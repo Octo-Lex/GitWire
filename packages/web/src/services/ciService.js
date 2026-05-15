@@ -1,5 +1,6 @@
 // src/services/ciService.js
 import { db } from "../lib/db.js";
+import { logger } from "../lib/logger.js";
 
 export const ciService = {
   /**
@@ -115,7 +116,8 @@ export const ciService = {
    * Update healing outcome (called by the ciHealWorker after diagnosis).
    */
   async saveHealResult(githubRunId, { status, failureType, rootCause, fixApplied, confidence }) {
-    await db.query(
+    // Best-effort: only UPDATE if the row exists (the heal worker creates it via upsertCIRun)
+    const { rowCount } = await db.query(
       `UPDATE ci_runs SET
          heal_status       = $1,
          heal_failure_type = $2,
@@ -127,5 +129,8 @@ export const ciService = {
        WHERE github_run_id = $6`,
       [status, failureType, rootCause, fixApplied, confidence, githubRunId]
     );
+    if (rowCount === 0) {
+      logger.warn({ githubRunId }, 'saveHealResult: no ci_runs row found — heal worker upsertCIRun may have failed');
+    }
   },
 };

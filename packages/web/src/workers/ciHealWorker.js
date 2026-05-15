@@ -1,6 +1,6 @@
 // src/workers/ciHealWorker.js
 // Processes failed CI runs from the ci-healing queue.
-// Flow: fetch logs → ask Claude for root cause → attempt automated fix.
+// Flow: upsert run → fetch logs → ask Claude for root cause → attempt automated fix.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { createWorker, QUEUES } from "../lib/queue.js";
@@ -9,13 +9,12 @@ import { ciService } from "../services/ciService.js";
 import { HEALABLE_TYPES } from "@gitwire/core";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
+import { db } from "../lib/db.js";
 
 const anthropic = new Anthropic({ 
   apiKey: config.anthropic.apiKey,
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
 });
-
-// Healable failure types imported from @gitwire/core
 
 export function startCIHealWorker() {
   return createWorker(QUEUES.CI_HEALING, async (job) => {
@@ -35,16 +34,29 @@ async function healWorkflowRun({ payload }) {
 
   logger.info({ runId: run.id, repo: repository.full_name }, "Attempting CI heal");
 
+  // ── 0. Upsert the CI run row so saveHealResult can UPDATE it ────────────
+  await upsertCIRun(run, repository);
+
   // ── 1. Fetch the failed job logs ─────────────────────────────────────────
   const logs = await fetchFailedJobLogs(octokit, owner, repo, run.id);
   if (!logs) {
     logger.warn({ runId: run.id }, "Could not retrieve run logs");
+    await ciService.saveHealResult(run.id, {
+      status: "skipped", failureType: "unknown",
+      rootCause: "Could not retrieve logs", fixApplied: null, confidence: "low",
+    });
     return;
   }
 
   // ── 2. Ask Claude to diagnose ─────────────────────────────────────────────
   const diagnosis = await diagnoseWithClaude(logs, run, repository);
-  if (!diagnosis) return;
+  if (!diagnosis) {
+    await ciService.saveHealResult(run.id, {
+      status: "failed", failureType: "unknown",
+      rootCause: "Claude diagnosis failed", fixApplied: null, confidence: "low",
+    });
+    return;
+  }
 
   logger.info({ runId: run.id, diagnosis }, "CI failure diagnosed");
 
@@ -52,7 +64,7 @@ async function healWorkflowRun({ payload }) {
   if (HEALABLE_TYPES.has(diagnosis.failure_type)) {
     await attemptHeal(octokit, owner, repo, run, diagnosis);
   } else {
-    // Non-healable: leave a detailed comment on the commit / PR
+    // Non-healable: leave a detailed comment on the commit
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis);
 
     // Persist: skipped (not auto-healable)
@@ -64,6 +76,30 @@ async function healWorkflowRun({ payload }) {
       confidence:   diagnosis.confidence,
     });
   }
+}
+
+// ── Upsert ci_runs row from webhook payload ───────────────────────────────────
+async function upsertCIRun(run, repository) {
+  // Resolve repo_id from repositories table
+  const { rows } = await db.query(
+    `SELECT github_id FROM repositories WHERE full_name = $1`,
+    [repository.full_name]
+  );
+  const repoId = rows[0]?.github_id;
+  if (!repoId) {
+    logger.warn({ repo: repository.full_name }, "Repo not found in DB — skipping CI run upsert");
+    return;
+  }
+
+  await db.query(
+    `INSERT INTO ci_runs
+       (github_run_id, repo_id, workflow_name, branch, head_sha, conclusion, heal_status, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, NOW())
+     ON CONFLICT (github_run_id) DO UPDATE SET
+       conclusion = EXCLUDED.conclusion,
+       updated_at = NOW()`,
+    [run.id, repoId, run.name, run.head_branch, run.head_sha, run.conclusion, run.created_at]
+  );
 }
 
 // ── Fetch logs from the first failed job ─────────────────────────────────────
@@ -127,18 +163,18 @@ Return ONLY this JSON schema, no explanation:
         "You are a CI failure analysis expert. Analyze logs precisely and return only valid JSON.",
     });
 
-    return JSON.parse(message.content[0].text);
+    const raw = message.content[0].text;
+    // Strip markdown code fences if present (Claude sometimes wraps in ```json ... ```)
+    const cleaned = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+    return JSON.parse(cleaned);
   } catch (err) {
     logger.error({ err }, "Claude diagnosis failed");
     return null;
   }
 }
 
-// ── Attempt automated fix via a new PR ───────────────────────────────────────
+// ── Attempt automated fix ───────────────────────────────────────────────────
 async function attemptHeal(octokit, owner, repo, run, diagnosis) {
-  // For now: trigger a re-run for flaky tests, post detailed comment for others.
-  // Full automated patch-PR creation is added in Step 5 (CI healing module).
-
   if (diagnosis.failure_type === "test_flaky" && diagnosis.confidence !== "low") {
     // Re-trigger the workflow run
     try {
@@ -157,7 +193,6 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis) {
         `_Confidence: ${diagnosis.confidence}_`
       );
 
-      // Persist: attempted (re-triggered)
       await ciService.saveHealResult(run.id, {
         status:       "attempted",
         failureType:  diagnosis.failure_type,
@@ -168,7 +203,6 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis) {
     } catch (err) {
       logger.error({ err }, "Failed to re-trigger workflow");
 
-      // Persist: failed (re-trigger error)
       await ciService.saveHealResult(run.id, {
         status:       "failed",
         failureType:  diagnosis.failure_type,
@@ -180,10 +214,9 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis) {
     return;
   }
 
-  // Other healable types: post fix instructions + label
+  // Other healable types: post fix instructions
   await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
 
-  // Persist: attempted (fix instructions posted)
   await ciService.saveHealResult(run.id, {
     status:       "attempted",
     failureType:  diagnosis.failure_type,
@@ -197,7 +230,7 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis) {
 async function postDiagnosisComment(octokit, owner, repo, run, diagnosis, healable = false) {
   const emoji = healable ? "🔧" : "🤖";
   const body = [
-    `${emoji} **Self-healing CI — diagnosis**`,
+    `${emoji} **GitWire Self-healing CI — diagnosis**`,
     "",
     `**Failure type:** \`${diagnosis.failure_type}\``,
     `**Root cause:** ${diagnosis.root_cause}`,
@@ -219,6 +252,7 @@ async function postComment(octokit, owner, repo, run, body) {
       commit_sha: run.head_sha,
       body,
     });
+    logger.info({ owner, repo, sha: run.head_sha }, "Diagnosis comment posted on commit");
   } catch (err) {
     logger.error({ err }, "Failed to post CI heal comment");
   }
