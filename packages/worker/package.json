@@ -1,0 +1,8 @@
+{
+  "name": "@gitwire/worker",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": { "test": "echo \"@gitwire/worker: stub\"" },
+  "description": "Job claim→heartbeat→complete worker loop"
+}

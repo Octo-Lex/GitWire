@@ -1,0 +1,8 @@
+{
+  "name": "@gitwire/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": { "test": "echo \"@gitwire/cli: stub\"" },
+  "description": "GitWire CLI entry point"
+}

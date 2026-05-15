@@ -1,0 +1,8 @@
+{
+  "name": "@gitwire/quality-gate",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": { "test": "echo \"@gitwire/quality-gate: stub\"" },
+  "description": "Phase gates, diff-aware review, policy evaluation"
+}

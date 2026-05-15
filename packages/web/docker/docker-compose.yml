@@ -1,0 +1,44 @@
+# docker/docker-compose.yml
+# Starts PostgreSQL + Redis for local development.
+# The Node.js app runs directly on your machine (not in Docker).
+#
+# Usage:
+#   cd docker && docker compose up -d
+#   cd .. && npm run dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     gitops
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB:       gitops_hub
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../db/migrations:/docker-entrypoint-initdb.d   # auto-runs migrations on first start
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitops -d gitops_hub"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
