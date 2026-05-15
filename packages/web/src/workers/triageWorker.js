@@ -42,7 +42,7 @@ async function triageIssue({ payload }) {
     return;
   }
 
-  if (!octokit?.rest?.issues) {
+  if (!octokit?.request) {
     logger.error({ installationId: installation.id }, "Invalid Octokit client — check GitHub App credentials");
     return;
   }
@@ -68,7 +68,12 @@ async function triageIssue({ payload }) {
 
   let classification;
   try {
-    classification = JSON.parse(message.content[0].text);
+    let raw = message.content[0].text.trim();
+    // Strip markdown code fences if Claude wrapped the JSON
+    if (raw.startsWith('```')) {
+      raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+    classification = JSON.parse(raw);
   } catch (err) {
     logger.error({ err, raw: message.content[0].text }, "Failed to parse Claude triage response");
     return;
