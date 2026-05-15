@@ -3,21 +3,41 @@
 //   - App-level JWT auth (for GitHub API calls as the App itself)
 //   - Installation-level token auth (for calls on behalf of an org/user)
 //   - A pre-configured Webhooks instance for signature verification
+//
+// The GitHub App is created lazily so the server can boot without
+// credentials (useful for local dev / API-only mode).
 
 import { App } from "@octokit/app";
 import { config } from "../../config/index.js";
 import { logger } from "./logger.js";
 
-// ── GitHub App singleton ─────────────────────────────────────────────────────
-export const githubApp = new App({
-  appId:         config.github.appId,
-  privateKey:    config.github.privateKey,
-  clientId:      config.github.clientId,
-  clientSecret:  config.github.clientSecret,
-  webhooks: {
-    secret: config.github.webhookSecret,
-  },
-});
+// ── Lazy GitHub App singleton ──────────────────────────────────────────────
+let _githubApp = null;
+
+function getGithubApp() {
+  if (!_githubApp) {
+    if (!config.github.appId || !config.github.privateKey) {
+      throw new Error(
+        "GitHub App not configured. Set GITHUB_APP_ID and GITHUB_PRIVATE_KEY in .env"
+      );
+    }
+    _githubApp = new App({
+      appId:         config.github.appId,
+      privateKey:    config.github.privateKey,
+      clientId:      config.github.clientId,
+      clientSecret:  config.github.clientSecret,
+      webhooks: {
+        secret: config.github.webhookSecret,
+      },
+    });
+  }
+  return _githubApp;
+}
+
+// Expose for webhook verification (returns null if not configured)
+export function getWebhookApp() {
+  try { return getGithubApp(); } catch { return null; }
+}
 
 // ── Convenience: get an Octokit client for a specific installation ───────────
 /**
@@ -28,7 +48,7 @@ export const githubApp = new App({
  * @returns {Promise<import("@octokit/rest").Octokit>}
  */
 export async function getInstallationClient(installationId) {
-  return githubApp.getInstallationOctokit(installationId);
+  return getGithubApp().getInstallationOctokit(installationId);
 }
 
 // ── Convenience: iterate all installations for the App ──────────────────────
@@ -39,7 +59,7 @@ export async function getInstallationClient(installationId) {
  * @param {(octokit, installation) => Promise<void>} fn
  */
 export async function forEachInstallation(fn) {
-  for await (const { octokit, installation } of githubApp.eachInstallation.iterator()) {
+  for await (const { octokit, installation } of getGithubApp().eachInstallation.iterator()) {
     try {
       await fn(octokit, installation);
     } catch (err) {

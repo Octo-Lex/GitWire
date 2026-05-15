@@ -30,17 +30,31 @@ function resolvePrivateKey() {
   return undefined;
 }
 
+// Strip empty-string env vars so Zod .optional() works correctly
+// (an empty string like GITHUB_APP_ID= fails .min(1) before .optional() applies)
+function cleanEnv(env) {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== "") {
+      cleaned[key] = value;
+    }
+  }
+  return cleaned;
+}
+
 const schema = z.object({
   // GitHub App
-  GITHUB_APP_ID: z.string().min(1, "GITHUB_APP_ID is required"),
-  GITHUB_APP_CLIENT_ID: z.string().min(1, "GITHUB_APP_CLIENT_ID is required"),
+  GITHUB_APP_ID: z.string().min(1, "GITHUB_APP_ID is required").optional(),
+  GITHUB_APP_CLIENT_ID: z.string().min(1, "GITHUB_APP_CLIENT_ID is required").optional(),
   GITHUB_APP_CLIENT_SECRET: z
     .string()
-    .min(1, "GITHUB_APP_CLIENT_SECRET is required"),
+    .min(1, "GITHUB_APP_CLIENT_SECRET is required")
+    .optional(),
   GITHUB_WEBHOOK_SECRET: z
     .string()
-    .min(1, "GITHUB_WEBHOOK_SECRET is required"),
-  GITHUB_PRIVATE_KEY: z.string().min(1, "GitHub private key is required"),
+    .min(1, "GITHUB_WEBHOOK_SECRET is required")
+    .optional(),
+  GITHUB_PRIVATE_KEY: z.string().min(1, "GitHub private key is required").optional(),
 
   // Server
   PORT: z.coerce.number().default(3000),
@@ -58,14 +72,14 @@ const schema = z.object({
   REDIS_URL: z.string().url("REDIS_URL must be a valid Redis URL"),
 
   // Claude
-  ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required"),
+  ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required").optional(),
 
   // App
-  APP_BASE_URL: z.string().url("APP_BASE_URL must be a valid URL"),
+  APP_BASE_URL: z.string().url("APP_BASE_URL must be a valid URL").default("http://localhost:3000"),
 });
 
 const rawEnv = {
-  ...process.env,
+  ...cleanEnv(process.env),
   GITHUB_PRIVATE_KEY: resolvePrivateKey(),
 };
 
@@ -81,11 +95,11 @@ if (!parsed.success) {
 
 export const config = {
   github: {
-    appId: parsed.data.GITHUB_APP_ID,
-    clientId: parsed.data.GITHUB_APP_CLIENT_ID,
-    clientSecret: parsed.data.GITHUB_APP_CLIENT_SECRET,
-    webhookSecret: parsed.data.GITHUB_WEBHOOK_SECRET,
-    privateKey: parsed.data.GITHUB_PRIVATE_KEY,
+    appId:         parsed.data.GITHUB_APP_ID         || "",
+    clientId:      parsed.data.GITHUB_APP_CLIENT_ID  || "",
+    clientSecret:  parsed.data.GITHUB_APP_CLIENT_SECRET || "",
+    webhookSecret: parsed.data.GITHUB_WEBHOOK_SECRET   || "dev-secret",
+    privateKey:    parsed.data.GITHUB_PRIVATE_KEY       || "",
   },
   server: {
     port: parsed.data.PORT,
@@ -100,6 +114,6 @@ export const config = {
     url: parsed.data.REDIS_URL,
   },
   anthropic: {
-    apiKey: parsed.data.ANTHROPIC_API_KEY,
+    apiKey: parsed.data.ANTHROPIC_API_KEY || "",
   },
 };

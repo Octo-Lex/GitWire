@@ -1,6 +1,7 @@
 {
   "name": "@gitwire/web",
   "version": "0.1.0",
+  "type": "module",
   "description": "GitHub account management platform",
   "main": "src/index.js",
   "scripts": {
@@ -12,6 +13,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
     "@octokit/app": "^14.0.0",
     "@octokit/rest": "^20.0.0",
     "@octokit/webhooks": "^13.0.0",

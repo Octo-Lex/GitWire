@@ -18,7 +18,8 @@ redis.on("error", (err) => logger.error({ err }, "Redis connection error"));
 redis.on("connect", () => logger.info("Redis connected"));
 
 // ── Queue names (single source of truth: @gitwire/core) ─────────────────────
-export { QUEUES } from "@gitwire/core";
+import { QUEUES } from "@gitwire/core";
+export { QUEUES };
 
 // ── Factory helpers ──────────────────────────────────────────────────────────
 

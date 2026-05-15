@@ -10,7 +10,7 @@
 // and never retries due to processing timeouts.
 
 import { Router } from "express";
-import { githubApp } from "../lib/github.js";
+import { getWebhookApp } from "../lib/github.js";
 import { webhookQueue, triageQueue, ciHealQueue } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
@@ -33,8 +33,13 @@ webhookRouter.post(
     }
 
     // ── 1. Verify signature ────────────────────────────────────────────────
+    const webhookApp = getWebhookApp();
+    if (!webhookApp) {
+      return res.status(503).json({ error: "GitHub App not configured" });
+    }
+
     try {
-      await githubApp.webhooks.verifyAndReceive({
+      await webhookApp.webhooks.verifyAndReceive({
         id:        deliveryId,
         name:      eventName,
         signature: signature,
