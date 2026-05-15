@@ -1,0 +1,76 @@
+services:
+  gitwire-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: packages/web/.env
+    environment:
+      DATABASE_URL: postgresql://gitwire:${DB_PASSWORD:-changeme}@postgres:5432/gitops_hub
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - gitwire-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gitwire
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: gitops_hub
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./packages/web/db/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - gitwire-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitwire -d gitops_hub"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - gitwire-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on:
+      gitwire-app:
+        condition: service_healthy
+    networks:
+      - gitwire-net
+
+networks:
+  gitwire-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

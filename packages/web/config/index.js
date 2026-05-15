@@ -73,6 +73,7 @@ const schema = z.object({
 
   // Claude
   ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required").optional(),
+  ANTHROPIC_BASE_URL: z.string().url().optional(),
 
   // App
   APP_BASE_URL: z.string().url("APP_BASE_URL must be a valid URL").default("http://localhost:3000"),
@@ -115,5 +116,6 @@ export const config = {
   },
   anthropic: {
     apiKey: parsed.data.ANTHROPIC_API_KEY || "",
+    baseURL: parsed.data.ANTHROPIC_BASE_URL || undefined,
   },
 };

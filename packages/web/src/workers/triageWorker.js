@@ -9,7 +9,10 @@ import { issueService } from "../services/issueService.js";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 
-const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+const anthropic = new Anthropic({ 
+  apiKey: config.anthropic.apiKey,
+  ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
+});
 
 export function startTriageWorker() {
   return createWorker(QUEUES.TRIAGE, async (job) => {
@@ -29,12 +32,23 @@ async function triageIssue({ payload }) {
   const { issue, repository, installation } = payload;
   if (!issue || !installation) return;
 
-  logger.info({ repo: repository.full_name, issue: issue.number }, "Triaging issue");
+  logger.info({ repo: repository?.full_name, issue: issue.number }, "Triaging issue");
 
-  const octokit = await getInstallationClient(installation.id);
+  let octokit;
+  try {
+    octokit = await getInstallationClient(installation.id);
+  } catch (err) {
+    logger.error({ err, installationId: installation.id }, "Failed to get installation client");
+    return;
+  }
+
+  if (!octokit?.rest?.issues) {
+    logger.error({ installationId: installation.id }, "Invalid Octokit client — check GitHub App credentials");
+    return;
+  }
 
   // Fetch existing labels for this repo so Claude can choose from them
-  const { data: repoLabels } = await octokit.rest.issues.listLabelsForRepo({
+  const { data: repoLabels } = await octokit.request('GET /repos/{owner}/{repo}/labels', {
     owner: repository.owner.login,
     repo:  repository.name,
     per_page: 100,
@@ -68,7 +82,7 @@ async function triageIssue({ payload }) {
   );
 
   if (labelsToApply.length > 0) {
-    await octokit.rest.issues.addLabels({
+    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
       owner:  repository.owner.login,
       repo:   repository.name,
       issue_number: issue.number,
@@ -87,7 +101,7 @@ async function triageIssue({ payload }) {
 
   // ── Post triage comment if needed ─────────────────────────────────────────
   if (classification.needs_more_info || classification.duplicate_hint) {
-    await octokit.rest.issues.createComment({
+    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
       owner:        repository.owner.login,
       repo:         repository.name,
       issue_number: issue.number,
@@ -123,7 +137,7 @@ async function triagePR({ payload }) {
 
   // Apply size label
   if (classification.size_label) {
-    await octokit.rest.issues.addLabels({
+    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
       owner:        repository.owner.login,
       repo:         repository.name,
       issue_number: pr.number,

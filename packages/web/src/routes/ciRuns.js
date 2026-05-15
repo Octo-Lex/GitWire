@@ -161,7 +161,7 @@ ciRouter.post("/:runId/retry", async (req, res, next) => {
     const { github_run_id, owner, name, installation_id } = rows[0];
     const octokit = await getInstallationClient(installation_id);
 
-    await octokit.rest.actions.reRunWorkflow({
+    await octokit.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {
       owner, repo: name, run_id: github_run_id,
     });
 

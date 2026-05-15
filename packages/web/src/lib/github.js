@@ -79,14 +79,18 @@ export async function forEachInstallation(fn) {
  * @param {(repo) => Promise<void>} fn
  */
 export async function forEachRepo(octokit, fn) {
-  for await (const { repository } of octokit.paginate.iterator(
-    octokit.rest.apps.listReposAccessibleToInstallation,
-    { per_page: 100 }
-  )) {
-    try {
-      await fn(repository);
-    } catch (err) {
-      logger.error({ repoId: repository.id, err }, "Error processing repo");
+  try {
+    const { data } = await octokit.request('GET /installation/repositories', {
+      per_page: 100,
+    });
+    for (const repository of data.repositories) {
+      try {
+        await fn(repository);
+      } catch (err) {
+        logger.error({ repoId: repository.id, err }, "Error processing repo");
+      }
     }
+  } catch (err) {
+    logger.error({ err }, "Failed to list repos for installation");
   }
 }

@@ -76,7 +76,7 @@ async function runFullSync() {
 async function syncInstallation(installationId) {
   const octokit = await getInstallationClient(installationId);
 
-  const { data: installation } = await octokit.rest.apps.getInstallation({
+  const { data: installation } = await octokit.request('GET /app/installations/{installation_id}', {
     installation_id: installationId,
   });
 
@@ -93,7 +93,7 @@ async function syncRepo(installationId, repoFullName) {
   const octokit = await getInstallationClient(installationId);
   const [owner, name] = repoFullName.split("/");
 
-  const { data: repo } = await octokit.rest.repos.get({ owner, repo: name });
+  const { data: repo } = await octokit.request('GET /repos/{owner}/{repo}', { owner, repo: name });
   await upsertRepo(repo, installationId);
   await syncRepoDetails(octokit, repo);
 }
@@ -125,16 +125,19 @@ async function syncIssues(octokit, repo, since) {
   };
 
   let count = 0;
-  for await (const { data: issues } of octokit.paginate.iterator(
-    octokit.rest.issues.listForRepo,
-    params
-  )) {
+  let page = 1;
+  while (true) {
+    const { data: issues } = await octokit.request('GET /repos/{owner}/{repo}/issues', {
+      ...params,
+      page,
+    });
+    if (!issues.length) break;
     for (const issue of issues) {
-      // GitHub returns PRs in the issues endpoint — skip them here
       if (issue.pull_request) continue;
       await upsertIssue(issue, repo.id);
       count++;
     }
+    page++;
   }
 
   if (count > 0) {
@@ -154,16 +157,19 @@ async function syncPullRequests(octokit, repo, since) {
   };
 
   let count = 0;
-  for await (const { data: prs } of octokit.paginate.iterator(
-    octokit.rest.pulls.list,
-    params
-  )) {
+  let page = 1;
+  while (true) {
+    const { data: prs } = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
+      ...params,
+      page,
+    });
+    if (!prs.length) break;
     for (const pr of prs) {
-      // Stop paginating if we've passed the since boundary
       if (since && new Date(pr.updated_at) < since) break;
       await upsertPR(pr, repo.id);
       count++;
     }
+    page++;
   }
 
   if (count > 0) {
@@ -175,7 +181,7 @@ async function syncPullRequests(octokit, repo, since) {
 async function syncWorkflowRuns(octokit, repo) {
   let runs;
   try {
-    const { data } = await octokit.rest.actions.listWorkflowRunsForRepo({
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/runs', {
       owner:    repo.owner.login,
       repo:     repo.name,
       per_page: 20,

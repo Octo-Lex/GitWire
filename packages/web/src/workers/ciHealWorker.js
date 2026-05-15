@@ -10,7 +10,10 @@ import { HEALABLE_TYPES } from "@gitwire/core";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 
-const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+const anthropic = new Anthropic({ 
+  apiKey: config.anthropic.apiKey,
+  ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
+});
 
 // Healable failure types imported from @gitwire/core
 
@@ -66,7 +69,7 @@ async function healWorkflowRun({ payload }) {
 // ── Fetch logs from the first failed job ─────────────────────────────────────
 async function fetchFailedJobLogs(octokit, owner, repo, runId) {
   try {
-    const { data: jobs } = await octokit.rest.actions.listJobsForWorkflowRun({
+    const { data: jobs } = await octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs', {
       owner,
       repo,
       run_id: runId,
@@ -75,7 +78,7 @@ async function fetchFailedJobLogs(octokit, owner, repo, runId) {
     const failedJob = jobs.jobs.find((j) => j.conclusion === "failure");
     if (!failedJob) return null;
 
-    const { data: logsText } = await octokit.rest.actions.downloadJobLogsForWorkflowRun({
+    const { data: logsText } = await octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {
       owner,
       repo,
       job_id: failedJob.id,
@@ -139,7 +142,7 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis) {
   if (diagnosis.failure_type === "test_flaky" && diagnosis.confidence !== "low") {
     // Re-trigger the workflow run
     try {
-      await octokit.rest.actions.reRunWorkflow({
+      await octokit.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {
         owner,
         repo,
         run_id: run.id,
@@ -210,7 +213,7 @@ async function postDiagnosisComment(octokit, owner, repo, run, diagnosis, healab
 
 async function postComment(octokit, owner, repo, run, body) {
   try {
-    await octokit.rest.repos.createCommitComment({
+    await octokit.request('POST /repos/{owner}/{repo}/commits/{commit_sha}/comments', {
       owner,
       repo,
       commit_sha: run.head_sha,
