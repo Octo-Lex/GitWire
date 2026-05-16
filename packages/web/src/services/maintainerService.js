@@ -14,27 +14,27 @@ export const maintainerService = {
   },
 
   async upsertSettings(repoId, patch) {
-    const fields = [];
-    const values = [repoId];
-    let idx = 2;
+    const setClauses = [];
+    const values = [];
+    let idx = 1;
 
     for (const [key, val] of Object.entries(patch)) {
       if (["stale_issue_days", "stale_pr_days", "stale_warn_days", "cleanup_branches", "enabled"].includes(key)) {
-        fields.push(key + " = $" + idx);
+        setClauses.push(key + " = $" + idx);
         values.push(val);
         idx++;
       }
     }
 
-    if (fields.length === 0) return null;
+    if (setClauses.length === 0) return null;
 
-    fields.push("updated_at = NOW()");
+    setClauses.push("updated_at = NOW()");
     values.push(repoId);
 
     await db.query(
       `INSERT INTO maintainer_settings (repo_id, updated_at)
-       VALUES ($1, NOW())
-       ON CONFLICT (repo_id) DO UPDATE SET ${fields.join(", ")}`,
+       VALUES ($${idx}, NOW())
+       ON CONFLICT (repo_id) DO UPDATE SET ${setClauses.join(", ")}`,
       values
     );
 
