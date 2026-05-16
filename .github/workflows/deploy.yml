@@ -10,9 +10,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Pull latest code
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd /opt/gitwire
-          git fetch origin master
+          git -c http.extraheader="Authorization: bearer ${GITHUB_TOKEN}" fetch origin master
           git reset --hard origin/master
 
       - name: Clean up disk (if needed)
