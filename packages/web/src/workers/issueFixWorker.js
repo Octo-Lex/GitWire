@@ -170,30 +170,36 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
       sha: ref.object.sha,
     });
 
-    // Commit each patch
+    // Apply search/replace patches to each file
     for (const patch of patches) {
-      // Get current file SHA (or null for new files)
-      let fileSha = null;
-      try {
-        const { data: existing } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-          owner, repo: repoName, path: patch.path, ref: branchName,
-        });
-        fileSha = existing.sha;
-      } catch (_) {
-        // File doesn't exist yet - new file
+      // Find the original file content (fetched earlier)
+      const origFile = fileContents.find((f) => f.path === patch.path);
+      if (!origFile) {
+        throw new Error("Original content not found for " + patch.path);
       }
 
-      const contentB64 = Buffer.from(patch.content).toString("base64");
-      const commitOpts = {
+      const result = applyPatches(origFile.content, patch.replacements);
+      if (result.errors.length > 0) {
+        logger.warn({ path: patch.path, errors: result.errors, applied: result.applied },
+          "Some replacements failed");
+      }
+      if (result.applied === 0) {
+        throw new Error("No replacements could be applied to " + patch.path);
+      }
+
+      logger.info({ path: patch.path, applied: result.applied, failedReplacements: result.errors.length },
+        "Patches applied");
+
+      // Commit the patched file using the original SHA
+      const patchedB64 = Buffer.from(result.content).toString("base64");
+      await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
         owner, repo: repoName,
         path: patch.path,
         message: patch.commit_message || ("fix: " + truncate(patch.explanation || patch.path, 72)),
-        content: contentB64,
+        content: patchedB64,
+        sha: origFile.sha,
         branch: branchName,
-      };
-      if (fileSha) commitOpts.sha = fileSha;
-
-      await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", commitOpts);
+      });
     }
 
     // Open PR
@@ -329,7 +335,7 @@ async function fetchTree(octokit, owner, repo) {
       return !srcExts.has(ext);
     });
 
-    // Core source first, then vendor source, then others — up to 500
+    // Core source first, then vendor source, then others - up to 500
     const prioritized = [...coreSource, ...vendorSource, ...otherFiles].slice(0, 500);
     return prioritized;
   } catch (err) {
@@ -348,7 +354,8 @@ async function fetchFileContents(octokit, owner, repo, paths) {
         owner, repo, path: p,
       });
       const content = Buffer.from(data.content, "base64").toString("utf8");
-      results.push({ path: p, content: content.slice(0, 8000) }); // 8k chars per file
+      const sha = data.sha;
+      results.push({ path: p, content, sha }); // full content - no truncation
     } catch (_) {
       // Skip files we can't read (e.g. too large, binary)
     }
@@ -384,7 +391,7 @@ async function aiAnalyze(issue, tree, repoFullName) {
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
       messages: [{ role: "user", content: prompt }],
-      system: "You are an expert software architect. Return ONLY valid JSON — no markdown, no explanation, no text before or after the JSON. Analyze issues precisely.",
+      system: "You are an expert software architect. Return ONLY valid JSON - no markdown, no explanation, no text before or after the JSON. Analyze issues precisely.",
     });
 
     const raw = message.content[0].text;
@@ -400,12 +407,13 @@ async function aiAnalyze(issue, tree, repoFullName) {
 
 async function aiGenerate(issue, analysis, fileContents, repoFullName) {
   var fence = BT + BT + BT;
+  // Include full file contents - Claude only returns diffs
   var filesSection = fileContents.map((f) =>
     "--- " + f.path + " ---\n" + fence + "\n" + f.content + "\n" + fence
   ).join("\n\n");
 
   var prompt =
-    "You are fixing a GitHub issue. Generate the minimal fix.\n\n" +
+    "You are fixing a GitHub issue. Generate search/replace patches.\n\n" +
     "Repository: " + repoFullName + "\n" +
     "Issue #" + issue.number + ": " + issue.title + "\n\n" +
     "Issue body:\n" + (issue.body || "(no body)") + "\n\n" +
@@ -413,34 +421,59 @@ async function aiGenerate(issue, analysis, fileContents, repoFullName) {
     "Files to modify:\n" + filesSection + "\n\n" +
     "Return ONLY a JSON array of patches:\n" +
     '[{"path": "relative/file/path",\n' +
-    '  "content": "complete new file content",\n' +
+    '  "replacements": [{"old": "exact text to find", "new": "replacement text"}],\n' +
     '  "commit_message": "fix(scope): description",\n' +
     '  "explanation": "what changed"}]\n\n' +
     "Rules:\n" +
-    "- Return COMPLETE file contents, not diffs\n" +
-    "- Make minimal changes to fix the issue\n" +
-    "- Include ALL files that need to change (even if from the list above)\n" +
+    "- The 'old' field must be an EXACT substring from the file above - copy it verbatim\n" +
+    "- The 'new' field is what replaces it\n" +
+    "- You can have multiple replacements per file\n" +
+    "- Make minimal changes - only what is needed to fix the issue\n" +
+    "- Include ALL files that need to change\n" +
     "- If no files need changing, return empty array []\n" +
     "- Do NOT modify unrelated code";
 
   try {
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 8192,
+      max_tokens: 4096,
       messages: [{ role: "user", content: prompt }],
-      system: "You are an expert software engineer. Return ONLY valid JSON — no markdown, no explanation, no text before or after the JSON. Generate minimal, precise fixes.",
+      system: "You are an expert software engineer. Return ONLY valid JSON. Generate minimal, precise search/replace patches. The 'old' text must match the file exactly.",
     });
 
     const raw = message.content[0].text;
     const cleaned = stripCodeFences(raw);
     const patches = extractJSON(cleaned);
     if (!Array.isArray(patches)) return null;
-    // Filter out patches with no actual content
-    return patches.filter((p) => p.path && p.content);
+    // Filter out patches with no replacements
+    return patches.filter((p) => p.path && p.replacements && p.replacements.length > 0);
   } catch (err) {
     logger.error({ err }, "AI patch generation failed");
     return null;
   }
+}
+
+// ── Apply search/replace patches to file contents ──────────────────────────
+
+function applyPatches(originalContent, replacements) {
+  var content = originalContent;
+  var applied = 0;
+  var errors = [];
+
+  for (const rep of replacements) {
+    if (!rep.old || !rep.new) {
+      errors.push("replacement missing 'old' or 'new' field");
+      continue;
+    }
+    if (!content.includes(rep.old)) {
+      errors.push("'old' text not found in file (len=" + rep.old.length + "): " + rep.old.substring(0, 80) + "...");
+      continue;
+    }
+    content = content.replace(rep.old, rep.new);
+    applied++;
+  }
+
+  return { content, applied, errors };
 }
 
 // ── Build PR body ──────────────────────────────────────────────────────────
@@ -463,6 +496,13 @@ function buildPRBody(issue, analysis, patches, issueNumber) {
 
   for (const p of patches) {
     lines.push("- **" + p.path + "**" + (p.explanation ? ": " + p.explanation : ""));
+    if (p.replacements) {
+      for (const r of p.replacements) {
+        var oldShort = truncate(r.old.trim(), 80);
+        var newShort = truncate(r.new.trim(), 80);
+        lines.push("  - Replace '" + oldShort + "' -> '" + newShort + "'");
+      }
+    }
   }
 
   lines.push("");
