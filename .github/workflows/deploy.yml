@@ -26,7 +26,7 @@ jobs:
       - name: Clean up disk (if needed)
         run: |
           USED=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
-          if [ "$USED" -gt 80 ]; then
+          if [ "$USED" -gt 70 ]; then
             echo "Disk usage at ${USED}%, pruning..."
             docker system prune -af --volumes 2>/dev/null || true
           fi
