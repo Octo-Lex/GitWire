@@ -11,6 +11,7 @@
 import { createWorker, createQueue, QUEUES } from "../lib/queue.js";
 import { forEachInstallation, forEachRepo, getInstallationClient } from "../lib/github.js";
 import { syncMembers, syncCollaborators, syncBranchRules } from "../services/maintainerService.js";
+import { backfillEmbeddings } from "../services/duplicateDetectionService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -119,6 +120,10 @@ async function syncRepoDetails(octokit, repo) {
     }),
     syncBranchRules(octokit, repo.owner.login, repo.name, repo.id).catch((err) => {
       logger.warn({ repo: repo.full_name, err: err.message }, "Branch rules sync failed");
+    }),
+    // Backfill embeddings for issues that don't have them yet
+    backfillEmbeddings({ repoId: repo.id, repoFullName: repo.full_name }).catch((err) => {
+      logger.warn({ repo: repo.full_name, err: err.message }, "Embedding backfill failed");
     }),
   ]);
 

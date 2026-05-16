@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { issueService } from "../services/issueService.js";
+import { detectDuplicates } from "../services/duplicateDetectionService.js";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 
@@ -112,6 +113,32 @@ async function triageIssue({ payload }) {
       issue_number: issue.number,
       body:         buildTriageComment(classification),
     });
+  }
+
+  // ── Run duplicate detection (best-effort) ────────────────────────────────
+  // Runs after classification so the embedding is stored alongside triage data.
+  // detectDuplicates handles its own GitHub comment — separate from triage comment.
+  try {
+    const { duplicates, related } = await detectDuplicates({
+      issue,
+      repository,
+      octokit,
+    });
+
+    if (duplicates.length) {
+      logger.info(
+        { issue: issue.number, topMatch: duplicates[0].number, similarity: duplicates[0].similarity.toFixed(3) },
+        "Duplicate detected"
+      );
+    } else if (related.length) {
+      logger.info(
+        { issue: issue.number, relatedCount: related.length },
+        "Related issues found"
+      );
+    }
+  } catch (err) {
+    // Duplicate detection is best-effort — never fail the triage job over it
+    logger.warn({ err: err.message, issue: issue.number }, "Duplicate detection failed (non-fatal)");
   }
 }
 

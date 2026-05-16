@@ -15,6 +15,7 @@ import { insightsRouter }      from "./routes/insights.js";
 import { maintainerRouter }     from "./routes/maintainer.js";
 import { fixRouter }              from "./routes/fix.js";
 import { healRouter }          from "./routes/healHistory.js";
+import { duplicatesRouter }    from "./routes/duplicates.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -75,6 +76,7 @@ export function createApp() {
   app.use("/api/maintainer",     maintainerRouter);
   app.use("/api/fix",             fixRouter);
   app.use("/api/heal",            healRouter);
+  app.use("/api/duplicates",       duplicatesRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {

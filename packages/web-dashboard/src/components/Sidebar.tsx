@@ -9,6 +9,7 @@ const NAV = [
   { href: "/repos",         label: "Repositories",    icon: "⎇" },
   { href: "/issues",        label: "Issues",          icon: "◎" },
   { href: "/pull-requests", label: "Pull Requests",   icon: "⌥" },
+  { href: "/duplicates",    label: "Duplicates",      icon: "⊗" },
   { href: "/ci",            label: "Self-Healing CI",  icon: "⚙" },
   { href: "/insights",      label: "Insights",        icon: "◈" },
   { href: "/maintainer",    label: "Maintainer",      icon: "⟳" },

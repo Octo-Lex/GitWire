@@ -60,6 +60,12 @@ export const API = {
 
   // Fix attempts
   fixAttempts: (owner: string, repo: string, q = "") => `/api/fix/${owner}/${repo}/attempts${q ? `?${q}` : ""}`,
+
+  // Duplicate detection
+  dupStats:     () => `/api/duplicates/stats`,
+  duplicates:   (q = "") => `/api/duplicates${q ? `?${q}` : ""}`,
+  dupByRepo:    (owner: string, repo: string) => `/api/duplicates/${owner}/${repo}`,
+  dupByIssue:   (issueId: string) => `/api/duplicates/issue/${issueId}`,
 };
 
 // ── Trigger helpers (non-GET) ─────────────────────────────────────────────
@@ -156,5 +162,31 @@ export async function updateBranchRule(owner: string, repo: string, pattern: str
       body: JSON.stringify(rule),
     }
   );
+  return res.json();
+}
+
+// ── Duplicate detection actions ────────────────────────────────────────────
+
+export async function confirmDuplicate(signalId: number) {
+  const res = await fetch(`${BASE}/api/duplicates/${signalId}/confirm`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function dismissDuplicate(signalId: number) {
+  const res = await fetch(`${BASE}/api/duplicates/${signalId}/dismiss`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function triggerEmbeddingBackfill(owner: string, repo: string) {
+  const res = await fetch(`${BASE}/api/duplicates/backfill/${owner}/${repo}`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
   return res.json();
 }
