@@ -69,8 +69,8 @@ healRouter.get("/", async (req, res, next) => {
       params
     );
 
-    params.push(perPage, offset);
-    const pIdx = params.length - 1;
+    const limitParam = addParam(perPage);
+    const offsetParam = addParam(offset);
 
     const { rows } = await db.query(
       `SELECT
@@ -86,7 +86,7 @@ healRouter.get("/", async (req, res, next) => {
        JOIN ci_runs      cr ON cr.id          = hp.ci_run_id
        ${where}
        ORDER BY hp.created_at DESC
-       LIMIT $${pIdx + 1} OFFSET $${pIdx + 2}`,
+       LIMIT ${limitParam} OFFSET ${offsetParam}`,
       params
     );
 

@@ -81,8 +81,8 @@ maintainerRouter.get("/members", async (req, res, next) => {
       "SELECT COUNT(*) FROM members m " + where, params
     );
 
-    params.push(perPage, offset);
-    const pIdx = params.length - 1;
+    const limitParam = addParam(perPage);
+    const offsetParam = addParam(offset);
 
     const { rows } = await db.query(
       `SELECT
@@ -103,7 +103,7 @@ maintainerRouter.get("/members", async (req, res, next) => {
        ${where}
        GROUP BY m.id, i.account_login
        ORDER BY m.role DESC, m.github_login
-       LIMIT $${pIdx + 1} OFFSET $${pIdx + 2}`,
+       LIMIT ${limitParam} OFFSET ${offsetParam}`,
       params
     );
 
@@ -183,8 +183,8 @@ maintainerRouter.get("/collaborators", async (req, res, next) => {
       params
     );
 
-    params.push(perPage, offset);
-    const pIdx = params.length - 1;
+    const limitParam = addParam(perPage);
+    const offsetParam = addParam(offset);
 
     const { rows } = await db.query(
       `SELECT rc.github_login, rc.github_id, rc.avatar_url,
@@ -202,7 +202,7 @@ maintainerRouter.get("/collaborators", async (req, res, next) => {
            ELSE 5
          END,
          rc.github_login
-       LIMIT $${pIdx + 1} OFFSET $${pIdx + 2}`,
+       LIMIT ${limitParam} OFFSET ${offsetParam}`,
       params
     );
 
@@ -316,8 +316,8 @@ maintainerRouter.get("/branch-rules", async (req, res, next) => {
       params
     );
 
-    params.push(perPage, offset);
-    const pIdx = params.length - 1;
+    const limitParam = addParam(perPage);
+    const offsetParam = addParam(offset);
 
     const { rows } = await db.query(
       `SELECT br.*, r.full_name AS repo_full_name, r.owner AS repo_owner, r.name AS repo_name
@@ -325,7 +325,7 @@ maintainerRouter.get("/branch-rules", async (req, res, next) => {
        JOIN repositories r ON r.github_id = br.repo_id
        ${where}
        ORDER BY r.full_name, br.pattern
-       LIMIT $${pIdx + 1} OFFSET $${pIdx + 2}`,
+       LIMIT ${limitParam} OFFSET ${offsetParam}`,
       params
     );
 
@@ -423,15 +423,15 @@ maintainerRouter.get("/audit", async (req, res, next) => {
       "SELECT COUNT(*) FROM audit_log a " + where, params
     );
 
-    params.push(perPage, offset);
-    const pIdx = params.length - 1;
+    const limitParam = addParam(perPage);
+    const offsetParam = addParam(offset);
 
     const { rows } = await db.query(
       `SELECT a.*
        FROM audit_log a
        ${where}
        ORDER BY a.created_at DESC
-       LIMIT $${pIdx + 1} OFFSET $${pIdx + 2}`,
+       LIMIT ${limitParam} OFFSET ${offsetParam}`,
       params
     );
 
