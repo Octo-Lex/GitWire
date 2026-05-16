@@ -38,6 +38,18 @@ export async function detectDuplicates({ issue, repository, octokit }) {
 
   logger.info({ repo: repository.full_name, issue: issue.number }, "Dup detection: start");
 
+  // ── 0. Ensure the issue exists in the DB (may not be synced yet for new issues) ──
+  await db.query(
+    `INSERT INTO issues (github_id, repo_id, number, title, state, labels, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+     ON CONFLICT (github_id) DO UPDATE SET
+       title     = EXCLUDED.title,
+       state     = EXCLUDED.state,
+       labels    = EXCLUDED.labels,
+       updated_at = NOW()`,
+    [issue.id, repoId, issue.number, issue.title, issue.state ?? 'open', issue.labels?.map(l => l.name) ?? []]
+  );
+
   // ── 1. Embed the new issue ─────────────────────────────────────────────────
   const { vector: queryVector } = await upsertIssueEmbedding({
     github_id: issue.id,
