@@ -45,7 +45,7 @@ export default function FixAttemptsPage() {
     { refreshInterval: 10000 }
   );
 
-  const attempts = attemptsData?.data ?? attemptsData ?? [];
+  const attempts = attemptsData?.data ?? attemptsData?.attempts ?? attemptsData ?? [];
 
   // Aggregate stats
   const stats = {
@@ -178,25 +178,25 @@ export default function FixAttemptsPage() {
                 )}
 
                 <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                  {attempt.pr_url && (
+                  {attempt.pr_number && (
                     <a
-                      href={String(attempt.pr_url)}
+                      href={`https://github.com/${selectedRepo.owner}/${selectedRepo.name}/pull/${attempt.pr_number}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-xs font-mono text-accent-green hover:underline"
                     >
-                      PR #{String(attempt.pr_number ?? "")} →
+                      PR #{String(attempt.pr_number)} →
                     </a>
                   )}
-                  {attempt.error_message && (
-                    <span className="text-xs font-mono text-accent-red line-clamp-1">{String(attempt.error_message)}</span>
+                  {attempt.error && (
+                    <span className="text-xs font-mono text-accent-red line-clamp-1">{String(attempt.error)}</span>
                   )}
                   <span className="text-[10px] text-text-tertiary font-mono">
                     {attempt.created_at ? formatDistanceToNow(new Date(String(attempt.created_at)), { addSuffix: true }) : ""}
                   </span>
                 </div>
 
-                {attempt.files_patched && (
+                {attempt.files_patched && Array.isArray(attempt.files_patched) && (
                   <div className="mt-1 flex gap-1 flex-wrap">
                     {(attempt.files_patched as string[]).map((f: string) => (
                       <span key={f} className="font-mono text-[10px] text-text-tertiary border border-border rounded px-1.5 py-0.5">

@@ -49,7 +49,7 @@ export default function MaintainerPage() {
     { refreshInterval: 30000 }
   );
 
-  const actionList = actions?.data ?? actions ?? [];
+  const actionList = actions?.data ?? actions?.actions ?? actions ?? [];
 
   async function handleTrigger(action: string) {
     setTriggering((t) => ({ ...t, [action]: true }));
@@ -95,10 +95,10 @@ export default function MaintainerPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-3 px-6 py-4 border-b border-border">
-        <StatCard label="Actions (7d)" value={stats?.actions_this_week ?? 0} loading={stl} accent="blue" />
-        <StatCard label="Issues closed" value={stats?.issues_closed ?? 0} loading={stl} accent="red" />
-        <StatCard label="PRs closed" value={stats?.prs_closed ?? 0} loading={stl} />
-        <StatCard label="Branches cleaned" value={stats?.branches_cleaned ?? 0} loading={stl} accent="purple" />
+        <StatCard label="Actions (7d)" value={stats?.last_7_days ?? stats?.actions_this_week ?? 0} loading={stl} accent="blue" />
+        <StatCard label="Applied" value={stats?.applied ?? 0} loading={stl} accent="green" />
+        <StatCard label="Skipped" value={stats?.skipped ?? 0} loading={stl} />
+        <StatCard label="Failed" value={stats?.failed ?? 0} loading={stl} accent="red" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-0">
@@ -232,7 +232,7 @@ export default function MaintainerPage() {
                 <div className="flex items-center gap-2">
                   <span className="text-base">{ACTION_ICONS[String(action.action_type)] ?? "●"}</span>
                   <span className="font-mono text-xs text-text-primary font-medium">{String(action.action_type)}</span>
-                  <Badge variant={String(action.status) === "success" ? "green" : String(action.status) === "failed" ? "red" : "default"}>
+                  <Badge variant={String(action.status) === "applied" || String(action.status) === "success" ? "green" : String(action.status) === "failed" ? "red" : "default"}>
                     {String(action.status)}
                   </Badge>
                 </div>
