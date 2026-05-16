@@ -10,6 +10,7 @@
 
 import { createWorker, createQueue, QUEUES } from "../lib/queue.js";
 import { forEachInstallation, forEachRepo, getInstallationClient } from "../lib/github.js";
+import { syncMembers, syncCollaborators, syncBranchRules } from "../services/maintainerService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -62,6 +63,11 @@ async function runFullSync() {
   await forEachInstallation(async (octokit, installation) => {
     await upsertInstallation(installation);
 
+    // Sync org members (best-effort — needs org:read scope)
+    if (installation.account?.type === 'Organization') {
+      await syncMembers(octokit, installation.id, installation.account.login).catch(() => {});
+    }
+
     await forEachRepo(octokit, async (repo) => {
       await upsertRepo(repo, installation.id);
       await syncRepoDetails(octokit, repo);
@@ -106,6 +112,8 @@ async function syncRepoDetails(octokit, repo) {
     syncIssues(octokit, repo, since),
     syncPullRequests(octokit, repo, since),
     syncWorkflowRuns(octokit, repo),
+    syncCollaborators(octokit, repo.owner.login, repo.name, repo.id).catch(() => {}),
+    syncBranchRules(octokit, repo.owner.login, repo.name, repo.id).catch(() => {}),
   ]);
 
   await db.query(

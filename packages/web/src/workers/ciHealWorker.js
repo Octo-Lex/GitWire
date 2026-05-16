@@ -235,7 +235,58 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
 
     logger.info({ runId: run.id, prNumber: pr.number, prUrl: pr.html_url }, "Patch PR created");
 
-    // 6. Post a comment on the commit linking to the PR
+    // 6. Add labels and request review from last committer
+    try {
+      await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+        owner, repo, issue_number: pr.number,
+        labels: ["ci-heal", diagnosis.failure_type],
+      });
+    } catch (lblErr) {
+      logger.warn({ err: lblErr.message }, "Failed to add labels to heal PR");
+    }
+
+    try {
+      // Request review from the last committer if different from bot
+      const { data: commits } = await octokit.request("GET /repos/{owner}/{repo}/commits", {
+        owner, repo, sha: run.head_sha, per_page: 1,
+      });
+      const lastCommitter = commits[0]?.author?.login;
+      if (lastCommitter && !lastCommitter.includes("[bot]")) {
+        await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", {
+          owner, repo, pull_number: pr.number, reviewers: [lastCommitter],
+        });
+      }
+    } catch (revErr) {
+      logger.warn({ err: revErr.message }, "Failed to request review on heal PR");
+    }
+
+    // 7. Record heal PR in database
+    try {
+      const { rows: [ciRow] } = await db.query(
+        "SELECT id FROM ci_runs WHERE github_run_id = $1", [run.id]
+      );
+      if (ciRow) {
+        await db.query(
+          `INSERT INTO heal_prs
+             (ci_run_id, repo_id, github_pr_number, github_pr_url, heal_branch,
+              failure_type, files_changed, pr_title, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')
+           ON CONFLICT DO NOTHING`,
+          [ciRow.id, rows[0]?.github_id || repository.id, pr.number, pr.html_url,
+           branchName, diagnosis.failure_type, [failingFile], prTitle]
+        );
+
+        // Also update ci_runs with PR link
+        await db.query(
+          `UPDATE ci_runs SET heal_pr_url = $1, heal_pr_number = $2 WHERE github_run_id = $3`,
+          [pr.html_url, pr.number, run.id]
+        );
+      }
+    } catch (dbErr) {
+      logger.warn({ err: dbErr.message }, "Failed to record heal PR in DB");
+    }
+
+    // 8. Post a comment on the commit linking to the PR
     await postComment(octokit, owner, repo, run,
       "🔧 **GitWire created a fix PR:** [#" + pr.number + "](" + pr.html_url + ")\n\n" +
       "**Failure type:** " + diagnosis.failure_type + "\n" +

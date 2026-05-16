@@ -1,4 +1,8 @@
 // src/services/maintainerService.js
+// GitWire Maintainer v2: settings, actions, org governance.
+// Syncs org members, repo collaborators, and branch protection rules
+// from GitHub into local Postgres tables.
+
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -89,3 +93,166 @@ export const maintainerService = {
     return rows[0];
   },
 };
+
+// ── Org governance: Members ───────────────────────────────────────────────────
+
+/**
+ * Sync all org members for an installation from GitHub.
+ */
+export async function syncMembers(octokit, installationId, org) {
+  logger.info({ org }, "Syncing org members");
+
+  let members = [];
+  try {
+    members = await octokit.paginate(
+      octokit.rest.orgs.listMembers,
+      { org, per_page: 100 }
+    );
+  } catch (err) {
+    logger.warn({ org, err: err.message }, "Could not list org members — may lack org:read scope");
+    return;
+  }
+
+  for (const m of members) {
+    let role = "member";
+    try {
+      const { data: membership } = await octokit.rest.orgs.getMembershipForUser({
+        org, username: m.login,
+      });
+      role = membership.role === "admin" ? "owner" : "member";
+    } catch { /* non-member or no access */ }
+
+    await db.query(
+      `INSERT INTO members
+         (installation_id, github_login, github_id, avatar_url, role, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (installation_id, github_login) DO UPDATE SET
+         github_id  = EXCLUDED.github_id,
+         avatar_url = EXCLUDED.avatar_url,
+         role       = EXCLUDED.role,
+         updated_at = NOW()`,
+      [installationId, m.login, m.id, m.avatar_url, role]
+    );
+  }
+
+  logger.info({ org, count: members.length }, "Members synced");
+}
+
+// ── Org governance: Repo collaborators ────────────────────────────────────────
+
+/**
+ * Sync collaborators for a single repo.
+ */
+export async function syncCollaborators(octokit, owner, repo, repoGithubId) {
+  const collabs = await octokit.paginate(
+    octokit.rest.repos.listCollaborators,
+    { owner, repo, per_page: 100 }
+  );
+
+  for (const c of collabs) {
+    const perms = c.permissions ?? {};
+    const level =
+      perms.admin    ? "admin"    :
+      perms.maintain ? "maintain" :
+      perms.push     ? "push"     :
+      perms.triage   ? "triage"   : "pull";
+
+    await db.query(
+      `INSERT INTO repo_collaborators
+         (repo_id, github_login, github_id, avatar_url, permission, role_name, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (repo_id, github_login) DO UPDATE SET
+         permission = EXCLUDED.permission,
+         role_name  = EXCLUDED.role_name,
+         avatar_url = EXCLUDED.avatar_url,
+         updated_at = NOW()`,
+      [repoGithubId, c.login, c.id, c.avatar_url, level, c.role_name ?? null]
+    );
+  }
+
+  logger.debug({ repo: `${owner}/${repo}`, count: collabs.length }, "Collaborators synced");
+}
+
+// ── Org governance: Branch protection rules ───────────────────────────────────
+
+/**
+ * Sync branch protection rules for a repo.
+ */
+export async function syncBranchRules(octokit, owner, repo, repoGithubId) {
+  let branches = [];
+  try {
+    branches = await octokit.paginate(
+      octokit.rest.repos.listBranches,
+      { owner, repo, protected: true, per_page: 100 }
+    );
+  } catch (err) {
+    if (err.status === 404) return;
+    throw err;
+  }
+
+  for (const branch of branches) {
+    try {
+      const { data: rule } = await octokit.rest.repos.getBranchProtection({
+        owner, repo, branch: branch.name,
+      });
+
+      const pr = rule.required_pull_request_reviews;
+      const sc = rule.required_status_checks;
+
+      await db.query(
+        `INSERT INTO branch_rules
+           (repo_id, pattern,
+            required_reviews, dismiss_stale_reviews, require_code_owner_reviews,
+            require_status_checks, required_status_checks, require_up_to_date_branch,
+            enforce_admins, allow_force_pushes, allow_deletions,
+            github_rule_id, synced_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW(),NOW())
+         ON CONFLICT (repo_id, pattern) DO UPDATE SET
+           required_reviews             = EXCLUDED.required_reviews,
+           dismiss_stale_reviews        = EXCLUDED.dismiss_stale_reviews,
+           require_code_owner_reviews   = EXCLUDED.require_code_owner_reviews,
+           require_status_checks        = EXCLUDED.require_status_checks,
+           required_status_checks       = EXCLUDED.required_status_checks,
+           require_up_to_date_branch    = EXCLUDED.require_up_to_date_branch,
+           enforce_admins               = EXCLUDED.enforce_admins,
+           allow_force_pushes           = EXCLUDED.allow_force_pushes,
+           allow_deletions              = EXCLUDED.allow_deletions,
+           synced_at                    = NOW(),
+           updated_at                   = NOW()`,
+        [
+          repoGithubId,
+          branch.name,
+          pr?.required_approving_review_count ?? 0,
+          pr?.dismiss_stale_reviews            ?? false,
+          pr?.require_code_owner_reviews        ?? false,
+          !!sc,
+          sc?.contexts ?? [],
+          sc?.strict    ?? false,
+          rule.enforce_admins?.enabled ?? false,
+          rule.allow_force_pushes?.enabled ?? false,
+          rule.allow_deletions?.enabled    ?? false,
+          null,
+        ]
+      );
+    } catch (err) {
+      if (err.status !== 404) {
+        logger.warn({ branch: branch.name, repo: `${owner}/${repo}`, err: err.message }, "Could not fetch branch protection");
+      }
+    }
+  }
+
+  logger.debug({ repo: `${owner}/${repo}`, count: branches.length }, "Branch rules synced");
+}
+
+// ── Audit log helper ─────────────────────────────────────────────────────────
+
+/**
+ * Write an entry to the audit_log table.
+ */
+export async function audit({ actor, action, targetType, targetId, payload, success = true, error = null }) {
+  await db.query(
+    `INSERT INTO audit_log (actor, action, target_type, target_id, payload, success, error)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [actor, action, targetType, targetId, payload ? JSON.stringify(payload) : null, success, error]
+  );
+}

@@ -137,16 +137,34 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
 
   await upsertFixAttempt(repoId, issueNumber, branchName, "generating", analysis.complexity, analysis.explanation);
 
-  // ── Step 5: Fetch relevant file contents ──────────────────────────────────
-  const fileContents = await fetchFileContents(octokit, owner, repoName, analysis.relevant_files || []);
+  // ── Step 5: Score relevant files ─────────────────────────────────────────
+  // Rank files by name match with issue keywords, proximity to existing code
+  const scoredFiles = scoreFiles(analysis.relevant_files || [], issue, tree);
+  const topFiles = scoredFiles.slice(0, 5).map((f) => f.path);
+  logger.info({ repo, issueNumber, topFiles, scored: scoredFiles.length }, "File scoring complete");
 
-  // ── Step 6: AI Pass 2 - Generate patches ──────────────────────────────────
-  const patches = await aiGenerate(issue, analysis, fileContents, repo);
-  if (!patches || !patches.length) {
+  // ── Step 6: Fetch relevant file contents ──────────────────────────────────
+  const fileContents = await fetchFileContents(octokit, owner, repoName, topFiles);
+
+  if (fileContents.length === 0) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed", analysis.complexity,
-      analysis.explanation, "AI could not generate patches");
+      analysis.explanation, "Could not fetch any target file contents");
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "⚠️ **GitWire Fix - no patches generated**\n\n" +
+      "⚠️ **GitWire Fix - file fetch failed**\n\n" +
+      "**Assessment:** " + analysis.explanation + "\n\n" +
+      "AI identified relevant files but none could be fetched.\n\n" +
+      "_Files attempted: " + topFiles.join(", ") + "_"
+    );
+    return;
+  }
+
+  // ── Step 7: AI Pass 2 - Generate full-file fixes ──────────────────────────
+  const fixes = await aiGenerateFullFile(issue, analysis, fileContents, repo);
+  if (!fixes || !fixes.length) {
+    await upsertFixAttempt(repoId, issueNumber, branchName, "failed", analysis.complexity,
+      analysis.explanation, "AI could not generate fixes");
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "⚠️ **GitWire Fix - no fixes generated**\n\n" +
       "**Assessment:** " + analysis.explanation + "\n\n" +
       "AI analyzed the issue but couldn't produce a concrete fix.\n\n" +
       "_Complexity: " + analysis.complexity + " · A maintainer should review._"
@@ -154,9 +172,24 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
     return;
   }
 
-  // ── Step 7: Create branch → commit patches → open PR ──────────────────────
+  // ── Step 8: Pre-merge validation ──────────────────────────────────────────
+  const validationResult = validatePatches(fixes, fileContents);
+  if (!validationResult.valid) {
+    logger.warn({ repo, issueNumber, reasons: validationResult.reasons }, "Patch validation failed");
+    await upsertFixAttempt(repoId, issueNumber, branchName, "failed", analysis.complexity,
+      analysis.explanation, "Patch validation failed: " + validationResult.reasons.join("; "));
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "⚠️ **GitWire Fix - validation failed**\n\n" +
+      "**Assessment:** " + analysis.explanation + "\n\n" +
+      "Generated fixes did not pass validation:\n" +
+      validationResult.reasons.map((r) => "- " + r).join("\n") + "\n\n" +
+      "_A maintainer should review manually._"
+    );
+    return;
+  }
+
+  // ── Step 9: Create branch → commit fixes → open PR ────────────────────────
   try {
-    // Get default branch ref
     const { data: repoInfo } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo: repoName });
     const defaultBranch = repoInfo.default_branch;
 
@@ -164,47 +197,60 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
       owner, repo: repoName, branch: defaultBranch,
     });
 
-    await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-      owner, repo: repoName,
-      ref: "refs/heads/" + branchName,
-      sha: ref.object.sha,
-    });
+    // Try to create branch, force-update if it already exists (retry scenario)
+    try {
+      await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+        owner, repo: repoName,
+        ref: "refs/heads/" + branchName,
+        sha: ref.object.sha,
+      });
+    } catch (refErr) {
+      if (refErr.status === 422) {
+        // Branch exists — force update
+        await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+          owner, repo: repoName,
+          ref: "heads/" + branchName,
+          sha: ref.object.sha,
+          force: true,
+        });
+        logger.info({ branch: branchName }, "Force-updated existing branch");
+      } else {
+        throw refErr;
+      }
+    }
 
-    // Apply search/replace patches to each file
-    for (const patch of patches) {
-      // Find the original file content (fetched earlier)
-      const origFile = fileContents.find((f) => f.path === patch.path);
+    // Commit full-file fixes
+    for (const fix of fixes) {
+      const origFile = fileContents.find((f) => f.path === fix.path);
       if (!origFile) {
-        throw new Error("Original content not found for " + patch.path);
+        throw new Error("Original content not found for " + fix.path);
       }
 
-      const result = applyPatches(origFile.content, patch.replacements);
-      if (result.errors.length > 0) {
-        logger.warn({ path: patch.path, errors: result.errors, applied: result.applied },
-          "Some replacements failed");
-      }
-      if (result.applied === 0) {
-        throw new Error("No replacements could be applied to " + patch.path);
+      // Verify the fix is actually different
+      if (fix.fixed_content === origFile.content) {
+        logger.warn({ path: fix.path }, "AI returned identical content — skipping");
+        continue;
       }
 
-      logger.info({ path: patch.path, applied: result.applied, failedReplacements: result.errors.length },
-        "Patches applied");
-
-      // Commit the patched file using the original SHA
-      const patchedB64 = Buffer.from(result.content).toString("base64");
+      const fixedB64 = Buffer.from(fix.fixed_content).toString("base64");
       await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
         owner, repo: repoName,
-        path: patch.path,
-        message: patch.commit_message || ("fix: " + truncate(patch.explanation || patch.path, 72)),
-        content: patchedB64,
+        path: fix.path,
+        message: fix.commit_message || ("fix: " + truncate(fix.explanation || fix.path, 72)),
+        content: fixedB64,
         sha: origFile.sha,
         branch: branchName,
       });
+
+      logger.info({ path: fix.path, explanation: fix.explanation }, "Fix committed");
     }
+
+    // Determine confidence with calibration
+    const confidence = calibrateConfidence(analysis, fileContents.length, fixes.length);
 
     // Open PR
     var prTitle = "🔧 [GitWire] Fix #" + issueNumber + ": " + truncate(issue.title, 60);
-    var prBody = buildPRBody(issue, analysis, patches, issueNumber);
+    var prBody = buildPRBodyFullFile(issue, analysis, fixes, issueNumber, confidence);
 
     const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
       owner, repo: repoName,
@@ -214,15 +260,25 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
       base: defaultBranch,
     });
 
-    logger.info({ repo, issueNumber, prNumber: pr.number, prUrl: pr.html_url }, "Fix PR created");
+    logger.info({ repo, issueNumber, prNumber: pr.number, prUrl: pr.html_url, confidence }, "Fix PR created");
+
+    // Add labels to PR
+    try {
+      await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+        owner, repo: repoName, issue_number: pr.number,
+        labels: ["gitwire-fix", analysis.complexity || "unknown-complexity"],
+      });
+    } catch (_) { /* non-critical */ }
 
     // Comment on issue linking to PR
     await postIssueComment(octokit, owner, repoName, issueNumber,
       "🔧 **GitWire Fix - PR submitted**\n\n" +
       "**PR:** [#" + pr.number + "](" + pr.html_url + ")\n" +
       "**Complexity:** " + (analysis.complexity || "unknown") + "\n" +
-      "**Changes:** " + patches.length + " file" + (patches.length > 1 ? "s" : "") + "\n\n" +
+      "**Confidence:** " + confidence + "\n" +
+      "**Changes:** " + fixes.length + " file" + (fixes.length > 1 ? "s" : "") + "\n\n" +
       "**Assessment:** " + (analysis.explanation || "") + "\n\n" +
+      (confidence === "low" ? "⚠️ Low confidence — please review carefully.\n\n" : "") +
       "_Please review before merging._"
     );
 
@@ -509,6 +565,226 @@ function buildPRBody(issue, analysis, patches, issueNumber) {
   lines.push("---");
   lines.push("*This PR was automatically generated by [GitWire](https://gitwire.erlab.uk).*");
   lines.push("*Review carefully before merging. Triggered by `/gitwire fix`.*");
+
+  return lines.join("\n");
+}
+
+// ── File scoring: rank files by relevance to issue ────────────────────────
+
+function scoreFiles(files, issue, tree) {
+  if (!files || !files.length) return [];
+
+  // Extract keywords from issue title and body
+  const titleWords = (issue.title || "").toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  const bodyWords = (issue.body || "").toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  const allKeywords = [...new Set([...titleWords, ...bodyWords])];
+
+  return files.map((path) => {
+    let score = 0;
+    const fileName = path.split("/").pop() || "";
+    const baseName = fileName.split(".")[0] || "";
+    const pathLower = path.toLowerCase();
+
+    // 1. Name match with keywords (strong signal)
+    for (const kw of allKeywords) {
+      if (baseName.includes(kw)) score += 10;
+      if (pathLower.includes(kw)) score += 5;
+    }
+
+    // 2. Proximity to core source (penalize deeply nested)
+    const depth = (path.match(/\//g) || []).length;
+    if (depth === 0) score += 3;
+    if (depth === 1) score += 2;
+
+    // 3. Prefer implementation files over config
+    if (pathLower.endsWith(".py") || pathLower.endsWith(".js") || pathLower.endsWith(".ts")) score += 2;
+
+    // 4. Penalize test files unless issue mentions test
+    if (pathLower.includes("test") && !pathLower.includes("test")) score -= 3;
+
+    // 5. Penalize __init__.py unless it's the only candidate
+    if (fileName === "__init__.py") score -= 5;
+
+    return { path, score: Math.max(score, 0) };
+  }).sort((a, b) => b.score - a.score);
+}
+
+// ── AI Pass 2 (v2): Generate full-file fixes ───────────────────────────────
+// Instead of search/replace, ask Claude for the complete corrected file.
+// This avoids the truncation bug from search/replace patches.
+
+async function aiGenerateFullFile(issue, analysis, fileContents, repoFullName) {
+  var fence = BT + BT + BT;
+  var filesSection = fileContents.map((f) =>
+    "--- " + f.path + " ---\n" + fence + "\n" + f.content + "\n" + fence
+  ).join("\n\n");
+
+  var prompt =
+    "You are fixing a GitHub issue. Return the COMPLETE corrected files.\n\n" +
+    "Repository: " + repoFullName + "\n" +
+    "Issue #" + issue.number + ": " + issue.title + "\n\n" +
+    "Issue body:\n" + (issue.body || "(no body)") + "\n\n" +
+    "Fix strategy: " + (analysis.fix_strategy || "") + "\n\n" +
+    "Files to fix:\n" + filesSection + "\n\n" +
+    "Return ONLY a JSON array of fixed files:\n" +
+    '[{"path": "relative/file/path",\n' +
+    '  "fixed_content": "the complete fixed file content as a string",\n' +
+    '  "commit_message": "fix(scope): brief description",\n' +
+    '  "explanation": "one-line summary of what changed"}]\n\n' +
+    "Rules:\n" +
+    "- Return the COMPLETE file content, not a diff or patch\n" +
+    "- Make only the minimal change needed to fix the issue\n" +
+    "- Preserve all existing code that doesn't need to change\n" +
+    "- If a file doesn't need changes, don't include it\n" +
+    "- If no files need fixing, return empty array []";
+
+  try {
+    const message = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 8192,
+      messages: [{ role: "user", content: prompt }],
+      system: "You are an expert software engineer. Return ONLY valid JSON. Return complete file contents, not diffs.",
+    });
+
+    const raw = message.content[0].text;
+    const cleaned = stripCodeFences(raw);
+    const fixes = extractJSON(cleaned);
+    if (!Array.isArray(fixes)) return null;
+    return fixes.filter((f) => f.path && f.fixed_content);
+  } catch (err) {
+    logger.error({ err }, "AI full-file fix generation failed");
+    return null;
+  }
+}
+
+// ── Pre-merge validation ──────────────────────────────────────────────────
+
+function validatePatches(fixes, originalFiles) {
+  const reasons = [];
+
+  for (const fix of fixes) {
+    const orig = originalFiles.find((f) => f.path === fix.path);
+    if (!orig) {
+      reasons.push("No original content for " + fix.path);
+      continue;
+    }
+
+    // 1. Verify fix is actually different
+    if (fix.fixed_content === orig.content) {
+      reasons.push(fix.path + ": AI returned identical content — no fix applied");
+      continue;
+    }
+
+    // 2. Check line count delta is reasonable (not destructive)
+    const origLines = orig.content.split("\n").length;
+    const fixLines = fix.fixed_content.split("\n").length;
+    const delta = Math.abs(fixLines - origLines);
+    const ratio = origLines > 0 ? delta / origLines : 0;
+
+    // If more than 60% of lines changed, it's suspicious for a targeted fix
+    if (ratio > 0.6 && origLines > 10) {
+      reasons.push(fix.path + ": too many lines changed (" + delta + "/" + origLines + " = " + Math.round(ratio * 100) + "%) — possible destructive replacement");
+    }
+
+    // 3. If file lost more than 30% of lines, it's likely broken
+    if (fixLines < origLines * 0.7 && origLines > 5) {
+      reasons.push(fix.path + ": file shrank significantly (" + origLines + " → " + fixLines + " lines) — likely missing content");
+    }
+
+    // 4. Check the file isn't empty
+    if (fix.fixed_content.trim().length === 0) {
+      reasons.push(fix.path + ": fixed file is empty");
+    }
+
+    // 5. Basic syntax check for common languages
+    const ext = fix.path.split(".").pop();
+    if (ext === "py") {
+      // Check for common Python syntax errors
+      const lines = fix.fixed_content.split("\n");
+      let inTriple = false;
+      for (const line of lines) {
+        const tripleCount = (line.match(/"""/g) || []).length + (line.match(/'''/g) || []).length;
+        if (tripleCount % 2 === 1) inTriple = !inTriple;
+      }
+      if (inTriple) {
+        reasons.push(fix.path + ": unclosed triple-quote string detected");
+      }
+    }
+    if (ext === "json") {
+      try { JSON.parse(fix.fixed_content); } catch (_) {
+        reasons.push(fix.path + ": invalid JSON after fix");
+      }
+    }
+  }
+
+  // Filter out fixes that failed basic checks
+  const validFixes = fixes.filter((fix) => {
+    const orig = originalFiles.find((f) => f.path === fix.path);
+    if (!orig) return false;
+    if (fix.fixed_content === orig.content) return false;
+    if (fix.fixed_content.trim().length === 0) return false;
+    return true;
+  });
+
+  if (validFixes.length === 0) {
+    reasons.push("No valid fixes remaining after validation");
+  }
+
+  return {
+    valid: validFixes.length > 0 && reasons.filter((r) => r.includes("destructive") || r.includes("shrank") || r.includes("empty") || r.includes("No valid")).length === 0,
+    reasons,
+  };
+}
+
+// ── Confidence calibration ────────────────────────────────────────────────
+
+function calibrateConfidence(analysis, filesFetched, fixesGenerated) {
+  let confidence = "high";
+
+  // Downgrade if analysis was uncertain
+  if (analysis.complexity === "moderate") confidence = "medium";
+  if (analysis.complexity === "complex") confidence = "low";
+
+  // Downgrade if we couldn't fetch all target files
+  const targetFiles = analysis.relevant_files?.length || 0;
+  if (filesFetched < targetFiles) confidence = "low";
+
+  // Downgrade if fewer fixes than expected
+  if (fixesGenerated === 0) confidence = "low";
+
+  return confidence;
+}
+
+// ── Build PR body (full-file version) ────────────────────────────────────
+
+function buildPRBodyFullFile(issue, analysis, fixes, issueNumber, confidence) {
+  var lines = [
+    "## 🔧 GitWire Autonomous Fix",
+    "",
+    "Fixes #" + issueNumber,
+    "",
+    "**Complexity:** " + (analysis.complexity || "unknown"),
+    "**Confidence:** " + (confidence || "unknown"),
+    "**Strategy:** " + (analysis.fix_strategy || ""),
+    "",
+    "### Assessment",
+    analysis.explanation || "",
+    "",
+    "### Changes",
+    "",
+  ];
+
+  for (const f of fixes) {
+    lines.push("- **" + f.path + "**" + (f.explanation ? ": " + f.explanation : ""));
+  }
+
+  lines.push("");
+  lines.push("---");
+  lines.push("*This PR was automatically generated by [GitWire](https://gitwire.erlab.uk).*");
+  lines.push("*Review carefully before merging. Triggered by `/gitwire fix`.*");
+  if (confidence === "low") {
+    lines.push("*⚠️ Low confidence fix — please verify all changes are correct.*");
+  }
 
   return lines.join("\n");
 }
