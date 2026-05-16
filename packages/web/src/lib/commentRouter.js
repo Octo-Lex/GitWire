@@ -5,6 +5,7 @@
 //   /gitwire status
 //   /gitwire stale scan
 //   /gitwire clean branches
+//   /gitwire fix
 //   /gitwire stop
 //   /gitwire settings stale <days>
 //   /gitwire settings pr-stale <days>
@@ -73,6 +74,9 @@ export function resolveCommandAction(parsed) {
       }
       return null;
 
+    case "fix":
+      return { action: "fix_issue" };
+
     case "stop":
       return { action: "stop" };
 
@@ -110,6 +114,9 @@ export function buildCommandResponse(action, data) {
 
     case "branch_cleanup":
       return "✅ **GitWire:** Branch cleanup triggered for this repo.";
+
+    case "fix_issue":
+      return "🔧 **GitWire:** Issue fix analysis started. I'll analyze the codebase and submit a PR if I can fix this.";
 
     case "stop":
       return "⏸️ **GitWire:** Maintainer automation paused for this repo. Use `/gitwire settings enable` to resume.";

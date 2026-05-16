@@ -68,3 +68,4 @@ export const triageQueue    = createQueue(QUEUES.TRIAGE);
 export const ciHealQueue    = createQueue(QUEUES.CI_HEALING);
 export const syncQueue      = createQueue(QUEUES.SYNC);
 export const maintainerQueue = createQueue(QUEUES.MAINTAINER);
+export const issueFixQueue   = createQueue(QUEUES.ISSUE_FIX);

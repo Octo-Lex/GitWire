@@ -13,6 +13,7 @@ import { pullRequestsRouter }  from "./routes/pullRequests.js";
 import { ciRouter }            from "./routes/ciRuns.js";
 import { insightsRouter }      from "./routes/insights.js";
 import { maintainerRouter }     from "./routes/maintainer.js";
+import { fixRouter }              from "./routes/fix.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -71,6 +72,7 @@ export function createApp() {
   app.use("/api/ci",             ciRouter);
   app.use("/api/insights",       insightsRouter);
   app.use("/api/maintainer",     maintainerRouter);
+  app.use("/api/fix",             fixRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {

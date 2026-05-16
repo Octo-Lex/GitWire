@@ -8,6 +8,7 @@ import { startTriageWorker }  from "./workers/triageWorker.js";
 import { startCIHealWorker }  from "./workers/ciHealWorker.js";
 import { startSyncWorker, scheduleSyncJobs } from "./workers/syncWorker.js";
 import { startMaintainerWorker, scheduleMaintainerJobs } from "./workers/maintainerWorker.js";
+import { startIssueFixWorker } from "./workers/issueFixWorker.js";
 import { db }     from "./lib/db.js";
 import { redis }  from "./lib/queue.js";
 import { logger } from "./lib/logger.js";
@@ -33,6 +34,7 @@ async function main() {
     startCIHealWorker(),
     startSyncWorker(),
     startMaintainerWorker(),
+    startIssueFixWorker(),
   ];
 
   // Schedule the repeating full-sync (every 30 min + immediate startup run)

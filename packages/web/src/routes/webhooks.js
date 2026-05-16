@@ -11,7 +11,7 @@
 
 import { Router } from "express";
 import { getWebhookApp } from "../lib/github.js";
-import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue } from "../lib/queue.js";
+import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { parseGitwireCommand, resolveCommandAction } from "../lib/commentRouter.js";
@@ -138,15 +138,26 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
         if (parsed) {
           const action = resolveCommandAction(parsed);
           if (action) {
-            await maintainerQueue.add("comment-command", {
-              ...action,
-              installationId: payload.installation?.id,
-              repoFullName: payload.repository?.full_name,
-              issueNumber: parsed.issueNumber,
-              commentId: parsed.commentId,
-              authorLogin: parsed.authorLogin,
-            }, { priority: 1 });
-            logger.info({ command: parsed.command, repo: payload.repository?.full_name }, "Gitwire comment command queued");
+            // fix_issue goes to the issue-fix queue; all others to maintainer
+            if (action.action === "fix_issue") {
+              await issueFixQueue.add("fix-issue", {
+                repo: payload.repository?.full_name,
+                issueNumber: parsed.issueNumber,
+                installationId: payload.installation?.id,
+                triggeredBy: parsed.authorLogin,
+              }, { priority: 1 });
+              logger.info({ command: "fix", repo: payload.repository?.full_name, issue: parsed.issueNumber }, "Fix command queued");
+            } else {
+              await maintainerQueue.add("comment-command", {
+                ...action,
+                installationId: payload.installation?.id,
+                repoFullName: payload.repository?.full_name,
+                issueNumber: parsed.issueNumber,
+                commentId: parsed.commentId,
+                authorLogin: parsed.authorLogin,
+              }, { priority: 1 });
+              logger.info({ command: parsed.command, repo: payload.repository?.full_name }, "Gitwire comment command queued");
+            }
           }
         }
       }
