@@ -104,10 +104,13 @@ export async function syncMembers(octokit, installationId, org) {
 
   let members = [];
   try {
-    members = await octokit.paginate(
-      octokit.rest.orgs.listMembers,
-      { org, per_page: 100 }
-    );
+    let page = 1;
+    while (true) {
+      const { data } = await octokit.request('GET /orgs/{org}/members', { org, per_page: 100, page });
+      if (!data.length) break;
+      members = members.concat(data);
+      page++;
+    }
   } catch (err) {
     logger.warn({ org, err: err.message }, "Could not list org members — may lack org:read scope");
     return;
@@ -116,7 +119,7 @@ export async function syncMembers(octokit, installationId, org) {
   for (const m of members) {
     let role = "member";
     try {
-      const { data: membership } = await octokit.rest.orgs.getMembershipForUser({
+      const { data: membership } = await octokit.request('GET /orgs/{org}/memberships/{username}', {
         org, username: m.login,
       });
       role = membership.role === "admin" ? "owner" : "member";
@@ -144,10 +147,21 @@ export async function syncMembers(octokit, installationId, org) {
  * Sync collaborators for a single repo.
  */
 export async function syncCollaborators(octokit, owner, repo, repoGithubId) {
-  const collabs = await octokit.paginate(
-    octokit.rest.repos.listCollaborators,
-    { owner, repo, per_page: 100 }
-  );
+  let collabs = [];
+  try {
+    let page = 1;
+    while (true) {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/collaborators', {
+        owner, repo, per_page: 100, page,
+      });
+      if (!data.length) break;
+      collabs = collabs.concat(data);
+      page++;
+    }
+  } catch (err) {
+    logger.warn({ repo: owner + "/" + repo, err: err.message }, "Could not list collaborators");
+    return;
+  }
 
   for (const c of collabs) {
     const perms = c.permissions ?? {};
@@ -181,10 +195,15 @@ export async function syncCollaborators(octokit, owner, repo, repoGithubId) {
 export async function syncBranchRules(octokit, owner, repo, repoGithubId) {
   let branches = [];
   try {
-    branches = await octokit.paginate(
-      octokit.rest.repos.listBranches,
-      { owner, repo, protected: true, per_page: 100 }
-    );
+    let page = 1;
+    while (true) {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/branches', {
+        owner, repo, protected: true, per_page: 100, page,
+      });
+      if (!data.length) break;
+      branches = branches.concat(data);
+      page++;
+    }
   } catch (err) {
     if (err.status === 404) return;
     throw err;
@@ -192,7 +211,7 @@ export async function syncBranchRules(octokit, owner, repo, repoGithubId) {
 
   for (const branch of branches) {
     try {
-      const { data: rule } = await octokit.rest.repos.getBranchProtection({
+      const { data: rule } = await octokit.request('GET /repos/{owner}/{repo}/branches/{branch}/protection', {
         owner, repo, branch: branch.name,
       });
 

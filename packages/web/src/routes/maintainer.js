@@ -250,7 +250,7 @@ maintainerRouter.put("/collaborators/:owner/:repo/:login", async (req, res, next
       [ctx.repo.github_id, login]
     );
 
-    await ctx.octokit.rest.repos.addCollaborator({ owner, repo, username: login, permission });
+    await ctx.octokit.request('PUT /repos/{owner}/{repo}/collaborators/{username}', { owner, repo, username: login, permission });
 
     await syncCollaborators(ctx.octokit, owner, repo, ctx.repo.github_id);
 
@@ -275,7 +275,7 @@ maintainerRouter.delete("/collaborators/:owner/:repo/:login", async (req, res, n
     const ctx = await getRepoAndOctokit(owner, repo);
     if (!ctx) return res.status(404).json({ error: "Repository not found" });
 
-    await ctx.octokit.rest.repos.removeCollaborator({ owner, repo, username: login });
+    await ctx.octokit.request('DELETE /repos/{owner}/{repo}/collaborators/{username}', { owner, repo, username: login });
 
     await db.query(
       "DELETE FROM repo_collaborators WHERE repo_id = $1 AND github_login = $2",
@@ -378,7 +378,7 @@ maintainerRouter.put("/branch-rules/:owner/:repo/:pattern", async (req, res, nex
       allow_deletions:    body.allow_deletions    ?? false,
     };
 
-    await ctx.octokit.rest.repos.updateBranchProtection(ghPayload);
+    await ctx.octokit.request('PUT /repos/{owner}/{repo}/branches/{branch}/protection', ghPayload);
 
     await syncBranchRules(ctx.octokit, owner, repo, ctx.repo.github_id);
 
