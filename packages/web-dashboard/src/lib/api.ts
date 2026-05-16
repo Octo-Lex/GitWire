@@ -1,83 +1,102 @@
-/** GitWire Dashboard API client */
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://gitwire.erlab.uk";
+/** GitWire Dashboard — SWR fetcher + typed API hooks */
+
+const BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
-async function fetchAPI(path: string) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { Authorization: `Bearer ${API_KEY}` },
-    cache: "no-store",
+async function fetcher(url: string) {
+  const res = await fetch(`${BASE}${url}`, {
+    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
   });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  if (!res.ok) throw new Error(`API error ${res.status}: ${url}`);
   return res.json();
 }
 
-// Types
-export interface Repo {
-  github_id: string;
-  full_name: string;
-  owner: string;
-  name: string;
-  private: boolean;
-  default_branch: string;
-  language: string | null;
-  stars: number;
-  open_issues: number;
-  open_prs: number;
-  last_synced_at: string | null;
-  ci_pass_rate: number | null;
-  last_ci_conclusion: string | null;
-  healed_runs: string;
-  failed_heal_runs: string;
-}
+export { fetcher };
 
-export interface Issue {
-  github_id: string;
-  number: number;
-  title: string;
-  state: string;
-  labels: string[];
-  assignees: string[];
-  triage_type: string | null;
-  triage_priority: string | null;
-  triage_summary: string | null;
-  triaged_at: string | null;
-  created_at: string;
-  repo_full_name: string;
-  repo_owner: string;
-  repo_name: string;
-}
+// ── API endpoint builders ──────────────────────────────────────────────────
+// Each returns a URL string for use as SWR key. Pass null to skip fetch.
 
-export interface CIStats {
-  summary: {
-    total_runs: string;
-    passed: string;
-    failed: string;
-    cancelled: string;
-    pass_rate: number | null;
-    auto_healed: string;
-    heal_attempted: string;
-    heal_failed: string;
-  };
-  by_failure_type: { failure_type: string; count: string }[];
-  trend: { date: string; passed: number; failed: number }[];
-}
+export const API = {
+  // Overview
+  insights:        () => `/api/insights/overview`,
+  insightRepos:    () => `/api/insights/repos`,
+  insightVelocity: () => `/api/insights/velocity`,
+  insightCITrend:  () => `/api/insights/ci-trend`,
 
-export interface InsightsOverview {
-  repos: { total: string; synced: string };
-  issues: { open: string; closed: string; unassigned: string; critical: string };
-  prs: { open: string; merged: string; draft: string };
-  ci: { pass_rate: number | null; auto_healed: string; total_failures: string };
-}
+  // Repos
+  repos: (q = "") => `/api/repos${q ? `?${q}` : ""}`,
+  repo:  (owner: string, name: string) => `/api/repos/${owner}/${name}`,
 
-// API functions
-export const api = {
-  repos: (page = 1) => fetchAPI(`/api/repos?page=${page}`),
-  issues: (page = 1) => fetchAPI(`/api/issues?page=${page}`),
-  pullRequests: (page = 1) => fetchAPI(`/api/pull-requests?page=${page}`),
-  ciRuns: (page = 1) => fetchAPI(`/api/ci/?page=${page}`),
-  ciStats: () => fetchAPI(`/api/ci/stats`),
-  insightsOverview: () => fetchAPI(`/api/insights/overview`),
-  insightsRepos: () => fetchAPI(`/api/insights/repos`),
-  insightsVelocity: () => fetchAPI(`/api/insights/velocity`),
-  insightsCITrend: () => fetchAPI(`/api/insights/ci-trend`),
+  // Issues
+  issueStats: () => `/api/issues/stats`,
+  issues:     (q = "") => `/api/issues${q ? `?${q}` : ""}`,
+
+  // PRs
+  prStats: () => `/api/pull-requests/stats`,
+  prs:     (q = "") => `/api/pull-requests${q ? `?${q}` : ""}`,
+
+  // CI
+  ciStats: () => `/api/ci/stats`,
+  ciRuns:  (q = "") => `/api/ci/${q ? `?${q}` : ""}`,
+
+  // Maintainer
+  maintainerSettings: (owner: string, repo: string) => `/api/maintainer/${owner}/${repo}/settings`,
+  maintainerActions:  (owner: string, repo: string, q = "") => `/api/maintainer/${owner}/${repo}/actions${q ? `?${q}` : ""}`,
+  maintainerStats:    (owner: string, repo: string) => `/api/maintainer/${owner}/${repo}/stats`,
+
+  // Fix attempts
+  fixAttempts: (owner: string, repo: string, q = "") => `/api/fix/${owner}/${repo}/attempts${q ? `?${q}` : ""}`,
 };
+
+// ── Trigger helpers (non-GET) ─────────────────────────────────────────────
+export async function triggerRepoSync(owner: string, repo: string) {
+  const res = await fetch(`${BASE}/api/repos/${owner}/${repo}/sync`, {
+    method: "POST",
+    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
+  });
+  return res.json();
+}
+
+export async function retryRun(runId: string) {
+  const res = await fetch(`${BASE}/api/ci/${runId}/retry`, {
+    method: "POST",
+    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
+  });
+  return res.json();
+}
+
+export async function triggerStaleScan(owner: string, repo: string) {
+  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/stale-scan`, {
+    method: "POST",
+    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
+  });
+  return res.json();
+}
+
+export async function triggerBranchCleanup(owner: string, repo: string) {
+  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/branch-cleanup`, {
+    method: "POST",
+    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
+  });
+  return res.json();
+}
+
+export async function updateSettings(owner: string, repo: string, settings: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/settings`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
+    },
+    body: JSON.stringify(settings),
+  });
+  return res.json();
+}
+
+export async function triggerFix(owner: string, repo: string, issueNumber: number) {
+  const res = await fetch(`${BASE}/api/fix/${owner}/${repo}/issues/${issueNumber}`, {
+    method: "POST",
+    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
+  });
+  return res.json();
+}
