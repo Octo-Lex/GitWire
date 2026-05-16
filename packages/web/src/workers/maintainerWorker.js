@@ -338,18 +338,92 @@ async function runCommentCommand(data) {
       break;
 
     case "status": {
-      const stats = await maintainerService.getActionStats(repoRow.github_id);
+      // Fetch the specific issue/PR for context
+      const { data: ghItem } = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
+        owner, repo, issue_number: issueNumber,
+      });
+      const isPR = !!ghItem.pull_request;
+      const daysSinceUpdate = ((Date.now() - new Date(ghItem.updated_at).getTime()) / (1000 * 60 * 60 * 24)).toFixed(1);
       const settings = await maintainerService.getSettings(repoRow.github_id);
-      responseText = [
-        "**GitWire Maintainer Status**",
-        "",
-        "Actions (7d): " + (stats?.last_7_days || 0) + " (" + (stats?.applied || 0) + " applied, " + (stats?.skipped || 0) + " skipped, " + (stats?.failed || 0) + " failed)",
-        "Stale issue threshold: **" + (settings?.stale_issue_days || 60) + " days**",
-        "Stale PR threshold: **" + (settings?.stale_pr_days || 30) + " days**",
-        "Branch cleanup: **" + ((settings?.cleanup_branches ?? true) ? "on" : "off") + "**",
-        "",
-        "_Maintainer is " + ((settings?.enabled ?? true) ? "\u2705 enabled" : "\u23f8\ufe0f paused") + " on this repo._",
-      ].join("\n");
+      const staleIssueDays = settings?.stale_issue_days ?? DEFAULT_STALE_ISSUE_DAYS;
+      const stalePrDays = settings?.stale_pr_days ?? DEFAULT_STALE_PR_DAYS;
+      const staleThreshold = isPR ? stalePrDays : staleIssueDays;
+      const daysUntilStale = Math.max(0, staleThreshold - parseFloat(daysSinceUpdate));
+
+      // Build context about THIS item
+      const lines = [];
+      lines.push("**GitWire Status for #" + issueNumber + "**");
+      lines.push("");
+      lines.push("Type: **" + (isPR ? "Pull Request" : "Issue") + "** | State: **" + ghItem.state + "** | Updated **" + daysSinceUpdate + "d ago**");
+
+      // Triage info from DB - try issues first, then PRs
+      const { rows: issueRows } = await db.query(
+        "SELECT triage_type, triage_priority, triage_summary FROM issues WHERE repo_id = $1 AND number = $2",
+        [repoRow.github_id, issueNumber]
+      );
+      const { rows: prRows } = await db.query(
+        "SELECT triage_type, triage_size, triage_risk, triage_summary, head_branch FROM pull_requests WHERE repo_id = $1 AND number = $2",
+        [repoRow.github_id, issueNumber]
+      );
+      const triageRow = issueRows[0] || prRows[0];
+      if (triageRow && triageRow.triage_type) {
+        const t = triageRow;
+        const priorityLabel = isPR ? (t.triage_size || t.triage_risk) : t.triage_priority;
+        lines.push("Triage: **" + t.triage_type + "** (" + (priorityLabel || "unknown") + ") — " + (t.triage_summary || "no summary"));
+      } else {
+        lines.push("Triage: _not yet classified_");
+      }
+
+      // Labels
+      const labelNames = (ghItem.labels || []).map(l => l.name).filter(Boolean);
+      if (labelNames.length > 0) {
+        lines.push("Labels: " + labelNames.map(l => "`" + l + "`").join(", "));
+      }
+
+      // CI info (PRs only) - match by head_branch
+      if (isPR) {
+        const prRow = prRows[0];
+        if (prRow) {
+          const { rows: ciRows } = await db.query(
+            "SELECT heal_status, heal_failure_type FROM ci_runs WHERE repo_id = $1 AND branch = $2 ORDER BY created_at DESC LIMIT 3",
+            [repoRow.github_id, prRow.head_branch]
+          );
+          if (ciRows.length > 0) {
+            const ci = ciRows[0];
+            lines.push("CI heal: **" + (ci.heal_status || "unknown") + "**" + (ci.heal_failure_type ? " (" + ci.heal_failure_type + ")" : ""));
+          } else {
+            lines.push("CI heal: _no CI runs found for this PR_");
+          }
+        }
+      }
+
+      // Stale countdown
+      if (ghItem.state === "open") {
+        if (daysUntilStale <= 0) {
+          lines.push("Stale: \u26a0\ufe0f **Past threshold** — eligible for closure");
+        } else if (daysUntilStale <= (settings?.stale_warn_days ?? DEFAULT_WARN_DAYS)) {
+          lines.push("Stale: \u23f0 **" + Math.ceil(daysUntilStale) + " days** until closure");
+        } else {
+          lines.push("Stale: \u2705 " + Math.ceil(daysUntilStale) + " days until stale threshold");
+        }
+      }
+
+      // Maintainer actions on this item
+      const { rows: itemActions } = await db.query(
+        "SELECT action_type, status, created_at FROM maintainer_actions WHERE repo_id = $1 AND target_number = $2 ORDER BY created_at DESC LIMIT 3",
+        [repoRow.github_id, String(issueNumber)]
+      );
+      if (itemActions.length > 0) {
+        lines.push("Actions: " + itemActions.map(a => a.action_type + " (" + a.status + " " + new Date(a.created_at).toISOString().split("T")[0] + ")").join(", "));
+      }
+
+      // Footer with repo-level info
+      const stats = await maintainerService.getActionStats(repoRow.github_id);
+      lines.push("");
+      lines.push("---");
+      lines.push("_Repo: maintainer " + ((settings?.enabled ?? true) ? "\u2705 on" : "\u23f8\ufe0f paused") + " | " + (stats?.last_7_days || 0) + " actions (7d) | stale issue " + staleIssueDays + "d / PR " + stalePrDays + "d_");
+
+      responseText = lines.join("\n");
       break;
     }
 
