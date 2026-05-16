@@ -63,7 +63,8 @@ export function createWorker(name, processor, opts = {}) {
 }
 
 // ── Singleton queues (import these in route handlers) ───────────────────────
-export const webhookQueue = createQueue(QUEUES.WEBHOOK_EVENTS);
-export const triageQueue  = createQueue(QUEUES.TRIAGE);
-export const ciHealQueue  = createQueue(QUEUES.CI_HEALING);
-export const syncQueue    = createQueue(QUEUES.SYNC);
+export const webhookQueue   = createQueue(QUEUES.WEBHOOK_EVENTS);
+export const triageQueue    = createQueue(QUEUES.TRIAGE);
+export const ciHealQueue    = createQueue(QUEUES.CI_HEALING);
+export const syncQueue      = createQueue(QUEUES.SYNC);
+export const maintainerQueue = createQueue(QUEUES.MAINTAINER);

@@ -7,6 +7,7 @@ import { startWebhookWorker } from "./workers/webhookWorker.js";
 import { startTriageWorker }  from "./workers/triageWorker.js";
 import { startCIHealWorker }  from "./workers/ciHealWorker.js";
 import { startSyncWorker, scheduleSyncJobs } from "./workers/syncWorker.js";
+import { startMaintainerWorker, scheduleMaintainerJobs } from "./workers/maintainerWorker.js";
 import { db }     from "./lib/db.js";
 import { redis }  from "./lib/queue.js";
 import { logger } from "./lib/logger.js";
@@ -31,10 +32,14 @@ async function main() {
     startTriageWorker(),
     startCIHealWorker(),
     startSyncWorker(),
+    startMaintainerWorker(),
   ];
 
   // Schedule the repeating full-sync (every 30 min + immediate startup run)
   await scheduleSyncJobs();
+
+  // Schedule maintainer jobs (stale scan every 6h, branch cleanup daily)
+  await scheduleMaintainerJobs();
 
   logger.info(`${workers.length} background workers started`);
 

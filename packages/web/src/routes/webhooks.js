@@ -11,9 +11,10 @@
 
 import { Router } from "express";
 import { getWebhookApp } from "../lib/github.js";
-import { webhookQueue, triageQueue, ciHealQueue } from "../lib/queue.js";
+import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { parseGitwireCommand, resolveCommandAction } from "../lib/commentRouter.js";
 
 export const webhookRouter = Router();
 
@@ -122,6 +123,33 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
     // Push events → trigger incremental sync
     case "push":
       await webhookQueue.add("sync-repo", jobData, { priority: 3 });
+      break;
+
+    // Issue comment → check for /gitwire commands
+    case "issue_comment":
+      if (payload.action === "created" && payload.comment) {
+        const parsed = parseGitwireCommand(payload.comment.body, {
+          repo: payload.repository?.full_name,
+          issueNumber: payload.issue?.number,
+          commentId: payload.comment.id,
+          authorAssociation: payload.comment.author_association,
+          authorLogin: payload.comment.user?.login,
+        });
+        if (parsed) {
+          const action = resolveCommandAction(parsed);
+          if (action) {
+            await maintainerQueue.add("comment-command", {
+              ...action,
+              installationId: payload.installation?.id,
+              repoFullName: payload.repository?.full_name,
+              issueNumber: parsed.issueNumber,
+              commentId: parsed.commentId,
+              authorLogin: parsed.authorLogin,
+            }, { priority: 1 });
+            logger.info({ command: parsed.command, repo: payload.repository?.full_name }, "Gitwire comment command queued");
+          }
+        }
+      }
       break;
 
     // All other events → general queue for logging / future use

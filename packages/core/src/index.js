@@ -12,6 +12,7 @@ export const QUEUES = Object.freeze({
   TRIAGE:         "triage",
   CI_HEALING:     "ci-healing",
   SYNC:           "sync",
+  MAINTAINER:     "maintainer",
 });
 
 // ── Heal status ────────────────────────────────────────────────────────────
