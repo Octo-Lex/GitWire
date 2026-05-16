@@ -20,7 +20,7 @@ const MAINTAINER_ROLES = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // { command, args[], repo, issueNumber, commentId, authorAssociation }
 
 export function parseGitwireCommand(body, { repo, issueNumber, commentId, authorAssociation, authorLogin }) {
-  if (!body || !body.startsWith(COMMAND_PREFIX)) return null;
+  if (!body) return null;
 
   // Only maintainers can issue commands
   if (!MAINTAINER_ROLES.has(authorAssociation)) {
@@ -28,7 +28,12 @@ export function parseGitwireCommand(body, { repo, issueNumber, commentId, author
     return null;
   }
 
-  const tokens = body.trim().split(/\s+/);
+  // Find /gitwire anywhere in the comment (may be preceded by other text)
+  const cmdIndex = body.indexOf(COMMAND_PREFIX);
+  if (cmdIndex === -1) return null;
+
+  const afterCmd = body.slice(cmdIndex).trim();
+  const tokens = afterCmd.split(/\s+/);
   const command = tokens[1] || null;
 
   if (!command) return null;
