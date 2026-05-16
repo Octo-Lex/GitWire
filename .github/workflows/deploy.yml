@@ -9,12 +9,18 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 10
     steps:
-      - name: Pull latest code
+      - name: Configure git credentials
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
+          chmod 600 ~/.git-credentials
+
+      - name: Pull latest code
+        run: |
           cd /opt/gitwire
-          git -c http.extraheader="Authorization: bearer ${GITHUB_TOKEN}" fetch origin master
+          git fetch origin master
           git reset --hard origin/master
 
       - name: Clean up disk (if needed)
