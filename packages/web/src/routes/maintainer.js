@@ -73,7 +73,7 @@ maintainerRouter.get("/members", async (req, res, next) => {
     const addParam   = (v) => { params.push(v); return "$" + params.length; };
 
     if (role)   conditions.push("m.role = " + addParam(role));
-    if (search) conditions.push("m.github_login ILIKE " + addParam("%" + search + "%"));
+    if (search) conditions.push("m.github_login ILIKE " + addParam("%" + search + "%") + "::text");
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
 
@@ -173,7 +173,7 @@ maintainerRouter.get("/collaborators", async (req, res, next) => {
     const addParam   = (v) => { params.push(v); return "$" + params.length; };
 
     if (permission) conditions.push("rc.permission = " + addParam(permission));
-    if (login)      conditions.push("rc.github_login ILIKE " + addParam("%" + login + "%"));
+    if (login)      conditions.push("rc.github_login ILIKE " + addParam("%" + login + "%") + "::text");
     if (repo)       conditions.push("r.full_name = " + addParam(repo));
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
@@ -307,7 +307,7 @@ maintainerRouter.get("/branch-rules", async (req, res, next) => {
     const addParam   = (v) => { params.push(v); return "$" + params.length; };
 
     if (repo)    conditions.push("r.full_name = " + addParam(repo));
-    if (pattern) conditions.push("br.pattern ILIKE " + addParam("%" + pattern + "%"));
+    if (pattern) conditions.push("br.pattern ILIKE " + addParam("%" + pattern + "%") + "::text");
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
 
@@ -414,8 +414,8 @@ maintainerRouter.get("/audit", async (req, res, next) => {
     const addParam   = (v) => { params.push(v); return "$" + params.length; };
 
     if (actor)  conditions.push("a.actor = " + addParam(actor));
-    if (action) conditions.push("a.action ILIKE " + addParam("%" + action + "%"));
-    if (target) conditions.push("a.target_id ILIKE " + addParam("%" + target + "%"));
+    if (action) conditions.push("a.action ILIKE " + addParam("%" + action + "%") + "::text");
+    if (target) conditions.push("a.target_id ILIKE " + addParam("%" + target + "%") + "::text");
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
 
