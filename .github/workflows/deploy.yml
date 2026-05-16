@@ -1,0 +1,60 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Pull latest code
+        run: |
+          cd /opt/gitwire
+          git fetch origin master
+          git reset --hard origin/master
+
+      - name: Clean up disk (if needed)
+        run: |
+          USED=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
+          if [ "$USED" -gt 80 ]; then
+            echo "Disk usage at ${USED}%, pruning..."
+            docker system prune -af --volumes 2>/dev/null || true
+          fi
+
+      - name: Build & Deploy
+        run: |
+          cd /opt/gitwire
+          docker compose build gitwire-app dashboard 2>&1
+          docker compose up -d gitwire-app dashboard 2>&1
+
+      - name: Wait for healthy
+        run: |
+          cd /opt/gitwire
+          echo "Waiting for containers to become healthy..."
+          sleep 5
+          docker compose ps --format json 2>&1 | python3 -c "
+          import sys, json
+          for line in sys.stdin:
+              svc = json.loads(line)
+              name = svc.get('Name','?')
+              health = svc.get('Health','?')
+              print(f'  {name}: {health}')
+          "
+
+      - name: Health check
+        run: |
+          APP_HEALTH=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo "FAILED")
+          DASH_HEALTH=$(docker exec gitwire-dashboard-1 wget -qO- http://localhost:3001 2>/dev/null > /dev/null && echo "OK" || echo "FAILED")
+          echo "gitwire-app:   $APP_HEALTH"
+          echo "dashboard:     $DASH_HEALTH"
+          if echo "$APP_HEALTH" | grep -q "FAILED"; then
+            echo "::error::gitwire-app health check failed"
+            exit 1
+          fi
+          if echo "$DASH_HEALTH" | grep -q "FAILED"; then
+            echo "::error::dashboard health check failed"
+            exit 1
+          fi
+          echo "✅ All services healthy"
