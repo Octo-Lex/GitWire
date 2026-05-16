@@ -1,13 +1,13 @@
 // src/workers/issueFixWorker.js
-// Autonomous Contributor — picks up an issue, analyzes the codebase,
+// Autonomous Contributor - picks up an issue, analyzes the codebase,
 // generates a fix, and submits a PR.
 //
 // Pipeline:
-//   1. Scope guard  — check qualifying labels
-//   2. Rate limit    — per-repo daily + per-issue uniqueness
-//   3. Analyze (AI)  — pick relevant files + assess complexity
-//   4. Generate (AI) — produce file patches
-//   5. Submit        — branch → commits → PR → comment on issue
+//   1. Scope guard  - check qualifying labels
+//   2. Rate limit    - per-repo daily + per-issue uniqueness
+//   3. Analyze (AI)  - pick relevant files + assess complexity
+//   4. Generate (AI) - produce file patches
+//   5. Submit        - branch → commits → PR → comment on issue
 
 import Anthropic from "@anthropic-ai/sdk";
 import { createWorker, QUEUES } from "../lib/queue.js";
@@ -22,7 +22,7 @@ const anthropic = new Anthropic({
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
 });
 
-// No backticks in regex — use char code
+// No backticks in regex - use char code
 const BT = String.fromCharCode(96);
 const FENCE_RE = new RegExp("^" + BT + BT + BT + "(?:json)?\\s*\\n?", "i");
 const FENCE_END_RE = new RegExp("\\n?" + BT + BT + BT + "\\s*$", "i");
@@ -72,7 +72,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   const rateLimit = await checkRateLimit(repoId, issueNumber, repo);
   if (!rateLimit.allowed) {
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "🚫 **GitWire Fix — rate limited**\n\n" + rateLimit.reason +
+      "🚫 **GitWire Fix - rate limited**\n\n" + rateLimit.reason +
       "\n\n_Adjust settings or wait for the limit to reset._"
     );
     return;
@@ -83,9 +83,9 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
     owner, repo: repoName, issue_number: issueNumber,
   });
 
-  // ── Step 3: Scope guard — qualifying labels ───────────────────────────────
+  // ── Step 3: Scope guard - qualifying labels ───────────────────────────────
   const settings = await maintainerService.getSettings(repoId);
-  const allowedLabels = settings.fix_allowed_labels || DEFAULT_ALLOWED_LABELS;
+  const allowedLabels = (settings && settings.fix_allowed_labels) || DEFAULT_ALLOWED_LABELS;
   const issueLabels = issue.labels.map((l) => typeof l === "string" ? l : l.name).map((l) => l.toLowerCase());
   const hasQualifying = issueLabels.some((l) => allowedLabels.map((a) => a.toLowerCase()).includes(l));
 
@@ -93,7 +93,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
     await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", null, null,
       "No qualifying label. Issue labels: " + issueLabels.join(", "));
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "🚫 **GitWire Fix — not eligible**\n\n" +
+      "🚫 **GitWire Fix - not eligible**\n\n" +
       "This issue doesn't have a qualifying label. Accepted labels: `" +
       allowedLabels.join("`, `") + "`\n\n" +
       "_Add one of these labels and try `/gitwire fix` again._"
@@ -107,13 +107,13 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   // Fetch repo file tree (top 3 levels)
   const tree = await fetchTree(octokit, owner, repoName);
 
-  // ── Step 4: AI Pass 1 — Analyze ───────────────────────────────────────────
+  // ── Step 4: AI Pass 1 - Analyze ───────────────────────────────────────────
   const analysis = await aiAnalyze(issue, tree, repo);
   if (!analysis) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed", null, null,
       "AI analysis returned no result");
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "⚠️ **GitWire Fix — analysis failed**\n\n" +
+      "⚠️ **GitWire Fix - analysis failed**\n\n" +
       "Could not analyze this issue. It may be too complex or unclear.\n\n" +
       "_A maintainer should review manually._"
     );
@@ -127,7 +127,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
     await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
       analysis.explanation, "Complexity too high for autonomous fix");
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "⚠️ **GitWire Fix — too complex**\n\n" +
+      "⚠️ **GitWire Fix - too complex**\n\n" +
       "**Assessment:** " + analysis.explanation + "\n\n" +
       "This issue requires human judgment. A maintainer should tackle this.\n\n" +
       "_Complexity: " + analysis.complexity + " · Relevant files: " + (analysis.relevant_files || []).join(", ") + "_"
@@ -140,13 +140,13 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   // ── Step 5: Fetch relevant file contents ──────────────────────────────────
   const fileContents = await fetchFileContents(octokit, owner, repoName, analysis.relevant_files || []);
 
-  // ── Step 6: AI Pass 2 — Generate patches ──────────────────────────────────
+  // ── Step 6: AI Pass 2 - Generate patches ──────────────────────────────────
   const patches = await aiGenerate(issue, analysis, fileContents, repo);
   if (!patches || !patches.length) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed", analysis.complexity,
       analysis.explanation, "AI could not generate patches");
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "⚠️ **GitWire Fix — no patches generated**\n\n" +
+      "⚠️ **GitWire Fix - no patches generated**\n\n" +
       "**Assessment:** " + analysis.explanation + "\n\n" +
       "AI analyzed the issue but couldn't produce a concrete fix.\n\n" +
       "_Complexity: " + analysis.complexity + " · A maintainer should review._"
@@ -180,7 +180,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
         });
         fileSha = existing.sha;
       } catch (_) {
-        // File doesn't exist yet — new file
+        // File doesn't exist yet - new file
       }
 
       const contentB64 = Buffer.from(patch.content).toString("base64");
@@ -212,7 +212,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
 
     // Comment on issue linking to PR
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "🔧 **GitWire Fix — PR submitted**\n\n" +
+      "🔧 **GitWire Fix - PR submitted**\n\n" +
       "**PR:** [#" + pr.number + "](" + pr.html_url + ")\n" +
       "**Complexity:** " + (analysis.complexity || "unknown") + "\n" +
       "**Changes:** " + patches.length + " file" + (patches.length > 1 ? "s" : "") + "\n\n" +
@@ -229,7 +229,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed",
       analysis.complexity, analysis.explanation, "PR creation failed: " + err.message);
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "❌ **GitWire Fix — PR creation failed**\n\n" +
+      "❌ **GitWire Fix - PR creation failed**\n\n" +
       "The fix was generated but could not be submitted:\n> " + err.message + "\n\n" +
       "**Assessment:** " + (analysis.explanation || "") + "\n\n" +
       "_A maintainer may need to intervene._"
@@ -241,8 +241,8 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
 
 async function checkRateLimit(repoId, issueNumber, repoFullName) {
   const settings = await maintainerService.getSettings(repoId);
-  const dailyLimit = settings.fix_daily_limit || 3;
-  const perIssueLimit = settings.fix_per_issue_limit || 1;
+  const dailyLimit = (settings && settings.fix_daily_limit) || 3;
+  const perIssueLimit = (settings && settings.fix_per_issue_limit) || 1;
 
   // Per-issue: check if already attempted
   const { rows: existing } = await db.query(
@@ -300,11 +300,38 @@ async function fetchTree(octokit, owner, repo) {
     const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
       owner, repo, tree_sha: repoInfo.default_branch, recursive: 1,
     });
-    // Return all file paths (limit to 500 for token budget)
-    return tree.tree
-      .filter((t) => t.type === "blob")
-      .map((t) => t.path)
-      .slice(0, 500);
+    const allFiles = tree.tree.filter((t) => t.type === "blob").map((t) => t.path);
+
+    // Prioritize source files over docs/assets to keep relevant files in view
+    // Exclude vendor/bundle/plugin docs that flood the tree
+    const srcExts = new Set([
+      ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".yaml", ".yml",
+      ".toml", ".cfg", ".ini", ".sh", ".bash", ".sql", ".rb", ".go",
+      ".rs", ".java", ".c", ".cpp", ".h", ".hpp", ".cs", ".php",
+    ]);
+    const excludePrefixes = [
+      "plugins/bundle/", "node_modules/", "vendor/", "third_party/",
+      ".github/", "website/", "docs/", "console/", "deploy/",
+      "scripts/pack/", "tests/",
+    ];
+    const isVendor = (p) => excludePrefixes.some((pre) => p.startsWith(pre));
+
+    const coreSource = allFiles.filter((p) => {
+      const ext = "." + p.split(".").pop();
+      return srcExts.has(ext) && !isVendor(p);
+    });
+    const vendorSource = allFiles.filter((p) => {
+      const ext = "." + p.split(".").pop();
+      return srcExts.has(ext) && isVendor(p);
+    });
+    const otherFiles = allFiles.filter((p) => {
+      const ext = "." + p.split(".").pop();
+      return !srcExts.has(ext);
+    });
+
+    // Core source first, then vendor source, then others — up to 500
+    const prioritized = [...coreSource, ...vendorSource, ...otherFiles].slice(0, 500);
+    return prioritized;
   } catch (err) {
     logger.error({ err, owner, repo }, "Failed to fetch tree");
     return [];
@@ -350,19 +377,19 @@ async function aiAnalyze(issue, tree, repoFullName) {
     "- complexity 'simple' = single file, clear fix\n" +
     "- complexity 'moderate' = 2-3 files, clear approach\n" +
     "- List at most 10 relevant_files\n" +
-    "- Be conservative — when in doubt, set higher complexity";
+    "- Be conservative - when in doubt, set higher complexity";
 
   try {
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
       messages: [{ role: "user", content: prompt }],
-      system: "You are an expert software architect. Analyze issues precisely and return only valid JSON.",
+      system: "You are an expert software architect. Return ONLY valid JSON — no markdown, no explanation, no text before or after the JSON. Analyze issues precisely.",
     });
 
     const raw = message.content[0].text;
     const cleaned = stripCodeFences(raw);
-    return JSON.parse(cleaned);
+    return extractJSON(cleaned);
   } catch (err) {
     logger.error({ err }, "AI analysis failed");
     return null;
@@ -401,12 +428,12 @@ async function aiGenerate(issue, analysis, fileContents, repoFullName) {
       model: "claude-sonnet-4-20250514",
       max_tokens: 8192,
       messages: [{ role: "user", content: prompt }],
-      system: "You are an expert software engineer. Generate minimal, precise fixes. Return only valid JSON.",
+      system: "You are an expert software engineer. Return ONLY valid JSON — no markdown, no explanation, no text before or after the JSON. Generate minimal, precise fixes.",
     });
 
     const raw = message.content[0].text;
     const cleaned = stripCodeFences(raw);
-    const patches = JSON.parse(cleaned);
+    const patches = extractJSON(cleaned);
     if (!Array.isArray(patches)) return null;
     // Filter out patches with no actual content
     return patches.filter((p) => p.path && p.content);
@@ -459,5 +486,44 @@ async function postIssueComment(octokit, owner, repo, issueNumber, body) {
 }
 
 function truncate(str, max) {
-  return str && str.length > max ? str.slice(0, max - 1) + "…" : str;
+  return str && str.length > max ? str.slice(0, max - 1) + "..." : str;
+}
+
+// ── Robust JSON extraction ─────────────────────────────────────────────────
+// Claude sometimes prefixes JSON with text like "I'll generate...".
+// Extract the first valid JSON object or array from the string.
+
+function extractJSON(text) {
+  try { return JSON.parse(text); } catch (_) {}
+
+  // Find the first { or [
+  let start = -1;
+  let isOpenObj = false;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "{") { start = i; isOpenObj = true; break; }
+    if (text[i] === "[") { start = i; isOpenObj = false; break; }
+  }
+  if (start === -1) return null;
+
+  const openCh = isOpenObj ? "{" : "[";
+  const closeCh = isOpenObj ? "}" : "]";
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (esc) { esc = false; continue; }
+    if (ch === "\\" && inStr) { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === openCh || ch === "[" || ch === "{") depth++;
+    else if (ch === closeCh || ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(text.slice(start, i + 1)); } catch (_) { return null; }
+      }
+    }
+  }
+  return null;
 }
