@@ -65,7 +65,9 @@ async function runFullSync() {
 
     // Sync org members (best-effort — needs org:read scope)
     if (installation.account?.type === 'Organization') {
-      await syncMembers(octokit, installation.id, installation.account.login).catch(() => {});
+      await syncMembers(octokit, installation.id, installation.account.login).catch((err) => {
+        logger.warn({ org: installation.account.login, err: err.message }, "Member sync failed");
+      });
     }
 
     await forEachRepo(octokit, async (repo) => {
@@ -112,8 +114,12 @@ async function syncRepoDetails(octokit, repo) {
     syncIssues(octokit, repo, since),
     syncPullRequests(octokit, repo, since),
     syncWorkflowRuns(octokit, repo),
-    syncCollaborators(octokit, repo.owner.login, repo.name, repo.id).catch(() => {}),
-    syncBranchRules(octokit, repo.owner.login, repo.name, repo.id).catch(() => {}),
+    syncCollaborators(octokit, repo.owner.login, repo.name, repo.id).catch((err) => {
+      logger.warn({ repo: repo.full_name, err: err.message }, "Collaborator sync failed");
+    }),
+    syncBranchRules(octokit, repo.owner.login, repo.name, repo.id).catch((err) => {
+      logger.warn({ repo: repo.full_name, err: err.message }, "Branch rules sync failed");
+    }),
   ]);
 
   await db.query(
