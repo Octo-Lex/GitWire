@@ -46,7 +46,7 @@ GitWire/
 └── scripts/           # Build and migration scripts
 ```
 
-## Four Pillars
+## Five Pillars
 
 | Pillar | Package | Status |
 |--------|---------|--------|
@@ -54,6 +54,7 @@ GitWire/
 | **Issue & PR Triage** | `@gitwire/triage` (logic in `@gitwire/web`) | ✅ Working |
 | **Self-Healing CI** | `@gitwire/healer` (logic in `@gitwire/web`) | ✅ Working |
 | **Multi-Repo Insights** | `@gitwire/insights` (logic in `@gitwire/web`) | ✅ Working |
+| **Autonomous Contributor** | `@gitwire/web` (future: `@gitwire/contributor`) | ✅ Working |
 
 ## Tech Stack
 
