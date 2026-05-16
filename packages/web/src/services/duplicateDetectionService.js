@@ -133,7 +133,7 @@ export async function detectDuplicates({ issue, repository, octokit }) {
  */
 export async function backfillEmbeddings({ repoId, repoFullName }) {
   const { rows: issues } = await db.query(
-    `SELECT github_id, title, body FROM issues
+    `SELECT github_id, title FROM issues
      WHERE repo_id = $1
        AND state   = 'open'
        AND embedding_id IS NULL
@@ -151,7 +151,7 @@ export async function backfillEmbeddings({ repoId, repoFullName }) {
         github_id: issue.github_id,
         repo_id: repoId,
         title: issue.title,
-        body: issue.body,
+        body: null,
       });
       done++;
       // Polite rate limiting — Voyage AI free tier is 3 req/s

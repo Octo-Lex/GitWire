@@ -148,6 +148,7 @@ duplicatesRouter.get("/:owner/:repo", async (req, res, next) => {
 });
 
 // ── GET /api/duplicates/issue/:githubIssueId ──────────────────────────────────
+// NOTE: Must come BEFORE /:owner/:repo and /:id/:action to avoid param conflicts
 duplicatesRouter.get("/issue/:githubIssueId", async (req, res, next) => {
   try {
     const { rows } = await db.query(
@@ -170,7 +171,8 @@ duplicatesRouter.get("/issue/:githubIssueId", async (req, res, next) => {
 });
 
 // ── POST /api/duplicates/:id/confirm ─────────────────────────────────────────
-duplicatesRouter.post("/:id/confirm", async (req, res, next) => {
+// NOTE: Must come BEFORE /:owner/:repo
+duplicatesRouter.post("/:id(\\d+)/confirm", async (req, res, next) => {
   try {
     const signal = await resolveSignalAndAct(req.params.id, "confirmed", req);
     if (!signal) return res.status(404).json({ error: "Signal not found" });
@@ -179,7 +181,7 @@ duplicatesRouter.post("/:id/confirm", async (req, res, next) => {
 });
 
 // ── POST /api/duplicates/:id/dismiss ─────────────────────────────────────────
-duplicatesRouter.post("/:id/dismiss", async (req, res, next) => {
+duplicatesRouter.post("/:id(\\d+)/dismiss", async (req, res, next) => {
   try {
     const signal = await resolveSignalAndAct(req.params.id, "dismissed", req);
     if (!signal) return res.status(404).json({ error: "Signal not found" });
@@ -188,6 +190,7 @@ duplicatesRouter.post("/:id/dismiss", async (req, res, next) => {
 });
 
 // ── POST /api/duplicates/backfill/:owner/:repo ────────────────────────────────
+// NOTE: Must come BEFORE /:owner/:repo
 duplicatesRouter.post("/backfill/:owner/:repo", async (req, res, next) => {
   try {
     const fullName = `${req.params.owner}/${req.params.repo}`;
