@@ -11,6 +11,8 @@ const NAV = [
   { href: "/pull-requests", label: "Pull Requests",   icon: "⌥" },
   { href: "/duplicates",    label: "Duplicates",      icon: "⊗" },
   { href: "/ci",            label: "Self-Healing CI",  icon: "⚙" },
+  { href: "/automation",    label: "Automation",      icon: "⌘" },
+  { href: "/trust",         label: "Trust & Policy",  icon: "🛡" },
   { href: "/insights",      label: "Insights",        icon: "◈" },
   { href: "/maintainer",    label: "Maintainer",      icon: "⟳" },
   { href: "/fix-attempts",  label: "Fix Attempts",    icon: "⚡" },

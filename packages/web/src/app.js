@@ -16,6 +16,9 @@ import { maintainerRouter }     from "./routes/maintainer.js";
 import { fixRouter }              from "./routes/fix.js";
 import { healRouter }          from "./routes/healHistory.js";
 import { duplicatesRouter }    from "./routes/duplicates.js";
+import { enforcementRouter }  from "./routes/enforcement.js";
+import { phase2Router }       from "./routes/phase2.js";
+import { phase3Router }       from "./routes/phase3.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -77,6 +80,15 @@ export function createApp() {
   app.use("/api/fix",             fixRouter);
   app.use("/api/heal",            healRouter);
   app.use("/api/duplicates",       duplicatesRouter);
+
+  // ── Phase 1: Enforcement ─────────────────────────────────────────────────
+  app.use("/api/enforcement",     enforcementRouter);
+
+  // ── Phase 2: Automation ──────────────────────────────────────────────────
+  app.use("/api/phase2",          phase2Router);
+
+  // ── Phase 3: Trust & Resilience ──────────────────────────────────────────
+  app.use("/api/phase3",          phase3Router);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {

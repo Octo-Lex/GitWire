@@ -66,6 +66,32 @@ export const API = {
   duplicates:   (q = "") => `/api/duplicates${q ? `?${q}` : ""}`,
   dupByRepo:    (owner: string, repo: string) => `/api/duplicates/${owner}/${repo}`,
   dupByIssue:   (issueId: string) => `/api/duplicates/issue/${issueId}`,
+
+  // Enforcement (Phase 1)
+  enforcementStats:   () => `/api/enforcement/stats`,
+  enforcementPolicies: () => `/api/enforcement/policies`,
+  enforcementViolations: (q = "") => `/api/enforcement/violations${q ? `?${q}` : ""}`,
+  enforcementConfigResults: (q = "") => `/api/enforcement/config-results${q ? `?${q}` : ""}`,
+
+  // Automation (Phase 2)
+  queue:          (q = "") => `/api/phase2/queue${q ? `?${q}` : ""}`,
+  queueRepo:      (owner: string, repo: string) => `/api/phase2/queue/${owner}/${repo}`,
+  feedbackRules:  () => `/api/phase2/feedback`,
+  telemetrySummary:  () => `/api/phase2/telemetry/summary`,
+  telemetryEvents:   (q = "") => `/api/phase2/telemetry/events${q ? `?${q}` : ""}`,
+  telemetryThroughput: () => `/api/phase2/telemetry/throughput`,
+  telemetryCiHealth:  () => `/api/phase2/telemetry/ci-health`,
+  rollbacks:      (q = "") => `/api/phase2/rollbacks${q ? `?${q}` : ""}`,
+
+  // Trust (Phase 3)
+  flakyStats:     () => `/api/phase3/flaky/stats`,
+  flakyTests:     (q = "") => `/api/phase3/flaky${q ? `?${q}` : ""}`,
+  flakyRepo:      (owner: string, repo: string) => `/api/phase3/flaky/${owner}/${repo}`,
+  reconcilerRuns: () => `/api/phase3/reconciler/runs`,
+  reconcilerRepos: (q = "") => `/api/phase3/reconciler/repos${q ? `?${q}` : ""}`,
+  depStats:       () => `/api/phase3/dependencies/stats`,
+  depVulns:       (q = "") => `/api/phase3/dependencies/vulnerabilities${q ? `?${q}` : ""}`,
+  depRepo:        (owner: string, repo: string) => `/api/phase3/dependencies/${owner}/${repo}`,
 };
 
 // ── Trigger helpers (non-GET) ─────────────────────────────────────────────
@@ -187,6 +213,158 @@ export async function triggerEmbeddingBackfill(owner: string, repo: string) {
   const res = await fetch(`${BASE}/api/duplicates/backfill/${owner}/${repo}`, {
     method: "POST",
     headers: authHeaders(),
+  });
+  return res.json();
+}
+
+// ── Enforcement actions (Phase 1) ──────────────────────────────────────────
+
+export async function createPolicy(policy: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/enforcement/policies`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(policy),
+  });
+  return res.json();
+}
+
+export async function updatePolicy(id: number, updates: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/enforcement/policies/${id}`, {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(updates),
+  });
+  return res.json();
+}
+
+export async function deletePolicy(id: number) {
+  const res = await fetch(`${BASE}/api/enforcement/policies/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function suppressViolation(id: number) {
+  const res = await fetch(`${BASE}/api/enforcement/violations/${id}/suppress`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function triggerEnforcementRun(repo?: string) {
+  const res = await fetch(`${BASE}/api/enforcement/run`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ repo }),
+  });
+  return res.json();
+}
+
+// ── Automation actions (Phase 2) ──────────────────────────────────────────
+
+export async function updateQueueConfig(owner: string, repo: string, config: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/phase2/queue/${owner}/${repo}/config`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(config),
+  });
+  return res.json();
+}
+
+export async function dequeuePR(owner: string, repo: string, pr: number) {
+  const res = await fetch(`${BASE}/api/phase2/queue/${owner}/${repo}/${pr}/remove`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function createFeedbackRule(rule: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/phase2/feedback`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(rule),
+  });
+  return res.json();
+}
+
+export async function updateFeedbackRule(id: number, updates: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/phase2/feedback/${id}`, {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(updates),
+  });
+  return res.json();
+}
+
+export async function deleteFeedbackRule(id: number) {
+  const res = await fetch(`${BASE}/api/phase2/feedback/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+// ── Trust actions (Phase 3) ──────────────────────────────────────────────
+
+export async function graduateTest(id: number) {
+  const res = await fetch(`${BASE}/api/phase3/flaky/${id}/graduate`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function dismissTest(id: number) {
+  const res = await fetch(`${BASE}/api/phase3/flaky/${id}/dismiss`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function triggerReconciliation(repo?: string) {
+  const res = await fetch(`${BASE}/api/phase3/reconciler/run`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ repo }),
+  });
+  return res.json();
+}
+
+export async function updateRepoReconcileConfig(owner: string, repo: string, updates: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/phase3/reconciler/repos/${owner}/${repo}`, {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(updates),
+  });
+  return res.json();
+}
+
+export async function triggerDepScan(owner: string, repo: string) {
+  const res = await fetch(`${BASE}/api/phase3/dependencies/${owner}/${repo}/scan`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function openBatchDepPR(owner: string, repo: string, ecosystem = "npm") {
+  const res = await fetch(`${BASE}/api/phase3/dependencies/${owner}/${repo}/batch-pr`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ ecosystem }),
+  });
+  return res.json();
+}
+
+export async function dismissVuln(id: number, reason?: string) {
+  const res = await fetch(`${BASE}/api/phase3/dependencies/vuln/${id}/dismiss`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ reason }),
   });
   return res.json();
 }

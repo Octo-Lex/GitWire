@@ -9,6 +9,8 @@ import { startCIHealWorker }  from "./workers/ciHealWorker.js";
 import { startSyncWorker, scheduleSyncJobs } from "./workers/syncWorker.js";
 import { startMaintainerWorker, scheduleMaintainerJobs } from "./workers/maintainerWorker.js";
 import { startIssueFixWorker } from "./workers/issueFixWorker.js";
+import { startMergeQueueWorker } from "./workers/phase2Worker.js";
+import { startPhase3Worker, schedulePhase3Jobs } from "./workers/phase3Worker.js";
 import { db }     from "./lib/db.js";
 import { redis }  from "./lib/queue.js";
 import { logger } from "./lib/logger.js";
@@ -35,6 +37,8 @@ async function main() {
     startSyncWorker(),
     startMaintainerWorker(),
     startIssueFixWorker(),
+    startMergeQueueWorker(),
+    startPhase3Worker(),
   ];
 
   // Schedule the repeating full-sync (every 30 min + immediate startup run)
@@ -42,6 +46,9 @@ async function main() {
 
   // Schedule maintainer jobs (stale scan every 6h, branch cleanup daily)
   await scheduleMaintainerJobs();
+
+  // Schedule Phase 3 recurring jobs (policy reconciliation nightly, dep scan weekly, graduation weekly)
+  await schedulePhase3Jobs();
 
   logger.info(`${workers.length} background workers started`);
 
