@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { fetcher, API, graduateTest, dismissTest, triggerReconciliation, updateRepoReconcileConfig, triggerDepScan, dismissVuln } from "../lib/api";
+import { fetcher, API, graduateTest, dismissTest, triggerReconciliation, updateRepoReconcileConfig, triggerDepScan, dismissVuln } from "../../lib/api";
 import { useState } from "react";
 
 const TABS = [

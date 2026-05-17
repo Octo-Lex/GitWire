@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { fetcher, API, dequeuePR, updateQueueConfig, createFeedbackRule, updateFeedbackRule, deleteFeedbackRule } from "../lib/api";
+import { fetcher, API, dequeuePR, updateQueueConfig, createFeedbackRule, updateFeedbackRule, deleteFeedbackRule } from "../../lib/api";
 import { useState } from "react";
 
 // ── Tab definition ──────────────────────────────────────────────────────────
