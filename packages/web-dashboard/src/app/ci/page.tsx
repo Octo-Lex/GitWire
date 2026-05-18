@@ -12,6 +12,7 @@ import {
 } from "@/components/ui";
 import { formatDistanceToNow } from "date-fns";
 import clsx from "clsx";
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const CONCLUSIONS = ["All", "failure", "success", "cancelled"];
 const HEAL_STATUS = ["All", "healed", "attempted", "failed", "pending"];
@@ -59,6 +60,7 @@ export default function CIPage() {
   };
 
   return (
+    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Self-healing CI"
@@ -262,6 +264,7 @@ function HealHistoryPanel({ healStats }: { healStats: Record<string, unknown> | 
   const summary = healStats?.summary as Record<string, unknown> | undefined;
 
   return (
+    <ErrorBoundary>
     <div className="px-6 py-4 space-y-4">
       {/* Heal summary cards */}
       {summary && (
@@ -349,5 +352,6 @@ function HealHistoryPanel({ healStats }: { healStats: Record<string, unknown> | 
         )}
       </div>
     </div>
+    </ErrorBoundary>
   );
 }

@@ -3,6 +3,7 @@
 import useSWR from "swr";
 import { fetcher, API, dequeuePR, updateQueueConfig, createFeedbackRule, updateFeedbackRule, deleteFeedbackRule } from "../../lib/api";
 import { useState } from "react";
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // ── Tab definition ──────────────────────────────────────────────────────────
 const TABS = [
@@ -16,6 +17,7 @@ type TabKey = (typeof TABS)[number]["key"];
 export default function AutomationPage() {
   const [tab, setTab] = useState<TabKey>("queue");
   return (
+    <ErrorBoundary>
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-bold text-text-primary">Automation</h1>
 
@@ -50,6 +52,7 @@ function MergeQueueTab() {
   const entries = data?.rows ?? data ?? [];
 
   return (
+    <ErrorBoundary>
     <div className="space-y-4">
       <p className="text-sm text-text-secondary">PRs waiting for auto-merge. Updates every 10s.</p>
       {entries.length === 0 ? (
@@ -92,6 +95,7 @@ function FeedbackTab() {
   const [showCreate, setShowCreate] = useState(false);
 
   return (
+    <ErrorBoundary>
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <p className="text-sm text-text-secondary">Notification rules for pipeline events.</p>
@@ -144,6 +148,7 @@ function TelemetryTab() {
   const evts = events?.rows ?? events ?? [];
 
   return (
+    <ErrorBoundary>
     <div className="space-y-6">
       {/* Summary cards */}
       <div className="grid grid-cols-5 gap-4">
@@ -186,6 +191,7 @@ function RollbacksTab() {
   const rollbacks = data?.rows ?? data ?? [];
 
   return (
+    <ErrorBoundary>
     <div className="space-y-4">
       <p className="text-sm text-text-secondary">Automatic and manual rollback history.</p>
       {rollbacks.length === 0 ? (

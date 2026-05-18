@@ -12,6 +12,7 @@ import {
 } from "@/components/ui";
 import { formatDistanceToNow } from "date-fns";
 import clsx from "clsx";
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const SIZES = ["All", "size/XS", "size/S", "size/M", "size/L", "size/XL"];
 const RISKS = ["All", "low", "medium", "high"];
@@ -50,6 +51,7 @@ export default function PullRequestsPage() {
   };
 
   return (
+    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Pull requests"
@@ -187,5 +189,6 @@ export default function PullRequestsPage() {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
   );
 }

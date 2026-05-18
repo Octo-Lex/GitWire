@@ -65,11 +65,11 @@ phase2Router.post("/queue/:owner/:repo/config", async (req, res, next) => {
     const { rows: [repo] } = await db.query("SELECT github_id FROM repositories WHERE full_name = $1", [fullName]);
     if (!repo) return res.status(404).json({ error: "Repository not found" });
 
-    const { enabled, merge_method, delete_branch, required_checks, max_queue_depth, check_timeout_mins } = req.body;
+    const { enabled, merge_method, delete_branch, required_checks, max_queue_depth, check_timeout_mins, base_branch } = req.body;
 
     const { rows: [cfg] } = await db.query(
-      `INSERT INTO merge_queue_config (repo_id, enabled, merge_method, delete_branch, required_checks, max_queue_depth, check_timeout_mins)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO merge_queue_config (repo_id, enabled, merge_method, delete_branch, required_checks, max_queue_depth, check_timeout_mins, base_branch)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (repo_id) DO UPDATE SET
          enabled = COALESCE($2, merge_queue_config.enabled),
          merge_method = COALESCE($3, merge_queue_config.merge_method),
@@ -77,10 +77,11 @@ phase2Router.post("/queue/:owner/:repo/config", async (req, res, next) => {
          required_checks = COALESCE($5, merge_queue_config.required_checks),
          max_queue_depth = COALESCE($6, merge_queue_config.max_queue_depth),
          check_timeout_mins = COALESCE($7, merge_queue_config.check_timeout_mins),
+         base_branch = COALESCE($8, merge_queue_config.base_branch),
          updated_at = NOW()
        RETURNING *`,
       [repo.github_id, enabled ?? false, merge_method ?? "squash",
-       delete_branch ?? true, required_checks ?? [], max_queue_depth ?? 20, check_timeout_mins ?? 60]
+       delete_branch ?? true, required_checks ?? [], max_queue_depth ?? 20, check_timeout_mins ?? 60, base_branch ?? "main"]
     );
     res.json(cfg);
   } catch (err) { next(err); }

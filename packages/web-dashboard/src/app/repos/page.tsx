@@ -12,6 +12,7 @@ import {
   Skeleton, EmptyState, FilterPill,
 } from "@/components/ui";
 import { formatDistanceToNow } from "date-fns";
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const LANGS = ["All", "TypeScript", "JavaScript", "Python", "Go", "Rust", "Java"];
 
@@ -45,6 +46,7 @@ export default function ReposPage() {
   }
 
   return (
+    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Repositories"
@@ -109,6 +111,7 @@ export default function ReposPage() {
                 {repos.map((repo: ApiItem) => {
                   const syncKey = String(repo.full_name);
                   return (
+    <ErrorBoundary>
                     <tr key={String(repo.github_id)} className="border-b border-border last:border-0 hover:bg-surface-2/40 transition-colors group">
                       <td className="px-4 py-3">
                         <div className="font-mono text-sm text-text-primary font-medium">{String(repo.full_name)}</div>
@@ -167,5 +170,6 @@ export default function ReposPage() {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
   );
 }

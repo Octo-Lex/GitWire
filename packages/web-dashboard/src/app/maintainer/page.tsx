@@ -13,6 +13,7 @@ import {
 } from "@/components/ui";
 import { formatDistanceToNow } from "date-fns";
 import clsx from "clsx";
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // ── Permission helpers ────────────────────────────────────────────────────────
 const PERMISSION_ORDER = ["pull", "triage", "push", "maintain", "admin"];
@@ -31,6 +32,7 @@ function PermBadge({ permission }: { permission: string }) {
 function Avatar({ login, avatarUrl, size = 7 }: { login: string; avatarUrl?: string; size?: number }) {
   if (avatarUrl) {
     return (
+    <ErrorBoundary>
       <img
         src={avatarUrl}
         alt={login}
@@ -39,6 +41,7 @@ function Avatar({ login, avatarUrl, size = 7 }: { login: string; avatarUrl?: str
     );
   }
   return (
+    <ErrorBoundary>
     <div className={`w-${size} h-${size} rounded-full bg-surface-3 border border-border flex items-center justify-center text-[10px] font-mono text-text-secondary flex-shrink-0 uppercase`}>
       {login?.[0]}
     </div>
@@ -50,6 +53,7 @@ const TABS = ["Team members", "Permissions", "Branch rules", "Settings", "Audit 
 
 function TabBar({ active, onChange }: { active: string; onChange: (t: string) => void }) {
   return (
+    <ErrorBoundary>
     <div className="flex gap-1 px-6 py-3 border-b border-border overflow-x-auto">
       {TABS.map((t) => (
         <FilterPill key={t} active={active === t} onClick={() => onChange(t)}>
@@ -87,6 +91,7 @@ function MembersTab() {
   }
 
   return (
+    <ErrorBoundary>
     <div className="px-6 py-4 space-y-4">
       <div className="flex items-center gap-3">
         <input
@@ -180,6 +185,7 @@ function PermissionsTab() {
   }
 
   return (
+    <ErrorBoundary>
     <div className="px-6 py-4 space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
         <input
@@ -329,6 +335,7 @@ function BranchRulesTab() {
 
   function Toggle({ label, value, field }: { label: string; value: boolean; field: string }) {
     return (
+    <ErrorBoundary>
       <label className="flex items-center justify-between py-1.5 cursor-pointer group">
         <span className="text-sm text-text-secondary group-hover:text-text-primary transition-colors">{label}</span>
         <button
@@ -348,6 +355,7 @@ function BranchRulesTab() {
   }
 
   return (
+    <ErrorBoundary>
     <div className="px-6 py-4 space-y-4">
       <div className="flex items-center gap-3">
         <input
@@ -434,6 +442,7 @@ function BranchRulesTab() {
                   </span>
                 );
                 return (
+    <ErrorBoundary>
                   <tr key={String(rule.id)} className={clsx("hover:bg-surface-2/40 transition-colors group", idx < rules.length - 1 && "border-b border-border")}>
                     <td className="px-4 py-2.5">
                       <div className="font-mono text-xs text-text-secondary">{String(rule.repo_full_name)}</div>
@@ -529,6 +538,7 @@ function SettingsTab() {
   }
 
   return (
+    <ErrorBoundary>
     <div className="px-6 py-4 space-y-4">
       {/* Repo selector + stats */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -648,6 +658,7 @@ function AuditTab() {
   };
 
   return (
+    <ErrorBoundary>
     <div className="px-6 py-4 space-y-4">
       <div className="flex items-center gap-3">
         <input
@@ -716,6 +727,7 @@ export default function MaintainerPage() {
   const [tab, setTab] = useState("Team members");
 
   return (
+    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Maintainer"
@@ -729,5 +741,6 @@ export default function MaintainerPage() {
       {tab === "Settings"     && <SettingsTab />}
       {tab === "Audit log"    && <AuditTab />}
     </div>
+    </ErrorBoundary>
   );
 }

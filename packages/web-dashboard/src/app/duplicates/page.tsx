@@ -9,6 +9,7 @@ import {
 } from "@/components/ui";
 import { formatDistanceToNow } from "date-fns";
 import clsx from "clsx";
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // ── Similarity bar ────────────────────────────────────────────────────────
 function SimBar({ value }: { value: number }) {
@@ -18,6 +19,7 @@ function SimBar({ value }: { value: number }) {
     pct >= 95 ? "bg-accent-amber" :
     pct >= 92 ? "bg-accent-purple" : "bg-accent-blue";
   return (
+    <ErrorBoundary>
     <div className="flex items-center gap-2 min-w-[80px]">
       <div className="flex-1 h-1 bg-surface-3 rounded-full overflow-hidden">
         <div className={clsx("h-full rounded-full", color)} style={{ width: `${pct}%` }} />
@@ -41,6 +43,7 @@ function CoverageRing({ pct }: { pct: number }) {
   const circ = 2 * Math.PI * r;
   const dash = (pct / 100) * circ;
   return (
+    <ErrorBoundary>
     <svg width={64} height={64} className="shrink-0">
       <circle cx={c} cy={c} r={r} fill="none" stroke="var(--color-border)" strokeWidth={4} />
       <circle
@@ -79,6 +82,7 @@ function SignalRow({ signal, onAction }: { signal: ApiItem; onAction: () => void
   const isPending = signal.status === "pending";
 
   return (
+    <ErrorBoundary>
     <div className="flex items-start gap-4 px-4 py-3 border-b border-border last:border-0 hover:bg-surface-2/40 transition-colors group">
       {/* Similarity strip */}
       <div className={clsx("w-0.5 self-stretch rounded-full shrink-0", {
@@ -180,6 +184,7 @@ export default function DuplicatesPage() {
   const coverage = stats?.coverage;
 
   return (
+    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Duplicate issue detection"
@@ -319,5 +324,6 @@ export default function DuplicatesPage() {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
   );
 }

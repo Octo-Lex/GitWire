@@ -202,24 +202,44 @@ async function buildPipPatch(vulns, octokit, owner, repo) {
 // ════════════════════════════════════════════════════════════════════════════
 
 async function fetchDependencyManifests(octokit, owner, repo) {
-  try {
-    const query = `query($owner: String!, $repo: String!) {
-      repository(owner: $owner, name: $repo) {
-        dependencyGraphManifests(first: 20) {
-          nodes { filename parseable dependencies(first: 100) { nodes { packageName requirements packageManager } } }
+  // NOTE: octokit.graphql() may not be available (core Octokit from @octokit/app).
+  // Fallback: fetch known manifest files via REST content API.
+  const knownManifests = [
+    { path: 'package.json', ecosystem: 'npm' },
+    { path: 'requirements.txt', ecosystem: 'pip' },
+    { path: 'go.mod', ecosystem: 'gomod' },
+    { path: 'pom.xml', ecosystem: 'maven' },
+    { path: 'Gemfile', ecosystem: 'rubygems' },
+    { path: 'Cargo.toml', ecosystem: 'cargo' },
+  ];
+
+  const results = [];
+  for (const manifest of knownManifests) {
+    try {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+        owner, repo, path: manifest.path,
+      });
+      if (data.content) {
+        const content = Buffer.from(data.content, 'base64').toString('utf-8');
+        let dependencies = [];
+        if (manifest.ecosystem === 'npm') {
+          try {
+            const pkg = JSON.parse(content);
+            const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+            dependencies = Object.entries(allDeps).map(([name, version_spec]) => ({ name, version_spec, package_manager: 'npm' }));
+          } catch (e) { /* invalid JSON */ }
+        } else {
+          // For non-npm ecosystems, just record the file exists
+          const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+          dependencies = lines.slice(0, 50).map(line => ({ name: line.split(/[=<>@]/)[0].trim(), version_spec: line.trim(), package_manager: manifest.ecosystem }));
         }
+        results.push({ path: manifest.path, ecosystem: manifest.ecosystem, dependencies });
       }
-    }`;
-    const result = await octokit.graphql(query, { owner, repo });
-    const manifests = result?.repository?.dependencyGraphManifests?.nodes ?? [];
-    return manifests.filter(m => m.parseable).map(m => ({
-      path: m.filename, ecosystem: inferEcosystem(m.filename),
-      dependencies: (m.dependencies?.nodes ?? []).map(d => ({ name: d.packageName, version_spec: d.requirements, package_manager: d.packageManager })),
-    })).filter(m => m.ecosystem !== "unknown");
-  } catch (err) {
-    logger.debug({ err: err.message }, "Dependency: GraphQL manifest fetch failed");
-    return [];
+    } catch (err) {
+      // File doesn't exist — skip
+    }
   }
+  return results;
 }
 
 async function fetchVulnerabilityAlerts(octokit, owner, repo) {
@@ -241,7 +261,7 @@ async function fetchVulnerabilityAlerts(octokit, owner, repo) {
       published_at:      alert.security_advisory?.published_at,
     })).filter(v => v.package_name && v.ghsa_id);
   } catch (err) {
-    logger.debug({ err: err.message }, "Dependency: Dependabot alerts fetch failed");
+    logger.warn({ err: err.message }, "Dependency: Dependabot alerts fetch failed");
     return [];
   }
 }

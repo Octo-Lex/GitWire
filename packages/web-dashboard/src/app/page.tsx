@@ -12,6 +12,7 @@ import {
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 import clsx from "clsx";
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 export default function DashboardPage() {
   const { data: overview, isLoading: ol } = useSWR(API.insights(), fetcher, { refreshInterval: 30000 });
@@ -25,6 +26,7 @@ export default function DashboardPage() {
   const recentRuns = ciRunsData?.data ?? [];
 
   return (
+    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Dashboard"
@@ -147,5 +149,6 @@ export default function DashboardPage() {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 }
