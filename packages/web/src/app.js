@@ -92,8 +92,7 @@ export function createApp() {
   app.use("/api/phase3",          phase3Router);
 
   // ── Phase 4: Intelligence & Compliance ──────────────────────────────────
-  app.use("/api/review",          phase4Router);
-  app.use("/api/audit",           phase4Router);
+  app.use("/api",                 phase4Router);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {
