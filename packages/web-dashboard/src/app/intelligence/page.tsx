@@ -315,7 +315,7 @@ function ReviewFindings({ review, onTrigger }: { review: Record<string, unknown>
               {f.file != null && <span className="font-mono text-[10px] text-text-tertiary">{f.file as string}{f.line != null ? `:${f.line}` : ""}</span>}
             </div>
             <p className="text-xs text-text-secondary leading-relaxed">{f.description as string}</p>
-            {f.suggestion && (
+            {f.suggestion != null && (
               <p className="text-xs text-accent-green/80 mt-1 leading-relaxed">→ {f.suggestion as string}</p>
             )}
           </div>
