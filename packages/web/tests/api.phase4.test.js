@@ -30,8 +30,8 @@ describe('Phase 4: AI Review Gate', () => {
     }
   });
 
-  test('GET /api/review/config/xjeddah/GitWire returns config', async () => {
-    const res = await get('/api/review/config/xjeddah/GitWire');
+  test('GET /api/review/config/Elephant-Rock-Lab/GitWire returns config', async () => {
+    const res = await get('/api/review/config/Elephant-Rock-Lab/GitWire');
     expectOk(res);
     expect(res.body).toBeDefined();
   });

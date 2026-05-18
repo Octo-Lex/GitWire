@@ -4,15 +4,15 @@
 import { get, expectOk } from './helpers.js';
 
 describe('Autonomous Contributor', () => {
-  test('GET /api/fix/xjeddah/GitWire/attempts returns attempts', async () => {
-    const res = await get('/api/fix/xjeddah/GitWire/attempts');
+  test('GET /api/fix/Elephant-Rock-Lab/GitWire/attempts returns attempts', async () => {
+    const res = await get('/api/fix/Elephant-Rock-Lab/GitWire/attempts');
     expectOk(res);
-    expect(res.body.repo).toBe('xjeddah/GitWire');
+    expect(res.body.repo).toBe('Elephant-Rock-Lab/GitWire');
     expect(res.body.attempts).toBeInstanceOf(Array);
   });
 
   test('Fix attempts have expected fields', async () => {
-    const res = await get('/api/fix/xjeddah/GitWire/attempts');
+    const res = await get('/api/fix/Elephant-Rock-Lab/GitWire/attempts');
     expectOk(res);
     if (res.body.attempts.length > 0) {
       const attempt = res.body.attempts[0];

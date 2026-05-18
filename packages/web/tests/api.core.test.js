@@ -29,9 +29,9 @@ describe('Core API', () => {
   });
 
   test('GET /api/repos/:owner/:repo returns repo detail', async () => {
-    const res = await get('/api/repos/xjeddah/GitWire');
+    const res = await get('/api/repos/Elephant-Rock-Lab/GitWire');
     expectOk(res);
-    expect(res.body.full_name).toBe('xjeddah/GitWire');
+    expect(res.body.full_name).toBe('Elephant-Rock-Lab/GitWire');
     expect(res.body.github_id).toBeDefined();
     expect(res.body.installation_id).toBeDefined();
   });
