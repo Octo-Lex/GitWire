@@ -61,7 +61,10 @@ export async function runFleetReconciliation(triggeredBy = "scheduler") {
 export async function reconcileRepo({ octokit, repo, policies }) {
   const desired  = buildDesiredState(repo, policies);
   const observed = await fetchObservedState(octokit, repo);
-  const { inSync, driftFields } = computeDiff(desired, observed);
+  const { inSync, driftFields: rawDrift } = computeDiff(desired, observed);
+
+  // Make mutable for plan-limit filtering
+  const driftFields = [...rawDrift];
 
   await db.query(
     `INSERT INTO policy_repo_configs (repo_id, desired_state, observed_state, in_sync, drift_fields, last_reconciled_at, next_reconcile_at)
@@ -85,16 +88,21 @@ export async function reconcileRepo({ octokit, repo, policies }) {
     return { inSync: false, corrected: false };
   }
 
+  // applyCorrections mutates driftFields to remove plan-limited fields
   const corrected = await applyCorrections({ octokit, repo, desired, observed, driftFields });
 
-  if (corrected) {
+  // After corrections, check if remaining drift is only plan-limited (now empty)
+  const finalInSync = driftFields.length === 0;
+  if (corrected || finalInSync) {
     await db.query("UPDATE policy_repo_configs SET in_sync = TRUE, drift_fields = '{}' WHERE repo_id = $1", [repo.github_id]);
-    await Events.violationRemediated(repo.github_id, {
-      actor: "gitwire[bot]", metadata: { drift_fields: driftFields, trigger: "policy_reconciler" },
-    });
+    if (corrected) {
+      await Events.violationRemediated(repo.github_id, {
+        actor: "gitwire[bot]", metadata: { drift_fields: rawDrift, trigger: "policy_reconciler" },
+      });
+    }
   }
 
-  return { inSync: false, corrected };
+  return { inSync: finalInSync, corrected };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -230,7 +238,19 @@ async function applyCorrections({ octokit, repo, desired, observed, driftFields 
       logger.info({ repo: repo.full_name, fields: bpDrift }, "Policy reconciler: branch protection corrected");
       applied = true;
     } catch (err) {
-      logger.warn({ repo: repo.full_name, err: err.message }, "Policy reconciler: branch protection correction failed");
+      // GitHub Free private repos: branch protection requires GitHub Pro/Team
+      const msg = err.message || "";
+      const isPlanLimit = msg.includes("Upgrade to GitHub Pro") || msg.includes("make this repository public");
+      if (isPlanLimit) {
+        logger.debug({ repo: repo.full_name }, "Policy reconciler: branch protection skipped (GitHub Free private repo)");
+        // Remove BP drift — it's not actionable on this plan
+        for (const f of bpDrift) {
+          const idx = driftFields.indexOf(f);
+          if (idx >= 0) driftFields.splice(idx, 1);
+        }
+      } else {
+        logger.warn({ repo: repo.full_name, err: msg }, "Policy reconciler: branch protection correction failed");
+      }
     }
   }
 
