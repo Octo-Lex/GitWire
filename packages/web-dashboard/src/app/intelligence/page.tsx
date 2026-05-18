@@ -269,12 +269,12 @@ function ReviewTab() {
                   {(r.finding_count as number) > 0 && (
                     <span className="text-xs text-text-secondary">{r.finding_count as number} finding{(r.finding_count as number) !== 1 ? "s" : ""}</span>
                   )}
-                  {r.tokens_used && <span className="font-mono text-[10px] text-text-tertiary">{r.tokens_used as number} tokens</span>}
+                  {r.tokens_used != null && <span className="font-mono text-[10px] text-text-tertiary">{r.tokens_used as number} tokens</span>}
                   <span className="text-[10px] text-text-tertiary">
                     {formatDistanceToNow(new Date(r.started_at as string), { addSuffix: true })}
                   </span>
                 </div>
-                {r.summary && <div className="text-xs text-text-secondary mt-1 line-clamp-1">{r.summary as string}</div>}
+                {r.summary != null && <div className="text-xs text-text-secondary mt-1 line-clamp-1">{r.summary as string}</div>}
               </div>
               <span className="text-text-tertiary text-xs flex-shrink-0 mt-1">{expanded === r.id ? "▲" : "▼"}</span>
             </div>
@@ -312,7 +312,7 @@ function ReviewFindings({ review, onTrigger }: { review: Record<string, unknown>
               <SeverityChip severity={f.severity as string} />
               <span className="text-xs font-mono text-text-tertiary">{f.category as string}</span>
               <span className="text-sm font-medium text-text-primary">{f.title as string}</span>
-              {f.file && <span className="font-mono text-[10px] text-text-tertiary">{f.file as string}{f.line ? `:${f.line}` : ""}</span>}
+              {f.file != null && <span className="font-mono text-[10px] text-text-tertiary">{f.file as string}{f.line != null ? `:${f.line}` : ""}</span>}
             </div>
             <p className="text-xs text-text-secondary leading-relaxed">{f.description as string}</p>
             {f.suggestion && (
@@ -507,7 +507,7 @@ function AuditTab() {
             <CategoryBadge category={e.category as string} />
             <span className="font-mono text-[10px] text-text-secondary flex-shrink-0">{(e.event_type as string).replace(/_/g, " ")}</span>
             <span className="text-text-tertiary flex-1 font-mono text-[10px] truncate">{e.repo_full_name as string}</span>
-            {e.pr_number && <span className="font-mono text-[10px] text-text-tertiary">#{e.pr_number as number}</span>}
+            {e.pr_number != null && <span className="font-mono text-[10px] text-text-tertiary">#{e.pr_number as number}</span>}
             <span className="font-mono text-[10px] text-text-secondary">@{(e.actor as string)?.replace("[bot]", "")}</span>
             {Array.isArray(e.framework) && (e.framework as string[]).length > 0 && (
               <span className="font-mono text-[10px] text-accent-purple/80">{(e.framework as string[]).join(",")}</span>
