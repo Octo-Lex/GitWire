@@ -16,10 +16,9 @@ const anthropic = new Anthropic({
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
 });
 
-// No backticks in regex — use char code to build the pattern
-const BT = String.fromCharCode(96);
-const FENCE_RE = new RegExp("^" + BT + BT + BT + "(?:json)?\\s*\\n?", "i");
-const FENCE_END_RE = new RegExp("\\n?" + BT + BT + BT + "\\s*$", "i");
+// Code fence regex for stripping ```json blocks from Claude responses
+const FENCE_RE = /^```(?:json)?\s*\n?/i;
+const FENCE_END_RE = /\n?```\s*$/i;
 
 function stripCodeFences(raw) {
   return raw.replace(FENCE_RE, "").replace(FENCE_END_RE, "").trim();
@@ -323,7 +322,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
 
 async function generateFixWithClaude(fileContent, filePath, logs, diagnosis, repository) {
   // Build prompt with string concat to avoid backtick issues
-  var fence = BT + BT + BT;
+  var fence = "```";
   var prompt = "You are fixing a CI failure. Apply the minimal fix to the file below.\n\n" +
     "Repository: " + repository.full_name + "\n" +
     "File: " + filePath + "\n" +
@@ -415,7 +414,7 @@ async function fetchFailedJobLogs(octokit, owner, repo, runId) {
 // ── Claude diagnosis ──────────────────────────────────────────────────────────
 
 async function diagnoseWithClaude(logData, run, repository) {
-  var fence = BT + BT + BT;
+  var fence = "```";
   var prompt = "Analyze this failed GitHub Actions log and diagnose the root cause.\n\n" +
     "Repository: " + repository.full_name + "\n" +
     "Workflow: " + run.name + "\n" +

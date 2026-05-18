@@ -207,7 +207,7 @@ function buildProtectionPayload(policy, live) {
 // ════════════════════════════════════════════════════════════════════════════
 
 async function reportViolationsAsIssue({ octokit, repo, branch, policy, violations }) {
-  const title = `[GitWire Policy] Branch ${String.fromCharCode(96)}${branch}${String.fromCharCode(96)} violates policy ${String.fromCharCode(96)}${policy.name}${String.fromCharCode(96)}`;
+  const title = `[GitWire Policy] Branch \`${branch}\` violates policy \`${policy.name}\``;
 
   const { data: existingIssues } = await octokit.request("GET /repos/{owner}/{repo}/issues", {
     owner: repo.owner, repo: repo.name, state: "open",

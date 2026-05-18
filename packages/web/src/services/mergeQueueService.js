@@ -1,6 +1,28 @@
-// src/services/mergeQueueService.js
-// Auto-merge queue for Phase 2.
-// Adapted for GitWire: octokit.request(), no silent catches, parameterized queries.
+/**
+ * @module mergeQueueService
+ * Auto-merge queue for Phase 2.
+ *
+ * Manages a FIFO queue of PRs waiting to be merged automatically
+ * once all required checks pass.
+ *
+ * Public API:
+ *   - admitToQueue({ pr, repository, octokit }) — add PR to queue
+ *   - removeFromQueue({ repoId, prNumber, reason }) — remove PR from queue
+ *   - onChecksUpdated({ checkSuite, repository, octokit }) — update check status
+ *   - processQueue(repoId, repository, octokit) — merge ready PRs
+ */
+
+/**
+ * Admit a PR to the auto-merge queue.
+ * Checks eligibility (non-draft, correct base branch, has approvals)
+ * then inserts into merge_queue_entries.
+ *
+ * @param {Object} params
+ * @param {Object} params.pr         - GitHub PR object
+ * @param {Object} params.repository - GitHub repository object
+ * @param {Object} params.octokit    - Authenticated Octokit instance
+ * @returns {Promise<Object|null>} Inserted queue entry or null if ineligible
+ */
 
 import { db }  from "../lib/db.js";
 import { Events } from "./pipelineEvents.js";
@@ -63,12 +85,12 @@ export async function admitToQueue({ pr, repository, octokit }) {
     name: "queued-for-merge", color: "0075ca", description: "In the auto-merge queue",
   });
 
-  const checkNames = requiredChecks.length ? requiredChecks.map(c => String.fromCharCode(96) + c + String.fromCharCode(96)).join(", ") : "all branch-protection checks";
+  const checkNames = requiredChecks.length ? requiredChecks.map(c => '`' + c + '`').join(", ") : "all branch-protection checks";
   await postQueueComment(octokit, repository.owner.login, repository.name, pr.number,
     "Admitted to the auto-merge queue (position #" + position + ")\n\n" +
     "This PR will be merged automatically once all required checks pass.\n" +
     "Required: " + checkNames + "\n\n" +
-    "_Remove the " + String.fromCharCode(96) + "queued-for-merge" + String.fromCharCode(96) + " label to dequeue._");
+    "_Remove the `queued-for-merge` label to dequeue._");
 
   await Events.prAdmitted(repoId, {
     prNumber: pr.number, ref: pr.head.ref, actor: pr.user.login,

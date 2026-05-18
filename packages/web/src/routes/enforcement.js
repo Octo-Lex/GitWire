@@ -85,12 +85,18 @@ enforcementRouter.get("/policies", async (_req, res, next) => {
 
 enforcementRouter.post("/policies", async (req, res, next) => {
   try {
-    const {
+    let {
       installation_id, name, description, repo_filter, branch_pattern,
       min_reviews, require_linear_history, block_force_pushes,
       block_deletions, enforce_admins, require_status_checks,
       required_status_check_contexts, mode,
     } = req.body;
+    // Auto-resolve installation_id from repo_filter if not provided
+    if (!installation_id && repo_filter) {
+      const { rows: [repo] } = await db.query("SELECT installation_id FROM repositories WHERE full_name = $1", [repo_filter]);
+      if (repo) installation_id = repo.installation_id;
+    }
+    if (!installation_id) return res.status(400).json({ error: "installation_id or repo_filter required" });
 
     const { rows: [policy] } = await db.query(
       `INSERT INTO policy_definitions

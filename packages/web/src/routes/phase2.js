@@ -126,7 +126,13 @@ phase2Router.get("/feedback", async (_req, res, next) => {
 
 phase2Router.post("/feedback", async (req, res, next) => {
   try {
-    const { installation_id, name, event_type, repo_filter, post_pr_comment, slack_webhook, teams_webhook, include_log_link, include_diff_preview } = req.body;
+    let { installation_id, name, event_type, repo_filter, post_pr_comment, slack_webhook, teams_webhook, include_log_link, include_diff_preview } = req.body;
+    // Auto-resolve installation_id from repo_filter if not provided
+    if (!installation_id && repo_filter) {
+      const { rows: [repo] } = await db.query("SELECT installation_id FROM repositories WHERE full_name = $1", [repo_filter]);
+      if (repo) installation_id = repo.installation_id;
+    }
+    if (!installation_id) return res.status(400).json({ error: "installation_id or repo_filter required" });
     const { rows: [rule] } = await db.query(
       `INSERT INTO feedback_rules (installation_id, name, event_type, repo_filter, post_pr_comment, slack_webhook, teams_webhook, include_log_link, include_diff_preview)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,

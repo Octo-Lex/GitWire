@@ -94,6 +94,37 @@ export async function appendEntry({
 // Typed convenience wrappers — one per event category
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Compliance-grade audit trail — append-only, hash-chained, framework-tagged.
+ *
+ * Trail is the public API. Each method appends one typed entry:
+ *   - Trail.aiDecision(data)  — AI review gate verdict
+ *   - Trail.autoMerge(data)   — auto-merge queue action
+ *   - Trail.policyBypass(data) — enforcement override
+ *   - Trail.branchRule(data)  — branch protection change
+ *   - Trail.ciHeal(data)      — CI auto-heal action
+ *   - Trail.rollback(data)    — automated rollback
+ *
+ * All methods return the inserted entry row or null on failure (non-fatal).
+ *
+ * @module auditTrailService
+ */
+
+/**
+ * Append-only audit trail with SHA-256 hash chaining.
+ * Each entry references the previous entry's hash, making tampering detectable.
+ * Entries are tagged with compliance frameworks (SOC2, ISO27001) and control IDs.
+ *
+ * @typedef {Object} TrailEntry
+ * @property {number} id        - Auto-incremented primary key
+ * @property {number} seq       - Monotonic sequence number
+ * @property {string} category  - Event category (ai_decision, review_gate, etc.)
+ * @property {string} event_type - Specific event type
+ * @property {string} actor     - Who triggered the event
+ * @property {string} payload_hash - SHA-256 of the JSON payload
+ * @property {string} prev_hash - SHA-256 of the previous entry's payload_hash
+ */
+
 export const Trail = {
   /** AI review gate made a decision on a PR */
   aiDecision: (data) => appendEntry({

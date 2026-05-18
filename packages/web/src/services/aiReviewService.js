@@ -240,10 +240,9 @@ async function fetchDiff(octokit, owner, repo, pr, cfg) {
 // ════════════════════════════════════════════════════════════════════════════
 
 async function runMultiPassReview({ files, pr, repository, cfg }) {
-  var BT = String.fromCharCode(96);
   var diffText = files.map(function(f) {
     return "### " + f.filename + " (+" + f.added + " -" + f.removed + ")\n" +
-      BT + "diff\n" + f.patch.slice(0, 3000) + "\n" + BT;
+      "```diff\n" + f.patch.slice(0, 3000) + "\n```";
   }).join("\n\n");
 
   const contextBlock = cfg.architecture_context

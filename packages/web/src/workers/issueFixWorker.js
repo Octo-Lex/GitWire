@@ -22,10 +22,8 @@ const anthropic = new Anthropic({
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
 });
 
-// No backticks in regex - use char code
-const BT = String.fromCharCode(96);
-const FENCE_RE = new RegExp("^" + BT + BT + BT + "(?:json)?\\s*\\n?", "i");
-const FENCE_END_RE = new RegExp("\\n?" + BT + BT + BT + "\\s*$", "i");
+const FENCE_RE = /^```(?:json)?\s*\n?/i;
+const FENCE_END_RE = /\n?```\s*$/i;
 
 function stripCodeFences(raw) {
   return raw.replace(FENCE_RE, "").replace(FENCE_END_RE, "").trim();
@@ -422,7 +420,7 @@ async function fetchFileContents(octokit, owner, repo, paths) {
 // ── AI Pass 1: Analyze ────────────────────────────────────────────────────
 
 async function aiAnalyze(issue, tree, repoFullName) {
-  var fence = BT + BT + BT;
+  var fence = "```";
   var prompt =
     "You are analyzing a GitHub issue to determine if it can be auto-fixed.\n\n" +
     "Repository: " + repoFullName + "\n" +
@@ -462,7 +460,7 @@ async function aiAnalyze(issue, tree, repoFullName) {
 // ── AI Pass 2: Generate patches ───────────────────────────────────────────
 
 async function aiGenerate(issue, analysis, fileContents, repoFullName) {
-  var fence = BT + BT + BT;
+  var fence = "```";
   // Include full file contents - Claude only returns diffs
   var filesSection = fileContents.map((f) =>
     "--- " + f.path + " ---\n" + fence + "\n" + f.content + "\n" + fence
@@ -614,7 +612,7 @@ function scoreFiles(files, issue, tree) {
 // This avoids the truncation bug from search/replace patches.
 
 async function aiGenerateFullFile(issue, analysis, fileContents, repoFullName) {
-  var fence = BT + BT + BT;
+  var fence = "```";
   var filesSection = fileContents.map((f) =>
     "--- " + f.path + " ---\n" + fence + "\n" + f.content + "\n" + fence
   ).join("\n\n");
