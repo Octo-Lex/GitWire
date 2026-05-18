@@ -54,28 +54,34 @@ export async function reviewPR({ pr, repository, octokit }) {
 
   logger.info({ repo: repository.full_name, pr: pr.number }, "AI review: starting");
 
-  // ── 2. Create pending check run ────────────────────────────────────────────
-  const { data: checkRun } = await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
-    owner,
-    repo,
-    name:       CHECK_RUN_NAME,
-    head_sha:   pr.head.sha,
-    status:     "in_progress",
-    started_at: new Date().toISOString(),
-    output: {
-      title:   "AI review in progress\u2026",
-      summary: "Analysing code quality, security, and architecture.",
-    },
-  });
+  // ── 2. Create pending check run (optional — requires checks:write permission) ─
+  let checkRunId = null;
+  try {
+    const { data: checkRun } = await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
+      owner,
+      repo,
+      name:       CHECK_RUN_NAME,
+      head_sha:   pr.head.sha,
+      status:     "in_progress",
+      started_at: new Date().toISOString(),
+      output: {
+        title:   "AI review in progress\u2026",
+        summary: "Analysing code quality, security, and architecture.",
+      },
+    });
+    checkRunId = checkRun.id;
+  } catch (checkErr) {
+    logger.warn({ err: checkErr.message, repo: repository.full_name }, "AI review: Check Run creation failed (non-fatal, continuing with PR Review only)");
+  }
 
   // ── 3. Persist review record ────────────────────────────────────────────────
   const { rows: [reviewRow] } = await db.query(
     "INSERT INTO ai_reviews (repo_id, pr_number, commit_sha, check_run_id, config_snapshot) " +
     "VALUES ($1,$2,$3,$4,$5) " +
     "ON CONFLICT (repo_id, pr_number, commit_sha) DO UPDATE SET " +
-    "  check_run_id = EXCLUDED.check_run_id, started_at = NOW() " +
+    "  check_run_id = COALESCE(EXCLUDED.check_run_id, ai_reviews.check_run_id), started_at = NOW() " +
     "RETURNING id",
-    [repoId, pr.number, pr.head.sha, checkRun.id, JSON.stringify(cfg)]
+    [repoId, pr.number, pr.head.sha, checkRunId, JSON.stringify(cfg)]
   );
 
   try {
@@ -83,11 +89,13 @@ export async function reviewPR({ pr, repository, octokit }) {
     const { files, totalAdded, totalRemoved } = await fetchDiff(octokit, owner, repo, pr, cfg);
 
     if (!files.length) {
-      await finaliseCheckRun(octokit, owner, repo, checkRun.id, "success", {
-        title:   "\u2705 No reviewable files changed",
-        summary: "All changed files are excluded by the ignore patterns.",
-        text:    "",
-      });
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "success", {
+          title:   "\u2705 No reviewable files changed",
+          summary: "All changed files are excluded by the ignore patterns.",
+          text:    "",
+        });
+      }
       return null;
     }
 
@@ -108,10 +116,12 @@ export async function reviewPR({ pr, repository, octokit }) {
     const shouldBlock = cfg.block_on_verdict.includes(verdict) &&
       confidenceLevel(confidence) >= confidenceLevel(cfg.min_confidence_to_block);
 
-    await finaliseCheckRun(octokit, owner, repo, checkRun.id,
-      shouldBlock ? "failure" : "success",
-      buildCheckOutput(findings, verdict, confidence, summary)
-    );
+    if (checkRunId) {
+      await finaliseCheckRun(octokit, owner, repo, checkRunId,
+        shouldBlock ? "failure" : "success",
+        buildCheckOutput(findings, verdict, confidence, summary)
+      );
+    }
 
     // ── 9. Persist final review ────────────────────────────────────────────────
     const criticalFindings = findings.filter(f => f.severity === "critical").length;
@@ -168,11 +178,13 @@ export async function reviewPR({ pr, repository, octokit }) {
   } catch (err) {
     logger.error({ err: err.message, pr: pr.number }, "AI review: failed");
 
-    await finaliseCheckRun(octokit, owner, repo, checkRun.id, "neutral", {
-      title:   "\u26A0\uFE0F AI review unavailable",
-      summary: "Review could not be completed: " + err.message,
-      text:    "",
-    });
+    if (checkRunId) {
+      await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+        title:   "\u26A0\uFE0F AI review unavailable",
+        summary: "Review could not be completed: " + err.message,
+        text:    "",
+      });
+    }
 
     return null;
   }
