@@ -15,12 +15,10 @@ import {
   Skeleton, EmptyState,
 } from "@/components/ui";
 import { format, parseISO } from "date-fns";
-import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 function ChartTooltip({ active, payload, label, unit = "" }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string; unit?: string }) {
   if (!active || !payload?.length) return null;
   return (
-    <ErrorBoundary>
     <div className="bg-surface-2 border border-border rounded px-3 py-2 text-xs font-mono shadow-xl">
       <div className="text-text-tertiary mb-1">{label}</div>
       {payload.map((p) => (
@@ -57,7 +55,6 @@ export default function InsightsPage() {
   const REPO_COLORS = ["#00d97e", "#4d9fff", "#a78bfa"];
 
   return (
-    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Multi-repo insights"
@@ -216,6 +213,5 @@ export default function InsightsPage() {
         </div>
       </div>
     </div>
-    </ErrorBoundary>
   );
 }

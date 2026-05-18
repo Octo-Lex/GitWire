@@ -11,7 +11,6 @@ import {
 } from "@/components/ui";
 import { formatDistanceToNow } from "date-fns";
 import clsx from "clsx";
-import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const REPOS = [
   { owner: "xjeddah", name: "MyShell" },
@@ -73,7 +72,6 @@ export default function FixAttemptsPage() {
   }
 
   return (
-    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Autonomous Contributor"
@@ -213,6 +211,5 @@ export default function FixAttemptsPage() {
         </div>
       </div>
     </div>
-    </ErrorBoundary>
   );
 }

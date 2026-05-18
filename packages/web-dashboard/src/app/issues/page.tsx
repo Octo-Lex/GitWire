@@ -12,7 +12,6 @@ import {
 } from "@/components/ui";
 import { formatDistanceToNow } from "date-fns";
 import clsx from "clsx";
-import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const PRIORITIES = ["All", "critical", "high", "medium", "low"];
 const TYPES = ["All", "bug", "feature", "question", "documentation"];
@@ -44,7 +43,6 @@ export default function IssuesPage() {
   const meta = data?.meta ?? {};
 
   return (
-    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Issue triage"
@@ -191,6 +189,5 @@ export default function IssuesPage() {
         </div>
       </div>
     </div>
-    </ErrorBoundary>
   );
 }

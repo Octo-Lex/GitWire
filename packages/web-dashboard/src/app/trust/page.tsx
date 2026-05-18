@@ -3,7 +3,6 @@
 import useSWR from "swr";
 import { fetcher, API, graduateTest, dismissTest, triggerReconciliation, updateRepoReconcileConfig, triggerDepScan, dismissVuln } from "../../lib/api";
 import { useState } from "react";
-import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const TABS = [
   { key: "flaky", label: "Flaky Tests" },
@@ -15,7 +14,6 @@ type TabKey = (typeof TABS)[number]["key"];
 export default function TrustPage() {
   const [tab, setTab] = useState<TabKey>("flaky");
   return (
-    <ErrorBoundary>
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-bold text-text-primary">Trust & Policy</h1>
 
@@ -50,7 +48,6 @@ function FlakyTab() {
   const s = stats?.summary ?? {};
 
   return (
-    <ErrorBoundary>
     <div className="space-y-6">
       {/* Stat cards */}
       <div className="grid grid-cols-5 gap-4">
@@ -123,7 +120,6 @@ function ReconcilerTab() {
   const lastRun = runList[0];
 
   return (
-    <ErrorBoundary>
     <div className="space-y-6">
       {/* Last run summary */}
       <div className="flex items-center justify-between">
@@ -198,7 +194,6 @@ function DependenciesTab() {
   const v = stats?.vulnerabilities ?? {};
 
   return (
-    <ErrorBoundary>
     <div className="space-y-6">
       {/* Stat cards */}
       <div className="grid grid-cols-5 gap-4">

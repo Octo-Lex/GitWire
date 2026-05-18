@@ -12,7 +12,6 @@ import {
 } from "../../components/ui";
 import { formatDistanceToNow, format, parseISO, subDays } from "date-fns";
 import clsx from "clsx";
-import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
@@ -28,7 +27,6 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
 function ChartTip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color: string }>; label?: string }) {
   if (!active || !payload?.length) return null;
   return (
-    <ErrorBoundary>
     <div className="bg-surface-2 border border-border rounded px-3 py-2 text-xs font-mono shadow-xl">
       <div className="text-text-tertiary mb-1">{label}</div>
       {payload.map(p => (
@@ -59,7 +57,6 @@ function SeverityChip({ severity }: { severity: string }) {
     info:     "bg-surface-3 border-border text-text-tertiary",
   };
   return (
-    <ErrorBoundary>
     <span className={clsx("text-[10px] font-mono px-1.5 py-0.5 rounded border", colors[severity] ?? colors.info)}>
       {severity}
     </span>
@@ -146,7 +143,6 @@ function ReviewTab() {
 
   function Toggle({ label, field }: { label: string; field: string }) {
     return (
-    <ErrorBoundary>
       <label className="flex items-center justify-between py-1 cursor-pointer">
         <span className="text-sm text-text-secondary">{label}</span>
         <button
@@ -161,7 +157,6 @@ function ReviewTab() {
   }
 
   return (
-    <ErrorBoundary>
     <div className="px-6 py-4 space-y-4">
       {/* Stats */}
       <div className="grid grid-cols-5 gap-3">
@@ -306,7 +301,6 @@ function ReviewFindings({ review, onTrigger }: { review: Record<string, unknown>
   const findings = Array.isArray(review.findings) ? review.findings : [];
 
   return (
-    <ErrorBoundary>
     <div className="bg-surface-0/50 border-b border-border px-4 pb-3 pt-0">
       <div className="ml-4 space-y-2 pt-3">
         {!findings.length && (
@@ -388,7 +382,6 @@ function AuditTab() {
   }
 
   return (
-    <ErrorBoundary>
     <div className="px-6 py-4 space-y-4">
       {/* Stats */}
       <div className="grid grid-cols-5 gap-3">
@@ -547,7 +540,6 @@ export default function IntelligencePage() {
   const [tab, setTab] = useState("AI Review Gate");
 
   return (
-    <ErrorBoundary>
     <div className="animate-fade-in">
       <PageHeader
         title="Intelligence & compliance"
@@ -561,6 +553,5 @@ export default function IntelligencePage() {
       {tab === "AI Review Gate" && <ReviewTab />}
       {tab === "Compliance & Audit Trail" && <AuditTab />}
     </div>
-    </ErrorBoundary>
   );
 }
