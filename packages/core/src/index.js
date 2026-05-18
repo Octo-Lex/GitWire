@@ -16,6 +16,7 @@ export const QUEUES = Object.freeze({
   ISSUE_FIX:      "issue-fix",
   PHASE2:         "phase2",
   PHASE3:         "phase3",
+  PHASE4:         "phase4",
 });
 
 // ── Heal status ────────────────────────────────────────────────────────────

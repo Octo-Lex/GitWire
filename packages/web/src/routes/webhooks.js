@@ -11,7 +11,7 @@
 
 import { Router } from "express";
 import { getWebhookApp } from "../lib/github.js";
-import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue } from "../lib/queue.js";
+import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue, phase2Queue, phase3Queue, phase4Queue } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { parseGitwireCommand, resolveCommandAction } from "../lib/commentRouter.js";
@@ -95,22 +95,65 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
       }
       break;
 
-    // Pull requests → triage queue
+    // Pull requests → triage + AI review + merge queue
     case "pull_request":
       if (["opened", "reopened", "ready_for_review"].includes(payload.action)) {
         await triageQueue.add("triage-pr", jobData, { priority: 2 });
         logger.info({ action: payload.action, pr: payload.pull_request?.number }, "PR queued for triage");
+
+        // Phase 4: AI review on PR open/sync/ready
+        await phase4Queue.add("ai-review", {
+          pr:           payload.pull_request,
+          repository:   payload.repository,
+          installation: payload.installation,
+        }, { priority: 1 });
+      }
+      // Phase 2: auto-merge label → merge queue
+      if (payload.action === "labeled" && payload.label?.name === "auto-merge") {
+        await phase2Queue.add("pr-labeled-auto-merge", jobData, { priority: 1 });
+      }
+      // Phase 2: closed/unlabeled → merge queue cleanup
+      if (payload.action === "closed" || payload.action === "unlabeled") {
+        await phase2Queue.add("pr-closed-or-unlabeled", jobData, { priority: 2 });
       }
       break;
 
-    // CI failures → self-healing queue
+    // PR review submitted → check if eligible for merge queue
+    case "pull_request_review":
+      if (payload.action === "submitted" && payload.review?.state === "approved") {
+        await phase2Queue.add("review-submitted", jobData, { priority: 2 });
+      }
+      break;
+
+    // Check suite completed → merge queue gate
+    case "check_suite":
+      if (payload.action === "completed") {
+        await phase2Queue.add("checks-updated", jobData, { priority: 1 });
+      }
+      break;
+
+    // CI results → healing queue (failure) + merge queue gate + rollback + test ingestion
     case "workflow_run":
-      if (payload.action === "completed" && payload.workflow_run?.conclusion === "failure") {
-        await ciHealQueue.add("heal-run", jobData, { priority: 1 });
-        logger.info(
-          { runId: payload.workflow_run?.id, repo: payload.repository?.full_name },
-          "Failed CI run queued for healing"
-        );
+      if (payload.action === "completed") {
+        if (payload.workflow_run?.conclusion === "failure") {
+          await ciHealQueue.add("heal-run", jobData, { priority: 1 });
+          logger.info(
+            { runId: payload.workflow_run?.id, repo: payload.repository?.full_name },
+            "Failed CI run queued for healing"
+          );
+        }
+        // Phase 2: notify merge queue of check completion
+        await phase2Queue.add("checks-updated", jobData, { priority: 1 });
+        // Phase 2: post-merge deploy failure → rollback evaluation
+        await phase2Queue.add("eval-rollback", jobData, { priority: 1 });
+        // Phase 3: ingest test results for flakiness detection
+        if (payload.workflow_run?.conclusion === "success" || payload.workflow_run?.conclusion === "failure") {
+          await phase3Queue.add("ingest-test-results", {
+            run: payload.workflow_run,
+            repository: payload.repository,
+            installation: payload.installation,
+          }, { priority: 3 });
+        }
       }
       break;
 
@@ -120,9 +163,10 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
       await webhookQueue.add("sync-installation", jobData);
       break;
 
-    // Push events → trigger incremental sync
+    // Push events → trigger incremental sync + config validation
     case "push":
       await webhookQueue.add("sync-repo", jobData, { priority: 3 });
+      await webhookQueue.add("validate-configs", jobData, { priority: 2 });
       break;
 
     // Issue comment → check for /gitwire commands

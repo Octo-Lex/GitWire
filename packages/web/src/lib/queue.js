@@ -71,3 +71,4 @@ export const maintainerQueue = createQueue(QUEUES.MAINTAINER);
 export const issueFixQueue   = createQueue(QUEUES.ISSUE_FIX);
 export const phase2Queue     = createQueue(QUEUES.PHASE2);
 export const phase3Queue     = createQueue(QUEUES.PHASE3);
+export const phase4Queue     = createQueue(QUEUES.PHASE4);

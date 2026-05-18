@@ -92,6 +92,19 @@ export const API = {
   depStats:       () => `/api/phase3/dependencies/stats`,
   depVulns:       (q = "") => `/api/phase3/dependencies/vulnerabilities${q ? `?${q}` : ""}`,
   depRepo:        (owner: string, repo: string) => `/api/phase3/dependencies/${owner}/${repo}`,
+
+  // Intelligence & Compliance (Phase 4)
+  reviewStats:      () => `/api/review/stats`,
+  reviewResults:    (q = "") => `/api/review/results${q ? `?${q}` : ""}`,
+  reviewRepoResults: (owner: string, repo: string) => `/api/review/results/${owner}/${repo}`,
+  reviewConfig:     (owner: string, repo: string) => `/api/review/config/${owner}/${repo}`,
+  reviewTrigger:    (owner: string, repo: string, pr: number) => `/api/review/trigger/${owner}/${repo}/${pr}`,
+  auditStats:       (days = 30) => `/api/audit/stats?days=${days}`,
+  auditEntries:     (q = "") => `/api/audit/entries${q ? `?${q}` : ""}`,
+  auditVerify:      () => `/api/audit/verify`,
+  auditExport:      () => `/api/audit/export`,
+  auditReports:     (q = "") => `/api/audit/reports${q ? `?${q}` : ""}`,
+  auditReport:      (id: number) => `/api/audit/reports/${id}`,
 };
 
 // ── Trigger helpers (non-GET) ─────────────────────────────────────────────
@@ -365,6 +378,41 @@ export async function dismissVuln(id: number, reason?: string) {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ reason }),
+  });
+  return res.json();
+}
+
+// ── Intelligence & Compliance actions (Phase 4) ──────────────────────────
+
+export async function updateReviewConfig(owner: string, repo: string, config: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/review/config/${owner}/${repo}`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(config),
+  });
+  return res.json();
+}
+
+export async function triggerReview(owner: string, repo: string, pr: number) {
+  const res = await fetch(`${BASE}/api/review/trigger/${owner}/${repo}/${pr}`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function verifyAuditChain() {
+  const res = await fetch(`${BASE}/api/audit/verify`, {
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function generateComplianceReport(reportType: string, from: string, to: string) {
+  const res = await fetch(`${BASE}/api/audit/reports`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ report_type: reportType, from, to, generated_by: "dashboard" }),
   });
   return res.json();
 }

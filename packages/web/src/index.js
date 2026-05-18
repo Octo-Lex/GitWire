@@ -11,6 +11,7 @@ import { startMaintainerWorker, scheduleMaintainerJobs } from "./workers/maintai
 import { startIssueFixWorker } from "./workers/issueFixWorker.js";
 import { startMergeQueueWorker } from "./workers/phase2Worker.js";
 import { startPhase3Worker, schedulePhase3Jobs } from "./workers/phase3Worker.js";
+import { startPhase4Worker, schedulePhase4Jobs } from "./workers/phase4Worker.js";
 import { db }     from "./lib/db.js";
 import { redis }  from "./lib/queue.js";
 import { logger } from "./lib/logger.js";
@@ -39,6 +40,7 @@ async function main() {
     startIssueFixWorker(),
     startMergeQueueWorker(),
     startPhase3Worker(),
+    startPhase4Worker(),
   ];
 
   // Schedule the repeating full-sync (every 30 min + immediate startup run)
@@ -50,7 +52,10 @@ async function main() {
   // Schedule Phase 3 recurring jobs (policy reconciliation nightly, dep scan weekly, graduation weekly)
   await schedulePhase3Jobs();
 
-  logger.info(`${workers.length} background workers started`);
+  // Schedule Phase 4 recurring jobs (nightly audit export at 01:00 UTC)
+  await schedulePhase4Jobs();
+
+  logger.info(workers.length + " background workers started");
 
   // ── Graceful shutdown ────────────────────────────────────────────────────
   async function shutdown(signal) {

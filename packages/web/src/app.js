@@ -19,6 +19,7 @@ import { duplicatesRouter }    from "./routes/duplicates.js";
 import { enforcementRouter }  from "./routes/enforcement.js";
 import { phase2Router }       from "./routes/phase2.js";
 import { phase3Router }       from "./routes/phase3.js";
+import { phase4Router }       from "./routes/phase4.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -89,6 +90,10 @@ export function createApp() {
 
   // ── Phase 3: Trust & Resilience ──────────────────────────────────────────
   app.use("/api/phase3",          phase3Router);
+
+  // ── Phase 4: Intelligence & Compliance ──────────────────────────────────
+  app.use("/api/review",          phase4Router);
+  app.use("/api/audit",           phase4Router);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {

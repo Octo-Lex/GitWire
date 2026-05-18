@@ -16,6 +16,7 @@ const NAV = [
   { href: "/insights",      label: "Insights",        icon: "◈" },
   { href: "/maintainer",    label: "Maintainer",      icon: "⟳" },
   { href: "/fix-attempts",  label: "Fix Attempts",    icon: "⚡" },
+  { href: "/intelligence", label: "Intelligence",     icon: "\uD83E\uDDE0" },
 ];
 
 export default function Sidebar() {
