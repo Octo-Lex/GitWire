@@ -96,6 +96,14 @@ export function createApp() {
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {
+    // Malformed JSON body → 400, not 500
+    // body-parser creates errors with {status:400, statusCode:400, body:'...'}
+    // Note: 'body' is a non-enumerable property on body-parser errors
+    if (err.status === 400 || err.statusCode === 400) {
+      if (err.type === 'SyntaxError' || (err.message && err.message.includes('JSON'))) {
+        return res.status(400).json({ error: 'Invalid JSON', message: err.message });
+      }
+    }
     logger.error({ err, path: req.path }, "Unhandled error");
     res.status(500).json({
       error: config.server.env === "production" ? "Internal server error" : err.message,
