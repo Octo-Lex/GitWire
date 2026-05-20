@@ -345,7 +345,7 @@ async function runSinglePass(passType, { diffText, pr, repository, contextBlock 
 // Verdict computation
 // ════════════════════════════════════════════════════════════════════════════
 
-function computeVerdict(findings, cfg) {
+export function computeVerdict(findings, cfg) {
   const critical = findings.filter(f => f.severity === "critical").length;
   const high     = findings.filter(f => f.severity === "high").length;
 
@@ -495,6 +495,6 @@ async function loadReviewConfig(repoId) {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-function confidenceLevel(c) {
+export function confidenceLevel(c) {
   return c === "high" ? 3 : c === "medium" ? 2 : 1;
 }

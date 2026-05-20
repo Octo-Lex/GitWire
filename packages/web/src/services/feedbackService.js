@@ -174,7 +174,7 @@ async function postWebhook(url, payload) {
   if (!res.ok) throw new Error("Webhook returned " + res.status);
 }
 
-function matchGlob(pattern, str) {
+export function matchGlob(pattern, str) {
   const re = new RegExp("^" + pattern.replace(/\*\*/g, "§").replace(/\*/g, "[^/]*").replace(/§/g, ".*") + "$");
   return re.test(str);
 }

@@ -332,7 +332,7 @@ function collectChangedFiles(push) {
   return [...files];
 }
 
-function getFileType(filePath) {
+export function getFileType(filePath) {
   for (const { regex, type } of CONFIG_PATTERNS) {
     if (regex.test(filePath)) return type;
   }

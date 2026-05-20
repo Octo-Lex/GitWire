@@ -807,7 +807,7 @@ function truncate(str, max) {
 // Claude sometimes prefixes JSON with text like "I'll generate...".
 // Extract the first valid JSON object or array from the string.
 
-function extractJSON(text) {
+export function extractJSON(text) {
   try { return JSON.parse(text); } catch (_) {}
 
   // Find the first { or [

@@ -296,7 +296,7 @@ function buildDuplicateComment(issue, duplicates, related, owner, repo) {
   return lines.join("\n");
 }
 
-function similarityLabel(score) {
+export function similarityLabel(score) {
   if (score >= 0.97) return "almost identical";
   if (score >= 0.95) return "very high confidence";
   if (score >= 0.92) return "high confidence";

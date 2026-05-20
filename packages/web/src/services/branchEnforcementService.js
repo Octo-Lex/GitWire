@@ -122,7 +122,7 @@ async function enforceRepoBranch({ octokit, repo, branch, policy }) {
 // Violation computation
 // ════════════════════════════════════════════════════════════════════════════
 
-function computeViolations(policy, live) {
+export function computeViolations(policy, live) {
   const v = [];
 
   if (live === null) {
@@ -177,7 +177,7 @@ async function remediateViolations({ octokit, repo, branch, policy, liveState })
   }
 }
 
-function buildProtectionPayload(policy, live) {
+export function buildProtectionPayload(policy, live) {
   const existingContexts = live?.required_status_checks?.contexts ?? [];
 
   return {
@@ -256,7 +256,7 @@ function buildViolationIssueBody(branch, policy, violations) {
   return lines.join("\n");
 }
 
-function formatVal(v) {
+export function formatVal(v) {
   if (typeof v === "boolean") return v ? "enabled" : "disabled";
   if (typeof v === "number")  return String(v);
   return String(v);

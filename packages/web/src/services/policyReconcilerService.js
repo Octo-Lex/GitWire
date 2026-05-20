@@ -184,7 +184,7 @@ async function fetchObservedState(octokit, repo) {
 // Diff computation
 // ════════════════════════════════════════════════════════════════════════════
 
-function computeDiff(desired, observed) {
+export function computeDiff(desired, observed) {
   const driftFields = [];
   const dbp = desired.branch_protection;
   const obp = observed.branch_protection;

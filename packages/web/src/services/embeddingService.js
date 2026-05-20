@@ -78,7 +78,7 @@ export async function embedText(text) {
 // Generates a 512-dim vector based on character n-gram hashing.
 // Good enough for basic title similarity, but less accurate than real embeddings.
 
-function fallbackEmbed(text) {
+export function fallbackEmbed(text) {
   const DIMS = 512;
   const vec = new Float32Array(DIMS);
   const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
@@ -238,7 +238,7 @@ export function rankBySimilarity(queryVector, candidates) {
  * Build the text to embed for an issue.
  * Title is weighted more heavily by repeating it.
  */
-function buildEmbedText(issue) {
+export function buildEmbedText(issue) {
   const title = (issue.title ?? "").trim();
   const body = (issue.body ?? "").trim().slice(0, 500);
   // Repeat title twice to give it ~2x weight over body

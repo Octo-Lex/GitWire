@@ -20,7 +20,7 @@ const anthropic = new Anthropic({
 const FENCE_RE = /^```(?:json)?\s*\n?/i;
 const FENCE_END_RE = /\n?```\s*$/i;
 
-function stripCodeFences(raw) {
+export function stripCodeFences(raw) {
   return raw.replace(FENCE_RE, "").replace(FENCE_END_RE, "").trim();
 }
 
@@ -483,11 +483,11 @@ async function postComment(octokit, owner, repo, run, body) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function failing_file_ext(path) {
+export function failing_file_ext(path) {
   var parts = path.split(".");
   return parts.length > 1 ? parts[parts.length - 1] : "misc";
 }
 
-function truncate(str, max) {
+export function truncate(str, max) {
   return str.length > max ? str.slice(0, max - 1) + "…" : str;
 }

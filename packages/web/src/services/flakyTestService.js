@@ -297,6 +297,6 @@ export async function checkGraduation(repoId) {
   return graduated;
 }
 
-function makeTestId(repoId, suite, name) {
+export function makeTestId(repoId, suite, name) {
   return crypto.createHash("sha256").update(repoId + ":" + suite + ":" + name).digest("hex").slice(0, 16);
 }
