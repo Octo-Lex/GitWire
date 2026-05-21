@@ -30,6 +30,43 @@ function resolvePrivateKey() {
   return undefined;
 }
 
+// ── Runtime secret guard ───────────────────────────────────────────────────
+// Refuse to start if any secret contains a template placeholder value.
+// This catches the case where .env.production was copied without editing.
+const PLACEHOLDER_PATTERNS = [
+  /YOUR[_-]KEY/i,
+  /YOUR[_-]SECRET/i,
+  /YOUR[_-]TOKEN/i,
+  /YOUR[_-]PASSWORD/i,
+  /YOURDOMAIN/i,
+  /^changeme/i,
+  /^sk-ant-YOUR/i,
+];
+
+function checkPlaceholders(env) {
+  const SECRET_KEYS = [
+    "ANTHROPIC_API_KEY",
+    "GITHUB_APP_CLIENT_SECRET",
+    "GITHUB_WEBHOOK_SECRET",
+    "API_KEY",
+    "TUNNEL_TOKEN",
+    "DB_PASSWORD",
+  ];
+
+  const violations = [];
+  for (const key of SECRET_KEYS) {
+    const value = env[key];
+    if (!value) continue; // missing is fine (optional fields)
+    for (const pattern of PLACEHOLDER_PATTERNS) {
+      if (pattern.test(value)) {
+        violations.push(`${key} contains placeholder "${value}"`);
+        break;
+      }
+    }
+  }
+  return violations;
+}
+
 // Strip empty-string env vars so Zod .optional() works correctly
 // (an empty string like GITHUB_APP_ID= fails .min(1) before .optional() applies)
 function cleanEnv(env) {
@@ -83,6 +120,20 @@ const rawEnv = {
   ...cleanEnv(process.env),
   GITHUB_PRIVATE_KEY: resolvePrivateKey(),
 };
+
+// ── Check for placeholder secrets BEFORE schema validation ─────────────────
+if (process.env.NODE_ENV === "production") {
+  const placeholderViolations = checkPlaceholders(process.env);
+  if (placeholderViolations.length > 0) {
+    console.error("🚨  FATAL: Placeholder secrets detected in production environment!");
+    console.error("   The following values must be replaced with real secrets:");
+    placeholderViolations.forEach((v) => console.error(`   • ${v}`));
+    console.error("");
+    console.error("   Copy .env.example to .env and fill in real values:");
+    console.error("     cp .env.example .env && nano .env");
+    process.exit(1);
+  }
+}
 
 const parsed = schema.safeParse(rawEnv);
 

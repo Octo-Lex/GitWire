@@ -4,8 +4,60 @@ on:
   push:
     branches: [master]
 
+# Least-privilege: only read repo contents by default
+# Jobs that need more access must declare it explicitly
+permissions:
+  contents: read
+
 jobs:
+  # ── Job 1: Security Gate ──────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Pull latest code
+        run: |
+          cd /opt/gitwire
+          git fetch origin master
+          git reset --hard origin/master
+
+      - name: Install gitleaks (if missing)
+        run: |
+          if ! command -v gitleaks &>/dev/null; then
+            echo "Installing gitleaks..."
+            curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b /usr/local/bin
+          fi
+
+      - name: Secret scan
+        run: |
+          cd /opt/gitwire
+          echo "🔍 Scanning repository for leaked secrets..."
+          # CI ignores gitleaks:allow bypass comments — no silent escape hatch
+          gitleaks git -c .gitleaks.toml --no-banner --verbose \
+            --ignore-gitleaks-allow \
+            --redact=50 \
+            --log-opts="--all" \
+            -r /tmp/gitleaks-report.json 2>&1 | tail -20
+          exit_code=${PIPESTATUS[0]:-0}
+          if [ "$exit_code" -eq 1 ]; then
+            echo ""
+            echo "🚨 DEPLOYMENT BLOCKED — Secrets detected!"
+            echo "   Report: /tmp/gitleaks-report.json"
+            echo "   Rotate the exposed secret and remove it from the codebase."
+            exit 1
+          fi
+          echo "✅ No secrets detected (full history + working tree scanned)"
+
+      - name: Dependency audit
+        run: |
+          cd /opt/gitwire
+          npm audit --omit=dev --audit-level=high 2>&1 | tail -10 || true
+
+  # ── Job 2: Deploy ─────────────────────────────────────────────
   deploy:
+    name: Build & Deploy
+    needs: security
     runs-on: self-hosted
     timeout-minutes: 10
     steps:
@@ -42,7 +94,7 @@ jobs:
           echo "Waiting for containers to start..."
           for i in $(seq 1 12); do
             APP=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo '')
-            DASH_IP=$(docker exec gitwire-dashboard-1 sh -c "ip -4 addr show eth0 | grep -o '[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*' | head -1" 2>/dev/null)
+            DASH_IP=$(docker exec gitwire-dashboard-1 sh -c "ip -4 addr show eth0 | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1" 2>/dev/null)
             DASH=$(docker exec gitwire-dashboard-1 wget -qO- "http://${DASH_IP}:3001" 2>/dev/null > /dev/null 2>&1 && echo 'ok' || echo '')
             echo "  Attempt $i/12: app=${APP:+healthy} dash=${DASH:+healthy}"
             if [ -n "$APP" ] && [ -n "$DASH" ]; then
@@ -55,7 +107,7 @@ jobs:
       - name: Health check
         run: |
           APP_HEALTH=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo "FAILED")
-          DASH_IP=$(docker exec gitwire-dashboard-1 sh -c "ip -4 addr show eth0 | grep -o '[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*' | head -1" 2>/dev/null)
+          DASH_IP=$(docker exec gitwire-dashboard-1 sh -c "ip -4 addr show eth0 | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1" 2>/dev/null)
           DASH_HEALTH=$(docker exec gitwire-dashboard-1 wget -qO- "http://${DASH_IP}:3001" 2>/dev/null > /dev/null && echo "OK" || echo "FAILED")
           echo "gitwire-app:   $APP_HEALTH"
           echo "dashboard:     $DASH_HEALTH"

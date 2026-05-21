@@ -2,10 +2,16 @@
 node_modules/
 dist/
 
-# Environment
+# Environment — ONLY .env.example is committed
+# All other .env* files are generated locally from the template
 .env
 .env.local
 .env.*.local
+.env.production
+.env.staging
+.env.development
+.env.test
+!.env.example
 
 # IDE
 .vscode/
@@ -27,3 +33,11 @@ logs/
 # Private keys
 *.pem
 config/private-key.pem
+
+# Secret scanning reports
+.gitleaks-report.json
+
+# VitePress
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+docs/node_modules/

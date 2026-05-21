@@ -1,0 +1,47 @@
+# ── GitWire Secret Scanning Configuration ─────────────────────────
+# This config runs on every commit (pre-commit hook) and in CI.
+#
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+
+title = "GitWire Secret Scanning"
+
+[extend]
+useDefault = true
+
+# ── Global allowlist ──────────────────────────────────────────────
+# These patterns are ignored across ALL rules.
+
+[allowlist]
+  description = "Global allowlist for templates, tests, docs, and UI assets"
+  regexTarget = "match"
+  regexes = [
+    '''YOUR[_-]KEY''',
+    '''YOUR[_-]SECRET''',
+    '''YOUR[_-]TOKEN''',
+    '''YOUR[_-]PASSWORD''',
+    '''YOURDOMAIN''',
+    '''yourdomain\.com''',
+    '''changeme''',
+    '''sk-ant-YOUR''',
+    '''password@localhost''',
+    '''-----BEGIN RSA PRIVATE KEY-----\\nMIIEow\.\.\.''',
+    '''gw_sec_live_''',
+  ]
+  paths = [
+    '''tests/.*''',
+    '''\.test\.''',
+    '''\.spec\.''',
+    '''mocks\.''',
+    '''helpers/.*''',
+    '''docs/.*''',
+    '''README\.md''',
+    '''DEVELOPMENT\.md''',
+    '''CONTRIBUTING\.md''',
+    '''.vitepress/.*''',
+    '''GitWireApp.*\.jsx''',
+    '''app\.jsx''',
+    '''index2\.html''',
+    '''index\.html''',
+    '''MediaPackage.*''',
+    '''scripts/secret-leak-stress-test\.sh''',
+  ]

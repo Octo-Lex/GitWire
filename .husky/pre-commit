@@ -1,0 +1,35 @@
+# ── GitWire Pre-Commit: Secret Scanning ──────────────────────────
+# Blocks commits containing hardcoded secrets, API keys, or tokens.
+# Uses gitleaks git --staged mode — scans the staged diff.
+# Requires: gitleaks >= 8.19 (https://github.com/gitleaks/gitleaks)
+
+# Try to find gitleaks on PATH
+if command -v gitleaks &>/dev/null; then
+  GITLEAKS="gitleaks"
+elif [ -f "$HOME/bin/gitleaks" ]; then
+  GITLEAKS="$HOME/bin/gitleaks"
+elif [ -f "$HOME/bin/gitleaks.exe" ]; then
+  GITLEAKS="$HOME/bin/gitleaks.exe"
+else
+  echo "⚠️  WARNING: gitleaks not found — skipping secret scan"
+  echo "   Install: https://github.com/gitleaks/gitleaks#installing"
+  exit 0
+fi
+
+echo "🔍 Scanning staged files for secrets..."
+
+$GITLEAKS git --staged -c .gitleaks.toml --verbose --redact
+
+exit_code=$?
+
+if [ $exit_code -eq 1 ]; then
+  echo ""
+  echo "🚨 COMMIT BLOCKED — Secrets detected in staged files!"
+  echo "   Review the findings above and remove any hardcoded secrets."
+  echo ""
+  echo "   If this is a false positive, add the fingerprint to .gitleaksignore"
+  echo "   (do NOT use gitleaks:allow inline comments — those are blocked in CI)"
+  exit 1
+fi
+
+exit 0
