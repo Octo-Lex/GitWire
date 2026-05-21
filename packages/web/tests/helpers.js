@@ -35,6 +35,16 @@ export async function post(path, data) {
   });
 }
 
+/** PUT request */
+export async function put(path, data) {
+  return api(path, { method: 'PUT', body: data ? JSON.stringify(data) : undefined });
+}
+
+/** PATCH request */
+export async function patch(path, data) {
+  return api(path, { method: 'PATCH', body: data ? JSON.stringify(data) : undefined });
+}
+
 /** DELETE request */
 export async function del(path) {
   return api(path, { method: 'DELETE' });
