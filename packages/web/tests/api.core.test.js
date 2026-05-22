@@ -8,7 +8,7 @@ describe('Core API', () => {
     const res = await get('/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
-    expect(res.body.service).toBe('gitops-hub');
+    expect(res.body.service).toBe('gitwire');
     expect(res.body.ts).toBeDefined();
   });
 

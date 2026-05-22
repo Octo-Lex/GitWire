@@ -23,7 +23,7 @@ async function main() {
   const server = app.listen(config.server.port, () => {
     logger.info(
       { port: config.server.port, env: config.server.env },
-      "GitOps Hub server started"
+      "GitWire server started"
     );
     logger.info(
       `Webhook endpoint: ${config.server.baseUrl}/webhooks/github`

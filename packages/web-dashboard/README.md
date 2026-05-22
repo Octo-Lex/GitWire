@@ -1,36 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# @gitwire/web-dashboard
 
-## Getting Started
+GitWire Dashboard — monitoring UI for the [GitWire](https://github.com/Elephant-Rock-Lab/GitWire) AI GitHub App platform.
 
-First, run the development server:
+## Stack
+
+- **Next.js 16** — App Router, standalone output
+- **SWR** — data fetching with caching and revalidation
+- **Recharts** — charts for CI runs, triage breakdown, fix attempts
+- **Tailwind CSS** — utility-first styling
+
+## Pages
+
+| Page | Path | Description |
+|------|------|-------------|
+| Dashboard | `/` | Overview — repo count, open issues, recent activity |
+| Repos | `/repos` | All synced repositories with stats |
+| Issues | `/issues` | Triage queue with AI classifications |
+| Pull Requests | `/pull-requests` | PR status, AI review findings |
+| CI Runs | `/ci` | CI failures and healing history |
+| Duplicates | `/duplicates` | Duplicate issue detection results |
+| Automation | `/automation` | Merge queue and error recovery |
+| Trust | `/trust` | Flaky tests, dependency scanning, policy status |
+| Maintainer | `/maintainer` | Stale issues/PRs, branch cleanup, settings |
+| Intelligence | `/intelligence` | AI review findings and audit trail |
+| Fix Attempts | `/fix-attempts` | Autonomous issue fix history |
+
+## Development
 
 ```bash
+# From monorepo root
+npm install
+npm run --workspace=@gitwire/web-dashboard dev
+
+# Or from this directory
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The dashboard runs on **port 3001** in development.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The API backend is expected at `http://localhost:3000`. Configure via `NEXT_PUBLIC_API_URL` in `.env.local`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Production
 
-## Learn More
+The dashboard builds as a Next.js standalone Docker image:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+docker build -t gitwire-dashboard .
+docker run -p 3001:3001 gitwire-dashboard
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+See the monorepo `docker-compose.yml` for the full deployment configuration.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Testing
 
-## Deploy on Vercel
+```bash
+npm test
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Tests cover the API client (`lib/api.ts`), URL builders, and React components (Sidebar, ErrorBoundary).

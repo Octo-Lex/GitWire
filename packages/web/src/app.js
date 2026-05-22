@@ -66,7 +66,7 @@ export function createApp() {
 
   // ── Routes ────────────────────────────────────────────────────────────────
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "gitops-hub", ts: new Date().toISOString() });
+    res.json({ status: "ok", service: "gitwire", ts: new Date().toISOString() });
   });
 
   app.use("/webhooks", webhookRouter);

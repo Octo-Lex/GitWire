@@ -1,0 +1,228 @@
+import { defineConfig } from "vitepress";
+
+export default defineConfig({
+  title: "GitWire Docs",
+  description: "Self-hosted AI that manages your GitHub",
+  base: "/docs/",
+  themeConfig: {
+    logo: "/logo.svg",
+    siteTitle: "GitWire",
+    nav: [
+      { text: "Docs", link: "/" },
+      { text: "Concepts", link: "/concepts/autonomous-github-management" },
+      { text: "API", link: "/api/rest-api-reference" },
+      { text: "Guides", link: "/guides/full-walkthrough" },
+      { text: "GitHub", link: "https://github.com/Elephant-Rock-Lab/GitWire" },
+    ],
+    sidebar: [
+      {
+        text: "Getting Started",
+        items: [
+          { text: "Welcome", link: "/" },
+        ],
+      },
+      {
+        text: "Concepts",
+        collapsed: true,
+        items: [
+          { text: "Autonomous GitHub Management", link: "/concepts/autonomous-github-management" },
+        ],
+      },
+      {
+        text: "Installation",
+        collapsed: false,
+        items: [
+          { text: "Prerequisites", link: "/installation/prerequisites" },
+          { text: "Docker Compose", link: "/installation/docker-compose" },
+          { text: "Cloudflare Tunnel", link: "/installation/cloudflare-tunnel" },
+          { text: "GitHub App Setup", link: "/installation/github-app-setup" },
+          { text: "Environment Variables", link: "/installation/environment-variables" },
+        ],
+      },
+      {
+        text: "Pillars",
+        collapsed: false,
+        items: [
+          {
+            text: "Issue & PR Triage",
+            collapsed: true,
+            items: [
+              { text: "Overview", link: "/pillars/triage/issue-pr-triage" },
+              { text: "AI Classification", link: "/pillars/triage/ai-classification" },
+              { text: "Duplicate Detection", link: "/pillars/triage/duplicate-detection" },
+              { text: "Comment Commands", link: "/pillars/triage/comment-commands" },
+            ],
+          },
+          {
+            text: "Self-Healing CI",
+            collapsed: true,
+            items: [
+              { text: "Overview", link: "/pillars/ci-healing/self-healing-ci" },
+              { text: "Failure Types", link: "/pillars/ci-healing/failure-types" },
+              { text: "Auto Patch PRs", link: "/pillars/ci-healing/auto-patch-prs" },
+              { text: "Heal History", link: "/pillars/ci-healing/heal-history" },
+            ],
+          },
+          {
+            text: "Autonomous Contributor",
+            collapsed: true,
+            items: [
+              { text: "Overview", link: "/pillars/contributor/autonomous-contributor" },
+              { text: "Scope Guards", link: "/pillars/contributor/scope-guards" },
+              { text: "File Scoring", link: "/pillars/contributor/file-scoring" },
+              { text: "Pre-Merge Validation", link: "/pillars/contributor/pre-merge-validation" },
+            ],
+          },
+          {
+            text: "Maintainer Tools",
+            collapsed: true,
+            items: [
+              { text: "Overview", link: "/pillars/maintainer/maintainer-tools" },
+              { text: "Stale Management", link: "/pillars/maintainer/stale-management" },
+              { text: "Branch Cleanup", link: "/pillars/maintainer/branch-cleanup" },
+              { text: "Settings API", link: "/pillars/maintainer/settings-api" },
+            ],
+          },
+          {
+            text: "Multi-Repo Insights",
+            collapsed: true,
+            items: [
+              { text: "Overview", link: "/pillars/insights/multi-repo-insights" },
+              { text: "Sync Engine", link: "/pillars/insights/sync-engine" },
+            ],
+          },
+          {
+            text: "Branch Enforcement",
+            collapsed: true,
+            items: [
+              { text: "Overview", link: "/pillars/enforcement/branch-enforcement" },
+              { text: "Policies", link: "/pillars/enforcement/policies" },
+              { text: "Violations", link: "/pillars/enforcement/violations" },
+              { text: "Config Validation", link: "/pillars/enforcement/config-validation" },
+            ],
+          },
+          {
+            text: "Merge Queue",
+            collapsed: true,
+            items: [
+              { text: "Overview", link: "/pillars/merge-queue/merge-queue" },
+              { text: "Error Recovery", link: "/pillars/merge-queue/error-recovery" },
+              { text: "Feedback Rules", link: "/pillars/merge-queue/feedback-rules" },
+            ],
+          },
+          {
+            text: "AI Review Gate",
+            collapsed: true,
+            items: [
+              { text: "Overview", link: "/pillars/review-gate/ai-review-gate" },
+              { text: "Review Findings", link: "/pillars/review-gate/review-findings" },
+              { text: "Audit Trail", link: "/pillars/review-gate/audit-trail" },
+              { text: "Compliance Reports", link: "/pillars/review-gate/compliance-reports" },
+            ],
+          },
+        ],
+      },
+      {
+        text: "REST API",
+        collapsed: false,
+        items: [
+          { text: "Authentication & Pagination", link: "/api/rest-api-reference" },
+          { text: "Repos", link: "/api/repos" },
+          { text: "Issues", link: "/api/issues" },
+          { text: "Pull Requests", link: "/api/pull-requests" },
+          { text: "CI Runs", link: "/api/ci-runs" },
+          { text: "Insights", link: "/api/insights" },
+          { text: "Fix Attempts", link: "/api/fix-attempts" },
+          { text: "Heal History", link: "/api/heal-history" },
+          { text: "Duplicates", link: "/api/duplicates" },
+          { text: "Maintainer", link: "/api/maintainer" },
+          { text: "Enforcement", link: "/api/enforcement" },
+          { text: "Merge Queue & Automation", link: "/api/phase2" },
+          { text: "Trust & Dependencies", link: "/api/phase3" },
+          { text: "Intelligence & Audit", link: "/api/phase4" },
+          { text: "Webhooks", link: "/api/webhooks" },
+        ],
+      },
+      {
+        text: "Database",
+        collapsed: true,
+        items: [
+          { text: "Overview", link: "/database/database-schema" },
+          { text: "Core Tables", link: "/database/core-tables" },
+          { text: "Maintainer Tables", link: "/database/maintainer-tables" },
+          { text: "Fix Tables", link: "/database/fix-tables" },
+          { text: "Enforcement Tables", link: "/database/enforcement-tables" },
+          { text: "Automation Tables", link: "/database/automation-tables" },
+          { text: "Trust Tables", link: "/database/trust-tables" },
+        ],
+      },
+      {
+        text: "Workers",
+        collapsed: true,
+        items: [
+          { text: "Overview", link: "/workers/background-workers" },
+          { text: "Webhook Worker", link: "/workers/webhook-worker" },
+          { text: "Triage Worker", link: "/workers/triage-worker" },
+          { text: "CI Heal Worker", link: "/workers/ci-heal-worker" },
+          { text: "Sync Worker", link: "/workers/sync-worker" },
+          { text: "Maintainer Worker", link: "/workers/maintainer-worker" },
+          { text: "Issue Fix Worker", link: "/workers/issue-fix-worker" },
+          { text: "Phase 2 Worker", link: "/workers/phase2-worker" },
+          { text: "Phase 3 Worker", link: "/workers/phase3-worker" },
+          { text: "Phase 4 Worker", link: "/workers/phase4-worker" },
+        ],
+      },
+      {
+        text: "Dashboard",
+        collapsed: true,
+        items: [
+          { text: "Overview", link: "/dashboard/web-dashboard" },
+          { text: "Pages", link: "/dashboard/pages" },
+          { text: "Configuration", link: "/dashboard/configuration" },
+        ],
+      },
+      {
+        text: "Architecture",
+        collapsed: true,
+        items: [
+          { text: "System Architecture", link: "/architecture/system-architecture" },
+          { text: "Data Flow", link: "/architecture/data-flow" },
+          { text: "Security", link: "/architecture/security" },
+        ],
+      },
+      {
+        text: "Configuration",
+        collapsed: true,
+        items: [
+          { text: "Queues", link: "/configuration/queues" },
+          { text: "Heal Status", link: "/configuration/heal-status" },
+          { text: "Failure Types", link: "/configuration/failure-types" },
+          { text: "Triage Priority", link: "/configuration/triage-priority" },
+          { text: "CI Conclusion", link: "/configuration/ci-conclusion" },
+        ],
+      },
+      {
+        text: "Guides",
+        collapsed: true,
+        items: [
+          { text: "Full Walkthrough", link: "/guides/full-walkthrough" },
+          { text: "First Triage", link: "/guides/first-triage" },
+          { text: "First CI Heal", link: "/guides/first-ci-heal" },
+          { text: "First Contributor Fix", link: "/guides/first-contributor-fix" },
+          { text: "Custom Enforcement", link: "/guides/custom-enforcement" },
+          { text: "Audit & Compliance", link: "/guides/audit-compliance" },
+        ],
+      },
+    ],
+    socialLinks: [
+      { icon: "github", link: "https://github.com/Elephant-Rock-Lab/GitWire" },
+    ],
+    search: {
+      provider: "local",
+    },
+    footer: {
+      message: "Released under the MIT License.",
+      copyright: "© 2026 Elephant Rock Lab",
+    },
+  },
+});

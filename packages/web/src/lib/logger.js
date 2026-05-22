@@ -8,5 +8,5 @@ export const logger = pino({
     config.server.env !== "production"
       ? { target: "pino-pretty", options: { colorize: true } }
       : undefined,
-  base: { service: "gitops-hub" },
+  base: { service: "gitwire" },
 });

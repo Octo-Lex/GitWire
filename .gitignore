@@ -19,6 +19,13 @@ dist/
 *.swp
 *.swo
 
+# Prototype artifacts
+*.jsx
+!packages/web-dashboard/src/**/*.tsx
+*.html
+!packages/web-dashboard/src/**/*.html
+tree.txt
+
 # OS
 .DS_Store
 Thumbs.db

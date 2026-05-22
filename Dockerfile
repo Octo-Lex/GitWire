@@ -4,11 +4,18 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy entire monorepo
-COPY . .
+# Copy package manifests first for better Docker layer caching.
+# npm install only re-runs when these files change, not on every source edit.
+COPY package.json package-lock.json ./
+COPY packages/core/package.json ./packages/core/package.json
+COPY packages/web/package.json ./packages/web/package.json
+COPY packages/worker/package.json ./packages/worker/package.json
 
-# Install all dependencies
+# Install production dependencies only, skip lifecycle scripts (husky etc.)
 RUN npm ci --omit=dev --ignore-scripts 2>/dev/null || npm install --omit=dev --ignore-scripts
+
+# Copy source (this layer only rebuilds when source actually changes)
+COPY . .
 
 # Expose the Express port
 EXPOSE 3000

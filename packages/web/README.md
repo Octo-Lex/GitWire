@@ -1,188 +1,88 @@
-# GitOps Hub — GitHub Account Management Platform
+# @gitwire/web
 
-Backend API + background workers for managing GitHub accounts at scale.
-Covers: Maintainer tools, Issue & PR triage, Self-healing CI, Multi-repo insights.
+GitWire Backend — API server and background workers for the [GitWire](https://github.com/Elephant-Rock-Lab/GitWire) AI GitHub App platform.
 
----
+## Stack
 
-## Prerequisites
+- **Express** — REST API with JSON body parsing
+- **PostgreSQL 16** — persistent storage (36 tables, 11 migrations)
+- **Redis 7 + BullMQ** — 9 background job queues
+- **Octokit** — GitHub API via `@octokit/app` (REST only)
+- **Anthropic Claude** — AI triage, CI diagnosis, issue fixes, PR review
 
-| Tool | Version |
-|------|---------|
-| Node.js | ≥ 20 |
-| Docker + Compose | any recent |
-| A public URL | VPS / Cloudflare Tunnel / ngrok (for webhooks) |
+## Structure
 
----
+```
+src/
+  app.js             Express app setup, middleware, routes, error handler
+  index.js           Server startup + worker initialization
+  config/index.js    Environment config with runtime secret guard
 
-## Step 1 — Create the GitHub App
+  routes/            HTTP endpoints (14 route files)
+    repos.js         Repository CRUD + sync trigger
+    issues.js        Issue listing + triage results
+    pullRequests.js  PR listing + review data
+    ciRuns.js        CI run history
+    webhooks.js      GitHub webhook ingest → queue dispatch
+    duplicates.js    Duplicate detection results
+    maintainer.js    Stale management, branch cleanup, settings
+    fix.js           Autonomous issue fix attempts
+    healHistory.js   CI healing history
+    enforcement.js   Branch/config policy violations
+    phase2.js        Merge queue + error recovery
+    phase3.js        Flaky tests, dependencies, policy reconciliation
+    phase4.js        AI review, audit trail
+    insights.js      Cross-repo aggregation
 
-1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
-2. Fill in:
-   - **App name:** `GitOps Hub` (or your own)
-   - **Homepage URL:** your VPS URL
-   - **Webhook URL:** `https://your-domain.com/webhooks/github`
-   - **Webhook secret:** generate with `openssl rand -hex 32`, save it
-3. **Permissions** (Repository):
-   - Actions: Read & Write
-   - Contents: Read & Write
-   - Issues: Read & Write
-   - Metadata: Read-only
-   - Pull requests: Read & Write
-   - Workflows: Read & Write
-4. **Subscribe to events:**
-   - Installation, Installation repositories
-   - Issues, Pull request
-   - Push, Workflow run
-5. Create the app, then:
-   - Note your **App ID** and **Client ID**
-   - Generate a **Client secret**
-   - Generate and download the **private key** (`.pem` file)
+  services/          Business logic (17 service files)
+  workers/           BullMQ job processors (9 workers)
+  lib/               Shared: db, queue, logger, github client, comment router
 
----
+db/
+  migrations/        001–011 SQL migrations
+```
 
-## Step 2 — Configure environment
+## Authentication
+
+- **API endpoints** require `Authorization: Bearer <API_KEY>` header
+- **Webhooks** verify GitHub HMAC signature (`X-Hub-Signature-256`)
+
+## Workers
+
+| Queue | Worker | Purpose |
+|-------|--------|---------|
+| `webhook` | `webhookWorker` | Routes GitHub events to downstream queues |
+| `triage` | `triageWorker` | AI issue/PR classification + duplicate detection |
+| `ci-healing` | `ciHealWorker` | CI failure diagnosis + auto-patch PRs |
+| `sync` | `syncWorker` | Repo data sync, member/collaborator backfill |
+| `maintainer` | `maintainerWorker` | Stale scans, branch cleanup, comment commands |
+| `issue-fix` | `issueFixWorker` | Autonomous issue fixing via `/gitwire fix` |
+| `phase2` | `phase2Worker` | Merge queue processing |
+| `phase3` | `phase3Worker` | Trust workflows (flaky tests, deps, policies) |
+| `phase4` | `phase4Worker` | AI PR review + audit reports |
+
+## Development
 
 ```bash
-cp .env.example .env
-```
-
-Edit `.env` and fill in all values. For the private key either:
-
-**Option A** — paste the key inline:
-```
-GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----"
-```
-
-**Option B** — save the `.pem` file and point to it:
-```
-GITHUB_PRIVATE_KEY_PATH=./config/private-key.pem
-```
-
----
-
-## Step 3 — Start dependencies
-
-```bash
-cd docker && docker compose up -d
-cd ..
-```
-
-This starts PostgreSQL (port 5432) and Redis (port 6379).
-The migrations in `db/migrations/` run automatically on first start.
-
----
-
-## Step 4 — Install & run
-
-```bash
+# From monorepo root
 npm install
-npm run dev          # development (auto-restarts on changes)
+npm run --workspace=@gitwire/web db:migrate   # Apply database migrations
+npm run --workspace=@gitwire/web dev           # Start with nodemon
+
+# Or from this directory
+npm run dev
 ```
 
-You should see:
-```
-GitOps Hub server started  port=3000
-Webhook endpoint: https://your-domain.com/webhooks/github
-3 background workers started
-Redis connected
-```
+Requires a running PostgreSQL and Redis. Configure via `.env` (see `.env.example`).
 
----
-
-## Step 5 — Expose your webhook URL
-
-GitHub needs to reach your server. During development:
-
-**Cloudflare Tunnel (free, persistent URL):**
-```bash
-cloudflared tunnel --url http://localhost:3000
-```
-
-**ngrok (temporary URL, free tier):**
-```bash
-ngrok http 3000
-```
-
-Copy the public URL and update the Webhook URL in your GitHub App settings.
-
----
-
-## Step 6 — Install the App on your org
-
-Go to `https://github.com/apps/<your-app-name>` and install it on the
-organisation(s) or repositories you want to manage.
-
-You should see a webhook delivery appear in GitHub → App settings → Advanced,
-and a log line in your server:
-
-```
-Webhook received  event=installation action=created
-Installation synced  installationId=12345 org=acme-corp
-```
-
----
-
-## Production deployment (VPS)
+## Testing
 
 ```bash
-# 1. Install PM2 globally
-npm install -g pm2
-
-# 2. Copy nginx config
-sudo cp docker/nginx.conf /etc/nginx/sites-available/gitops-hub
-sudo ln -s /etc/nginx/sites-available/gitops-hub /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-
-# 3. Get SSL certificate
-sudo certbot --nginx -d your-domain.com
-
-# 4. Start with PM2
-NODE_ENV=production pm2 start ecosystem.config.cjs
-pm2 save
-pm2 startup   # follow the printed command to enable auto-start
+npm test
 ```
 
----
+395 tests across unit, service mock, stress, and dashboard suites.
 
-## Project structure
+## Deployment
 
-```
-gitops-hub/
-├── config/
-│   └── index.js              # Env validation (fails fast on missing vars)
-├── db/
-│   └── migrations/
-│       └── 001_initial_schema.sql
-├── docker/
-│   ├── docker-compose.yml    # PostgreSQL + Redis
-│   └── nginx.conf            # Reverse proxy
-├── src/
-│   ├── app.js                # Express app factory
-│   ├── index.js              # Entry point (server + workers)
-│   ├── lib/
-│   │   ├── db.js             # PostgreSQL pool
-│   │   ├── github.js         # Octokit / GitHub App helpers
-│   │   ├── logger.js         # Pino logger
-│   │   └── queue.js          # BullMQ queues + Redis
-│   ├── routes/
-│   │   └── webhooks.js       # POST /webhooks/github
-│   └── workers/
-│       ├── webhookWorker.js  # Installation + repo sync
-│       ├── triageWorker.js   # AI issue/PR triage
-│       └── ciHealWorker.js   # AI CI root-cause + healing
-├── .env.example
-├── ecosystem.config.cjs      # PM2 production config
-└── package.json
-```
-
----
-
-## What's next
-
-| Step | Module |
-|------|--------|
-| 2 | Sync worker — periodic full repo/issue sync |
-| 3 | REST API + Next.js dashboard |
-| 4 | Multi-repo insights |
-| 5 | Full CI healing with auto-patch PRs |
+See the monorepo `docker-compose.yml` for the full production deployment (backend, dashboard, PostgreSQL, Redis, Cloudflare Tunnel).
