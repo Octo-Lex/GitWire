@@ -16,9 +16,13 @@
 # Documentation site
 docs/
 
-# Security reports and test scripts
+# Security reports
 security/
-scripts/
+
+# Test scripts only (keep migrate.js)
+scripts/secret-leak-stress-test.sh
+scripts/create-test-issues.js
+scripts/update-webhook.js
 
 # Test files
 *.test.*
