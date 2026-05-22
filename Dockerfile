@@ -8,7 +8,7 @@ WORKDIR /app
 COPY . .
 
 # Install all dependencies
-RUN npm ci --omit=dev 2>/dev/null || npm install --omit=dev
+RUN npm ci --omit=dev --ignore-scripts 2>/dev/null || npm install --omit=dev --ignore-scripts
 
 # Expose the Express port
 EXPOSE 3000

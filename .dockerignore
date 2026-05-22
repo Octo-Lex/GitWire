@@ -1,0 +1,57 @@
+# ── GitWire Docker Build Context ──────────────────────────────
+# Exclude everything not needed for production runtime.
+# This shrinks the build context and prevents dev tooling
+# (husky, tests, docs) from interfering with the container build.
+
+# Version control
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# Pre-commit hooks — not needed in container
+.husky/
+
+# Documentation site
+docs/
+
+# Security reports and test scripts
+security/
+scripts/
+
+# Test files
+*.test.*
+*.spec.*
+tests/
+__tests__/
+
+# Development configs
+.gitleaks.toml
+.editorconfig
+.prettierrc*
+.eslintrc*
+
+# Brand assets and media
+MediaPackage*
+index2.html
+index.html
+*.png
+*.jpg
+*.svg
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Local env files (production uses env_file in docker-compose)
+.env
+.env.*
+!.env.example
+
+# Already installed via npm ci
+node_modules/

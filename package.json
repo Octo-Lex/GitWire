@@ -14,7 +14,7 @@
     "test": "npm run --workspaces test",
     "db:migrate": "node scripts/migrate.js",
     "start": "npm --workspace=@gitwire/web run start",
-    "prepare": "husky"
+    "prepare": "husky 2>/dev/null || true"
   },
   "workspaces": [
     "packages/*"
