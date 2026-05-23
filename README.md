@@ -1,12 +1,13 @@
 # GitWire
 
-> AI-powered GitHub account management platform.
+> Self-hosted AI that manages your GitHub — triage, CI healing, stale management, autonomous fixes, and more.
 
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
-npm install
+# 1. Clone and install
+git clone https://github.com/Elephant-Rock-Lab/GitWire.git
+cd GitWire && npm install
 
 # 2. Configure environment
 cp packages/web/.env.example packages/web/.env
@@ -27,46 +28,79 @@ npm run dev
 ```
 GitWire/
 ├── packages/
-│   ├── core/          # Shared types, constants, utilities
-│   ├── web/           # Express API + workers + dashboard (current runtime)
+│   ├── core/          # Shared constants, enums (zero deps)
+│   ├── runtime/       # DB, Redis, logger, GitHub factories
+│   ├── rules/         # Config schema, validation, risk scoring
+│   ├── web/           # Express API + BullMQ workers
+│   ├── web-dashboard/ # Next.js 16 dashboard UI
 │   ├── worker/        # Generic worker loop (future extraction)
 │   ├── triage/        # AI issue/PR classification (future extraction)
 │   ├── healer/        # CI diagnosis + auto-patch (future extraction)
 │   ├── quality-gate/  # Phase gates + diff-aware review (future)
-│   ├── rules/         # YAML/DSL policy definitions (future)
 │   ├── insights/      # Multi-repo analytics (future extraction)
 │   ├── maintainer/    # Team access + branch rules (future)
 │   ├── ai-skills/     # Prompt templates + LLM routing (future)
 │   ├── mcp/           # MCP server for external tools (future)
 │   └── cli/           # CLI entry point (future)
-├── config/            # Shared configuration
-├── db/migrations/     # PostgreSQL schema migrations
-├── docker/            # Docker Compose (PostgreSQL, Redis)
-├── docs/              # Project documentation
-└── scripts/           # Build and migration scripts
+├── docs/              # VitePress documentation site
+├── scripts/           # Migration, backup, restore scripts
+└── security/          # Security audit reports
 ```
 
-## Five Pillars
+## Pillars
 
-| Pillar | Package | Status |
-|--------|---------|--------|
-| **Maintainer Tools** | `@gitwire/maintainer` | Stub |
-| **Issue & PR Triage** | `@gitwire/triage` (logic in `@gitwire/web`) | ✅ Working |
-| **Self-Healing CI** | `@gitwire/healer` (logic in `@gitwire/web`) | ✅ Working |
-| **Multi-Repo Insights** | `@gitwire/insights` (logic in `@gitwire/web`) | ✅ Working |
-| **Autonomous Contributor** | `@gitwire/web` (future: `@gitwire/contributor`) | ✅ Working |
+| Pillar | Description | Status |
+|--------|-------------|--------|
+| **Issue & PR Triage** | AI classification, auto-label, duplicate detection | ✅ Working |
+| **Self-Healing CI** | Diagnose failures, generate patch PRs | ✅ Working |
+| **Maintainer Tools** | Stale management, branch cleanup, settings API | ✅ Working |
+| **Multi-Repo Insights** | Cross-repo sync, metrics, health scores | ✅ Working |
+| **Autonomous Contributor** | AI-generated fix PRs with scope guards | ✅ Working |
+| **Branch Enforcement** | Config validation, policy reconciliation | ✅ Working |
+| **Merge Queue** | Automated merge management, error recovery | ✅ Working |
+| **AI Review Gate** | PR code review, audit trail, compliance | ✅ Working |
+
+## Policy-as-Code
+
+Configure per-repo behavior with `.gitwire.yml`:
+
+```yaml
+pillars:
+  triage:
+    enabled: true
+    auto_label: true
+  ci_healing:
+    enabled: true
+    min_confidence_to_patch: medium
+  issue_fix:
+    enabled: false
+settings:
+  dry_run: false
+```
+
+See [`.gitwire.example.yml`](.gitwire.example.yml) for the full reference.
 
 ## Tech Stack
 
-- **Runtime:** Node.js 20+
+- **Runtime:** Node.js 20+ (ESM)
 - **API:** Express + Helmet + CORS + Zod validation
-- **Queue:** BullMQ + Redis
-- **Database:** PostgreSQL
-- **AI:** Claude (Anthropic API)
+- **Dashboard:** Next.js 16 + SWR + Recharts + TailwindCSS
+- **Queue:** BullMQ + Redis 7
+- **Database:** PostgreSQL 16 (39 tables)
+- **AI:** Claude via Anthropic API
 - **GitHub:** Octokit + GitHub App webhooks
-- **Logging:** Pino
 - **Auth:** Bearer API key + HMAC webhook verification
-- **Rate Limiting:** Redis sliding window
+- **Rate Limiting:** Redis sliding window (100 req/min)
+
+## Documentation
+
+Full docs at [docs/](docs/) (VitePress, 93 pages):
+
+- [Installation Guide](docs/installation/docker-compose.md)
+- [Policy-as-Code](docs/configuration/policy-as-code.md)
+- [Risk Scoring](docs/configuration/risk-scoring.md)
+- [REST API Reference](docs/api/rest-api-reference.md)
+- [Architecture](docs/architecture/system-architecture.md)
 
 ## License
 

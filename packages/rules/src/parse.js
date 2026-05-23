@@ -2,7 +2,7 @@
 // YAML parser with deep-merge onto defaults.
 
 import yaml from "js-yaml";
-import { DEFAULT_CONFIG } from "./schema.js";
+import { DEFAULT_CONFIG, validateConfig } from "./schema.js";
 
 /**
  * Parse a .gitwire.yml string into a resolved config object.
@@ -15,6 +15,12 @@ export function parseConfig(yamlContent) {
   const parsed = yaml.load(yamlContent);
 
   if (!parsed || typeof parsed !== "object") return structuredClone(DEFAULT_CONFIG);
+
+  // Validate before merge — reject invalid shapes
+  const validation = validateConfig(parsed);
+  if (!validation.valid) {
+    throw new Error("Invalid .gitwire.yml: " + validation.errors.join("; "));
+  }
 
   return mergeDeep(structuredClone(DEFAULT_CONFIG), parsed);
 }

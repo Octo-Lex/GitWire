@@ -8,7 +8,7 @@ import { getInstallationClient } from "../lib/github.js";
 import { ciService } from "../services/ciService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { HEALABLE_TYPES } from "@gitwire/core";
-import { isPillarEnabled, isFileAllowed, isDryRun } from "@gitwire/rules";
+import { isPillarEnabled, isFileAllowed, isDryRun, meetsConfidence, getMinPatchConfidence, scoreCIRisk } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
@@ -113,7 +113,7 @@ async function healWorkflowRun({ payload }) {
 
 // ── Attempt automated heal via patch PR ───────────────────────────────────────
 
-async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository) {
+async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig) {
   // Flaky test: just re-run
   if (diagnosis.failure_type === "test_flaky" && diagnosis.confidence !== "low") {
     await healByRerun(octokit, owner, repo, run, diagnosis, repoConfig);

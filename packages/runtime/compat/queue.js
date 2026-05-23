@@ -90,13 +90,23 @@ function getQueueSingleton(prop) {
   return _queueCache[prop];
 }
 
-// Export named singleton queues as lazy proxies
-export const webhookQueue    = new Proxy({}, { get: (_, p) => getQueueSingleton("webhookQueue")[p] });
-export const triageQueue     = new Proxy({}, { get: (_, p) => getQueueSingleton("triageQueue")[p] });
-export const ciHealQueue     = new Proxy({}, { get: (_, p) => getQueueSingleton("ciHealQueue")[p] });
-export const syncQueue       = new Proxy({}, { get: (_, p) => getQueueSingleton("syncQueue")[p] });
-export const maintainerQueue = new Proxy({}, { get: (_, p) => getQueueSingleton("maintainerQueue")[p] });
-export const issueFixQueue   = new Proxy({}, { get: (_, p) => getQueueSingleton("issueFixQueue")[p] });
-export const phase2Queue     = new Proxy({}, { get: (_, p) => getQueueSingleton("phase2Queue")[p] });
-export const phase3Queue     = new Proxy({}, { get: (_, p) => getQueueSingleton("phase3Queue")[p] });
-export const phase4Queue     = new Proxy({}, { get: (_, p) => getQueueSingleton("phase4Queue")[p] });
+// Export named singleton queues as lazy proxies with proper method binding
+function queueProxy(name) {
+  return new Proxy({}, {
+    get(_target, prop) {
+      const q = getQueueSingleton(name);
+      const val = q[prop];
+      return typeof val === "function" ? val.bind(q) : val;
+    },
+  });
+}
+
+export const webhookQueue    = queueProxy("webhookQueue");
+export const triageQueue     = queueProxy("triageQueue");
+export const ciHealQueue     = queueProxy("ciHealQueue");
+export const syncQueue       = queueProxy("syncQueue");
+export const maintainerQueue = queueProxy("maintainerQueue");
+export const issueFixQueue   = queueProxy("issueFixQueue");
+export const phase2Queue     = queueProxy("phase2Queue");
+export const phase3Queue     = queueProxy("phase3Queue");
+export const phase4Queue     = queueProxy("phase4Queue");

@@ -60,7 +60,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="px-5 py-3 border-t border-border">
         <div className="text-[10px] font-mono text-text-tertiary">
-          GitWire v0.1
+          GitWire v0.8
         </div>
       </div>
     </aside>
