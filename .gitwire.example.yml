@@ -58,6 +58,13 @@ pillars:
   enforcement:
     enabled: true
 
+  # ── Trust & Safety ────────────────────────────────────────────────────────
+  # Flaky test detection and dependency vulnerability scanning.
+  trust:
+    enabled: true
+    flaky_test_detection: true   # Quarantine flaky tests automatically
+    dependency_scanning: true    # Scan manifests for known vulnerabilities
+
   # ── Merge Queue ───────────────────────────────────────────────────────────
   # Auto-merge PRs with "auto-merge" label when checks pass.
   merge_queue:

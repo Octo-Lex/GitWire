@@ -8,7 +8,7 @@ import { ingestTestResults, checkGraduation } from "../services/flakyTestService
 import { runFleetReconciliation } from "../services/policyReconcilerService.js";
 import { scanRepo } from "../services/dependencyService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled } from "@gitwire/rules";
+import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { logger } from "../lib/logger.js";
 import { db }     from "../lib/db.js";
 
@@ -20,10 +20,19 @@ export function startPhase3Worker() {
       case "ingest-test-results": {
         const { run, repository, installation } = job.data;
         if (!run || !repository || !installation) return;
-        // ── Check .gitwire.yml pillar config ──────────────────────────────
+        // ── Gate: trust pillar (flaky test detection) ────────────────────
         const repoConfig = await getConfigForRepo(repository.full_name);
-        if (!isPillarEnabled("enforcement", repoConfig)) {
-          logger.debug({ repo: repository.full_name }, "Enforcement disabled — skipping test ingestion");
+        if (!isPillarEnabled("trust", repoConfig)) {
+          logger.debug({ repo: repository.full_name }, "Trust pillar disabled — skipping test ingestion");
+          return;
+        }
+        const trustOpts = repoConfig.pillars?.trust || {};
+        if (trustOpts.flaky_test_detection === false) {
+          logger.debug({ repo: repository.full_name }, "Flaky test detection disabled — skipping");
+          return;
+        }
+        if (isDryRun(repoConfig)) {
+          logger.info({ repo: repository.full_name }, "DRY RUN: would ingest test results");
           return;
         }
         const octokit = await getInstallationClient(installation.id);
@@ -32,6 +41,7 @@ export function startPhase3Worker() {
       }
 
       case "graduation-check": {
+        // Fleet-wide: no per-repo gating needed
         const { rows: repos } = await db.query("SELECT DISTINCT repo_id FROM flaky_tests WHERE quarantined = TRUE");
         for (const { repo_id } of repos) {
           await checkGraduation(repo_id).catch(err =>
@@ -42,6 +52,7 @@ export function startPhase3Worker() {
       }
 
       case "policy-reconcile-fleet": {
+        // Gate: enforcement pillar only
         await runFleetReconciliation("scheduler");
         break;
       }
@@ -53,6 +64,16 @@ export function startPhase3Worker() {
             [installation.id]
           );
           for (const repo of repos) {
+            // Gate: trust pillar (dependency scanning) per repo
+            const repoConfig = await getConfigForRepo(repo.full_name);
+            const trustOpts = repoConfig.pillars?.trust || {};
+            if (!isPillarEnabled("trust", repoConfig) || trustOpts.dependency_scanning === false) {
+              continue;
+            }
+            if (isDryRun(repoConfig)) {
+              logger.info({ repo: repo.full_name }, "DRY RUN: would scan dependencies");
+              continue;
+            }
             await scanRepo({
               repository: { ...repo, id: repo.github_id, owner: { login: repo.owner } },
               octokit,
@@ -72,6 +93,16 @@ export function startPhase3Worker() {
           [repoId]
         );
         if (!repo) return;
+        // Gate: trust pillar for single-repo scan
+        const repoConfig = await getConfigForRepo(repo.full_name);
+        if (!isPillarEnabled("trust", repoConfig)) {
+          logger.debug({ repo: repo.full_name }, "Trust pillar disabled — skipping dep scan");
+          return;
+        }
+        if (isDryRun(repoConfig)) {
+          logger.info({ repo: repo.full_name }, "DRY RUN: would scan dependencies");
+          return;
+        }
         const octokit = await getInstallationClient(installationId);
         await scanRepo({
           repository: { ...repo, id: repo.github_id, owner: { login: repo.owner } },

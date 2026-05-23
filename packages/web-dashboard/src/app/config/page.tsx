@@ -115,6 +115,16 @@ const PILLARS = [
     opts: [],
   },
   {
+    key: "trust",
+    label: "Trust & Safety",
+    icon: "🔒",
+    desc: "Flaky test detection, dependency scanning",
+    opts: [
+      { key: "flaky_test_detection", label: "Flaky test detection", type: "toggle" },
+      { key: "dependency_scanning", label: "Dependency scanning", type: "toggle" },
+    ],
+  },
+  {
     key: "merge_queue",
     label: "Merge Queue",
     icon: "⌘",

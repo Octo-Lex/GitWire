@@ -64,6 +64,12 @@ export const DEFAULT_CONFIG = {
       enabled: true,
     },
 
+    trust: {
+      enabled: true,
+      flaky_test_detection: true,
+      dependency_scanning: true,
+    },
+
     merge_queue: {
       enabled: false,
       required_checks: [],
