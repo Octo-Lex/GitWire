@@ -1,5 +1,7 @@
 /** GitWire Dashboard — SWR fetcher + typed API hooks */
 
+import useSWR, { type SWRConfiguration } from "swr";
+
 const BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
@@ -12,6 +14,19 @@ async function fetcher(url: string) {
 }
 
 export { fetcher };
+
+// ── useApi: unified data accessor ──────────────────────────────────────────
+// Auto-unwraps {data, meta} response shape. Returns typed rows + metadata.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function useApi<T = any>(url: string | null, opts?: SWRConfiguration) {
+  const { data, error, isLoading, mutate } = useSWR<any>(url, fetcher, opts);
+  // Unwrap {data: [...], meta: {...}} or {data: [...], pagination: {...}} shapes
+  const rows: T[] = data?.data ?? data?.rows ?? (Array.isArray(data) ? data : []);
+  const meta = data?.meta ?? data?.pagination ?? null;
+  const raw = data ?? null;
+  return { data: rows, meta, raw, error, isLoading, mutate };
+}
 
 // ── API endpoint builders ──────────────────────────────────────────────────
 
@@ -112,6 +127,19 @@ export const API = {
   // Decisions
   decisions:        (q = "") => `/api/decisions${q ? `?${q}` : ""}`,
   decisionsSummary: () => `/api/decisions/summary`,
+
+  // Waivers
+  waivers:          (repo: string, q = "") => `/api/waivers?repo=${encodeURIComponent(repo)}${q ? `&${q}` : ""}`,
+  waiverCheck:      (repo: string, pillar: string, scope = "", scopeValue = "") =>
+    `/api/waivers/check?repo=${encodeURIComponent(repo)}&pillar=${pillar}${scope ? `&scope=${scope}` : ""}${scopeValue ? `&scopeValue=${scopeValue}` : ""}`,
+
+  // Activity Feed
+  activity:         (q = "") => `/api/activity${q ? `?${q}` : ""}`,
+  activitySummary:  () => `/api/activity/summary`,
+
+  // Readiness
+  readiness:        () => `/api/readiness`,
+  readinessRepo:    (owner: string, repo: string) => `/api/readiness/${owner}/${repo}`,
 };
 
 // ── Trigger helpers (non-GET) ─────────────────────────────────────────────
@@ -470,6 +498,26 @@ export async function restoreConfigVersion(owner: string, repo: string, historyI
   const res = await fetch(`${BASE}/api/config/${owner}/${repo}/restore/${historyId}`, {
     method: "POST",
     headers: authHeaders(),
+  });
+  return res.json();
+}
+
+// ── Waiver actions ────────────────────────────────────────────────────────
+
+export async function grantWaiver(repo: string, pillar: string, scope: string, scopeValue: string, reason: string, grantedBy: string, expiresAt?: string) {
+  const res = await fetch(`${BASE}/api/waivers`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ repo, pillar, scope, scopeValue, reason, grantedBy, expiresAt }),
+  });
+  return res.json();
+}
+
+export async function revokeWaiver(id: number, revokedBy = "dashboard") {
+  const res = await fetch(`${BASE}/api/waivers/${id}`, {
+    method: "DELETE",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ revokedBy }),
   });
   return res.json();
 }

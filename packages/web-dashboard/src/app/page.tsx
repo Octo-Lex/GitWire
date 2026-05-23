@@ -1,28 +1,49 @@
 "use client";
 
-import { ApiItem } from "@/lib/types";
-
 import useSWR from "swr";
-
-import { fetcher, API } from "@/lib/api";
+import { useApi, fetcher, API } from "@/lib/api";
 import {
   PageHeader, StatCard, Badge, CIBadge, HealthBadge, MiniBar,
   Skeleton, EmptyState,
 } from "@/components/ui";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
-import clsx from "clsx";
 
 export default function DashboardPage() {
+  // ── 5 data sources for the overview ──
+  // Overview is a single object (not array), so use raw SWR
   const { data: overview, isLoading: ol } = useSWR(API.insights(), fetcher, { refreshInterval: 30000 });
-  const { data: repos, isLoading: rl } = useSWR(API.insightRepos(), fetcher, { refreshInterval: 60000 });
-  const { data: issueStats, isLoading: il } = useSWR(API.issueStats(), fetcher, { refreshInterval: 30000 });
-  const { data: ciStats, isLoading: cl } = useSWR(API.ciStats(), fetcher, { refreshInterval: 15000 });
-  const { data: issuesData, isLoading: issl } = useSWR(API.issues("state=open&per_page=5"), fetcher, { refreshInterval: 20000 });
-  const { data: ciRunsData, isLoading: crl } = useSWR(API.ciRuns("per_page=5"), fetcher, { refreshInterval: 10000 });
+  // Repos is an array
+  const { data: reposData, isLoading: rl } = useApi<any>(API.insightRepos(), { refreshInterval: 60000 });
+  // Issues and CI runs are arrays
+  const { data: recentIssues, isLoading: issl } = useApi<any>(API.issues("state=open&per_page=5"), { refreshInterval: 20000 });
+  const { data: recentRuns, isLoading: crl } = useApi<any>(API.ciRuns("per_page=5"), { refreshInterval: 10000 });
 
-  const recentIssues = issuesData?.data ?? [];
-  const recentRuns = ciRunsData?.data ?? [];
+  // Activity summary (raw object shape)
+  const { data: actSummary, isLoading: asl } = useSWR(API.activitySummary(), fetcher, { refreshInterval: 30000 });
+
+  // Readiness scores (raw object shape)
+  const { data: readinessData, isLoading: rdl } = useSWR(API.readiness(), fetcher, { refreshInterval: 120000 });
+
+  // Decisions summary (raw object shape)
+  const { data: decSummary, isLoading: dsl } = useSWR(API.decisionsSummary(), fetcher, { refreshInterval: 30000 });
+
+  // ── Computed values ──
+  const totalRepos = overview?.repos?.total ?? readinessData?.total_repos ?? null;
+  const fleetScore = readinessData?.average_score ?? null;
+  const last24h = actSummary?.recent?.last_24h ?? null;
+  const totalActions = actSummary?.total ?? null;
+
+  // Top / bottom repos by readiness
+  const readinessRepos = readinessData?.repos ?? [];
+  const topRepos = [...readinessRepos].sort((a: any, b: any) => b.score - a.score).slice(0, 5);
+  const bottomRepos = [...readinessRepos].sort((a: any, b: any) => a.score - b.score).slice(0, 5);
+
+  // Decision counts
+  const decisionCounts = decSummary?.data ?? [];
+  const totalActed = decisionCounts.reduce((sum: number, d: any) => sum + (d.acted ?? 0), 0);
+  const totalSkipped = decisionCounts.reduce((sum: number, d: any) => sum + (d.skipped ?? 0), 0);
+  const totalBlocked = decisionCounts.reduce((sum: number, d: any) => sum + (d.blocked ?? 0), 0);
 
   return (
     <div className="animate-fade-in">
@@ -31,17 +52,27 @@ export default function DashboardPage() {
         subtitle="Real-time overview across all repositories"
       />
 
-      {/* Stats row */}
-      <div className="grid grid-cols-6 gap-3 px-6 py-4 border-b border-border">
-        <StatCard label="Repos"       value={overview?.repos?.total}         loading={ol} accent="blue" />
-        <StatCard label="Open issues"  value={overview?.issues?.open}         loading={ol} />
-        <StatCard label="Critical"     value={overview?.issues?.critical}     loading={ol} accent="red" />
-        <StatCard label="Open PRs"     value={overview?.prs?.open}            loading={ol} />
-        <StatCard label="CI pass rate" value={overview?.ci?.pass_rate != null ? `${overview.ci.pass_rate}%` : null} loading={ol} accent={overview?.ci?.pass_rate >= 90 ? "green" : "amber"} />
-        <StatCard label="Auto-healed"  value={overview?.ci?.auto_healed}      loading={ol} accent="purple" />
+      {/* ── Hero stats row ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 px-6 py-4 border-b border-border">
+        <StatCard label="Repos" value={totalRepos} loading={ol && rdl} accent="blue" />
+        <StatCard label="Open Issues" value={overview?.issues?.open} loading={ol} />
+        <StatCard label="Open PRs" value={overview?.prs?.open} loading={ol} />
+        <StatCard
+          label="CI Pass Rate"
+          value={overview?.ci?.pass_rate != null ? `${overview.ci.pass_rate}%` : null}
+          loading={ol}
+          accent={overview?.ci?.pass_rate >= 90 ? "green" : "amber"}
+        />
+        <StatCard label="Actions (24h)" value={last24h} loading={asl} accent="purple" />
+        <StatCard
+          label="Fleet Readiness"
+          value={fleetScore != null ? `${fleetScore}/100` : null}
+          loading={rdl}
+          accent={fleetScore != null && fleetScore >= 70 ? "green" : fleetScore != null && fleetScore >= 40 ? "amber" : "red"}
+        />
       </div>
 
-      {/* Two-column layout */}
+      {/* ── Two-column layout ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 lg:gap-0">
 
         {/* Left: Recent issues */}
@@ -57,7 +88,7 @@ export default function DashboardPage() {
             {!issl && !recentIssues.length && (
               <EmptyState icon="◎" title="No issues" body="Issues will appear here after sync." />
             )}
-            {recentIssues.map((issue: ApiItem) => (
+            {recentIssues.map((issue: any) => (
               <div key={String(issue.github_id)} className="px-6 py-3 hover:bg-surface-2/50 transition-colors">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-medium text-text-primary leading-snug line-clamp-1">{String(issue.title)}</span>
@@ -91,7 +122,7 @@ export default function DashboardPage() {
             {!crl && !recentRuns.length && (
               <EmptyState icon="⚙" title="No CI runs" body="Runs will appear after webhook events." />
             )}
-            {recentRuns.map((run: ApiItem) => (
+            {recentRuns.map((run: any) => (
               <div key={String(run.id)} className="px-6 py-3 hover:bg-surface-2/50 transition-colors">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-mono text-sm font-medium text-text-primary">{String(run.repo_name ?? "")}</span>
@@ -114,9 +145,80 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Repo health quick table */}
-      {repos?.length > 0 && (
+      {/* ── Decisions summary row ── */}
+      <div className="px-6 py-4 border-b border-border">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[10px] font-mono text-text-tertiary uppercase tracking-wider">Decision Summary</div>
+          <Link href="/decisions" className="text-xs font-mono text-accent-green hover:underline">view all →</Link>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="card p-3 flex items-center gap-3">
+            <div className="text-2xl font-display font-bold text-accent-green tabular-nums">{dsl ? "—" : totalActed}</div>
+            <div>
+              <div className="text-xs font-mono text-text-tertiary uppercase">Acted</div>
+              <div className="text-[10px] text-text-tertiary">Actions taken</div>
+            </div>
+          </div>
+          <div className="card p-3 flex items-center gap-3">
+            <div className="text-2xl font-display font-bold text-accent-amber tabular-nums">{dsl ? "—" : totalSkipped}</div>
+            <div>
+              <div className="text-xs font-mono text-text-tertiary uppercase">Skipped</div>
+              <div className="text-[10px] text-text-tertiary">Policy / filter</div>
+            </div>
+          </div>
+          <div className="card p-3 flex items-center gap-3">
+            <div className="text-2xl font-display font-bold text-accent-red tabular-nums">{dsl ? "—" : totalBlocked}</div>
+            <div>
+              <div className="text-xs font-mono text-text-tertiary uppercase">Blocked</div>
+              <div className="text-[10px] text-text-tertiary">Dry run / policy</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Fleet readiness table ── */}
+      {readinessRepos.length > 0 && (
         <div className="px-6 py-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[10px] font-mono text-text-tertiary uppercase tracking-wider">Fleet Readiness</div>
+            <Link href="/readiness" className="text-xs font-mono text-accent-green hover:underline">view all →</Link>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Top 5 */}
+            <div className="card overflow-hidden">
+              <div className="px-4 py-2 border-b border-border text-[10px] font-mono text-accent-green uppercase tracking-wider">Top Repos</div>
+              <div className="divide-y divide-border">
+                {topRepos.map((r: any) => (
+                  <Link key={r.repo} href={`/readiness/${r.owner}/${r.name}`} className="flex items-center justify-between px-4 py-2.5 hover:bg-surface-2/40 transition-colors">
+                    <span className="font-mono text-xs text-text-primary truncate">{r.repo}</span>
+                    <div className="flex items-center gap-2">
+                      <MiniBar value={r.score} />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+            {/* Bottom 5 */}
+            <div className="card overflow-hidden">
+              <div className="px-4 py-2 border-b border-border text-[10px] font-mono text-accent-red uppercase tracking-wider">Needs Attention</div>
+              <div className="divide-y divide-border">
+                {bottomRepos.map((r: any) => (
+                  <Link key={r.repo} href={`/readiness/${r.owner}/${r.name}`} className="flex items-center justify-between px-4 py-2.5 hover:bg-surface-2/40 transition-colors">
+                    <span className="font-mono text-xs text-text-primary truncate">{r.repo}</span>
+                    <div className="flex items-center gap-2">
+                      <MiniBar value={r.score} />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Repo health quick table (from insights/repos) ── */}
+      {reposData?.length > 0 && (
+        <div className="px-6 py-5 border-t border-border">
           <div className="text-[10px] font-mono text-text-tertiary uppercase tracking-wider mb-3">Repository health</div>
           <div className="card overflow-hidden">
             <div className="overflow-x-auto">
@@ -131,7 +233,7 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {repos.map((repo: ApiItem) => (
+                  {reposData.map((repo: any) => (
                     <tr key={String(repo.full_name)} className="border-b border-border last:border-0 hover:bg-surface-2/40 transition-colors">
                       <td className="px-4 py-2.5 font-mono text-xs text-text-primary font-medium">{String(repo.full_name)}</td>
                       <td className="px-4 py-2.5 text-right font-mono text-xs text-text-secondary">{String(repo.open_issues ?? 0)}</td>

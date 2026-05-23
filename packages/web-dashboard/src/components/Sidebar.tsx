@@ -16,6 +16,7 @@ const NAV = [
   { href: "/insights",      label: "Insights",        icon: "◈" },
   { href: "/activity",     label: "Activity",       icon: "📊" },
   { href: "/decisions",   label: "Decisions",     icon: "⚖" },
+  { href: "/waivers",     label: "Waivers",       icon: "🛡" },
   { href: "/readiness",   label: "Readiness",     icon: "✓" },
   { href: "/maintainer",    label: "Maintainer",      icon: "⟳" },
   { href: "/fix-attempts",  label: "Fix Attempts",    icon: "⚡" },
@@ -63,7 +64,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="px-5 py-3 border-t border-border">
         <div className="text-[10px] font-mono text-text-tertiary">
-          GitWire v0.8
+          GitWire v0.9
         </div>
       </div>
     </aside>
