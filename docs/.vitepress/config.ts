@@ -216,6 +216,7 @@ export default defineConfig({
           { text: "Dry Run Mode", link: "/configuration/dry-run" },
           { text: "Expression Language", link: "/configuration/expression-language" },
           { text: "Custom Rules", link: "/configuration/custom-rules" },
+          { text: "Custom Rules Pipeline", link: "/configuration/custom-rules-pipeline" },
           { text: "Plugins", link: "/configuration/plugins" },
           { text: "Config Playground", link: "/configuration/playground" },
           { text: "Queues", link: "/configuration/queues" },
