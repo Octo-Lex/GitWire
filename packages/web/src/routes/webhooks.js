@@ -16,6 +16,7 @@ import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { parseGitwireCommand, resolveCommandAction, buildCommandResponse } from "../lib/commentRouter.js";
 import { invalidateConfigCache } from "../services/configService.js";
+import { evaluateAndExecuteCustomRules } from "../services/customRulesService.js";
 import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFromDecision } from "../lib/checkStatus.js";
 
 export const webhookRouter = Router();
@@ -68,6 +69,21 @@ webhookRouter.post(
 
     // ── 3. Enqueue based on event type ────────────────────────────────────
     await routeWebhookToQueue(eventName, payload, deliveryId);
+
+    // ── 3a. Evaluate custom rules ────────────────────────────────────────────
+    if (["issues", "pull_request"].includes(eventName)) {
+      try {
+        const customResults = await evaluateAndExecuteCustomRules(eventName, payload, payload.installation);
+        if (customResults.length > 0) {
+          logger.info(
+            { deliveryId, rules: customResults.map((r) => r.name) },
+            "Custom rules executed"
+          );
+        }
+      } catch (err) {
+        logger.warn({ err: err.message, deliveryId }, "Custom rules evaluation failed (non-fatal)");
+      }
+    }
 
     // ── 3b. Create GitWire check for PR events ──────────────────────────────
     if (eventName === "pull_request" && payload.pull_request?.head?.sha) {

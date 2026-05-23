@@ -183,6 +183,36 @@ configRouter.post("/:owner/:repo/restore/:historyId", async (req, res) => {
   }
 });
 
+/**
+ * GET /api/config/:owner/:repo/custom-rules
+ *
+ * Returns the resolved custom rules and named expressions for a repo.
+ */
+configRouter.get("/:owner/:repo/custom-rules", async (req, res) => {
+  try {
+    const fullName = req.params.owner + "/" + req.params.repo;
+    const config = await getConfigForRepo(fullName);
+
+    const customRules = config.custom_rules || {};
+    const expressions = config.expressions || {};
+
+    // List rule names with their conditions
+    const rules = Object.entries(customRules).map(([name, rule]) => ({
+      name,
+      condition: rule.if,
+      actions: (rule.run || []).map((a) => a.action),
+    }));
+
+    res.json({
+      rules,
+      expressions,
+      total: rules.length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Playground ─────────────────────────────────────────────────────────────
 
 /**
