@@ -118,8 +118,8 @@ SELECT
   NULL                               AS target_url,
   'review'                           AS action_type,
   a.verdict                          AS status,
-  ('confidence: ' || a.confidence || '; findings: ' || jsonb_array_length(a.findings)) AS detail,
-  a.created_at                       AS created_at
+  ('confidence: ' || a.confidence || '; findings: ' || COALESCE(jsonb_array_length(a.findings), 0)) AS detail,
+  a.started_at                       AS created_at
 
 FROM ai_reviews a
 JOIN repositories r ON r.github_id = a.repo_id
