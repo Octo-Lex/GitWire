@@ -44,7 +44,7 @@ export default function TrustPage() {
 function FlakyTab() {
   const { data: stats } = useSWR(API.flakyStats(), fetcher, { refreshInterval: 20000 });
   const { data, mutate } = useSWR(API.flakyTests("perPage=30"), fetcher, { refreshInterval: 20000 });
-  const tests = data?.rows ?? data ?? [];
+  const tests = data?.data ?? data?.rows ?? data ?? [];
   const s = stats?.summary ?? {};
 
   return (
@@ -115,8 +115,8 @@ function FlakyTab() {
 function ReconcilerTab() {
   const { data: runs } = useSWR(API.reconcilerRuns(), fetcher, { refreshInterval: 30000 });
   const { data: repos, mutate } = useSWR(API.reconcilerRepos("perPage=50"), fetcher, { refreshInterval: 30000 });
-  const runList = (runs?.rows ?? runs ?? []) as any[];
-  const repoList = (repos?.rows ?? repos ?? []) as any[];
+  const runList = (runs?.data ?? runs?.rows ?? runs ?? []) as any[];
+  const repoList = (repos?.data ?? repos?.rows ?? repos ?? []) as any[];
   const lastRun = runList[0];
 
   return (
@@ -190,7 +190,7 @@ function ReconcilerTab() {
 function DependenciesTab() {
   const { data: stats } = useSWR(API.depStats(), fetcher, { refreshInterval: 20000 });
   const { data, mutate } = useSWR(API.depVulns("perPage=30"), fetcher, { refreshInterval: 20000 });
-  const vulns = (data?.rows ?? data ?? []) as any[];
+  const vulns = (data?.data ?? data?.rows ?? data ?? []) as any[];
   const v = stats?.vulnerabilities ?? {};
 
   return (

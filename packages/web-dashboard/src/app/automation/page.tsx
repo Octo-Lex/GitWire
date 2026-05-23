@@ -47,7 +47,7 @@ export default function AutomationPage() {
 // ── Merge Queue Tab ─────────────────────────────────────────────────────────
 function MergeQueueTab() {
   const { data, mutate } = useSWR(API.queue(), fetcher, { refreshInterval: 10000 });
-  const entries = data?.rows ?? data ?? [];
+  const entries = data?.data ?? data?.rows ?? data ?? [];
 
   return (
     <div className="space-y-4">
@@ -88,7 +88,7 @@ function MergeQueueTab() {
 // ── Feedback Tab ────────────────────────────────────────────────────────────
 function FeedbackTab() {
   const { data, mutate } = useSWR(API.feedbackRules(), fetcher, { refreshInterval: 30000 });
-  const rules = Array.isArray(data) ? data : [];
+  const rules = Array.isArray(data) ? data : data?.data ?? [];
   const [showCreate, setShowCreate] = useState(false);
 
   return (
@@ -141,7 +141,7 @@ function FeedbackTab() {
 function TelemetryTab() {
   const { data: summary } = useSWR(API.telemetrySummary(), fetcher, { refreshInterval: 15000 });
   const { data: events } = useSWR(API.telemetryEvents("perPage=20"), fetcher, { refreshInterval: 10000 });
-  const evts = events?.rows ?? events ?? [];
+  const evts = events?.data ?? events?.rows ?? events ?? [];
 
   return (
     <div className="space-y-6">
@@ -183,7 +183,7 @@ function TelemetryTab() {
 // ── Rollbacks Tab ───────────────────────────────────────────────────────────
 function RollbacksTab() {
   const { data } = useSWR(API.rollbacks("perPage=20"), fetcher, { refreshInterval: 15000 });
-  const rollbacks = data?.rows ?? data ?? [];
+  const rollbacks = data?.data ?? data?.rows ?? data ?? [];
 
   return (
     <div className="space-y-4">
