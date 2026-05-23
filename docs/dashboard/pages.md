@@ -99,16 +99,39 @@ Two tabs:
 
 Per-repository configuration management:
 - **Repo selector** — Dropdown to pick from synced repos
-- **Pillar cards** (7) — Toggle each pillar on/off, configure sub-options:
-  - Issue & PR Triage: auto_label, auto_comment, duplicate_detection
-  - Self-Healing CI: auto_patch, max_fix_attempts, min_confidence_to_patch
+- **Pillar cards** (9) — Toggle each pillar on/off, configure sub-options:
+  - Issue & PR Triage: auto_label, auto_comment, duplicate_detection, triggers
+  - Self-Healing CI: auto_patch, max_fix_attempts, min_confidence_to_patch, triggers
   - Autonomous Contributor: max_file_changes, max_line_changes, min_confidence_to_submit
   - Maintainer Tools: stale config, branch cleanup
-  - Branch Enforcement, Merge Queue, AI Review Gate
+  - Branch Enforcement, Merge Queue, AI Review Gate, Trust
 - **Settings** — Dry Run Mode toggle (yellow banner when active)
 - **Change History** — Audit trail of all config changes with:
   - Action badges (set, patch, delete, restore)
   - Before/after diff summary
   - Restore buttons to re-apply previous versions
+
+## Decisions (`/decisions`)
+
+Worker decision log:
+- **Source filter bar** — Filter by worker (ci_heal, triage, ai_review, etc.)
+- **Decision type filter** — acted, skipped, blocked
+- **Color-coded badges** — Green (acted), yellow (skipped), red (blocked)
+- **Condition details** — Expandable rows showing the checks evaluated
+- **Pagination** — Server-side paginated results
+
+## Activity (`/activity`)
+
+Unified action feed across 9 source tables:
+- **Source filter bar** — Filter by action type
+- **Color-coded badges** — Per-source coloring
+- **Pagination** — Server-side paginated results
+
+## Readiness (`/readiness`)
+
+Fleet-wide repo readiness scores:
+- **Fleet overview** — All repos scored out of 100, sorted by score
+- **Per-repo detail** — 9 weighted checks with pass/fail status
+- **Checks** — .gitwire.yml present, webhooks active, branch protection, config synced, etc.
 
 → [Configuration](/dashboard/configuration)

@@ -6,16 +6,37 @@ GitWire uses a **policy-as-code** approach. Each repository can define a `.gitwi
 
 ```mermaid
 graph LR
-    A[DEFAULT_CONFIG] --> B[".gitwire.yml from repo"]
-    B --> C["DB overrides (dashboard)"]
-    C --> D["Resolved config"]
+    A[DEFAULT_CONFIG] --> B["Org .gitwire.yml"]
+    B --> C["Repo .gitwire.yml"]
+    C --> D["DB overrides (dashboard)"]
+    D --> E["Resolved config"]
 ```
 
 Resolution order (last wins):
 
 1. **`DEFAULT_CONFIG`** — built-in defaults from `@gitwire/rules`
-2. **`.gitwire.yml`** — fetched from the repository's default branch, cached for 5 minutes
-3. **Database overrides** — set via the dashboard `/config` page or API
+2. **Org `.gitwire.yml`** — from `{org}/gitwire-config` repository
+3. **Repo `.gitwire.yml`** — fetched from the repository's default branch, cached for 5 minutes
+4. **Database overrides** — set via the dashboard `/config` page or API
+
+→ See [Org-Level Config](/configuration/org-config) for details on the org config layer.
+
+## Trigger Filters
+
+Each pillar supports optional `triggers` filters to control **when** it activates:
+
+```yaml
+pillars:
+  ci_healing:
+    triggers:
+      branches: ["main", "develop"]
+      ignore_authors: ["dependabot[bot]"]
+  ai_review:
+    triggers:
+      paths: ["src/**", "lib/**"]
+```
+
+→ See [Trigger Control](/configuration/trigger-control) for the full reference.
 
 ## Minimal Example
 
