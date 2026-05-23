@@ -14,6 +14,7 @@ const NAV = [
   { href: "/automation",    label: "Automation",      icon: "⌘" },
   { href: "/trust",         label: "Trust & Policy",  icon: "🛡" },
   { href: "/insights",      label: "Insights",        icon: "◈" },
+  { href: "/activity",     label: "Activity",       icon: "📊" },
   { href: "/maintainer",    label: "Maintainer",      icon: "⟳" },
   { href: "/fix-attempts",  label: "Fix Attempts",    icon: "⚡" },
   { href: "/intelligence", label: "Intelligence",     icon: "\uD83E\uDDE0" },

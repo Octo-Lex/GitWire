@@ -469,3 +469,20 @@ export async function restoreConfigVersion(owner: string, repo: string, historyI
   });
   return res.json();
 }
+
+// ── Activity Feed ──────────────────────────────────────────────────────────
+
+export async function getActivity(params = "") {
+  const res = await fetch(`${BASE}/api/activity${params ? "?" + params : ""}`, {
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function getActivitySummary(since?: string) {
+  const params = since ? `?since=${since}` : "";
+  const res = await fetch(`${BASE}/api/activity/summary${params}`, {
+    headers: authHeaders(),
+  });
+  return res.json();
+}
