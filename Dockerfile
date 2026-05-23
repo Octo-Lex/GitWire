@@ -9,6 +9,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/core/package.json ./packages/core/package.json
 COPY packages/web/package.json ./packages/web/package.json
+COPY packages/rules/package.json ./packages/rules/package.json
 COPY packages/worker/package.json ./packages/worker/package.json
 
 # Install production dependencies only, skip lifecycle scripts (husky etc.)
