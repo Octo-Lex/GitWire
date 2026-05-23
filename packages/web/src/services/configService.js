@@ -1,12 +1,13 @@
-// @gitwire/rules — barrel export
 // src/services/configService.js
 // Fetches .gitwire.yml from GitHub, parses with @gitwire/rules,
 // caches in Redis with 5-minute TTL.
 //
-// The configService owns the runtime coupling (GitHub API + Redis).
-// @gitwire/rules stays pure — no network, no cache.
+// Resolution order (highest priority wins):
+//   1. DB overrides (repo_config table — set via dashboard UI)
+//   2. .gitwire.yml file (fetched from GitHub repo)
+//   3. DEFAULT_CONFIG from @gitwire/rules
 
-import { parseConfig, DEFAULT_CONFIG } from "@gitwire/rules";
+import { parseConfig, DEFAULT_CONFIG, mergeDeep } from "@gitwire/rules";
 import { redis } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { db } from "../lib/db.js";
@@ -18,12 +19,8 @@ const CACHE_PREFIX = "gitwire:config:";
 const CONFIG_PATHS = [".github/.gitwire.yml", ".gitwire.yml"];
 
 /**
- * Get the resolved .gitwire.yml config for a repo.
- * Checks Redis cache first, then fetches from GitHub API.
- * Returns DEFAULT_CONFIG if no .gitwire.yml exists in the repo.
- *
- * @param {string} repoFullName — e.g. "owner/repo"
- * @returns {Promise<object>} resolved config object
+ * Get the resolved config for a repo.
+ * Merge order: DEFAULT_CONFIG ← YAML file ← DB overrides
  */
 export async function getConfigForRepo(repoFullName) {
   const cacheKey = CACHE_PREFIX + repoFullName;
@@ -39,25 +36,97 @@ export async function getConfigForRepo(repoFullName) {
       }
     }
   } catch (err) {
-    logger.warn({ err: err.message, repo: repoFullName }, "Redis cache read failed — fetching from GitHub");
+    logger.warn({ err: err.message, repo: repoFullName }, "Redis cache read failed");
   }
 
-  // 2. Fetch from GitHub
-  const config = await fetchFromGitHub(repoFullName);
+  // 2. Start from defaults
+  let config = structuredClone(DEFAULT_CONFIG);
 
-  // 3. Cache in Redis
+  // 3. Layer on YAML file from GitHub
+  const yamlConfig = await fetchFromGitHub(repoFullName);
+  if (yamlConfig !== DEFAULT_CONFIG) {
+    config = yamlConfig; // already merged with defaults by parseConfig
+  }
+
+  // 4. Layer on DB overrides (dashboard UI)
+  const dbOverrides = await fetchDBOverrides(repoFullName);
+  if (dbOverrides && Object.keys(dbOverrides).length > 0) {
+    config = mergeDeep(config, dbOverrides);
+  }
+
+  // 5. Cache in Redis
   try {
     await redis.set(cacheKey, JSON.stringify(config), "EX", CACHE_TTL);
   } catch (err) {
-    logger.warn({ err: err.message, repo: repoFullName }, "Redis cache write failed — config not cached");
+    logger.warn({ err: err.message, repo: repoFullName }, "Redis cache write failed");
   }
 
   return config;
 }
 
 /**
+ * Get DB overrides for a repo (raw, not merged).
+ * Used by the API to show current overrides to the dashboard.
+ */
+export async function getConfigOverrides(repoFullName) {
+  const { rows } = await db.query(
+    `SELECT rc.config, rc.updated_at, rc.updated_by
+     FROM repo_config rc
+     JOIN repositories r ON r.github_id = rc.repo_id
+     WHERE r.full_name = $1`,
+    [repoFullName]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Set DB config overrides for a repo (replaces entirely).
+ * Used by the dashboard UI.
+ */
+export async function setConfigOverrides(repoFullName, overrides, updatedBy = "dashboard") {
+  const { rows: repoRows } = await db.query(
+    "SELECT github_id FROM repositories WHERE full_name = $1",
+    [repoFullName]
+  );
+  if (!repoRows.length) {
+    throw new Error(`Repo not found: ${repoFullName}`);
+  }
+  const repoId = repoRows[0].github_id;
+
+  await db.query(
+    `INSERT INTO repo_config (repo_id, config, updated_at, updated_by)
+     VALUES ($1, $2, NOW(), $3)
+     ON CONFLICT (repo_id) DO UPDATE SET
+       config = EXCLUDED.config,
+       updated_at = NOW(),
+       updated_by = EXCLUDED.updated_by`,
+    [repoId, JSON.stringify(overrides), updatedBy]
+  );
+
+  // Invalidate cache so next read picks up the new overrides
+  await invalidateConfigCache(repoFullName);
+
+  logger.info({ repo: repoFullName, updatedBy }, "Config overrides updated");
+}
+
+/**
+ * Delete DB config overrides for a repo (revert to YAML-only).
+ */
+export async function deleteConfigOverrides(repoFullName) {
+  const { rows: repoRows } = await db.query(
+    "SELECT github_id FROM repositories WHERE full_name = $1",
+    [repoFullName]
+  );
+  if (!repoRows.length) return;
+
+  await db.query("DELETE FROM repo_config WHERE repo_id = $1", [repoRows[0].github_id]);
+  await invalidateConfigCache(repoFullName);
+
+  logger.info({ repo: repoFullName }, "Config overrides deleted (reverted to YAML)");
+}
+
+/**
  * Invalidate the cached config for a repo.
- * Called when a push touches .gitwire.yml.
  */
 export async function invalidateConfigCache(repoFullName) {
   try {
@@ -68,13 +137,9 @@ export async function invalidateConfigCache(repoFullName) {
   }
 }
 
-/**
- * Fetch and parse .gitwire.yml from the GitHub repository.
- * Tries .github/.gitwire.yml first, then root .gitwire.yml.
- * Returns DEFAULT_CONFIG if not found or on any error.
- */
+// ── Internal ────────────────────────────────────────────────────────────────
+
 async function fetchFromGitHub(repoFullName) {
-  // Look up installation for this repo
   const { rows } = await db.query(
     "SELECT installation_id FROM repositories WHERE full_name = $1",
     [repoFullName]
@@ -97,13 +162,11 @@ async function fetchFromGitHub(repoFullName) {
           }
         );
         if (data) {
-          const config = parseConfig(data);
           logger.info({ repo: repoFullName, path }, ".gitwire.yml loaded");
-          return config;
+          return parseConfig(data);
         }
       } catch (err) {
         if (err.status !== 404) throw err;
-        // 404 = not at this path, try next
       }
     }
   } catch (err) {
@@ -114,4 +177,21 @@ async function fetchFromGitHub(repoFullName) {
   }
 
   return structuredClone(DEFAULT_CONFIG);
+}
+
+async function fetchDBOverrides(repoFullName) {
+  try {
+    const { rows } = await db.query(
+      `SELECT rc.config
+       FROM repo_config rc
+       JOIN repositories r ON r.github_id = rc.repo_id
+       WHERE r.full_name = $1`,
+      [repoFullName]
+    );
+    return rows[0]?.config || null;
+  } catch (err) {
+    // Table might not exist yet (pre-migration)
+    logger.debug({ err: err.message }, "DB config overrides not available");
+    return null;
+  }
 }

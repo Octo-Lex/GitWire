@@ -17,6 +17,7 @@ const NAV = [
   { href: "/maintainer",    label: "Maintainer",      icon: "⟳" },
   { href: "/fix-attempts",  label: "Fix Attempts",    icon: "⚡" },
   { href: "/intelligence", label: "Intelligence",     icon: "\uD83E\uDDE0" },
+  { href: "/config",       label: "Config",           icon: "\u2699" },
 ];
 
 export default function Sidebar() {

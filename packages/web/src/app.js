@@ -20,6 +20,7 @@ import { enforcementRouter }  from "./routes/enforcement.js";
 import { phase2Router }       from "./routes/phase2.js";
 import { phase3Router }       from "./routes/phase3.js";
 import { phase4Router }       from "./routes/phase4.js";
+import { configRouter }        from "./routes/config.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -93,6 +94,9 @@ export function createApp() {
 
   // ── Phase 4: Intelligence & Compliance ──────────────────────────────────
   app.use("/api",                 phase4Router);
+
+  // ── Config: per-repo .gitwire.yml overrides ─────────────────────────────
+  app.use("/api/config",          configRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {

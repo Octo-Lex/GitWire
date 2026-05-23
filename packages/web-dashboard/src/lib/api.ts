@@ -105,6 +105,9 @@ export const API = {
   auditExport:      () => `/api/audit/export`,
   auditReports:     (q = "") => `/api/audit/reports${q ? `?${q}` : ""}`,
   auditReport:      (id: number) => `/api/audit/reports/${id}`,
+
+  // Config (.gitwire.yml overrides)
+  repoConfig:       (owner: string, repo: string) => `/api/config/${owner}/${repo}`,
 };
 
 // ── Trigger helpers (non-GET) ─────────────────────────────────────────────
@@ -413,6 +416,41 @@ export async function generateComplianceReport(reportType: string, from: string,
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ report_type: reportType, from, to, generated_by: "dashboard" }),
+  });
+  return res.json();
+}
+
+// ── Config actions (.gitwire.yml overrides) ────────────────────────────────
+
+export async function getRepoConfig(owner: string, repo: string) {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, {
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function updateRepoConfig(owner: string, repo: string, overrides: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(overrides),
+  });
+  return res.json();
+}
+
+export async function patchRepoConfig(owner: string, repo: string, patch: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(patch),
+  });
+  return res.json();
+}
+
+export async function resetRepoConfig(owner: string, repo: string) {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, {
+    method: "DELETE",
+    headers: authHeaders(),
   });
   return res.json();
 }
