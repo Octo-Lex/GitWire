@@ -1,95 +1,104 @@
 # Package Dependencies
 
-## Current State (v0.6)
+## Current State (v0.8.0)
 
 ```mermaid
 graph TD
-    web["@gitwire/web<br/>Express API + Workers<br/>11,400 lines"]
     core["@gitwire/core<br/>Constants + Enums<br/>72 lines, 0 deps"]
-    dashboard["@gitwire/web-dashboard<br/>Next.js 16 UI<br/>4,391 lines"]
+    runtime["@gitwire/runtime<br/>db, queue, logger, GitHub client<br/>8 deps: pg, bullmq, ioredis, pino, @octokit/*"]
+    rules["@gitwire/rules<br/>Config schema, validation, helpers<br/>js-yaml only, 83 tests"]
+    web["@gitwire/web<br/>Express API + Workers + Routes<br/>14 services, 9 workers"]
+    dashboard["@gitwire/web-dashboard<br/>Next.js 16 UI<br/>13 pages"]
 
-    web -->|"imports QUEUES, enums"| core
+    web -->|"QUEUES, enums"| core
+    web -->|"initRuntime(config)"| runtime
+    web -->|"isPillarEnabled, scoreCIRisk"| rules
+    runtime -->|"QUEUES"| core
     dashboard -->|"fetches from API"| web
 
-    subgraph "Stub packages (25 lines total)"
+    subgraph "Stub packages (future extraction targets)"
         triage["@gitwire/triage"]
         healer["@gitwire/healer"]
-        maintainer["@gitwire/maintainer"]
+        maintainer_pkg["@gitwire/maintainer"]
         insights["@gitwire/insights"]
-        rules["@gitwire/rules"]
         quality["@gitwire/quality-gate"]
         skills["@gitwire/ai-skills"]
         mcp["@gitwire/mcp"]
         cli["@gitwire/cli"]
-        worker["@gitwire/worker"]
-        runtime["@gitwire/runtime"]
+        worker_pkg["@gitwire/worker"]
     end
-```
-
-## Target State (v0.8+)
-
-```mermaid
-graph TD
-    core["@gitwire/core<br/>Constants, enums, pure helpers<br/>0 runtime deps"]
-    runtime["@gitwire/runtime<br/>db, queue, logger, GitHub client<br/>Deps: pg, bullmq, ioredis, pino, @octokit/*"]
-    rules["@gitwire/rules<br/>Config schema, validation, defaults<br/>Deps: js-yaml"]
-    triage["@gitwire/triage<br/>Triage + duplicate detection"]
-    healer["@gitwire/healer<br/>CI healing logic"]
-    maintainer_pkg["@gitwire/maintainer<br/>Stale mgmt, branch cleanup"]
-    web["@gitwire/web<br/>Express API, routes, webhook ingest"]
-    dashboard["@gitwire/web-dashboard<br/>Next.js 16 UI"]
-
-    web --> core
-    web --> runtime
-    web --> rules
-    web --> triage
-    web --> healer
-    web --> maintainer_pkg
-    triage --> core
-    triage --> runtime
-    healer --> core
-    healer --> runtime
-    maintainer_pkg --> core
-    maintainer_pkg --> runtime
-    dashboard -->|"fetches from API"| web
 
     style core fill:#4ade80,color:#000
     style runtime fill:#60a5fa,color:#000
     style rules fill:#fbbf24,color:#000
 ```
 
-## Dependency Inventory
+## @gitwire/runtime Architecture
 
-### What lives where today
+### Factory Pattern
 
-| Module | Location | Lines | Dependencies |
-|--------|----------|-------|--------------|
-| Constants/enums | `@gitwire/core` | 72 | None |
-| DB client (`db.js`) | `@gitwire/web/src/lib/` | 57 | pg, config, logger |
-| Queue factory (`queue.js`) | `@gitwire/web/src/lib/` | 74 | bullmq, ioredis, config, logger, @gitwire/core |
-| Logger (`logger.js`) | `@gitwire/web/src/lib/` | 12 | pino, config |
-| GitHub client (`github.js`) | `@gitwire/web/src/lib/` | 96 | @octokit/app, @octokit/rest, config, logger |
-| Comment router | `@gitwire/web/src/lib/` | 145 | Stays in web (API-surface logic) |
-| Config | `@gitwire/web/config/` | 172 | zod, dotenv, fs |
+Each infrastructure module is a factory function that accepts config — no config imports:
 
-### Extraction blockers
+| Factory | Accepts | Returns |
+|---------|---------|---------|
+| `createLogger({ logLevel, env })` | Server config | pino Logger |
+| `createDatabase({ url, logger })` | DB URL + logger | `{ query, transaction, end, pool }` |
+| `createRedisConnection(url, { logger })` | Redis URL + logger | IORedis instance |
+| `createQueue(redis, name)` | Redis + queue name | BullMQ Queue |
+| `createWorker(redis, name, processor, opts)` | Redis + processor | BullMQ Worker |
+| `createGitHubApp({ appId, privateKey, ... })` | GitHub credentials | `{ getWebhookApp, getInstallationClient, forEachInstallation, forEachRepo }` |
 
-Each `lib/` file imports `config` from `../../config/index.js`. To extract into `@gitwire/runtime`:
-
-1. **Config must become injectable.** Runtime modules should accept config as a constructor/init parameter, not import it directly.
-2. **Logger must be created before DB/queue.** Both depend on logger, logger depends on config.
-3. **No circular deps.** `@gitwire/core` cannot import from `@gitwire/runtime` (core has zero deps).
-
-### Proposed init pattern
+### Init Pattern
 
 ```javascript
-// @gitwire/runtime — future API
-import { createRuntime } from "@gitwire/runtime";
-
-const { db, logger, redis, createQueue, getInstallationClient } = createRuntime(config);
+// Called once at startup (src/index.js)
+import { initRuntime } from "@gitwire/runtime";
+const runtime = initRuntime(config);  // { logger, db, redis, github, QUEUES }
 ```
 
-This lets `@gitwire/web` create the runtime with its validated config, then pass it to workers and services.
+### Compat Layer (backward compatibility)
+
+`compat/` modules provide lazy proxies that delegate to the runtime. This means all 14 existing imports keep working:
+
+```javascript
+// Old code still works — zero changes needed
+import { db } from "../lib/db.js";
+import { logger } from "../lib/logger.js";
+import { redis, createQueue, webhookQueue } from "../lib/queue.js";
+import { getInstallationClient } from "../lib/github.js";
+```
+
+The `lib/*.js` files are now thin re-exports from `@gitwire/runtime/compat/*`.
+
+### Auto-initialization
+
+Workers call `createQueue()` at module top level (before `main()` runs). The compat layer handles this via `ensureRuntime()` which picks up the config set by `config/index.js` through `setConfig()`.
+
+## Dependency Inventory
+
+### What lives where
+
+| Module | Package | Lines | Dependencies |
+|--------|---------|-------|--------------|
+| Constants/enums | `@gitwire/core` | 72 | None |
+| DB client | `@gitwire/runtime` (factory) | 67 | pg |
+| Queue factory | `@gitwire/runtime` (factory) | 72 | bullmq, ioredis |
+| Logger | `@gitwire/runtime` (factory) | 24 | pino |
+| GitHub client | `@gitwire/runtime` (factory) | 91 | @octokit/app |
+| Config schema + helpers | `@gitwire/rules` | ~230 | js-yaml |
+| Config validation | `@gitwire/web/config/` | 172 | zod, dotenv |
+| Services (17) | `@gitwire/web/src/services/` | ~5,000 | runtime, rules, anthropic |
+| Workers (9) | `@gitwire/web/src/workers/` | ~3,000 | runtime, rules, services |
+| Routes (14) | `@gitwire/web/src/routes/` | ~2,000 | runtime, services |
+
+### Test coverage
+
+| Package | Tests | Type |
+|---------|-------|------|
+| `@gitwire/core` | — | Constants only |
+| `@gitwire/rules` | 83 | Pure unit tests |
+| `@gitwire/runtime` | 16 | Factory + init tests |
+| `@gitwire/web` | ~395 | Integration, stress, mutation |
 
 ## Package Role Taxonomy
 
@@ -97,17 +106,14 @@ This lets `@gitwire/web` create the runtime with its validated config, then pass
 |---------|------|-------------|--------------------------|
 | `@gitwire/core` | Constants, enums | None | ✅ Yes |
 | `@gitwire/runtime` | DB, queue, logger, GitHub | pg, bullmq, ioredis, pino, @octokit/* | ❌ No — needs Postgres, Redis |
-| `@gitwire/rules` | Config schema, validation | js-yaml only | ✅ Yes |
-| `@gitwire/triage` | Issue/PR classification | @anthropic-ai/sdk, runtime | ❌ No |
-| `@gitwire/healer` | CI failure repair | @anthropic-ai/sdk, runtime | ❌ No |
-| `@gitwire/maintainer` | Stale/branch management | runtime | ❌ No |
+| `@gitwire/rules` | Config schema, validation, scoring | None | ✅ Yes |
 | `@gitwire/web` | API surface, orchestration | express, helmet, cors, everything | ❌ No |
 | `@gitwire/web-dashboard` | Browser UI | next, swr, recharts | ✅ Yes (mock API) |
 
-## Migration Order
+## Future Migration
 
-1. **v0.7.x** — Decouple config from runtime modules (injectable pattern)
-2. **v0.8.0** — Move `db.js`, `queue.js`, `logger.js`, `github.js` to `@gitwire/runtime`
-3. **v0.8.1** — Move triage services to `@gitwire/triage`
-4. **v0.8.2** — Move healer services to `@gitwire/healer`
-5. **v0.8.3** — Move maintainer services to `@gitwire/maintainer`
+| Version | Target | Description |
+|---------|--------|-------------|
+| v0.8.1 | `@gitwire/triage` | Extract triage + duplicate detection services |
+| v0.8.2 | `@gitwire/healer` | Extract CI healing services |
+| v0.8.3 | `@gitwire/maintainer` | Extract stale/branch management |
