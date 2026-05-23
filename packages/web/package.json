@@ -16,6 +16,7 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@gitwire/core": "*",
     "@gitwire/rules": "*",
+    "@gitwire/runtime": "*",
     "@octokit/app": "^14.0.0",
     "@octokit/rest": "^20.0.0",
     "@octokit/webhooks": "^13.0.0",

@@ -1,9 +1,17 @@
 {
   "name": "@gitwire/runtime",
-  "version": "0.1.0",
+  "version": "0.8.0",
   "type": "module",
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./compat/logger":  "./compat/logger.js",
+    "./compat/db":      "./compat/db.js",
+    "./compat/queue":   "./compat/queue.js",
+    "./compat/github":  "./compat/github.js"
+  },
   "dependencies": {
+    "@gitwire/core": "*",
     "@octokit/app": "^14.0.0",
     "@octokit/rest": "^20.0.0",
     "bullmq": "^5.0.0",
@@ -14,6 +22,6 @@
     "pino-pretty": "^10.0.0"
   },
   "scripts": {
-    "test": "echo \"@gitwire/runtime: no tests yet\""
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js"
   }
 }

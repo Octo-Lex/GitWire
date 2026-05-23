@@ -4,5 +4,8 @@ export default {
   transform: {},
   moduleFileExtensions: ['js', 'json'],
   testTimeout: 60000,
-  // ESM support (type:module in package.json handles this)
+  moduleNameMapper: {
+    "^@gitwire/runtime/compat/(.*)$": "<rootDir>/../../packages/runtime/compat/$1",
+    "^@gitwire/runtime$": "<rootDir>/../../packages/runtime/src/index.js",
+  },
 };

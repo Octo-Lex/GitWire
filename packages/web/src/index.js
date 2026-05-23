@@ -12,12 +12,13 @@ import { startIssueFixWorker } from "./workers/issueFixWorker.js";
 import { startMergeQueueWorker } from "./workers/phase2Worker.js";
 import { startPhase3Worker, schedulePhase3Jobs } from "./workers/phase3Worker.js";
 import { startPhase4Worker, schedulePhase4Jobs } from "./workers/phase4Worker.js";
-import { db }     from "./lib/db.js";
-import { redis }  from "./lib/queue.js";
-import { logger } from "./lib/logger.js";
+import { initRuntime, getRuntime } from "@gitwire/runtime";
 import { config } from "../config/index.js";
 
 async function main() {
+  // ── Initialize runtime infrastructure (db, redis, logger, github) ────────
+  initRuntime(config);
+  const { db, redis, logger } = getRuntime();
   // ── Start HTTP server ────────────────────────────────────────────────────
   const app    = createApp();
   const server = app.listen(config.server.port, () => {

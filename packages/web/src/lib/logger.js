@@ -1,12 +1,6 @@
 // src/lib/logger.js
-import pino from "pino";
-import { config } from "../../config/index.js";
+// Re-exported from @gitwire/runtime for backward compatibility.
+// All existing imports continue to work:
+//   import { logger } from "../lib/logger.js";
 
-export const logger = pino({
-  level: config.server.logLevel,
-  transport:
-    config.server.env !== "production"
-      ? { target: "pino-pretty", options: { colorize: true } }
-      : undefined,
-  base: { service: "gitwire" },
-});
+export { logger } from "@gitwire/runtime/compat/logger.js";
