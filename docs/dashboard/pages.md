@@ -95,4 +95,20 @@ Two tabs:
 - **AI Review** — Review results, findings, config
 - **Audit Trail** — Chain-verified entries, compliance reports
 
+## Config (`/config`)
+
+Per-repository configuration management:
+- **Repo selector** — Dropdown to pick from synced repos
+- **Pillar cards** (7) — Toggle each pillar on/off, configure sub-options:
+  - Issue & PR Triage: auto_label, auto_comment, duplicate_detection
+  - Self-Healing CI: auto_patch, max_fix_attempts, min_confidence_to_patch
+  - Autonomous Contributor: max_file_changes, max_line_changes, min_confidence_to_submit
+  - Maintainer Tools: stale config, branch cleanup
+  - Branch Enforcement, Merge Queue, AI Review Gate
+- **Settings** — Dry Run Mode toggle (yellow banner when active)
+- **Change History** — Audit trail of all config changes with:
+  - Action badges (set, patch, delete, restore)
+  - Before/after diff summary
+  - Restore buttons to re-apply previous versions
+
 → [Configuration](/dashboard/configuration)

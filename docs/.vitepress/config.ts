@@ -36,6 +36,7 @@ export default defineConfig({
           { text: "Docker Compose", link: "/installation/docker-compose" },
           { text: "Cloudflare Tunnel", link: "/installation/cloudflare-tunnel" },
           { text: "GitHub App Setup", link: "/installation/github-app-setup" },
+          { text: "Backup & Restore", link: "/installation/backup-restore" },
           { text: "Environment Variables", link: "/installation/environment-variables" },
         ],
       },
@@ -127,6 +128,7 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: "Authentication & Pagination", link: "/api/rest-api-reference" },
+          { text: "Config", link: "/api/config-api" },
           { text: "Repos", link: "/api/repos" },
           { text: "Issues", link: "/api/issues" },
           { text: "Pull Requests", link: "/api/pull-requests" },
@@ -186,6 +188,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: "System Architecture", link: "/architecture/system-architecture" },
+          { text: "Runtime Architecture", link: "/architecture/runtime-architecture" },
           { text: "Data Flow", link: "/architecture/data-flow" },
           { text: "Security", link: "/architecture/security" },
         ],
@@ -194,6 +197,9 @@ export default defineConfig({
         text: "Configuration",
         collapsed: true,
         items: [
+          { text: "Policy-as-Code (.gitwire.yml)", link: "/configuration/policy-as-code" },
+          { text: "Risk Scoring", link: "/configuration/risk-scoring" },
+          { text: "Dry Run Mode", link: "/configuration/dry-run" },
           { text: "Queues", link: "/configuration/queues" },
           { text: "Heal Status", link: "/configuration/heal-status" },
           { text: "Failure Types", link: "/configuration/failure-types" },
