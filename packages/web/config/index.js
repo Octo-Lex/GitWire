@@ -170,3 +170,10 @@ export const config = {
     baseURL: parsed.data.ANTHROPIC_BASE_URL || undefined,
   },
 };
+
+// ── Register config with @gitwire/runtime auto-init ───────────────────────
+// This MUST run before any compat module is first accessed.
+// It allows module-level code (like export const phase4Queue = createQueue(...))
+// to work even though initRuntime() hasn't been called yet.
+import { setConfig } from "@gitwire/runtime/compat/_init.js";
+setConfig(config);

@@ -1,19 +1,22 @@
 // @gitwire/runtime/compat/queue.js
 // Lazy singleton — delegates to the runtime-initialized Redis + queues.
-// This allows existing code to keep using:
+// Auto-initializes from config if needed.
+// All existing imports continue to work:
 //   import { redis, createQueue, createWorker, webhookQueue, ... } from "../lib/queue.js";
 
 import { Queue, Worker } from "bullmq";
 import { getRuntime } from "../src/index.js";
+import { ensureRuntime } from "./_init.js";
 import { QUEUES } from "@gitwire/core";
 
 export { QUEUES };
 
-// Redis connection — proxied to runtime (lazy, so initRuntime() can run first)
+// Redis connection — lazy proxy
 export const redis = new Proxy(
   {},
   {
     get(_target, prop) {
+      ensureRuntime();
       const rt = getRuntime();
       const val = rt.redis[prop];
       return typeof val === "function" ? val.bind(rt.redis) : val;
@@ -21,8 +24,9 @@ export const redis = new Proxy(
   }
 );
 
-// Factory helpers — use runtime's redis connection
+// Factory helpers — lazily use runtime's redis connection
 export function createQueue(name) {
+  ensureRuntime();
   const rt = getRuntime();
   return new Queue(name, {
     connection: rt.redis,
@@ -36,6 +40,7 @@ export function createQueue(name) {
 }
 
 export function createWorker(name, processor, opts = {}) {
+  ensureRuntime();
   const rt = getRuntime();
   const worker = new Worker(name, processor, {
     connection: rt.redis,
@@ -70,6 +75,7 @@ const _queueCache = {};
 
 function getQueueSingleton(prop) {
   if (!_queueCache[prop]) {
+    ensureRuntime();
     const rt = getRuntime();
     _queueCache[prop] = new Queue(QUEUE_NAMES[prop], {
       connection: rt.redis,

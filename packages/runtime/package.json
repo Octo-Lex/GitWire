@@ -5,6 +5,8 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./compat/_init": "./compat/_init.js",
+    "./compat/_init.js": "./compat/_init.js",
     "./compat/logger": "./compat/logger.js",
     "./compat/logger.js": "./compat/logger.js",
     "./compat/db": "./compat/db.js",

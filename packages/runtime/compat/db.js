@@ -1,17 +1,27 @@
 // @gitwire/runtime/compat/db.js
 // Lazy singleton — delegates to the runtime-initialized database.
-// This allows existing code to keep using:
-//   import { db } from "../lib/db.js";
+// Auto-initializes from config if needed.
 
 import { getRuntime } from "../src/index.js";
+import { ensureRuntime } from "./_init.js";
+
+let _db = null;
+
+function getDb() {
+  if (!_db) {
+    ensureRuntime();
+    _db = getRuntime().db;
+  }
+  return _db;
+}
 
 export const db = new Proxy(
   {},
   {
     get(_target, prop) {
-      const rt = getRuntime();
-      const val = rt.db[prop];
-      return typeof val === "function" ? val.bind(rt.db) : val;
+      const d = getDb();
+      const val = d[prop];
+      return typeof val === "function" ? val.bind(d) : val;
     },
   }
 );
