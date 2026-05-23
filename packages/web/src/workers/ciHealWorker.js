@@ -122,6 +122,7 @@ async function healWorkflowRun({ payload }) {
     await ciService.saveHealResult(run.id, {
       status: "skipped", failureType: "unknown",
       rootCause: "Could not retrieve logs", fixApplied: null, confidence: "low",
+    });
     await logDecision({
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
