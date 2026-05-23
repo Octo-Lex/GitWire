@@ -17,4 +17,4 @@ export {
   phase2Queue,
   phase3Queue,
   phase4Queue,
-} from "@gitwire/runtime/compat/queue.js";
+} from "@gitwire/runtime/compat/queue";

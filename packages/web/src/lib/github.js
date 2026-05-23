@@ -8,4 +8,4 @@ export {
   getInstallationClient,
   forEachInstallation,
   forEachRepo,
-} from "@gitwire/runtime/compat/github.js";
+} from "@gitwire/runtime/compat/github";

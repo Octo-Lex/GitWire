@@ -3,4 +3,4 @@
 // All existing imports continue to work:
 //   import { logger } from "../lib/logger.js";
 
-export { logger } from "@gitwire/runtime/compat/logger.js";
+export { logger } from "@gitwire/runtime/compat/logger";

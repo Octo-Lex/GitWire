@@ -5,10 +5,14 @@
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./compat/logger":  "./compat/logger.js",
-    "./compat/db":      "./compat/db.js",
-    "./compat/queue":   "./compat/queue.js",
-    "./compat/github":  "./compat/github.js"
+    "./compat/logger": "./compat/logger.js",
+    "./compat/logger.js": "./compat/logger.js",
+    "./compat/db": "./compat/db.js",
+    "./compat/db.js": "./compat/db.js",
+    "./compat/queue": "./compat/queue.js",
+    "./compat/queue.js": "./compat/queue.js",
+    "./compat/github": "./compat/github.js",
+    "./compat/github.js": "./compat/github.js"
   },
   "dependencies": {
     "@gitwire/core": "*",
