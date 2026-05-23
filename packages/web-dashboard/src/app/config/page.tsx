@@ -138,14 +138,15 @@ export default function ConfigPage() {
     setLoading(true);
     setMessage("");
     try {
-      const [owner, name] = fullName.split("/");
-      const [data, histData] = await Promise.all([
-        getRepoConfig(owner, name),
-        getConfigHistory(owner, name),
-      ]);
+      const parts = fullName.split("/");
+      const owner = parts[0];
+      const name = parts[1];
+      const data = await getRepoConfig(owner, name);
       setConfig(data);
+      // Load history
+      const histData = await getConfigHistory(owner, name);
       setHistory(histData?.history || []);
-    } catch {
+    } catch (_e) {
       setMessage("Failed to load config");
     } finally {
       setLoading(false);
@@ -161,13 +162,13 @@ export default function ConfigPage() {
     if (!selected) return;
     setSaving(true);
     try {
-      const [owner, name] = selected.split("/");
-      await patchRepoConfig(owner, name, {
+      const parts = selected.split("/");
+      await patchRepoConfig(parts[0], parts[1], {
         pillars: { [pillarKey]: { enabled } },
       });
       await loadConfig(selected);
-      setMessage(`✓ ${pillarKey} ${enabled ? "enabled" : "disabled"}`);
-    } catch {
+      setMessage("✓ " + pillarKey + (enabled ? " enabled" : " disabled"));
+    } catch (_e) {
       setMessage("Failed to update config");
     } finally {
       setSaving(false);
@@ -182,19 +183,19 @@ export default function ConfigPage() {
     if (!selected) return;
     setSaving(true);
     try {
-      const [owner, name] = selected.split("/");
+      const parts = selected.split("/");
       // Build nested path (e.g. "stale.issues.warn_days" → { stale: { issues: { warn_days: N } } })
-      const parts = optionKey.split(".");
+      const parts2 = optionKey.split(".");
       let nested: any = value;
-      for (let i = parts.length - 1; i >= 0; i--) {
-        nested = { [parts[i]]: nested };
+      for (let i = parts2.length - 1; i >= 0; i--) {
+        nested = { [parts2[i]]: nested };
       }
-      await patchRepoConfig(owner, name, {
+      await patchRepoConfig(parts[0], parts[1], {
         pillars: { [pillarKey]: nested },
       });
       await loadConfig(selected);
-      setMessage(`✓ ${optionKey} updated`);
-    } catch {
+      setMessage("✓ " + optionKey + " updated");
+    } catch (_e) {
       setMessage("Failed to update config");
     } finally {
       setSaving(false);
@@ -205,24 +206,27 @@ export default function ConfigPage() {
     if (!selected) return;
     setSaving(true);
     try {
-      const [owner, name] = selected.split("/");
-      await restoreConfigVersion(owner, name, historyId);
+      const parts = selected.split("/");
+      await restoreConfigVersion(parts[0], parts[1], historyId);
       await loadConfig(selected);
       setMessage("✓ Restored from history");
-    } catch {
+    } catch (_e) {
       setMessage("Failed to restore");
     } finally {
       setSaving(false);
     }
   };
-    if (!selected || !confirm("Reset all overrides? Config will revert to YAML + defaults.")) return;
+
+  const handleReset = async () => {
+    if (!selected) return;
+    if (!confirm("Reset all overrides? Config will revert to YAML + defaults.")) return;
     setSaving(true);
     try {
-      const [owner, name] = selected.split("/");
-      await resetRepoConfig(owner, name);
+      const parts = selected.split("/");
+      await resetRepoConfig(parts[0], parts[1]);
       await loadConfig(selected);
       setMessage("✓ Config reset to defaults");
-    } catch {
+    } catch (_e) {
       setMessage("Failed to reset config");
     } finally {
       setSaving(false);
@@ -292,11 +296,11 @@ export default function ConfigPage() {
         <div className="flex items-center gap-2 text-xs text-text-tertiary">
           <span>Source:</span>
           <span
-            className={`px-2 py-0.5 rounded ${
+            className={
               config.source === "database"
-                ? "bg-accent-green/10 text-accent-green"
-                : "bg-surface-2 text-text-secondary"
-            }`}
+                ? "px-2 py-0.5 rounded bg-accent-green/10 text-accent-green"
+                : "px-2 py-0.5 rounded bg-surface-2 text-text-secondary"
+            }
           >
             {config.source === "database" ? "Dashboard overrides" : "YAML / defaults"}
           </span>
@@ -322,16 +326,16 @@ export default function ConfigPage() {
           {PILLARS.map((pillar) => {
             const enabled = getPillarEnabled(pillar.key);
             const overridden = getPillarOverridden(pillar.key);
-            const pillarConfig = config.config?.pillars?.[pillar.key] || {};
 
             return (
               <div
                 key={pillar.key}
-                className={`border rounded-lg p-4 transition-colors ${
-                  enabled
+                className={
+                  "border rounded-lg p-4 transition-colors " +
+                  (enabled
                     ? "border-border bg-surface-0"
-                    : "border-border/50 bg-surface-0/50 opacity-60"
-                }`}
+                    : "border-border/50 bg-surface-0/50 opacity-60")
+                }
               >
                 {/* Header */}
                 <div className="flex items-center justify-between">
@@ -357,14 +361,16 @@ export default function ConfigPage() {
                   <button
                     onClick={() => togglePillar(pillar.key, !enabled)}
                     disabled={saving}
-                    className={`relative w-11 h-6 rounded-full transition-colors ${
-                      enabled ? "bg-accent-green" : "bg-surface-2"
-                    }`}
+                    className={
+                      "relative w-11 h-6 rounded-full transition-colors " +
+                      (enabled ? "bg-accent-green" : "bg-surface-2")
+                    }
                   >
                     <span
-                      className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                        enabled ? "left-[22px]" : "left-0.5"
-                      }`}
+                      className={
+                        "absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform " +
+                        (enabled ? "left-[22px]" : "left-0.5")
+                      }
                     />
                   </button>
                 </div>
@@ -381,7 +387,6 @@ export default function ConfigPage() {
                   <div className="mt-3 grid grid-cols-2 gap-3">
                     {pillar.opts.map((opt) => {
                       const val = getOptionValue(pillar.key, opt.key);
-
                       return (
                         <div key={opt.key} className="flex items-center gap-2">
                           {opt.type === "toggle" ? (
@@ -450,6 +455,13 @@ export default function ConfigPage() {
           <div className="space-y-2">
             {history.map((entry: any) => {
               const changes = diffConfigs(entry.config_old, entry.config_new);
+              const dateStr = new Date(entry.changed_at).toLocaleString();
+              const actionClass =
+                entry.action === "delete"
+                  ? "bg-red-500/10 text-red-400"
+                  : entry.action === "restore"
+                  ? "bg-blue-500/10 text-blue-400"
+                  : "bg-accent-green/10 text-accent-green";
               return (
                 <div
                   key={entry.id}
@@ -457,20 +469,10 @@ export default function ConfigPage() {
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2 text-xs">
-                      <span
-                        className={`px-1.5 py-0.5 rounded font-mono ${
-                          entry.action === "delete"
-                            ? "bg-red-500/10 text-red-400"
-                            : entry.action === "restore"
-                            ? "bg-blue-500/10 text-blue-400"
-                            : "bg-accent-green/10 text-accent-green"
-                        }`
-                      >
+                      <span className={"px-1.5 py-0.5 rounded font-mono " + actionClass}>
                         {entry.action}
                       </span>
-                      <span className="text-text-tertiary">
-                        {new Date(entry.changed_at).toLocaleString()}
-                      </span>
+                      <span className="text-text-tertiary">{dateStr}</span>
                       <span className="text-text-secondary">by {entry.changed_by}</span>
                     </div>
                     {changes.length > 0 && (
@@ -517,11 +519,11 @@ function diffConfigs(
   const oldPillars = oldConfig.pillars || {};
   const newPillars = newConfig.pillars || {};
 
-  for (const key of new Set([...Object.keys(oldPillars), ...Object.keys(newPillars)])) {
+  for (const key of Object.keys(newPillars)) {
     const oldVal = oldPillars[key]?.enabled;
     const newVal = newPillars[key]?.enabled;
     if (oldVal !== newVal) {
-      changes.push(`${key}: ${oldVal ? "on" : "off"} → ${newVal ? "on" : "off"}`);
+      changes.push(key + ": " + (oldVal ? "on" : "off") + " → " + (newVal ? "on" : "off"));
     }
   }
 
