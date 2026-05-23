@@ -6,7 +6,7 @@
 // DELETE /api/config/:owner/:repo         — delete overrides (revert to YAML)
 
 import { Router } from "express";
-import { getConfigForRepo, getConfigOverrides, setConfigOverrides, deleteConfigOverrides } from "../services/configService.js";
+import { getConfigForRepo, getConfigOverrides, setConfigOverrides, deleteConfigOverrides, getConfigHistory, restoreConfigVersion } from "../services/configService.js";
 import { DEFAULT_CONFIG, validateConfig } from "@gitwire/rules";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
@@ -75,7 +75,7 @@ configRouter.put("/:owner/:repo", async (req, res) => {
 
   try {
     const actor = req.headers["x-actor-login"] || "dashboard";
-    await setConfigOverrides(fullName, overrides, actor);
+    await setConfigOverrides(fullName, overrides, actor, "set");
 
     // Return the newly resolved config
     const config = await getConfigForRepo(fullName);
@@ -115,7 +115,7 @@ configRouter.patch("/:owner/:repo", async (req, res) => {
     }
 
     const actor = req.headers["x-actor-login"] || "dashboard";
-    await setConfigOverrides(fullName, merged, actor);
+    await setConfigOverrides(fullName, merged, actor, "patch");
 
     const config = await getConfigForRepo(fullName);
 
@@ -136,7 +136,8 @@ configRouter.delete("/:owner/:repo", async (req, res) => {
   const fullName = `${owner}/${repo}`;
 
   try {
-    await deleteConfigOverrides(fullName);
+    const actor = req.headers["x-actor-login"] || "dashboard";
+    await deleteConfigOverrides(fullName, actor);
     const config = await getConfigForRepo(fullName);
 
     res.json({
@@ -147,6 +148,36 @@ configRouter.delete("/:owner/:repo", async (req, res) => {
   } catch (err) {
     logger.error({ err, repo: fullName }, "Failed to delete config overrides");
     res.status(500).json({ error: "Failed to delete config" });
+  }
+});
+
+// ── GET config history ────────────────────────────────────────────────────
+configRouter.get("/:owner/:repo/history", async (req, res) => {
+  const { owner, repo } = req.params;
+  const fullName = `${owner}/${repo}`;
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+
+  try {
+    const history = await getConfigHistory(fullName, limit);
+    res.json({ history });
+  } catch (err) {
+    logger.error({ err, repo: fullName }, "Failed to get config history");
+    res.status(500).json({ error: "Failed to get config history" });
+  }
+});
+
+// ── POST restore a specific version ────────────────────────────────────────
+configRouter.post("/:owner/:repo/restore/:historyId", async (req, res) => {
+  const { owner, repo, historyId } = req.params;
+  const fullName = `${owner}/${repo}`;
+
+  try {
+    const actor = req.headers["x-actor-login"] || "dashboard";
+    const config = await restoreConfigVersion(fullName, parseInt(historyId), actor);
+    res.json({ ok: true, config, message: `Restored from version ${historyId}` });
+  } catch (err) {
+    logger.error({ err, repo: fullName, historyId }, "Failed to restore config version");
+    res.status(400).json({ error: err.message });
   }
 });
 

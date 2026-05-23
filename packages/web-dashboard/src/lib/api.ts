@@ -454,3 +454,18 @@ export async function resetRepoConfig(owner: string, repo: string) {
   });
   return res.json();
 }
+
+export async function getConfigHistory(owner: string, repo: string, limit = 20) {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}/history?limit=${limit}`, {
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function restoreConfigVersion(owner: string, repo: string, historyId: number) {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}/restore/${historyId}`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}

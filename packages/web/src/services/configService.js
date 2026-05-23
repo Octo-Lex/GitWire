@@ -81,9 +81,9 @@ export async function getConfigOverrides(repoFullName) {
 
 /**
  * Set DB config overrides for a repo (replaces entirely).
- * Used by the dashboard UI.
+ * Records the change in config_history for audit.
  */
-export async function setConfigOverrides(repoFullName, overrides, updatedBy = "dashboard") {
+export async function setConfigOverrides(repoFullName, overrides, updatedBy = "dashboard", action = "set") {
   const { rows: repoRows } = await db.query(
     "SELECT github_id FROM repositories WHERE full_name = $1",
     [repoFullName]
@@ -92,6 +92,13 @@ export async function setConfigOverrides(repoFullName, overrides, updatedBy = "d
     throw new Error(`Repo not found: ${repoFullName}`);
   }
   const repoId = repoRows[0].github_id;
+
+  // Capture current overrides for history (before overwrite)
+  const { rows: prevRows } = await db.query(
+    "SELECT config FROM repo_config WHERE repo_id = $1",
+    [repoId]
+  );
+  const oldConfig = prevRows[0]?.config || null;
 
   await db.query(
     `INSERT INTO repo_config (repo_id, config, updated_at, updated_by)
@@ -103,26 +110,42 @@ export async function setConfigOverrides(repoFullName, overrides, updatedBy = "d
     [repoId, JSON.stringify(overrides), updatedBy]
   );
 
+  // Record in history
+  await recordHistory(repoId, action, oldConfig, overrides, updatedBy);
+
   // Invalidate cache so next read picks up the new overrides
   await invalidateConfigCache(repoFullName);
 
-  logger.info({ repo: repoFullName, updatedBy }, "Config overrides updated");
+  logger.info({ repo: repoFullName, updatedBy, action }, "Config overrides updated");
 }
 
 /**
  * Delete DB config overrides for a repo (revert to YAML-only).
+ * Records the deletion in config_history.
  */
-export async function deleteConfigOverrides(repoFullName) {
+export async function deleteConfigOverrides(repoFullName, deletedBy = "dashboard") {
   const { rows: repoRows } = await db.query(
     "SELECT github_id FROM repositories WHERE full_name = $1",
     [repoFullName]
   );
   if (!repoRows.length) return;
+  const repoId = repoRows[0].github_id;
 
-  await db.query("DELETE FROM repo_config WHERE repo_id = $1", [repoRows[0].github_id]);
+  // Capture current overrides for history
+  const { rows: prevRows } = await db.query(
+    "SELECT config FROM repo_config WHERE repo_id = $1",
+    [repoId]
+  );
+  const oldConfig = prevRows[0]?.config || null;
+
+  await db.query("DELETE FROM repo_config WHERE repo_id = $1", [repoId]);
+
+  // Record deletion in history
+  await recordHistory(repoId, "delete", oldConfig, null, deletedBy);
+
   await invalidateConfigCache(repoFullName);
 
-  logger.info({ repo: repoFullName }, "Config overrides deleted (reverted to YAML)");
+  logger.info({ repo: repoFullName, deletedBy }, "Config overrides deleted (reverted to YAML)");
 }
 
 /**
@@ -137,7 +160,60 @@ export async function invalidateConfigCache(repoFullName) {
   }
 }
 
+/**
+ * Get config change history for a repo.
+ */
+export async function getConfigHistory(repoFullName, limit = 20) {
+  const { rows } = await db.query(
+    `SELECT ch.id, ch.action, ch.config_old, ch.config_new, ch.changed_by, ch.changed_at
+     FROM config_history ch
+     JOIN repositories r ON r.github_id = ch.repo_id
+     WHERE r.full_name = $1
+     ORDER BY ch.changed_at DESC
+     LIMIT $2`,
+    [repoFullName, limit]
+  );
+  return rows;
+}
+
+/**
+ * Restore a specific historical config version.
+ */
+export async function restoreConfigVersion(repoFullName, historyId, restoredBy = "dashboard") {
+  const { rows } = await db.query(
+    `SELECT ch.config_new, ch.config_old
+     FROM config_history ch
+     JOIN repositories r ON r.github_id = ch.repo_id
+     WHERE r.full_name = $1 AND ch.id = $2`,
+    [repoFullName, historyId]
+  );
+  if (!rows.length) {
+    throw new Error(`History entry ${historyId} not found for ${repoFullName}`);
+  }
+
+  const target = rows[0].config_new;
+  if (!target) {
+    throw new Error("Cannot restore a deletion entry — use delete overrides instead");
+  }
+
+  await setConfigOverrides(repoFullName, target, restoredBy, "restore");
+  return target;
+}
+
 // ── Internal ────────────────────────────────────────────────────────────────
+
+async function recordHistory(repoId, action, configOld, configNew, changedBy) {
+  try {
+    await db.query(
+      `INSERT INTO config_history (repo_id, action, config_old, config_new, changed_by)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [repoId, action, JSON.stringify(configOld), configNew ? JSON.stringify(configNew) : null, changedBy]
+    );
+  } catch (err) {
+    // History is best-effort — never block the main operation
+    logger.warn({ err: err.message, repoId }, "Failed to record config history");
+  }
+}
 
 async function fetchFromGitHub(repoFullName) {
   const { rows } = await db.query(

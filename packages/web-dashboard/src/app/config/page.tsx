@@ -8,6 +8,8 @@ import {
   getRepoConfig,
   patchRepoConfig,
   resetRepoConfig,
+  getConfigHistory,
+  restoreConfigVersion,
 } from "../../lib/api";
 
 // ── Pillar definitions ──────────────────────────────────────────────────────
@@ -126,6 +128,7 @@ export default function ConfigPage() {
 
   const [selected, setSelected] = useState("");
   const [config, setConfig] = useState<any>(null);
+  const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -136,8 +139,12 @@ export default function ConfigPage() {
     setMessage("");
     try {
       const [owner, name] = fullName.split("/");
-      const data = await getRepoConfig(owner, name);
+      const [data, histData] = await Promise.all([
+        getRepoConfig(owner, name),
+        getConfigHistory(owner, name),
+      ]);
       setConfig(data);
+      setHistory(histData?.history || []);
     } catch {
       setMessage("Failed to load config");
     } finally {
@@ -194,7 +201,20 @@ export default function ConfigPage() {
     }
   };
 
-  const handleReset = async () => {
+  const handleRestore = async (historyId: number) => {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      const [owner, name] = selected.split("/");
+      await restoreConfigVersion(owner, name, historyId);
+      await loadConfig(selected);
+      setMessage("✓ Restored from history");
+    } catch {
+      setMessage("Failed to restore");
+    } finally {
+      setSaving(false);
+    }
+  };
     if (!selected || !confirm("Reset all overrides? Config will revert to YAML + defaults.")) return;
     setSaving(true);
     try {
@@ -420,6 +440,90 @@ export default function ConfigPage() {
       {message && (
         <div className="text-sm text-accent-green animate-pulse">{message}</div>
       )}
+
+      {/* History */}
+      {config && history.length > 0 && (
+        <div>
+          <h2 className="text-lg font-display font-bold text-text-primary mb-3">
+            Change History
+          </h2>
+          <div className="space-y-2">
+            {history.map((entry: any) => {
+              const changes = diffConfigs(entry.config_old, entry.config_new);
+              return (
+                <div
+                  key={entry.id}
+                  className="border border-border rounded-lg p-3 flex items-center justify-between"
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span
+                        className={`px-1.5 py-0.5 rounded font-mono ${
+                          entry.action === "delete"
+                            ? "bg-red-500/10 text-red-400"
+                            : entry.action === "restore"
+                            ? "bg-blue-500/10 text-blue-400"
+                            : "bg-accent-green/10 text-accent-green"
+                        }`
+                      >
+                        {entry.action}
+                      </span>
+                      <span className="text-text-tertiary">
+                        {new Date(entry.changed_at).toLocaleString()}
+                      </span>
+                      <span className="text-text-secondary">by {entry.changed_by}</span>
+                    </div>
+                    {changes.length > 0 && (
+                      <div className="mt-1 text-xs text-text-secondary">
+                        {changes.join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                  {entry.action !== "delete" && (
+                    <button
+                      onClick={() => handleRestore(entry.id)}
+                      disabled={saving}
+                      className="ml-3 px-3 py-1 text-xs font-medium text-accent-green border border-accent-green/30 rounded hover:bg-accent-green/10 transition-colors disabled:opacity-50"
+                    >
+                      Restore
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+// ── Config diff helper ──────────────────────────────────────────────────────
+function diffConfigs(
+  oldConfig: Record<string, any> | null,
+  newConfig: Record<string, any> | null
+): string[] {
+  const changes: string[] = [];
+  if (!oldConfig && newConfig) {
+    changes.push("Initial config set");
+    return changes;
+  }
+  if (oldConfig && !newConfig) {
+    changes.push("All overrides deleted");
+    return changes;
+  }
+  if (!oldConfig || !newConfig) return changes;
+
+  const oldPillars = oldConfig.pillars || {};
+  const newPillars = newConfig.pillars || {};
+
+  for (const key of new Set([...Object.keys(oldPillars), ...Object.keys(newPillars)])) {
+    const oldVal = oldPillars[key]?.enabled;
+    const newVal = newPillars[key]?.enabled;
+    if (oldVal !== newVal) {
+      changes.push(`${key}: ${oldVal ? "on" : "off"} → ${newVal ? "on" : "off"}`);
+    }
+  }
+
+  return changes.length > 0 ? changes : ["No pillar changes (sub-option update)"];
 }
