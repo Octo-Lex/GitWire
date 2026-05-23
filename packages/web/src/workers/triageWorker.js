@@ -7,6 +7,8 @@ import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { issueService } from "../services/issueService.js";
 import { detectDuplicates } from "../services/duplicateDetectionService.js";
+import { getConfigForRepo } from "../services/configService.js";
+import { isPillarEnabled } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 
@@ -34,6 +36,13 @@ async function triageIssue({ payload }) {
   if (!issue || !installation) return;
 
   logger.info({ repo: repository?.full_name, issue: issue.number }, "Triaging issue");
+
+  // ── Check .gitwire.yml pillar config ────────────────────────────────────
+  const repoConfig = await getConfigForRepo(repository.full_name);
+  if (!isPillarEnabled("triage", repoConfig)) {
+    logger.info({ repo: repository.full_name, issue: issue.number }, "Triage disabled for repo — skipping");
+    return;
+  }
 
   let octokit;
   try {
@@ -83,11 +92,12 @@ async function triageIssue({ payload }) {
   logger.info({ issue: issue.number, classification }, "Issue classified");
 
   // ── Apply labels ──────────────────────────────────────────────────────────
+  const triageOpts = repoConfig.pillars?.triage || {};
   const labelsToApply = classification.labels.filter((l) =>
     labelNames.includes(l)
   );
 
-  if (labelsToApply.length > 0) {
+  if (labelsToApply.length > 0 && triageOpts.auto_label !== false) {
     await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
       owner:  repository.owner.login,
       repo:   repository.name,
@@ -106,7 +116,7 @@ async function triageIssue({ payload }) {
   logger.info({ issue: issue.number, type: classification.type, priority: classification.priority }, "Issue triage persisted");
 
   // ── Post triage comment if needed ─────────────────────────────────────────
-  if (classification.needs_more_info || classification.duplicate_hint) {
+  if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
     await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
       owner:        repository.owner.login,
       repo:         repository.name,
@@ -118,27 +128,32 @@ async function triageIssue({ payload }) {
   // ── Run duplicate detection (best-effort) ────────────────────────────────
   // Runs after classification so the embedding is stored alongside triage data.
   // detectDuplicates handles its own GitHub comment — separate from triage comment.
-  try {
-    const { duplicates, related } = await detectDuplicates({
-      issue,
-      repository,
-      octokit,
-    });
+  // Controlled by pillars.triage.duplicate_detection in .gitwire.yml.
+  if (triageOpts.duplicate_detection === false) {
+    logger.debug({ issue: issue.number }, "Duplicate detection disabled for repo — skipping");
+  } else {
+    try {
+      const { duplicates, related } = await detectDuplicates({
+        issue,
+        repository,
+        octokit,
+      });
 
-    if (duplicates.length) {
-      logger.info(
-        { issue: issue.number, topMatch: duplicates[0].number, similarity: duplicates[0].similarity.toFixed(3) },
-        "Duplicate detected"
-      );
-    } else if (related.length) {
-      logger.info(
-        { issue: issue.number, relatedCount: related.length },
-        "Related issues found"
-      );
+      if (duplicates.length) {
+        logger.info(
+          { issue: issue.number, topMatch: duplicates[0].number, similarity: duplicates[0].similarity.toFixed(3) },
+          "Duplicate detected"
+        );
+      } else if (related.length) {
+        logger.info(
+          { issue: issue.number, relatedCount: related.length },
+          "Related issues found"
+        );
+      }
+    } catch (err) {
+      // Duplicate detection is best-effort — never fail the triage job over it
+      logger.warn({ err: err.message, issue: issue.number }, "Duplicate detection failed (non-fatal)");
     }
-  } catch (err) {
-    // Duplicate detection is best-effort — never fail the triage job over it
-    logger.warn({ err: err.message, issue: issue.number }, "Duplicate detection failed (non-fatal)");
   }
 }
 
@@ -148,6 +163,13 @@ async function triagePR({ payload }) {
   if (!pr || !installation) return;
 
   logger.info({ repo: repository.full_name, pr: pr.number }, "Triaging PR");
+
+  // ── Check .gitwire.yml pillar config ────────────────────────────────────
+  const repoConfig = await getConfigForRepo(repository.full_name);
+  if (!isPillarEnabled("triage", repoConfig)) {
+    logger.info({ repo: repository.full_name, pr: pr.number }, "Triage disabled for repo — skipping PR");
+    return;
+  }
 
   const octokit = await getInstallationClient(installation.id);
 

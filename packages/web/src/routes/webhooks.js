@@ -15,6 +15,7 @@ import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue,
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { parseGitwireCommand, resolveCommandAction } from "../lib/commentRouter.js";
+import { invalidateConfigCache } from "../services/configService.js";
 
 export const webhookRouter = Router();
 
@@ -167,6 +168,15 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
     case "push":
       await webhookQueue.add("sync-repo", jobData, { priority: 3 });
       await webhookQueue.add("validate-configs", jobData, { priority: 2 });
+
+      // Invalidate .gitwire.yml cache if it changed in this push
+      const changed = [
+        ...(payload.head_commit?.added || []),
+        ...(payload.head_commit?.modified || []),
+      ];
+      if (changed.some((f) => f === ".gitwire.yml" || f === ".github/.gitwire.yml")) {
+        await invalidateConfigCache(payload.repository.full_name);
+      }
       break;
 
     // Issue comment → check for /gitwire commands

@@ -1,0 +1,74 @@
+# .gitwire.yml — per-repo policy configuration
+# Place at .github/.gitwire.yml or .gitwire.yml in your repo root.
+# All fields are optional — missing fields inherit defaults from @gitwire/rules.
+#
+# Docs: https://gitwire.erlab.uk/configuration/gitwire-yml
+
+version: 1
+
+pillars:
+  # ── Issue & PR Triage ─────────────────────────────────────────────────────
+  # AI-powered classification, labeling, and duplicate detection.
+  triage:
+    enabled: true
+    auto_label: true           # Apply AI-suggested labels
+    auto_comment: true         # Post triage summary as comment
+    duplicate_detection: true  # Run duplicate detection on new issues
+
+  # ── CI Healing ────────────────────────────────────────────────────────────
+  # Diagnose failed CI runs and open fix PRs automatically.
+  ci_healing:
+    enabled: true
+    auto_patch: true           # Open fix PRs (false = comment-only diagnosis)
+    max_fix_attempts: 3        # Max patch attempts per CI run
+    blocked_file_patterns:     # Never auto-patch these files
+      - ".env*"
+      - "secrets/**"
+      - "*.pem"
+      - "*.key"
+
+  # ── Maintainer ────────────────────────────────────────────────────────────
+  # Stale issue/PR management and merged branch cleanup.
+  maintainer:
+    enabled: true
+    stale:
+      issues:
+        warn_days: 60          # Days before warning comment
+        close_days:            # Days before auto-close (null = warn only)
+        exempt_labels: ["pinned", "security"]
+      prs:
+        warn_days: 30
+        exempt_labels: ["pinned"]
+    branch_cleanup:
+      enabled: true
+      protected_branches: ["main", "master", "develop"]
+      min_age_days: 7         # Only delete branches older than this
+
+  # ── Autonomous Contributor ────────────────────────────────────────────────
+  # AI-generated code fixes for labeled issues. Requires explicit opt-in.
+  issue_fix:
+    enabled: false
+    max_file_changes: 3
+    max_line_changes: 200
+    allowed_labels: ["bug", "good first issue", "help wanted"]
+    blocked_paths: ["migrations/**", ".github/**", "db/**"]
+
+  # ── Enforcement ───────────────────────────────────────────────────────────
+  # Branch protection and config validation.
+  enforcement:
+    enabled: true
+
+  # ── Merge Queue ───────────────────────────────────────────────────────────
+  # Auto-merge PRs with "auto-merge" label when checks pass.
+  merge_queue:
+    enabled: false
+    required_checks: []        # e.g. ["ci", "lint"]
+
+  # ── AI Review ─────────────────────────────────────────────────────────────
+  # Automated code review on PR open/sync.
+  ai_review:
+    enabled: true
+    comment_findings: true     # Post review findings as PR comments
+
+settings:
+  dry_run: false               # true = log actions without executing

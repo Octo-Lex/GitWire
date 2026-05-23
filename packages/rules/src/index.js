@@ -1,1 +1,12 @@
-// @gitwire/rules — coming soon
+// @gitwire/rules — barrel export
+export { DEFAULT_CONFIG, validateConfig } from "./schema.js";
+export { parseConfig, mergeDeep } from "./parse.js";
+export {
+  isPillarEnabled,
+  isFileAllowed,
+  isFixPathBlocked,
+  isFixLabelAllowed,
+  getStaleConfig,
+  isStaleExempt,
+  matchGlob,
+} from "./helpers.js";
