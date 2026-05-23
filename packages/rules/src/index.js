@@ -10,4 +10,9 @@ export {
   getStaleConfig,
   isStaleExempt,
   matchGlob,
+  meetsConfidence,
+  getMinPatchConfidence,
+  getMinFixConfidence,
+  scoreCIRisk,
+  scoreFixRisk,
 } from "./helpers.js";

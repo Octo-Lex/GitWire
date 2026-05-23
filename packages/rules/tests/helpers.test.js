@@ -7,6 +7,11 @@ import {
   getStaleConfig,
   isStaleExempt,
   matchGlob,
+  meetsConfidence,
+  getMinPatchConfidence,
+  getMinFixConfidence,
+  scoreCIRisk,
+  scoreFixRisk,
 } from "../src/helpers.js";
 import { DEFAULT_CONFIG, validateConfig } from "../src/schema.js";
 
@@ -279,5 +284,118 @@ describe("validateConfig", () => {
   test("rejects array pillars", () => {
     const result = validateConfig({ pillars: [1, 2, 3] });
     expect(result.valid).toBe(false);
+  });
+});
+
+// ── meetsConfidence ──────────────────────────────────────────────────────────
+
+describe("meetsConfidence", () => {
+  test("high >= medium", () => { expect(meetsConfidence("high", "medium")).toBe(true); });
+  test("high >= high", () => { expect(meetsConfidence("high", "high")).toBe(true); });
+  test("medium >= medium", () => { expect(meetsConfidence("medium", "medium")).toBe(true); });
+  test("low >= medium", () => { expect(meetsConfidence("low", "medium")).toBe(false); });
+  test("low >= low", () => { expect(meetsConfidence("low", "low")).toBe(true); });
+  test("medium >= high", () => { expect(meetsConfidence("medium", "high")).toBe(false); });
+  test("unknown >= low", () => { expect(meetsConfidence("garbage", "low")).toBe(false); });
+});
+
+// ── getMinPatchConfidence / getMinFixConfidence ──────────────────────────────
+
+describe("confidence thresholds", () => {
+  test("default patch threshold is medium", () => {
+    expect(getMinPatchConfidence(DEFAULT_CONFIG)).toBe("medium");
+  });
+
+  test("default fix threshold is medium", () => {
+    expect(getMinFixConfidence(DEFAULT_CONFIG)).toBe("medium");
+  });
+
+  test("reads custom patch threshold", () => {
+    const config = { pillars: { ci_healing: { min_confidence_to_patch: "high" } } };
+    expect(getMinPatchConfidence(config)).toBe("high");
+  });
+
+  test("reads custom fix threshold", () => {
+    const config = { pillars: { issue_fix: { min_confidence_to_submit: "low" } } };
+    expect(getMinFixConfidence(config)).toBe("low");
+  });
+});
+
+// ── scoreCIRisk ──────────────────────────────────────────────────────────────
+
+describe("scoreCIRisk", () => {
+  test("safe lint error with high confidence = low risk", () => {
+    const result = scoreCIRisk({
+      failure_type: "lint_error", confidence: "high", auto_fixable: true, failing_file: "src/app.js",
+    });
+    expect(result.level).toBe("low");
+    expect(result.score).toBeLessThan(25);
+  });
+
+  test("infra error with low confidence = high risk", () => {
+    const result = scoreCIRisk({
+      failure_type: "infra_error", confidence: "low", auto_fixable: false, failing_file: null,
+    });
+    expect(result.level).toBe("high");
+    expect(result.score).toBeGreaterThanOrEqual(50);
+  });
+
+  test("flaky test with medium confidence = medium risk", () => {
+    const result = scoreCIRisk({
+      failure_type: "test_flaky", confidence: "medium", auto_fixable: true, failing_file: "test/app.test.js",
+    });
+    expect(result.level).toBe("medium");
+    expect(result.score).toBeGreaterThanOrEqual(25);
+  });
+
+  test("unknown failure without file = high risk", () => {
+    const result = scoreCIRisk({
+      failure_type: "unknown", confidence: "medium", auto_fixable: false, failing_file: null,
+    });
+    expect(result.level).toBe("high");
+  });
+
+  test("reasons list is populated", () => {
+    const result = scoreCIRisk({ failure_type: "lint_error", confidence: "high", failing_file: "a.js" });
+    expect(result.reasons.length).toBeGreaterThan(0);
+  });
+});
+
+// ── scoreFixRisk ─────────────────────────────────────────────────────────────
+
+describe("scoreFixRisk", () => {
+  const origFiles = [
+    { path: "src/app.js", content: "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n" },
+  ];
+
+  test("trivial single-file fix = low risk", () => {
+    const result = scoreFixRisk(
+      { complexity: "trivial" },
+      [{ path: "src/app.js", fixed_content: "line1\nFIXED\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n" }],
+      origFiles
+    );
+    expect(result.level).toBe("low");
+    expect(result.score).toBeLessThan(25);
+  });
+
+  test("complex multi-file fix = high risk", () => {
+    const fixes = [
+      { path: "src/app.js", fixed_content: "totally different" },
+      { path: "src/util.js", fixed_content: "new" },
+      { path: "src/db.js", fixed_content: "new" },
+      { path: "src/routes.js", fixed_content: "new" },
+    ];
+    const result = scoreFixRisk({ complexity: "complex" }, fixes, origFiles);
+    expect(result.level).toBe("high");
+    expect(result.score).toBeGreaterThanOrEqual(50);
+  });
+
+  test("moderate fix with large delta = medium risk", () => {
+    const result = scoreFixRisk(
+      { complexity: "moderate" },
+      [{ path: "src/app.js", fixed_content: "only 2 lines" }],
+      origFiles
+    );
+    expect(result.level).toBe("medium");
   });
 });

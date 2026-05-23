@@ -113,3 +113,106 @@ export function matchGlob(str, pattern) {
 function escapeRegex(char) {
   return char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+// ── Confidence / Risk scoring ─────────────────────────────────────────────────
+
+const CONFIDENCE_LEVELS = { low: 1, medium: 2, high: 3 };
+
+/**
+ * Compare two confidence levels. Returns true if actual >= required.
+ */
+export function meetsConfidence(actual, required) {
+  const a = CONFIDENCE_LEVELS[actual] || 0;
+  const r = CONFIDENCE_LEVELS[required] || 0;
+  return a >= r;
+}
+
+/**
+ * Get the minimum confidence threshold for CI healing patches.
+ * Returns the configured level or "medium" by default.
+ */
+export function getMinPatchConfidence(config) {
+  return config?.pillars?.ci_healing?.min_confidence_to_patch || "medium";
+}
+
+/**
+ * Get the minimum confidence threshold for issue fix PR submission.
+ * Returns the configured level or "medium" by default.
+ */
+export function getMinFixConfidence(config) {
+  return config?.pillars?.issue_fix?.min_confidence_to_submit || "medium";
+}
+
+/**
+ * Compute a composite risk score from a CI diagnosis.
+ * Returns { score: 0-100, level: "low"|"medium"|"high", reasons: string[] }
+ */
+export function scoreCIRisk(diagnosis) {
+  let score = 0;
+  const reasons = [];
+
+  // Confidence inverted (low confidence = high risk)
+  const conf = diagnosis.confidence || "medium";
+  if (conf === "low") { score += 40; reasons.push("Low AI confidence"); }
+  else if (conf === "medium") { score += 15; reasons.push("Medium AI confidence"); }
+  else { reasons.push("High AI confidence"); }
+
+  // Failure type risk
+  const HIGH_RISK_TYPES = ["infra_error", "build_error", "unknown"];
+  const SAFE_TYPES = ["lint_error", "format_error", "type_error"];
+  if (HIGH_RISK_TYPES.includes(diagnosis.failure_type)) {
+    score += 30; reasons.push("High-risk failure type: " + diagnosis.failure_type);
+  } else if (SAFE_TYPES.includes(diagnosis.failure_type)) {
+    reasons.push("Safe failure type: " + diagnosis.failure_type);
+  } else {
+    score += 15; // test_flaky, test_permanent, dependency_missing
+  }
+
+  // No file identified = higher risk
+  if (!diagnosis.failing_file) {
+    score += 20; reasons.push("No failing file identified");
+  }
+
+  // Auto-fixable flag
+  if (diagnosis.auto_fixable === false) {
+    score += 30; reasons.push("AI flagged as not auto-fixable");
+  }
+
+  const level = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+  return { score: Math.min(score, 100), level, reasons };
+}
+
+/**
+ * Compute a composite risk score for an issue fix.
+ * Returns { score: 0-100, level: "low"|"medium"|"high", reasons: string[] }
+ */
+export function scoreFixRisk(analysis, fixes, originalFiles) {
+  let score = 0;
+  const reasons = [];
+
+  // Complexity
+  const complexity = analysis.complexity || "moderate";
+  if (complexity === "complex") { score += 40; reasons.push("Complex issue"); }
+  else if (complexity === "moderate") { score += 20; reasons.push("Moderate complexity"); }
+  else if (complexity === "trivial") { reasons.push("Trivial fix"); }
+  else { reasons.push("Simple fix"); }
+
+  // Number of files changed
+  if (fixes.length > 3) { score += 20; reasons.push(fixes.length + " files changed"); }
+
+  // Line delta check
+  for (const fix of fixes) {
+    const orig = originalFiles.find(f => f.path === fix.path);
+    if (orig) {
+      const origLines = orig.content.split("\n").length;
+      const fixLines = fix.fixed_content.split("\n").length;
+      const delta = Math.abs(fixLines - origLines);
+      if (delta > origLines * 0.3 && origLines > 10) {
+        score += 15; reasons.push(fix.path + ": " + Math.round(delta / origLines * 100) + "% lines changed");
+      }
+    }
+  }
+
+  const level = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+  return { score: Math.min(score, 100), level, reasons };
+}

@@ -19,6 +19,7 @@ export const DEFAULT_CONFIG = {
       enabled: true,
       auto_patch: true,
       max_fix_attempts: 3,
+      min_confidence_to_patch: "medium", // low | medium | high — patches below this are comment-only
       allowed_file_patterns: ["**"],
       blocked_file_patterns: [".env*", "secrets/**", "*.pem", "*.key"],
     },
@@ -48,6 +49,7 @@ export const DEFAULT_CONFIG = {
       enabled: false, // Opt-in only — autonomous fixes are destructive
       max_file_changes: 3,
       max_line_changes: 200,
+      min_confidence_to_submit: "medium", // low | medium | high — PRs below this are rejected
       allowed_labels: [
         "bug",
         "good first issue",

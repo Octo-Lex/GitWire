@@ -14,7 +14,7 @@ import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { maintainerService } from "../services/maintainerService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled, isFixPathBlocked, isFixLabelAllowed, isDryRun } from "@gitwire/rules";
+import { isPillarEnabled, isFixPathBlocked, isFixLabelAllowed, isDryRun, meetsConfidence, getMinFixConfidence, scoreFixRisk } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
@@ -179,11 +179,44 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
     return;
   }
 
-  // ── Step 8: Pre-merge validation ──────────────────────────────────────────
+  // ── Step 8: Risk scoring + validation ────────────────────────────────────
   // Check .gitwire.yml blocked_paths + max_file_changes + max_line_changes
-  const fixOpts = repoConfig.pillars?.issue_fix || {};
-  const maxFileChanges = fixOpts.max_file_changes || 3;
-  const maxLineChanges = fixOpts.max_line_changes || 200;
+  var fixOpts = repoConfig.pillars?.issue_fix || {};
+  var maxFileChanges = fixOpts.max_file_changes || 3;
+  var maxLineChanges = fixOpts.max_line_changes || 200;
+  var minConfidence = getMinFixConfidence(repoConfig);
+
+  // Confidence check from calibrateConfidence result (computed after PR creation)
+  // We pre-check using analysis complexity as a proxy
+  var preConfidence = analysis.complexity === "trivial" ? "high" : analysis.complexity === "simple" ? "medium" : "low";
+  if (!meetsConfidence(preConfidence, minConfidence)) {
+    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
+      analysis.explanation, "Complexity " + analysis.complexity + " below confidence threshold " + minConfidence);
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "\u{1F6AB} **GitWire Fix - confidence gate**\n\n" +
+      "Issue complexity: **" + analysis.complexity + "** (confidence: " + preConfidence + ")\n" +
+      "Minimum required: **" + minConfidence + "**\n\n" +
+      "_Adjust `issue_fix.min_confidence_to_submit` in `.gitwire.yml` if needed._"
+    );
+    return;
+  }
+
+  // Risk score the fix
+  var risk = scoreFixRisk(analysis, fixes, fileContents);
+  logger.info({ repo, issueNumber, riskScore: risk.score, riskLevel: risk.level, reasons: risk.reasons }, "Fix risk assessment");
+
+  // Block high-risk fixes
+  if (risk.level === "high") {
+    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
+      analysis.explanation, "High risk: " + risk.reasons.join("; "));
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "\u{1F6AB} **GitWire Fix - high risk**\n\n" +
+      "Risk score: **" + risk.score + "/100**\n" +
+      risk.reasons.map(function(r) { return "- " + r; }).join("\n") + "\n\n" +
+      "_This fix is too risky for autonomous submission._"
+    );
+    return;
+  }
 
   // Reject if too many files changed
   if (fixes.length > maxFileChanges) {

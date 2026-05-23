@@ -79,9 +79,26 @@ async function healWorkflowRun({ payload }) {
 
   logger.info({ runId: run.id, diagnosis }, "CI failure diagnosed");
 
-  // 3. Route based on healability
+  // 3. Route based on healability + risk scoring
   if (HEALABLE_TYPES.has(diagnosis.failure_type) && diagnosis.auto_fixable !== false) {
-    await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository);
+    // Risk scoring
+    var risk = scoreCIRisk(diagnosis);
+    var minConf = getMinPatchConfidence(repoConfig);
+    logger.info({ runId: run.id, riskScore: risk.score, riskLevel: risk.level, minConfidence: minConf }, "CI risk assessment");
+
+    // If confidence doesn't meet threshold, skip patching
+    if (!meetsConfidence(diagnosis.confidence, minConf)) {
+      logger.info({ runId: run.id, confidence: diagnosis.confidence, minConfidence: minConf }, "Confidence below threshold");
+      await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
+      await ciService.saveHealResult(run.id, {
+        status: "skipped", failureType: diagnosis.failure_type,
+        rootCause: diagnosis.root_cause + " (confidence " + diagnosis.confidence + " below " + minConf + ")",
+        fixApplied: null, confidence: diagnosis.confidence,
+      });
+      return;
+    }
+
+    await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig);
   } else {
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis);
     await ciService.saveHealResult(run.id, {
