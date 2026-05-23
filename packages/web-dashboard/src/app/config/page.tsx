@@ -117,6 +117,9 @@ const PILLARS = [
       { key: "dry_run", label: "Dry run mode", type: "toggle", warn: "No mutations will be executed" },
     ],
   },
+  {
+    key: "ai_review",
+    label: "AI Review",
     icon: "🧠",
     desc: "Automated code review on PR open/sync",
     opts: [
