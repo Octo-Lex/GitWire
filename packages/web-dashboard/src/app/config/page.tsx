@@ -8,7 +8,7 @@ import {
   getRepoConfig,
   patchRepoConfig,
   resetRepoConfig,
-} from "../lib/api";
+} from "../../lib/api";
 
 // ── Pillar definitions ──────────────────────────────────────────────────────
 
