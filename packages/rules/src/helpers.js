@@ -2,6 +2,7 @@
 // Query helpers for resolved config objects.
 
 import { DEFAULT_CONFIG } from "./schema.js";
+import { evaluateExpr } from "./expr/index.js";
 
 /**
  * Check if a pillar is enabled in the given config.
@@ -253,4 +254,67 @@ export function shouldTrigger(pillar, context, config) {
   }
 
   return true;
+}
+
+// ── Custom rules evaluation ───────────────────────────────────────────────────
+
+/**
+ * Evaluate all custom rules in a config against a context.
+ * Returns an array of { name, actions } for rules whose `if` condition is true.
+ *
+ * @param {object} context — event context (author, files, branch, labels, etc.)
+ * @param {object} config — resolved config with custom_rules and expressions
+ * @param {object} [plugins] — custom filter functions from .gitwire/plugins/
+ * @returns {Array<{name: string, actions: Array}>} matched rules with their run actions
+ */
+export function evaluateRules(context, config, plugins) {
+  const rules = config?.custom_rules;
+  if (!rules || typeof rules !== "object") return [];
+
+  // Build expression context — merge named expressions into context
+  // Named expressions like `is.docs` get resolved first
+  const exprContext = { ...context };
+  const expressions = config?.expressions || {};
+
+  // Resolve named expression groups (e.g., is.docs, is.security)
+  for (const [groupName, group] of Object.entries(expressions)) {
+    if (typeof group === "object" && group !== null) {
+      exprContext[groupName] = {};
+      for (const [key, expr] of Object.entries(group)) {
+        try {
+          exprContext[groupName][key] = evaluateExpr(expr, context, plugins);
+        } catch (_e) {
+          // Failed named expression resolves to undefined
+          exprContext[groupName][key] = undefined;
+        }
+      }
+    } else if (typeof group === "string") {
+      // Top-level named expression
+      try {
+        exprContext[groupName] = evaluateExpr(group, context, plugins);
+      } catch (_e) {
+        exprContext[groupName] = undefined;
+      }
+    }
+  }
+
+  // Evaluate each rule
+  const matched = [];
+  for (const [ruleName, rule] of Object.entries(rules)) {
+    if (!rule || typeof rule.if !== "string") continue;
+
+    try {
+      const result = evaluateExpr(rule.if, exprContext, plugins);
+      if (result) {
+        matched.push({
+          name: ruleName,
+          actions: rule.run || [],
+        });
+      }
+    } catch (_e) {
+      // Rule evaluation failure = skip (don't block other rules)
+    }
+  }
+
+  return matched;
 }

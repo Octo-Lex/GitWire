@@ -13,6 +13,7 @@ import {
   scoreCIRisk,
   scoreFixRisk,
   shouldTrigger,
+  evaluateRules,
 } from "../src/helpers.js";
 import { DEFAULT_CONFIG, validateConfig } from "../src/schema.js";
 
@@ -460,5 +461,115 @@ describe("shouldTrigger", () => {
       },
     };
     expect(shouldTrigger("ci_healing", { branch: "main", author: "dependabot[bot]" }, config)).toBe(false);
+  });
+});
+
+// ── evaluateRules ──────────────────────────────────────────────────────────────
+
+describe("evaluateRules", () => {
+  test("returns empty array when no custom_rules", () => {
+    const result = evaluateRules({}, {});
+    expect(result).toEqual([]);
+  });
+
+  test("evaluates simple rule that matches", () => {
+    const config = {
+      custom_rules: {
+        label_bots: {
+          if: "author | match('*[bot]')",
+          run: [{ action: "add-label", args: { label: "bot" } }],
+        },
+      },
+    };
+    const result = evaluateRules({ author: "dependabot[bot]" }, config);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("label_bots");
+    expect(result[0].actions).toHaveLength(1);
+  });
+
+  test("skips rule that does not match", () => {
+    const config = {
+      custom_rules: {
+        label_bots: {
+          if: "author | match('*[bot]')",
+          run: [{ action: "add-label", args: { label: "bot" } }],
+        },
+      },
+    };
+    const result = evaluateRules({ author: "alice" }, config);
+    expect(result).toEqual([]);
+  });
+
+  test("evaluates multiple rules, returns all matching", () => {
+    const config = {
+      custom_rules: {
+        label_bots: {
+          if: "author | match('*[bot]')",
+          run: [{ action: "add-label", args: { label: "bot" } }],
+        },
+        label_large: {
+          if: "changes.added + changes.deleted > 100",
+          run: [{ action: "add-label", args: { label: "size/L" } }],
+        },
+      },
+    };
+    const ctx = { author: "dependabot[bot]", changes: { added: 80, deleted: 30 } };
+    const result = evaluateRules(ctx, config);
+    expect(result).toHaveLength(2);
+    expect(result.map((r) => r.name).sort()).toEqual(["label_bots", "label_large"]);
+  });
+
+  test("resolves named expressions before evaluating rules", () => {
+    const config = {
+      expressions: {
+        is: {
+          docs: "files | all(extension('.md'))",
+        },
+      },
+      custom_rules: {
+        approve_docs: {
+          if: "is.docs",
+          run: [{ action: "approve" }],
+        },
+      },
+    };
+    const result = evaluateRules({ files: ["README.md", "docs/guide.md"] }, config);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("approve_docs");
+  });
+
+  test("handles evaluation errors gracefully", () => {
+    const config = {
+      custom_rules: {
+        bad_rule: {
+          if: "???invalid",
+          run: [{ action: "add-label" }],
+        },
+        good_rule: {
+          if: "true",
+          run: [{ action: "add-label", args: { label: "ok" } }],
+        },
+      },
+    };
+    const result = evaluateRules({}, config);
+    // Bad rule is skipped, good rule passes
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("good_rule");
+  });
+
+  test("supports custom plugin functions", () => {
+    const plugins = {
+      inTeam: (author, team) => author === "alice" && team === "frontend",
+    };
+    const config = {
+      custom_rules: {
+        frontend_review: {
+          if: "author | inTeam('frontend')",
+          run: [{ action: "add-label", args: { label: "frontend" } }],
+        },
+      },
+    };
+    const result = evaluateRules({ author: "alice" }, config, plugins);
+    expect(result).toHaveLength(1);
   });
 });

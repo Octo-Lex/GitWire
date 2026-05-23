@@ -22,6 +22,7 @@ const NAV = [
   { href: "/fix-attempts",  label: "Fix Attempts",    icon: "⚡" },
   { href: "/intelligence", label: "Intelligence",     icon: "\uD83E\uDDE0" },
   { href: "/config",       label: "Config",           icon: "\u2699" },
+  { href: "/config/playground", label: "Playground",  icon: "\uD83E\uDDEA" },
 ];
 
 export default function Sidebar() {
@@ -42,7 +43,7 @@ export default function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 py-3 px-3 space-y-0.5 overflow-y-auto">
         {NAV.map((item) => {
-          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+          const active = item.href === "/" ? pathname === "/" : pathname === item.href || (pathname.startsWith(item.href + "/"));
           return (
             <Link
               key={item.href}
@@ -64,7 +65,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="px-5 py-3 border-t border-border">
         <div className="text-[10px] font-mono text-text-tertiary">
-          GitWire v0.9
+          GitWire v0.10
         </div>
       </div>
     </aside>

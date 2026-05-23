@@ -16,4 +16,5 @@ export {
   scoreCIRisk,
   scoreFixRisk,
   shouldTrigger,
+  evaluateRules,
 } from "./helpers.js";

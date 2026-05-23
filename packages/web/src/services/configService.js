@@ -357,3 +357,79 @@ async function fetchOrgConfig(repoFullName) {
 
   return { config: structuredClone(DEFAULT_CONFIG), source: null };
 }
+
+/**
+ * Fetch plugin files from .gitwire/plugins/ directory in a repo.
+ * Returns a map of function name → function (loaded from source).
+ *
+ * @param {string} repoFullName — owner/repo
+ * @returns {Promise<object>} plugin filter functions
+ */
+export async function getPluginsForRepo(repoFullName) {
+  const cacheKey = CACHE_PREFIX + "plugins:" + repoFullName;
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  } catch (_e) {
+    // Cache miss — continue
+  }
+
+  try {
+    const [owner, repo] = repoFullName.split("/");
+    const octokit = await getInstallationClient(owner);
+    if (!octokit) return {};
+
+    // Get the repo tree
+    const { data: treeData } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{ref}", {
+      owner,
+      repo,
+      ref: "HEAD",
+      recursive: "1",
+    });
+
+    // Find plugin files
+    const pluginFiles = (treeData.tree || [])
+      .filter((entry) =>
+        entry.type === "blob" &&
+        entry.path.startsWith(".gitwire/plugins/") &&
+        entry.path.endsWith(".js")
+      );
+
+    if (pluginFiles.length === 0) return {};
+
+    // Fetch each plugin file's content
+    const pluginSources = [];
+    for (const file of pluginFiles) {
+      try {
+        const { data: blob } = await octokit.request("GET /repos/{owner}/{repo}/git/blobs/{sha}", {
+          owner,
+          repo,
+          sha: file.sha,
+        });
+        const source = Buffer.from(blob.content, "base64").toString("utf-8");
+        pluginSources.push({ source, filename: file.path.replace(".gitwire/plugins/", "") });
+      } catch (_e) {
+        // Skip files we can't read
+      }
+    }
+
+    // Cache the source list (not the functions — they're not serializable)
+    // The caller will load them with loadPlugins()
+    const result = pluginSources;
+    try {
+      await redis.set(cacheKey, JSON.stringify(result), "EX", CACHE_TTL);
+    } catch (_e) {
+      // Cache write failure is non-critical
+    }
+
+    return result;
+  } catch (err) {
+    logger.debug(
+      { err: err.message, repo: repoFullName },
+      "Plugin fetch failed — returning empty"
+    );
+    return {};
+  }
+}

@@ -8,6 +8,8 @@
 import { Router } from "express";
 import { getConfigForRepo, getConfigOverrides, setConfigOverrides, deleteConfigOverrides, getConfigHistory, restoreConfigVersion } from "../services/configService.js";
 import { DEFAULT_CONFIG, validateConfig } from "@gitwire/rules";
+import { evaluateExpr, evaluateExprWithTrace } from "@gitwire/rules/expr";
+import { loadPlugins } from "@gitwire/rules/plugins";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -178,6 +180,80 @@ configRouter.post("/:owner/:repo/restore/:historyId", async (req, res) => {
   } catch (err) {
     logger.error({ err, repo: fullName, historyId }, "Failed to restore config version");
     res.status(400).json({ error: err.message });
+  }
+});
+
+// ── Playground ─────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/config/playground
+ *
+ * Evaluate an expression against a test context.
+ * Used by the dashboard config playground.
+ *
+ * Body: {
+ *   expression: string,
+ *   context: object,
+ *   expressions?: object,  // named expressions
+ *   plugins?: Array<{source: string, filename: string}>  // plugin sources
+ * }
+ */
+configRouter.post("/playground", async (req, res) => {
+  try {
+    const { expression, context = {}, expressions = {}, plugins: pluginSources = [] } = req.body;
+
+    if (!expression || typeof expression !== "string") {
+      return res.status(400).json({ error: "expression is required and must be a string" });
+    }
+
+    if (typeof context !== "object" || Array.isArray(context)) {
+      return res.status(400).json({ error: "context must be an object" });
+    }
+
+    // Load plugins if provided
+    let pluginFilters = {};
+    if (Array.isArray(pluginSources) && pluginSources.length > 0) {
+      try {
+        pluginFilters = loadPlugins(pluginSources);
+      } catch (err) {
+        return res.status(400).json({ error: `Plugin load error: ${err.message}` });
+      }
+    }
+
+    // Resolve named expressions
+    const exprContext = { ...context };
+    for (const [groupName, group] of Object.entries(expressions)) {
+      if (typeof group === "object" && group !== null) {
+        exprContext[groupName] = {};
+        for (const [key, expr] of Object.entries(group)) {
+          try {
+            exprContext[groupName][key] = evaluateExpr(expr, context, pluginFilters);
+          } catch (_e) {
+            exprContext[groupName][key] = undefined;
+          }
+        }
+      } else if (typeof group === "string") {
+        try {
+          exprContext[groupName] = evaluateExpr(group, context, pluginFilters);
+        } catch (_e) {
+          exprContext[groupName] = undefined;
+        }
+      }
+    }
+
+    // Evaluate with trace
+    const { result, trace } = evaluateExprWithTrace(expression, exprContext, pluginFilters);
+
+    res.json({
+      result,
+      trace,
+      evaluated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(400).json({
+      error: err.message,
+      trace: [],
+    });
   }
 });
 

@@ -106,6 +106,12 @@ export const DEFAULT_CONFIG = {
   settings: {
     dry_run: false,
   },
+
+  // Named reusable expressions
+  expressions: {},
+
+  // Custom automation rules
+  custom_rules: {},
 };
 
 // Validate that a parsed config object has the expected shape.
@@ -145,6 +151,33 @@ export function validateConfig(config) {
     }
     if (config.settings?.dry_run !== undefined && typeof config.settings.dry_run !== "boolean") {
       errors.push("settings.dry_run must be a boolean");
+    }
+  }
+
+  // Validate custom_rules if present
+  if (config.custom_rules !== undefined) {
+    if (typeof config.custom_rules !== "object" || Array.isArray(config.custom_rules)) {
+      errors.push("custom_rules must be an object");
+    } else {
+      for (const [ruleName, rule] of Object.entries(config.custom_rules)) {
+        if (typeof rule !== "object" || Array.isArray(rule)) {
+          errors.push(`custom_rules.${ruleName} must be an object`);
+          continue;
+        }
+        if (typeof rule.if !== "string") {
+          errors.push(`custom_rules.${ruleName}.if must be a string expression`);
+        }
+        if (!Array.isArray(rule.run)) {
+          errors.push(`custom_rules.${ruleName}.run must be an array of actions`);
+        }
+      }
+    }
+  }
+
+  // Validate expressions if present
+  if (config.expressions !== undefined) {
+    if (typeof config.expressions !== "object" || Array.isArray(config.expressions)) {
+      errors.push("expressions must be an object");
     }
   }
 

@@ -1,5 +1,5 @@
 import { parseConfig, mergeDeep } from "../src/parse.js";
-import { DEFAULT_CONFIG } from "../src/schema.js";
+import { DEFAULT_CONFIG, validateConfig } from "../src/schema.js";
 
 describe("parseConfig", () => {
   test("returns DEFAULT_CONFIG for null input", () => {
@@ -127,5 +127,70 @@ describe("mergeDeep", () => {
     const source = { x: 2 };
     const result = mergeDeep(target, source);
     expect(result).toEqual({ x: 2, y: "hello" });
+  });
+});
+
+describe("validateConfig — custom_rules and expressions", () => {
+  test("accepts valid custom_rules", () => {
+    const config = {
+      custom_rules: {
+        safe_changes: {
+          if: "is.formatting or is.docs",
+          run: [
+            { action: "add-label", args: { label: "safe" } },
+          ],
+        },
+      },
+    };
+    const result = validateConfig(config);
+    expect(result.valid).toBe(true);
+  });
+
+  test("rejects custom_rules without if string", () => {
+    const config = {
+      custom_rules: {
+        bad_rule: {
+          if: 42,
+          run: [],
+        },
+      },
+    };
+    const result = validateConfig(config);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain("if must be a string");
+  });
+
+  test("rejects custom_rules without run array", () => {
+    const config = {
+      custom_rules: {
+        bad_rule: {
+          if: "true",
+          run: "not-array",
+        },
+      },
+    };
+    const result = validateConfig(config);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain("run must be an array");
+  });
+
+  test("accepts valid expressions", () => {
+    const config = {
+      expressions: {
+        is: {
+          docs: "files | all(extension('.md'))",
+          safe: "files | all(extension('.css', '.scss'))",
+        },
+      },
+    };
+    const result = validateConfig(config);
+    expect(result.valid).toBe(true);
+  });
+
+  test("rejects non-object custom_rules", () => {
+    const config = { custom_rules: "bad" };
+    const result = validateConfig(config);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain("custom_rules must be an object");
   });
 });
