@@ -8,7 +8,7 @@ import { getInstallationClient } from "../lib/github.js";
 import { issueService } from "../services/issueService.js";
 import { detectDuplicates } from "../services/duplicateDetectionService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled } from "@gitwire/rules";
+import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 
@@ -98,12 +98,16 @@ async function triageIssue({ payload }) {
   );
 
   if (labelsToApply.length > 0 && triageOpts.auto_label !== false) {
-    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-      owner:  repository.owner.login,
-      repo:   repository.name,
-      issue_number: issue.number,
-      labels: labelsToApply,
-    });
+    if (isDryRun(repoConfig)) {
+      logger.info({ issue: issue.number, labels: labelsToApply }, "DRY RUN: would apply labels");
+    } else {
+      await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+        owner:  repository.owner.login,
+        repo:   repository.name,
+        issue_number: issue.number,
+        labels: labelsToApply,
+      });
+    }
   }
 
   // ── Persist triage result to database ────────────────────────────────────
@@ -117,12 +121,16 @@ async function triageIssue({ payload }) {
 
   // ── Post triage comment if needed ─────────────────────────────────────────
   if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
-    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-      owner:        repository.owner.login,
-      repo:         repository.name,
-      issue_number: issue.number,
-      body:         buildTriageComment(classification),
-    });
+    if (isDryRun(repoConfig)) {
+      logger.info({ issue: issue.number }, "DRY RUN: would post triage comment");
+    } else {
+      await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+        owner:        repository.owner.login,
+        repo:         repository.name,
+        issue_number: issue.number,
+        body:         buildTriageComment(classification),
+      });
+    }
   }
 
   // ── Run duplicate detection (best-effort) ────────────────────────────────

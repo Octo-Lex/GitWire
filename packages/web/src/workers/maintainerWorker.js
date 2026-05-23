@@ -10,7 +10,7 @@ import { maintainerQueue } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { maintainerService } from "../services/maintainerService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled, getStaleConfig, isStaleExempt } from "@gitwire/rules";
+import { isPillarEnabled, getStaleConfig, isStaleExempt, isDryRun } from "@gitwire/rules";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -114,14 +114,14 @@ async function processStaleItems(octokit, owner, repo, type, staleDays, warnDays
         const closeKey = idempotencyBase + ":close";
         if (await maintainerService.actionExists(closeKey)) continue;
 
-        await closeStaleItem(octokit, owner, repo, type, number, staleDays, repoId, closeKey);
+        await closeStaleItem(octokit, owner, repo, type, number, staleDays, repoId, closeKey, repoConfig);
         processed++;
       } else if (daysSinceUpdate >= staleDays - warnDays) {
         // Warn about upcoming closure
         const warnKey = idempotencyBase + ":warn";
         if (await maintainerService.actionExists(warnKey)) continue;
 
-        await warnStaleItem(octokit, owner, repo, type, number, staleDays, daysSinceUpdate, repoId, warnKey);
+        await warnStaleItem(octokit, owner, repo, type, number, staleDays, daysSinceUpdate, repoId, warnKey, repoConfig);
         processed++;
       }
     }
@@ -135,7 +135,15 @@ async function processStaleItems(octokit, owner, repo, type, staleDays, warnDays
   }
 }
 
-async function warnStaleItem(octokit, owner, repo, type, number, staleDays, daysIdle, repoId, idempotencyKey) {
+async function warnStaleItem(octokit, owner, repo, type, number, staleDays, daysIdle, repoId, idempotencyKey, repoConfig) {
+  if (isDryRun(repoConfig)) {
+    logger.info({ type, number, daysIdle: Math.floor(daysIdle), repo: owner + "/" + repo }, "DRY RUN: would warn stale item");
+    await maintainerService.recordAction(repoId, {
+      actionType: "stale_warn", targetType: type, targetNumber: String(number),
+      idempotencyKey, status: "skipped", result: "Dry run: would warn",
+    });
+    return;
+  }
   const daysLeft = Math.ceil(staleDays - daysIdle);
   const body = [
     "⏰ **GitWire Stale Warning**",
@@ -167,7 +175,16 @@ async function warnStaleItem(octokit, owner, repo, type, number, staleDays, days
   }
 }
 
-async function closeStaleItem(octokit, owner, repo, type, number, staleDays, repoId, idempotencyKey) {
+async function closeStaleItem(octokit, owner, repo, type, number, staleDays, repoId, idempotencyKey, repoConfig) {
+  if (isDryRun(repoConfig)) {
+    logger.info({ type, number, staleDays, repo: owner + "/" + repo }, "DRY RUN: would close stale item");
+    await maintainerService.recordAction(repoId, {
+      actionType: "stale_close", targetType: type, targetNumber: String(number),
+      idempotencyKey, status: "skipped", result: "Dry run: would close",
+    });
+    return;
+  }
+
   // Re-fetch to verify still open and unchanged
   const { data: item } = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
     owner, repo, issue_number: number,
@@ -285,6 +302,14 @@ async function runBranchCleanup({ installationId, repoFullName }) {
       }
 
       // Safe to delete — no open PRs
+      if (isDryRun(repoConfig)) {
+        logger.info({ branch: branch.name, repo: repoFullName }, "DRY RUN: would delete branch");
+        await maintainerService.recordAction(repoRow.github_id, {
+          actionType: "branch_cleanup", targetType: "branch", targetNumber: branch.name,
+          idempotencyKey, status: "skipped", result: "Dry run: would delete",
+        });
+        continue;
+      }
       try {
         await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}", {
           owner, repo, branch: branch.name,

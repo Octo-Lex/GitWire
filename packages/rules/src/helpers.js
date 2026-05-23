@@ -12,6 +12,14 @@ export function isPillarEnabled(pillar, config) {
 }
 
 /**
+ * Check if dry-run mode is enabled.
+ * When true, workers log what they would do but skip all mutations.
+ */
+export function isDryRun(config) {
+  return config?.settings?.dry_run === true;
+}
+
+/**
  * Check if a file path is allowed for CI healing patching.
  * Blocked patterns take precedence over allowed patterns.
  */

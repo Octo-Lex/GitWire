@@ -7,7 +7,7 @@ import { getInstallationClient }     from "../lib/github.js";
 import { reviewPR }      from "../services/aiReviewService.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled } from "@gitwire/rules";
+import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { QUEUES } from "@gitwire/core";
 import { logger } from "../lib/logger.js";
 
@@ -25,6 +25,10 @@ export function startPhase4Worker() {
         const repoConfig = await getConfigForRepo(repository.full_name);
         if (!isPillarEnabled("ai_review", repoConfig)) {
           logger.debug({ repo: repository.full_name, pr: pr.number }, "AI review disabled — skipping");
+          return;
+        }
+        if (isDryRun(repoConfig)) {
+          logger.info({ repo: repository.full_name, pr: pr.number }, "DRY RUN: would run AI review");
           return;
         }
         const octokit = await getInstallationClient(installation.id);

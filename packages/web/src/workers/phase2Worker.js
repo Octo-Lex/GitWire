@@ -7,7 +7,7 @@ import { getInstallationClient } from "../lib/github.js";
 import { admitToQueue, onChecksUpdated, processQueue, removeFromQueue } from "../services/mergeQueueService.js";
 import { evaluateRollback } from "../services/errorRecoveryService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled } from "@gitwire/rules";
+import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { logger } from "../lib/logger.js";
 
 // ── Merge queue worker ────────────────────────────────────────────────────────
@@ -24,6 +24,10 @@ export function startMergeQueueWorker() {
     const repoConfig = await getConfigForRepo(repository.full_name);
     if (!isPillarEnabled("merge_queue", repoConfig)) {
       logger.debug({ repo: repository.full_name }, "Merge queue disabled for repo — skipping");
+      return;
+    }
+    if (isDryRun(repoConfig)) {
+      logger.info({ repo: repository.full_name, jobName: job.name }, "DRY RUN: would process merge queue event");
       return;
     }
 

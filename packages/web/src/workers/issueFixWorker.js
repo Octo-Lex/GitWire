@@ -14,7 +14,7 @@ import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { maintainerService } from "../services/maintainerService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled, isFixPathBlocked, isFixLabelAllowed } from "@gitwire/rules";
+import { isPillarEnabled, isFixPathBlocked, isFixLabelAllowed, isDryRun } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
@@ -226,6 +226,13 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   }
 
   // ── Step 9: Create branch → commit fixes → open PR ────────────────────────
+  if (isDryRun(repoConfig)) {
+    logger.info({ repo, issueNumber, fixes: fixes.length, complexity: analysis.complexity }, "DRY RUN: would create fix PR");
+    await upsertFixAttempt(repoId, issueNumber, branchName, "submitted",
+      analysis.complexity, analysis.explanation, null, null);
+    return;
+  }
+
   try {
     const { data: repoInfo } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo: repoName });
     const defaultBranch = repoInfo.default_branch;

@@ -109,8 +109,14 @@ const PILLARS = [
     opts: [],
   },
   {
-    key: "ai_review",
-    label: "AI Review",
+    key: "settings",
+    label: "Settings",
+    icon: "⚙",
+    desc: "Global behavior flags",
+    opts: [
+      { key: "dry_run", label: "Dry run mode", type: "toggle", warn: "No mutations will be executed" },
+    ],
+  },
     icon: "🧠",
     desc: "Automated code review on PR open/sync",
     opts: [
@@ -184,15 +190,20 @@ export default function ConfigPage() {
     setSaving(true);
     try {
       const parts = selected.split("/");
-      // Build nested path (e.g. "stale.issues.warn_days" → { stale: { issues: { warn_days: N } } })
-      const parts2 = optionKey.split(".");
-      let nested: any = value;
-      for (let i = parts2.length - 1; i >= 0; i--) {
-        nested = { [parts2[i]]: nested };
+      if (pillarKey === "settings") {
+        await patchRepoConfig(parts[0], parts[1], {
+          settings: { [optionKey]: value },
+        });
+      } else {
+        const parts2 = optionKey.split(".");
+        let nested: any = value;
+        for (let i = parts2.length - 1; i >= 0; i--) {
+          nested = { [parts2[i]]: nested };
+        }
+        await patchRepoConfig(parts[0], parts[1], {
+          pillars: { [pillarKey]: nested },
+        });
       }
-      await patchRepoConfig(parts[0], parts[1], {
-        pillars: { [pillarKey]: nested },
-      });
       await loadConfig(selected);
       setMessage("✓ " + optionKey + " updated");
     } catch (_e) {
@@ -234,6 +245,7 @@ export default function ConfigPage() {
   };
 
   const getPillarEnabled = (key: string) => {
+    if (key === "settings") return true; // always show
     return config?.pillars?.[key]?.enabled !== false;
   };
 
@@ -242,6 +254,9 @@ export default function ConfigPage() {
   };
 
   const getOptionValue = (pillarKey: string, optionKey: string) => {
+    if (pillarKey === "settings") {
+      return config?.config?.settings?.[optionKey];
+    }
     const parts = optionKey.split(".");
     let val = config?.config?.pillars?.[pillarKey];
     for (const p of parts) {
@@ -317,6 +332,13 @@ export default function ConfigPage() {
       {loading && (
         <div className="text-sm text-text-secondary animate-pulse">
           Loading config…
+        </div>
+      )}
+
+      {/* Dry-run banner */}
+      {config && config.config?.settings?.dry_run && (
+        <div className="px-4 py-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm font-medium">
+          ⚠ DRY RUN MODE ACTIVE — All mutations are logged but not executed. Workers will describe what they would do without making changes.
         </div>
       )}
 

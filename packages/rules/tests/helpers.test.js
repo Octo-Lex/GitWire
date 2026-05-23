@@ -1,5 +1,6 @@
 import {
   isPillarEnabled,
+  isDryRun,
   isFileAllowed,
   isFixPathBlocked,
   isFixLabelAllowed,
@@ -44,6 +45,30 @@ describe("isPillarEnabled", () => {
 
   test("handles undefined config", () => {
     expect(isPillarEnabled("triage", undefined)).toBe(true);
+  });
+});
+
+// ── isDryRun ─────────────────────────────────────────────────────────────────
+
+describe("isDryRun", () => {
+  test("returns false by default", () => {
+    expect(isDryRun(DEFAULT_CONFIG)).toBe(false);
+  });
+
+  test("returns true when settings.dry_run is true", () => {
+    expect(isDryRun({ settings: { dry_run: true } })).toBe(true);
+  });
+
+  test("returns false when settings.dry_run is false", () => {
+    expect(isDryRun({ settings: { dry_run: false } })).toBe(false);
+  });
+
+  test("returns false for null config", () => {
+    expect(isDryRun(null)).toBe(false);
+  });
+
+  test("returns false for empty object", () => {
+    expect(isDryRun({})).toBe(false);
   });
 });
 

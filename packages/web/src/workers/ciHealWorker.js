@@ -8,7 +8,7 @@ import { getInstallationClient } from "../lib/github.js";
 import { ciService } from "../services/ciService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { HEALABLE_TYPES } from "@gitwire/core";
-import { isPillarEnabled, isFileAllowed } from "@gitwire/rules";
+import { isPillarEnabled, isFileAllowed, isDryRun } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
@@ -99,7 +99,7 @@ async function healWorkflowRun({ payload }) {
 async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository) {
   // Flaky test: just re-run
   if (diagnosis.failure_type === "test_flaky" && diagnosis.confidence !== "low") {
-    await healByRerun(octokit, owner, repo, run, diagnosis);
+    await healByRerun(octokit, owner, repo, run, diagnosis, repoConfig);
     return;
   }
 
@@ -141,7 +141,11 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repositor
 
 // ── Heal strategy: re-run for flaky tests ─────────────────────────────────────
 
-async function healByRerun(octokit, owner, repo, run, diagnosis) {
+async function healByRerun(octokit, owner, repo, run, diagnosis, repoConfig) {
+  if (isDryRun(repoConfig)) {
+    logger.info({ runId: run.id, type: diagnosis.failure_type }, "DRY RUN: would re-run workflow");
+    return;
+  }
   try {
     await octokit.request("POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun", {
       owner, repo, run_id: run.id,
@@ -174,6 +178,10 @@ async function healByRerun(octokit, owner, repo, run, diagnosis) {
 // ── Heal strategy: create a patch PR with the fix ─────────────────────────────
 
 async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig) {
+  if (isDryRun(repoConfig)) {
+    logger.info({ runId: run.id, failingFile: diagnosis.failing_file, rootCause: diagnosis.root_cause }, "DRY RUN: would create patch PR");
+    return;
+  }
   const branchName = "gitwire/heal-" + run.id;
   const failingFile = diagnosis.failing_file;
 
