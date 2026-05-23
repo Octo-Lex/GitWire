@@ -26,6 +26,7 @@ import readinessRouter from "./routes/readiness.js";
 import { decisionsRouter } from "./routes/decisions.js";
 import waiverRouter from "./routes/waivers.js";
 import gatesRouter from "./routes/gates.js";
+import webhookDeliveriesRouter from "./routes/webhookDeliveries.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -107,6 +108,7 @@ export function createApp() {
   app.use("/api/decisions",        decisionsRouter);
   app.use("/api/waivers",          waiverRouter);
   app.use("/api/gates",            gatesRouter);
+  app.use("/api/webhooks/deliveries", webhookDeliveriesRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {

@@ -80,6 +80,13 @@ export function buildExpressionContext(eventName, payload) {
       if (issue.pull_request) {
         ctx.branch = issue.pull_request?.ref || "";
       }
+      // Add comment-specific data
+      const comment = payload.comment;
+      if (comment) {
+        ctx.comment_author = comment.user?.login || "";
+        ctx.comment_body = comment.body || "";
+        ctx.is_command = comment.body?.trim().startsWith("/gitwire") || false;
+      }
     }
   }
 
@@ -148,8 +155,9 @@ export async function evaluateAndExecuteCustomRules(eventName, payload, installa
   }
 
   // 4. Enrich with PR files if applicable
-  if (eventName === "pull_request" && payload.pull_request) {
-    await enrichWithPRFiles(octokit, repo.owner.login, repo.name, payload.pull_request.number, ctx);
+  const prNumber = payload.pull_request?.number || (eventName === "issue_comment" && payload.issue?.pull_request ? payload.issue.number : null);
+  if (prNumber) {
+    await enrichWithPRFiles(octokit, repo.owner.login, repo.name, prNumber, ctx);
   }
 
   // 5. Load plugins

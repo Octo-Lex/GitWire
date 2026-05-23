@@ -259,4 +259,66 @@ router.get("/:owner/:repo/metrics", async (req, res) => {
   }
 });
 
+// ── GET /api/gates/:owner/:repo/trends — Gate evaluation trends ────────
+router.get("/:owner/:repo/trends", async (req, res) => {
+  try {
+    const fullName = req.params.owner + "/" + req.params.repo;
+    const { rows: [repo] } = await db.query(
+      "SELECT github_id FROM repositories WHERE full_name = $1",
+      [fullName]
+    );
+    if (!repo) return res.status(404).json({ error: "Repository not found" });
+
+    const days = Math.min(parseInt(req.query.days) || 30, 90);
+
+    // Daily aggregated scores
+    const { rows } = await db.query(
+      `SELECT
+         DATE(ge.evaluated_at) AS date,
+         qg.name AS gate_name,
+         qg.is_default,
+         ge.result,
+         AVG(ge.score)::numeric(5,1) AS avg_score,
+         MIN(ge.score) AS min_score,
+         MAX(ge.score) AS max_score,
+         COUNT(*)::int AS eval_count,
+         COUNT(*) FILTER (WHERE ge.result = 'passed')::int AS passed_count,
+         COUNT(*) FILTER (WHERE ge.result = 'failed')::int AS failed_count
+       FROM gate_evaluations ge
+       JOIN quality_gates qg ON qg.id = ge.gate_id
+       WHERE ge.repo_id = $1 AND ge.evaluated_at > NOW() - ($2 || ' days')::interval
+       GROUP BY DATE(ge.evaluated_at), qg.name, qg.is_default
+       ORDER BY date ASC, qg.name`,
+      [repo.github_id, days]
+    );
+
+    // Also get per-metric trends from the latest evaluation conditions
+    const { rows: metricTrends } = await db.query(
+      `SELECT
+         DATE(ge.evaluated_at) AS date,
+         qg.name AS gate_name,
+         c->>'metric' AS metric,
+         (c->>'actual')::float AS actual,
+         (c->>'threshold')::float AS threshold,
+         (c->>'passed')::boolean AS passed
+       FROM gate_evaluations ge
+       JOIN quality_gates qg ON qg.id = ge.gate_id
+       CROSS JOIN jsonb_array_elements(ge.conditions) AS c
+       WHERE ge.repo_id = $1 AND ge.evaluated_at > NOW() - ($2 || ' days')::interval
+       ORDER BY date ASC, qg.name, c->>'metric'`,
+      [repo.github_id, days]
+    );
+
+    res.json({
+      repo: fullName,
+      days,
+      gate_trends: rows,
+      metric_trends: metricTrends,
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to get gate trends");
+    res.status(500).json({ error: "Failed to get trends" });
+  }
+});
+
 export default router;

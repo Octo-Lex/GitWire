@@ -89,6 +89,16 @@ export default function GatesPage() {
     fetcher
   );
 
+  const { data: trends } = useSWR<{
+    repo: string;
+    days: number;
+    gate_trends: Array<{ date: string; gate_name: string; avg_score: string; result: string; passed_count: number; failed_count: number }>;
+    metric_trends: Array<{ date: string; gate_name: string; metric: string; actual: number; threshold: number; passed: boolean }>;
+  }>(
+    selectedRepo ? API.gatesTrends(selectedRepo.split("/")[0], selectedRepo.split("/")[1], 30) : null,
+    fetcher
+  );
+
   const handleEvaluate = async () => {
     if (!selectedRepo) return;
     setEvaluating(true);
@@ -378,6 +388,92 @@ export default function GatesPage() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Gate score trends */}
+            {trends && trends.gate_trends.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold text-text-secondary mb-2">
+                  Gate Score Trends (30 days)
+                </h3>
+                <div className="space-y-3">
+                  {Array.from(new Set(trends.gate_trends.map((t) => t.gate_name))).map((gateName) => {
+                    const gateData = trends.gate_trends.filter((t) => t.gate_name === gateName);
+                    const maxScore = 100;
+                    return (
+                      <div key={gateName} className="bg-gray-800/30 rounded p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-medium">{gateName}</span>
+                          <span className="text-xs text-text-tertiary">{gateData.length} evaluations</span>
+                        </div>
+                        <div className="flex items-end gap-0.5 h-16">
+                          {gateData.map((d, i) => {
+                            const score = parseFloat(d.avg_score);
+                            const h = Math.max((score / maxScore) * 100, 2);
+                            const isFail = d.result === "failed";
+                            return (
+                              <div
+                                key={i}
+                                className="flex-1 rounded-t transition-colors"
+                                title={d.date + ": " + score + "% (" + d.passed_count + "/" + (d.passed_count + d.failed_count) + " passed)"}
+                                style={{
+                                  height: h + "%",
+                                  backgroundColor: isFail ? "rgba(239,68,68,0.3)" : "rgba(0,217,126,0.3)",
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Metric trends */}
+            {trends && trends.metric_trends.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold text-text-secondary mb-2">
+                  Metric Trends (30 days)
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {Array.from(new Set(trends.metric_trends.map((t) => t.metric))).map((metric) => {
+                    const metricData = trends.metric_trends.filter((t) => t.metric === metric);
+                    const latest = metricData[metricData.length - 1];
+                    const allPassed = metricData.every((d) => d.passed);
+                    const maxVal = Math.max(...metricData.map((d) => d.actual), latest?.threshold || 0, 0.01);
+                    return (
+                      <div key={metric} className="bg-gray-800/30 rounded p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-mono text-text-tertiary">{metric}</span>
+                          <span className={allPassed ? "text-green-400" : "text-red-400"}>
+                            {allPassed ? "\u2705" : "\u274C"}
+                          </span>
+                        </div>
+                        <p className="text-sm font-mono font-medium">
+                          {formatMetricValue(metric, latest?.actual)}
+                        </p>
+                        <div className="flex items-end gap-px h-8 mt-1">
+                          {metricData.slice(-14).map((d, i) => {
+                            const h = Math.max((d.actual / maxVal) * 100, 2);
+                            return (
+                              <div
+                                key={i}
+                                className="flex-1 rounded-t"
+                                style={{
+                                  height: h + "%",
+                                  backgroundColor: d.passed ? "rgba(0,217,126,0.3)" : "rgba(239,68,68,0.3)",
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 

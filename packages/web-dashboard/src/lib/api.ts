@@ -147,6 +147,7 @@ export const API = {
   gatesEvaluate:     (owner: string, repo: string) => `/api/gates/${owner}/${repo}/evaluate`,
   gatesHistory:      (owner: string, repo: string, q = "") => `/api/gates/${owner}/${repo}/history${q ? `?${q}` : ""}`,
   gatesMetrics:      (owner: string, repo: string) => `/api/gates/${owner}/${repo}/metrics`,
+  gatesTrends:       (owner: string, repo: string, days = 30) => `/api/gates/${owner}/${repo}/trends?days=${days}`,
 };
 
 // ── Trigger helpers (non-GET) ─────────────────────────────────────────────

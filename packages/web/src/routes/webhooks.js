@@ -72,7 +72,7 @@ webhookRouter.post(
     await routeWebhookToQueue(eventName, payload, deliveryId);
 
     // ── 3a. Evaluate custom rules ────────────────────────────────────────────
-    if (["issues", "pull_request"].includes(eventName)) {
+    if (["issues", "pull_request", "issue_comment"].includes(eventName)) {
       try {
         const customResults = await evaluateAndExecuteCustomRules(eventName, payload, payload.installation);
         if (customResults.length > 0) {
