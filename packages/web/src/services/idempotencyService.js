@@ -7,7 +7,7 @@
 // Key pattern: gitwire:idem:{source}:{key}
 // TTL: 1 hour by default (configurable per check)
 
-import { redis } from "../lib/db.js";
+import { redis } from "../lib/queue.js";
 import { logger } from "../lib/logger.js";
 
 const IDEM_PREFIX = "gitwire:idem:";

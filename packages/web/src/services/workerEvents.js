@@ -9,7 +9,7 @@
 // Key: gitwire:events (pending events)
 // Key: gitwire:events:processed (tracking set)
 
-import { redis } from "../lib/db.js";
+import { redis } from "../lib/queue.js";
 import { logger } from "../lib/logger.js";
 
 const EVENTS_KEY = "gitwire:events";
