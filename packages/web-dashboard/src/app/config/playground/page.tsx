@@ -43,9 +43,13 @@ export default function PlaygroundPage() {
     setLoading(true);
     try {
       const ctx = JSON.parse(contextJSON);
-      const res = await fetch("/api/config/playground", {
+      const BASE = process.env.NEXT_PUBLIC_API_URL || "";
+      const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
+      const res = await fetch(`${BASE}/api/config/playground`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           expression,
           context: ctx,
