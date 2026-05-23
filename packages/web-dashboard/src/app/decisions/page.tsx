@@ -103,7 +103,7 @@ export default function DecisionsPage() {
         ))}
 
         {!isLoading && decisions.length === 0 && (
-          <EmptyState message="No decisions recorded yet" />
+          <EmptyState title="No decisions recorded yet" />
         )}
 
         {!isLoading && decisions.map((d: any) => (
