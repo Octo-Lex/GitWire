@@ -5,7 +5,6 @@
 import { Router } from "express";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
-import { paginate } from "../middleware/pagination.js";
 
 const router = Router();
 
