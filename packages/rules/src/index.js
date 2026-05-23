@@ -18,3 +18,10 @@ export {
   shouldTrigger,
   evaluateRules,
 } from "./helpers.js";
+export {
+  evaluateCondition,
+  evaluateGate,
+  evaluateAllGates,
+  getRequiredMetrics,
+  formatGateSummary,
+} from "./gates.js";

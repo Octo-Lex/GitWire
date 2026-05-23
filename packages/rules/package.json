@@ -1,6 +1,6 @@
 {
   "name": "@gitwire/rules",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -9,7 +9,9 @@
     "./expr": "./src/expr/index.js",
     "./expr.js": "./src/expr/index.js",
     "./plugins": "./src/plugins/index.js",
-    "./plugins.js": "./src/plugins/index.js"
+    "./plugins.js": "./src/plugins/index.js",
+    "./gates": "./src/gates.js",
+    "./gates.js": "./src/gates.js"
   },
   "scripts": {
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js"

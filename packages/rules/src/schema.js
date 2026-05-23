@@ -112,6 +112,18 @@ export const DEFAULT_CONFIG = {
 
   // Custom automation rules
   custom_rules: {},
+
+  // Quality gates — metric thresholds evaluated on PRs
+  quality_gates: {
+    default: {
+      conditions: [
+        { metric: "ci_failure_rate_7d", operator: "<", threshold: 0.3 },
+        { metric: "triage_coverage", operator: ">=", threshold: 0.5 },
+        { metric: "readiness_score", operator: ">=", threshold: 40 },
+      ],
+      block_on_fail: true,
+    },
+  },
 };
 
 // Validate that a parsed config object has the expected shape.
@@ -178,6 +190,40 @@ export function validateConfig(config) {
   if (config.expressions !== undefined) {
     if (typeof config.expressions !== "object" || Array.isArray(config.expressions)) {
       errors.push("expressions must be an object");
+    }
+  }
+
+  // Validate quality_gates if present
+  if (config.quality_gates !== undefined) {
+    if (typeof config.quality_gates !== "object" || Array.isArray(config.quality_gates)) {
+      errors.push("quality_gates must be an object");
+    } else {
+      const VALID_OPERATORS = ["<", "<=", ">", ">=", "==", "!="];
+      for (const [gateName, gate] of Object.entries(config.quality_gates)) {
+        if (typeof gate !== "object" || Array.isArray(gate)) {
+          errors.push("quality_gates." + gateName + " must be an object");
+          continue;
+        }
+        if (!Array.isArray(gate.conditions)) {
+          errors.push("quality_gates." + gateName + ".conditions must be an array");
+        } else {
+          for (let i = 0; i < gate.conditions.length; i++) {
+            const cond = gate.conditions[i];
+            if (typeof cond.metric !== "string") {
+              errors.push("quality_gates." + gateName + ".conditions[" + i + "].metric must be a string");
+            }
+            if (!VALID_OPERATORS.includes(cond.operator)) {
+              errors.push("quality_gates." + gateName + ".conditions[" + i + "].operator must be one of: " + VALID_OPERATORS.join(", "));
+            }
+            if (typeof cond.threshold !== "number") {
+              errors.push("quality_gates." + gateName + ".conditions[" + i + "].threshold must be a number");
+            }
+          }
+        }
+        if (gate.block_on_fail !== undefined && typeof gate.block_on_fail !== "boolean") {
+          errors.push("quality_gates." + gateName + ".block_on_fail must be a boolean");
+        }
+      }
     }
   }
 

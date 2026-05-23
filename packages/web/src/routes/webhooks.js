@@ -17,6 +17,7 @@ import { logger } from "../lib/logger.js";
 import { parseGitwireCommand, resolveCommandAction, buildCommandResponse } from "../lib/commentRouter.js";
 import { invalidateConfigCache } from "../services/configService.js";
 import { evaluateAndExecuteCustomRules } from "../services/customRulesService.js";
+import { evaluateGatesForPR as evaluateQualityGates } from "../services/qualityGateService.js";
 import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFromDecision } from "../lib/checkStatus.js";
 
 export const webhookRouter = Router();
@@ -82,6 +83,34 @@ webhookRouter.post(
         }
       } catch (err) {
         logger.warn({ err: err.message, deliveryId }, "Custom rules evaluation failed (non-fatal)");
+      }
+    }
+
+    // ── 3a-2. Evaluate quality gates for PR events ──────────────────────────
+    if (eventName === "pull_request" && payload.pull_request) {
+      try {
+        const pr = payload.pull_request;
+        const octokit = await getInstallationClient(payload.installation?.id);
+        if (octokit && pr.head?.sha) {
+          const gateResults = await evaluateQualityGates({
+            repoId: payload.repository.id,
+            repoFullName: payload.repository.full_name,
+            headSha: pr.head.sha,
+            prNumber: pr.number,
+            octokit,
+            owner: payload.repository.owner.login,
+            repo: payload.repository.name,
+          });
+          if (gateResults.length > 0) {
+            const failed = gateResults.filter((r) => r.result === "failed" && r.block_on_fail);
+            logger.info(
+              { deliveryId, pr: pr.number, gateResults: gateResults.length, failed: failed.length },
+              "Quality gates evaluated"
+            );
+          }
+        }
+      } catch (err) {
+        logger.warn({ err: err.message, deliveryId }, "Quality gate evaluation failed (non-fatal)");
       }
     }
 

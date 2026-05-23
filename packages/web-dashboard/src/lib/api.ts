@@ -140,6 +140,13 @@ export const API = {
   // Readiness
   readiness:        () => `/api/readiness`,
   readinessRepo:    (owner: string, repo: string) => `/api/readiness/${owner}/${repo}`,
+
+  // Quality Gates
+  gates:             () => `/api/gates`,
+  gatesRepo:         (owner: string, repo: string) => `/api/gates/${owner}/${repo}`,
+  gatesEvaluate:     (owner: string, repo: string) => `/api/gates/${owner}/${repo}/evaluate`,
+  gatesHistory:      (owner: string, repo: string, q = "") => `/api/gates/${owner}/${repo}/history${q ? `?${q}` : ""}`,
+  gatesMetrics:      (owner: string, repo: string) => `/api/gates/${owner}/${repo}/metrics`,
 };
 
 // ── Trigger helpers (non-GET) ─────────────────────────────────────────────
@@ -550,6 +557,34 @@ export async function getReadiness() {
 
 export async function getRepoReadiness(owner: string, repo: string) {
   const res = await fetch(`${BASE}/api/readiness/${owner}/${repo}`, {
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+// ── Quality Gates ────────────────────────────────────────────────────────
+
+export async function evaluateGates(owner: string, repo: string, headSha?: string, prNumber?: number) {
+  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}/evaluate`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ head_sha: headSha, pr_number: prNumber }),
+  });
+  return res.json();
+}
+
+export async function createGate(owner: string, repo: string, name: string, conditions: Array<{metric: string, operator: string, threshold: number}>, blockOnFail = true) {
+  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name, conditions, block_on_fail: blockOnFail }),
+  });
+  return res.json();
+}
+
+export async function deleteGate(owner: string, repo: string, name: string) {
+  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}/${encodeURIComponent(name)}`, {
+    method: "DELETE",
     headers: authHeaders(),
   });
   return res.json();
