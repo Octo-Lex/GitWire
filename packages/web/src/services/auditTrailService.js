@@ -142,6 +142,8 @@ export const Trail = {
       critical_findings:  data.criticalFindings,
       tokens_used:        data.tokensUsed,
       review_id:          data.reviewId,
+      // Evidence bundle (structured proof)
+      ...(data.evidence ? { evidence: data.evidence } : {}),
     },
   }),
 
@@ -159,6 +161,8 @@ export const Trail = {
       duration_ms:   data.durationMs,
       author:        data.author,
       checks_passed: data.checksPassed,
+      // Evidence bundle
+      ...(data.evidence ? { evidence: data.evidence } : {}),
     },
   }),
 
@@ -174,6 +178,8 @@ export const Trail = {
       bypass_type:  data.bypassType,
       reason:       data.reason,
       approved_by:  data.approvedBy,
+      // Evidence bundle
+      ...(data.evidence ? { evidence: data.evidence } : {}),
     },
   }),
 
@@ -206,6 +212,8 @@ export const Trail = {
       fix_type:     data.healType,
       pr_number:    data.prNumber,
       confidence:   data.confidence,
+      // Evidence bundle
+      ...(data.evidence ? { evidence: data.evidence } : {}),
     },
   }),
 
@@ -222,6 +230,8 @@ export const Trail = {
       merge_commit:   data.mergeCommit,
       revert_pr:      data.revertPrNumber,
       status:         data.status,
+      // Evidence bundle
+      ...(data.evidence ? { evidence: data.evidence } : {}),
     },
   }),
 
@@ -267,6 +277,8 @@ export const Trail = {
       verdict:  data.verdict,
       reason:   data.reason,
       findings: data.findings,
+      // Evidence bundle
+      ...(data.evidence ? { evidence: data.evidence } : {}),
     },
   }),
 };

@@ -5,7 +5,8 @@
 // Resolution order (highest priority wins):
 //   1. DB overrides (repo_config table — set via dashboard UI)
 //   2. .gitwire.yml file (fetched from GitHub repo)
-//   3. DEFAULT_CONFIG from @gitwire/rules
+//   3. Org-level .gitwire.yml (from {org}/gitwire-config repo)
+//   4. DEFAULT_CONFIG from @gitwire/rules
 
 import { parseConfig, DEFAULT_CONFIG, mergeDeep } from "@gitwire/rules";
 import { redis } from "../lib/queue.js";
@@ -18,9 +19,12 @@ const CACHE_PREFIX = "gitwire:config:";
 
 const CONFIG_PATHS = [".github/.gitwire.yml", ".gitwire.yml"];
 
+// Org-level config repo name — can be overridden via ENV
+const ORG_CONFIG_REPO = process.env.GITWIRE_ORG_CONFIG_REPO || "gitwire-config";
+
 /**
  * Get the resolved config for a repo.
- * Merge order: DEFAULT_CONFIG ← YAML file ← DB overrides
+ * Merge order: DEFAULT_CONFIG ← org/.gitwire.yml ← repo/.gitwire.yml ← DB overrides
  */
 export async function getConfigForRepo(repoFullName) {
   const cacheKey = CACHE_PREFIX + repoFullName;
@@ -41,20 +45,39 @@ export async function getConfigForRepo(repoFullName) {
 
   // 2. Start from defaults
   let config = structuredClone(DEFAULT_CONFIG);
+  let layers = { defaults: true, org: false, repo: false, db: false };
+  let orgSource = null;
 
-  // 3. Layer on YAML file from GitHub
+  // 3. Layer on org-level .gitwire.yml
+  const orgResult = await fetchOrgConfig(repoFullName);
+  if (orgResult.config !== DEFAULT_CONFIG) {
+    config = orgResult.config; // already merged with defaults by parseConfig
+    layers.org = true;
+    orgSource = orgResult.source;
+  }
+
+  // 4. Layer on repo-level YAML file from GitHub
   const yamlConfig = await fetchFromGitHub(repoFullName);
   if (yamlConfig !== DEFAULT_CONFIG) {
     config = yamlConfig; // already merged with defaults by parseConfig
+    layers.repo = true;
   }
 
-  // 4. Layer on DB overrides (dashboard UI)
+  // 5. Layer on DB overrides (dashboard UI)
   const dbOverrides = await fetchDBOverrides(repoFullName);
   if (dbOverrides && Object.keys(dbOverrides).length > 0) {
     config = mergeDeep(config, dbOverrides);
+    layers.db = true;
   }
 
-  // 5. Cache in Redis
+  // Attach layer metadata for dashboard visibility
+  config._meta = {
+    layers,
+    org_source: orgSource,
+    resolved_at: new Date().toISOString(),
+  };
+
+  // 6. Cache in Redis
   try {
     await redis.set(cacheKey, JSON.stringify(config), "EX", CACHE_TTL);
   } catch (err) {
@@ -270,4 +293,67 @@ async function fetchDBOverrides(repoFullName) {
     logger.debug({ err: err.message }, "DB config overrides not available");
     return null;
   }
+}
+
+// ── Org-level config ────────────────────────────────────────────────────────
+
+/**
+ * Fetch org-level .gitwire.yml from the {org}/gitwire-config repo.
+ * Returns { config, source } where source is "org/gitwire-config" or null.
+ */
+async function fetchOrgConfig(repoFullName) {
+  try {
+    // Look up org name from installations table
+    const { rows: [repo] } = await db.query(
+      "SELECT r.installation_id, i.account_login " +
+      "FROM repositories r " +
+      "JOIN installations i ON i.github_id = r.installation_id " +
+      "WHERE r.full_name = $1",
+      [repoFullName]
+    );
+    if (!repo) return { config: structuredClone(DEFAULT_CONFIG), source: null };
+
+    // Try to fetch org config from {org}/gitwire-config repo
+    const octokit = await getInstallationClient(repo.installation_id);
+    const [owner] = repoFullName.split("/");
+
+    for (const path of CONFIG_PATHS) {
+      try {
+        const { data } = await octokit.request(
+          "GET /repos/{owner}/{repo}/contents/{path}",
+          {
+            owner: repo.account_login,
+            repo: ORG_CONFIG_REPO,
+            path,
+            headers: { accept: "application/vnd.github.v3.raw" },
+          }
+        );
+        if (data) {
+          logger.info(
+            { org: repo.account_login, path, source: repo.account_login + "/" + ORG_CONFIG_REPO },
+            "Org-level .gitwire.yml loaded"
+          );
+          return {
+            config: parseConfig(data),
+            source: repo.account_login + "/" + ORG_CONFIG_REPO,
+          };
+        }
+      } catch (err) {
+        if (err.status !== 404) {
+          logger.warn(
+            { err: err.message, org: repo.account_login },
+            "Org config fetch error (non-404)"
+          );
+        }
+        // 404 = no org config repo — that's normal, skip silently
+      }
+    }
+  } catch (err) {
+    logger.debug(
+      { err: err.message, repo: repoFullName },
+      "Org config resolution failed — using defaults"
+    );
+  }
+
+  return { config: structuredClone(DEFAULT_CONFIG), source: null };
 }

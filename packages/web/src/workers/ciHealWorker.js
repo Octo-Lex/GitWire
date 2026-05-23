@@ -12,6 +12,9 @@ import { isPillarEnabled, isFileAllowed, isDryRun, meetsConfidence, getMinPatchC
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
+import { recordAction, cleanupPR } from "../services/managedActionService.js";
+import { logDecision } from "../services/decisionLogService.js";
+import { Trail } from "../services/auditTrailService.js";
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -30,8 +33,58 @@ export function startCIHealWorker() {
   return createWorker(QUEUES.CI_HEALING, async (job) => {
     if (job.name === "heal-run") {
       await healWorkflowRun(job.data);
+    } else if (job.name === "reconcile-pr") {
+      await reconcilePR(job.data);
     }
   });
+}
+
+// ── Reconcile managed actions on PR synchronize ────────────────────────────
+
+async function reconcilePR({ payload }) {
+  const { repository, pull_request, installation } = payload;
+  if (!pull_request || !installation) return;
+
+  const octokit = await getInstallationClient(installation.id);
+  const owner = repository.owner.login;
+  const repo = repository.name;
+  const repoId = repository.id;
+  const prNumber = pull_request.number;
+
+  const { getActiveActions, deactivateAction } = await import("../services/managedActionService.js");
+  const activeActions = await getActiveActions(repoId, prNumber, "ci_heal");
+
+  for (const action of activeActions) {
+    try {
+      if (action.action_type === "label") {
+        // Remove stale label from PR
+        try {
+          await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", {
+            owner, repo, issue_number: prNumber, name: action.action_value,
+          });
+        } catch (_e) {
+          // Label may already be gone — non-fatal
+        }
+      } else if (action.action_type === "comment" && action.github_id) {
+        // Minimize stale comment (not deletable by app)
+        try {
+          await octokit.request("PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}", {
+            owner, repo, comment_id: action.github_id,
+            body: "~~" + action.action_value + "~~\n\n_Edit: Conditions changed, this diagnosis is stale._",
+          });
+        } catch (_e) {
+          // Comment may be gone — non-fatal
+        }
+      }
+      await deactivateAction(action.id);
+    } catch (err) {
+      logger.warn({ actionId: action.id, err: err.message }, "Reconciliation failed for action (non-fatal)");
+    }
+  }
+
+  if (activeActions.length > 0) {
+    logger.info({ repo: repository.full_name, prNumber, reconciled: activeActions.length }, "Reconciled CI heal actions");
+  }
 }
 
 // ── Main heal flow ────────────────────────────────────────────────────────────
@@ -50,6 +103,12 @@ async function healWorkflowRun({ payload }) {
   const repoConfig = await getConfigForRepo(repository.full_name);
   if (!isPillarEnabled("ci_healing", repoConfig)) {
     logger.info({ runId: run.id, repo: repository.full_name }, "CI healing disabled for repo — skipping");
+    await logDecision({
+      repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
+      targetType: "pr", targetNumber: 0, pillar: "ci_healing",
+      decision: "skipped", reason: "Pillar ci_healing disabled in config",
+      conditions: [{ check: "pillar_enabled(ci_healing)", result: false }],
+    });
     return;
   }
 
@@ -63,11 +122,15 @@ async function healWorkflowRun({ payload }) {
     await ciService.saveHealResult(run.id, {
       status: "skipped", failureType: "unknown",
       rootCause: "Could not retrieve logs", fixApplied: null, confidence: "low",
+    await logDecision({
+      repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
+      targetType: "pr", targetNumber: 0, pillar: "ci_healing",
+      decision: "skipped", reason: "Could not retrieve CI run logs",
+      conditions: [{ check: "logs_available", result: false }],
+      commitSha: run.head_sha,
     });
     return;
   }
-
-  // 2. Ask Claude to diagnose
   const diagnosis = await diagnoseWithClaude(logs, run, repository);
   if (!diagnosis) {
     await ciService.saveHealResult(run.id, {
@@ -94,6 +157,19 @@ async function healWorkflowRun({ payload }) {
         status: "skipped", failureType: diagnosis.failure_type,
         rootCause: diagnosis.root_cause + " (confidence " + diagnosis.confidence + " below " + minConf + ")",
         fixApplied: null, confidence: diagnosis.confidence,
+      });
+      await logDecision({
+        repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
+        targetType: "pr", targetNumber: 0, pillar: "ci_healing",
+        decision: "blocked", reason: "Confidence " + diagnosis.confidence + " below threshold " + minConf,
+        conditions: [
+          { check: "pillar_enabled(ci_healing)", result: true },
+          { check: "healable_type(" + diagnosis.failure_type + ")", result: true },
+          { check: "risk_score(" + risk.score + ")", result: true },
+          { check: "confidence(" + diagnosis.confidence + ") >= threshold(" + minConf + ")", result: false },
+        ],
+        configUsed: { min_confidence: minConf, risk_level: risk.level },
+        commitSha: run.head_sha,
       });
       return;
     }
@@ -294,6 +370,10 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
         owner, repo, issue_number: pr.number,
         labels: ["ci-heal", diagnosis.failure_type],
       });
+      // Managed action: record label additions
+      const repoId = repository.id;
+      await recordAction({ repoId, source: "ci_heal", prNumber: pr.number, actionType: "label", actionKey: "label:ci-heal", actionValue: "ci-heal", context: { runId: run.id, headSha: run.head_sha } });
+      await recordAction({ repoId, source: "ci_heal", prNumber: pr.number, actionType: "label", actionKey: "label:" + diagnosis.failure_type, actionValue: diagnosis.failure_type, context: { runId: run.id, headSha: run.head_sha } });
     } catch (lblErr) {
       logger.warn({ err: lblErr.message }, "Failed to add labels to heal PR");
     }
@@ -308,6 +388,8 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
         await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", {
           owner, repo, pull_number: pr.number, reviewers: [lastCommitter],
         });
+        // Managed action: record reviewer request
+        await recordAction({ repoId: repository.id, source: "ci_heal", prNumber: pr.number, actionType: "reviewer", actionKey: "reviewer:" + lastCommitter, actionValue: lastCommitter, context: { runId: run.id, headSha: run.head_sha } });
       }
     } catch (revErr) {
       logger.warn({ err: revErr.message }, "Failed to request review on heal PR");
@@ -347,6 +429,46 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       "**Fix:** " + fix.explanation + "\n\n" +
       "_Confidence: " + diagnosis.confidence + " · Review and merge when ready._"
     );
+
+    // Managed action: record the heal PR creation
+    await recordAction({ repoId: repository.id, source: "ci_heal", prNumber: pr.number, actionType: "branch_ref", actionKey: "heal_pr", actionValue: branchName, context: { runId: run.id, headSha: run.head_sha, failureType: diagnosis.failure_type } });
+
+    // Audit trail with evidence bundle
+    var risk = scoreCIRisk(diagnosis);
+    await Trail.ciHeal({
+      repoFullName: repository.full_name,
+      healType: "patch_pr",
+      failureType: diagnosis.failure_type,
+      rootCause: diagnosis.root_cause,
+      prNumber: pr.number,
+      commitSha: run.head_sha,
+      confidence: diagnosis.confidence,
+      evidence: {
+        decision: "acted",
+        reason: "CI heal patch PR created",
+        conditions: [
+          { check: "pillar_enabled(ci_healing)", result: true },
+          { check: "healable_type(" + diagnosis.failure_type + ")", result: true },
+          { check: "confidence(" + diagnosis.confidence + ") >= threshold", result: true },
+          { check: "risk_score(" + risk.score + ")", result: risk.level !== "high" },
+          { check: "is_dry_run()", result: false },
+        ],
+        config_snapshot: {
+          auto_patch: repoConfig.pillars?.ci_healing?.auto_patch !== false,
+          pillar_enabled: true,
+        },
+        context: {
+          run_id: run.id,
+          failing_file: failingFile,
+          branch: run.head_branch,
+        },
+        actions_taken: [
+          { type: "label", key: "label:ci-heal", value: "ci-heal" },
+          { type: "branch_ref", key: "heal_pr", value: branchName },
+          { type: "pr_created", key: "heal_pr", value: "#" + pr.number },
+        ],
+      },
+    });
 
     // 7. Save result
     await ciService.saveHealResult(run.id, {

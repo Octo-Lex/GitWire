@@ -10,12 +10,13 @@
 // and never retries due to processing timeouts.
 
 import { Router } from "express";
-import { getWebhookApp } from "../lib/github.js";
+import { getWebhookApp, getInstallationClient } from "../lib/github.js";
 import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue, phase2Queue, phase3Queue, phase4Queue } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { parseGitwireCommand, resolveCommandAction } from "../lib/commentRouter.js";
 import { invalidateConfigCache } from "../services/configService.js";
+import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFromDecision } from "../lib/checkStatus.js";
 
 export const webhookRouter = Router();
 
@@ -68,6 +69,30 @@ webhookRouter.post(
     // ── 3. Enqueue based on event type ────────────────────────────────────
     await routeWebhookToQueue(eventName, payload, deliveryId);
 
+    // ── 3b. Create GitWire check for PR events ──────────────────────────────
+    if (eventName === "pull_request" && payload.pull_request?.head?.sha) {
+      try {
+        const octokit = await getInstallationClient(payload.installation?.id);
+        if (octokit) {
+          const checkRunId = await createGitwireCheck({
+            octokit,
+            owner: payload.repository.owner.login,
+            repo: payload.repository.name,
+            headSha: payload.pull_request.head.sha,
+            status: "queued",
+            title: "GitWire — evaluating…",
+            summary: "GitWire is processing this PR. Results will appear here shortly.",
+          });
+          // Store check run ID for workers to update (best-effort)
+          if (checkRunId) {
+            logger.debug({ checkRunId, pr: payload.pull_request.number }, "GitWire check created for PR");
+          }
+        }
+      } catch (err) {
+        logger.warn({ err: err.message }, "Failed to create GitWire check on PR (non-fatal)");
+      }
+    }
+
     // ── 4. Log delivery for audit ──────────────────────────────────────────
     await db.query(
       `INSERT INTO webhook_deliveries (delivery_id, event_name, action, repo, processed, received_at)
@@ -108,6 +133,29 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
           repository:   payload.repository,
           installation: payload.installation,
         }, { priority: 1 });
+      }
+      // Managed actions: reconcile stale actions on force-push
+      if (payload.action === "synchronize") {
+        await ciHealQueue.add("reconcile-pr", {
+          payload: {
+            repository:   payload.repository,
+            pull_request: payload.pull_request,
+            installation: payload.installation,
+          },
+        }, { priority: 5 });
+        logger.info({ pr: payload.pull_request?.number }, "PR synchronize — reconcile job queued");
+      }
+      // Managed actions: cleanup when PR is closed/merged
+      if (payload.action === "closed") {
+        try {
+          const { cleanupPR } = await import("../services/managedActionService.js");
+          const deactivated = await cleanupPR(payload.repository?.id, payload.pull_request?.number);
+          if (deactivated.length > 0) {
+            logger.info({ pr: payload.pull_request?.number, deactivated: deactivated.length }, "Cleaned up managed actions on PR close");
+          }
+        } catch (err) {
+          logger.warn({ err: err.message }, "Managed action cleanup failed (non-fatal)");
+        }
       }
       // Phase 2: auto-merge label → merge queue
       if (payload.action === "labeled" && payload.label?.name === "auto-merge") {

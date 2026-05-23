@@ -11,6 +11,8 @@ import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
+import { recordAction } from "../services/managedActionService.js";
+import { logDecision } from "../services/decisionLogService.js";
 
 const anthropic = new Anthropic({ 
   apiKey: config.anthropic.apiKey,
@@ -41,6 +43,12 @@ async function triageIssue({ payload }) {
   const repoConfig = await getConfigForRepo(repository.full_name);
   if (!isPillarEnabled("triage", repoConfig)) {
     logger.info({ repo: repository.full_name, issue: issue.number }, "Triage disabled for repo — skipping");
+    await logDecision({
+      repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
+      targetType: "issue", targetNumber: issue.number, pillar: "triage",
+      decision: "skipped", reason: "Pillar triage disabled in config",
+      conditions: [{ check: "pillar_enabled(triage)", result: false }],
+    });
     return;
   }
 
@@ -107,6 +115,10 @@ async function triageIssue({ payload }) {
         issue_number: issue.number,
         labels: labelsToApply,
       });
+      // Managed action: record each label
+      for (const lbl of labelsToApply) {
+        await recordAction({ repoId: repository.id, source: "triage", issueNumber: issue.number, actionType: "label", actionKey: "label:" + lbl, actionValue: lbl, context: { issueId: issue.id, title: issue.title } });
+      }
     }
   }
 
@@ -119,17 +131,36 @@ async function triageIssue({ payload }) {
 
   logger.info({ issue: issue.number, type: classification.type, priority: classification.priority }, "Issue triage persisted");
 
+  // ── Log decision ──────────────────────────────────────────────────────────
+  await logDecision({
+    repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
+    targetType: "issue", targetNumber: issue.number, pillar: "triage",
+    decision: labelsToApply.length > 0 ? (isDryRun(repoConfig) ? "dry_run" : "acted") : "skipped",
+    reason: labelsToApply.length > 0
+      ? "Classified as " + classification.type + " (" + classification.priority + "), applied labels: " + labelsToApply.join(", ")
+      : "Classified as " + classification.type + " (" + classification.priority + "), no labels to apply",
+    conditions: [
+      { check: "pillar_enabled(triage)", result: true },
+      { check: "auto_label", result: triageOpts.auto_label !== false },
+      { check: "is_dry_run()", result: isDryRun(repoConfig) },
+      { check: "labels_match_repo(" + labelsToApply.length + ")", result: labelsToApply.length > 0 },
+    ],
+    configUsed: { auto_label: triageOpts.auto_label !== false },
+  });
+
   // ── Post triage comment if needed ─────────────────────────────────────────
   if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
     if (isDryRun(repoConfig)) {
       logger.info({ issue: issue.number }, "DRY RUN: would post triage comment");
     } else {
-      await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+      const { data: comment } = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
         owner:        repository.owner.login,
         repo:         repository.name,
         issue_number: issue.number,
         body:         buildTriageComment(classification),
       });
+      // Managed action: record comment
+      await recordAction({ repoId: repository.id, source: "triage", issueNumber: issue.number, actionType: "comment", actionKey: "comment:triage:summary", actionValue: classification.triage_summary, githubId: comment.id, context: { issueId: issue.id, title: issue.title } });
     }
   }
 
@@ -205,6 +236,8 @@ async function triagePR({ payload }) {
       issue_number: pr.number,
       labels:       [classification.size_label],
     });
+    // Managed action: record size label
+    await recordAction({ repoId: repository.id, source: "triage", prNumber: pr.number, actionType: "label", actionKey: "label:" + classification.size_label, actionValue: classification.size_label, context: { prId: pr.id, additions: pr.additions, deletions: pr.deletions } });
   }
 
   logger.info({ pr: pr.number, classification }, "PR classified");

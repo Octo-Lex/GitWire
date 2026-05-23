@@ -108,6 +108,10 @@ export const API = {
 
   // Config (.gitwire.yml overrides)
   repoConfig:       (owner: string, repo: string) => `/api/config/${owner}/${repo}`,
+
+  // Decisions
+  decisions:        (q = "") => `/api/decisions${q ? `?${q}` : ""}`,
+  decisionsSummary: () => `/api/decisions/summary`,
 };
 
 // ── Trigger helpers (non-GET) ─────────────────────────────────────────────
