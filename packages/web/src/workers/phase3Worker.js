@@ -7,6 +7,8 @@ import { getInstallationClient, forEachInstallation } from "../lib/github.js";
 import { ingestTestResults, checkGraduation } from "../services/flakyTestService.js";
 import { runFleetReconciliation } from "../services/policyReconcilerService.js";
 import { scanRepo } from "../services/dependencyService.js";
+import { getConfigForRepo } from "../services/configService.js";
+import { isPillarEnabled } from "@gitwire/rules";
 import { logger } from "../lib/logger.js";
 import { db }     from "../lib/db.js";
 
@@ -18,6 +20,12 @@ export function startPhase3Worker() {
       case "ingest-test-results": {
         const { run, repository, installation } = job.data;
         if (!run || !repository || !installation) return;
+        // ── Check .gitwire.yml pillar config ──────────────────────────────
+        const repoConfig = await getConfigForRepo(repository.full_name);
+        if (!isPillarEnabled("enforcement", repoConfig)) {
+          logger.debug({ repo: repository.full_name }, "Enforcement disabled — skipping test ingestion");
+          return;
+        }
         const octokit = await getInstallationClient(installation.id);
         await ingestTestResults({ run, repository, octokit });
         break;

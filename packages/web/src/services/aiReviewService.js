@@ -43,7 +43,7 @@ const CHECK_RUN_NAME = "GitWire AI Review";
  * @param {object} opts.repository  - GitHub repository payload
  * @param {object} opts.octokit
  */
-export async function reviewPR({ pr, repository, octokit }) {
+export async function reviewPR({ pr, repository, octokit, commentFindings = true }) {
   const owner  = repository.owner.login;
   const repo   = repository.name;
   const repoId = repository.id;
@@ -108,9 +108,15 @@ export async function reviewPR({ pr, repository, octokit }) {
     const { verdict, confidence } = computeVerdict(findings, cfg);
 
     // ── 7. Post GitHub PR Review ──────────────────────────────────────────────
-    const { reviewId, summary } = await postGitHubReview({
-      octokit, owner, repo, pr, findings, verdict, confidence, cfg,
-    });
+    let reviewId = null;
+    let summary = "";
+    if (commentFindings) {
+      const result = await postGitHubReview({
+        octokit, owner, repo, pr, findings, verdict, confidence, cfg,
+      });
+      reviewId = result.reviewId;
+      summary = result.summary;
+    }
 
     // ── 8. Update check run ────────────────────────────────────────────────────
     const shouldBlock = cfg.block_on_verdict.includes(verdict) &&

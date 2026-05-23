@@ -6,6 +6,8 @@ import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { admitToQueue, onChecksUpdated, processQueue, removeFromQueue } from "../services/mergeQueueService.js";
 import { evaluateRollback } from "../services/errorRecoveryService.js";
+import { getConfigForRepo } from "../services/configService.js";
+import { isPillarEnabled } from "@gitwire/rules";
 import { logger } from "../lib/logger.js";
 
 // ── Merge queue worker ────────────────────────────────────────────────────────
@@ -17,6 +19,13 @@ export function startMergeQueueWorker() {
     if (!repository || !installation) return;
 
     const octokit = await getInstallationClient(installation.id);
+
+    // ── Check .gitwire.yml pillar config ──────────────────────────────────
+    const repoConfig = await getConfigForRepo(repository.full_name);
+    if (!isPillarEnabled("merge_queue", repoConfig)) {
+      logger.debug({ repo: repository.full_name }, "Merge queue disabled for repo — skipping");
+      return;
+    }
 
     switch (job.name) {
       case "checks-updated": {

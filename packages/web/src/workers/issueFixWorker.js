@@ -13,6 +13,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { maintainerService } from "../services/maintainerService.js";
+import { getConfigForRepo } from "../services/configService.js";
+import { isPillarEnabled, isFixPathBlocked, isFixLabelAllowed } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
@@ -53,6 +55,13 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
 
   logger.info({ repo, issueNumber, triggeredBy }, "Issue fix pipeline started");
 
+  // ── Check .gitwire.yml pillar config ────────────────────────────────────
+  const repoConfig = await getConfigForRepo(repo);
+  if (!isPillarEnabled("issue_fix", repoConfig)) {
+    logger.info({ repo, issueNumber }, "Issue fix disabled for repo — skipping");
+    return;
+  }
+
   // Resolve repo in DB
   const { rows: repoRows } = await db.query(
     "SELECT github_id FROM repositories WHERE full_name = $1", [repo]
@@ -83,9 +92,9 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
 
   // ── Step 3: Scope guard - qualifying labels ───────────────────────────────
   const settings = await maintainerService.getSettings(repoId);
-  const allowedLabels = (settings && settings.fix_allowed_labels) || DEFAULT_ALLOWED_LABELS;
+  const allowedLabels = (settings && settings.fix_allowed_labels) || repoConfig.pillars?.issue_fix?.allowed_labels || DEFAULT_ALLOWED_LABELS;
   const issueLabels = issue.labels.map((l) => typeof l === "string" ? l : l.name).map((l) => l.toLowerCase());
-  const hasQualifying = issueLabels.some((l) => allowedLabels.map((a) => a.toLowerCase()).includes(l));
+  const hasQualifying = issueLabels.some((l) => isFixLabelAllowed(l, repoConfig));
 
   if (!hasQualifying) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", null, null,
@@ -171,6 +180,36 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   }
 
   // ── Step 8: Pre-merge validation ──────────────────────────────────────────
+  // Check .gitwire.yml blocked_paths + max_file_changes + max_line_changes
+  const fixOpts = repoConfig.pillars?.issue_fix || {};
+  const maxFileChanges = fixOpts.max_file_changes || 3;
+  const maxLineChanges = fixOpts.max_line_changes || 200;
+
+  // Reject if too many files changed
+  if (fixes.length > maxFileChanges) {
+    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
+      analysis.explanation, "Too many files changed: " + fixes.length + " > " + maxFileChanges);
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "🚫 **GitWire Fix - scope guard**\n\n" +
+      "Fix touches " + fixes.length + " files (max: " + maxFileChanges + ").\n\n" +
+      "_Reduce scope or adjust `issue_fix.max_file_changes` in `.gitwire.yml`._"
+    );
+    return;
+  }
+
+  // Reject if any file is in blocked paths
+  const blockedFixes = fixes.filter((f) => isFixPathBlocked(f.path, repoConfig));
+  if (blockedFixes.length > 0) {
+    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
+      analysis.explanation, "Blocked paths: " + blockedFixes.map((f) => f.path).join(", "));
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "🚫 **GitWire Fix - blocked paths**\n\n" +
+      "These files are protected by policy: `" + blockedFixes.map((f) => f.path).join("`, `") + "`\n\n" +
+      "_Adjust `issue_fix.blocked_paths` in `.gitwire.yml` if needed._"
+    );
+    return;
+  }
+
   const validationResult = validatePatches(fixes, fileContents);
   if (!validationResult.valid) {
     logger.warn({ repo, issueNumber, reasons: validationResult.reasons }, "Patch validation failed");

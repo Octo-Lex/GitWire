@@ -9,6 +9,8 @@ import { createWorker, QUEUES } from "../lib/queue.js";
 import { maintainerQueue } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { maintainerService } from "../services/maintainerService.js";
+import { getConfigForRepo } from "../services/configService.js";
+import { isPillarEnabled, getStaleConfig, isStaleExempt } from "@gitwire/rules";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -45,6 +47,13 @@ async function runStaleScan({ installationId, repoFullName }) {
   const repoRow = await findRepo(repoFullName);
   if (!repoRow) return;
 
+  // ── Check .gitwire.yml pillar config ────────────────────────────────────
+  const repoConfig = await getConfigForRepo(repoFullName);
+  if (!isPillarEnabled("maintainer", repoConfig)) {
+    logger.info({ repo: repoFullName }, "Maintainer disabled via .gitwire.yml — skipping");
+    return;
+  }
+
   const settings = await maintainerService.getSettings(repoRow.github_id);
   const enabled = settings?.enabled ?? true;
   if (!enabled) {
@@ -52,17 +61,20 @@ async function runStaleScan({ installationId, repoFullName }) {
     return;
   }
 
-  const staleIssueDays = settings?.stale_issue_days ?? DEFAULT_STALE_ISSUE_DAYS;
-  const stalePrDays = settings?.stale_pr_days ?? DEFAULT_STALE_PR_DAYS;
+  // Stale config: .gitwire.yml overrides DB settings, DB overrides defaults
+  const issueStale = getStaleConfig("issues", repoConfig);
+  const prStale = getStaleConfig("prs", repoConfig);
+  const staleIssueDays = settings?.stale_issue_days ?? issueStale.warn_days ?? DEFAULT_STALE_ISSUE_DAYS;
+  const stalePrDays = settings?.stale_pr_days ?? prStale.warn_days ?? DEFAULT_STALE_PR_DAYS;
   const warnDays = settings?.stale_warn_days ?? DEFAULT_WARN_DAYS;
 
   // Process issues
-  await processStaleItems(octokit, owner, repo, "issue", staleIssueDays, warnDays, repoRow.github_id);
+  await processStaleItems(octokit, owner, repo, "issue", staleIssueDays, warnDays, repoRow.github_id, repoConfig);
   // Process PRs
-  await processStaleItems(octokit, owner, repo, "pr", stalePrDays, warnDays, repoRow.github_id);
+  await processStaleItems(octokit, owner, repo, "pr", stalePrDays, warnDays, repoRow.github_id, repoConfig);
 }
 
-async function processStaleItems(octokit, owner, repo, type, staleDays, warnDays, repoId) {
+async function processStaleItems(octokit, owner, repo, type, staleDays, warnDays, repoId, repoConfig) {
   const apiPath = type === "issue"
     ? "GET /repos/{owner}/{repo}/issues"
     : "GET /repos/{owner}/{repo}/pulls";
@@ -89,6 +101,10 @@ async function processStaleItems(octokit, owner, repo, type, staleDays, warnDays
 
       // Skip if bot-authored (avoid recursion)
       if (item.user && item.user.login.includes("[bot]")) continue;
+
+      // Skip if exempt by .gitwire.yml config
+      const itemLabels = (item.labels || []).map((l) => typeof l === "string" ? l : l.name);
+      if (isStaleExempt(itemLabels, type === "issue" ? "issues" : "prs", repoConfig)) continue;
 
       const number = item.number;
       const idempotencyBase = "stale:" + repoId + ":" + type + ":" + number;
@@ -218,6 +234,19 @@ async function runBranchCleanup({ installationId, repoFullName }) {
 
   const repoRow = await findRepo(repoFullName);
   if (!repoRow) return;
+
+  // ── Check .gitwire.yml pillar config ────────────────────────────────────
+  const repoConfig = await getConfigForRepo(repoFullName);
+  if (!isPillarEnabled("maintainer", repoConfig)) {
+    logger.info({ repo: repoFullName }, "Maintainer disabled via .gitwire.yml — skipping branch cleanup");
+    return;
+  }
+
+  const branchCleanupOpts = repoConfig.pillars?.maintainer?.branch_cleanup || {};
+  if (branchCleanupOpts.enabled === false) {
+    logger.info({ repo: repoFullName }, "Branch cleanup disabled via .gitwire.yml — skipping");
+    return;
+  }
 
   const settings = await maintainerService.getSettings(repoRow.github_id);
   if (settings && !settings.cleanup_branches) {

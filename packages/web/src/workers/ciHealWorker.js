@@ -6,7 +6,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { ciService } from "../services/ciService.js";
+import { getConfigForRepo } from "../services/configService.js";
 import { HEALABLE_TYPES } from "@gitwire/core";
+import { isPillarEnabled, isFileAllowed } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
@@ -43,6 +45,13 @@ async function healWorkflowRun({ payload }) {
   const repo    = repository.name;
 
   logger.info({ runId: run.id, repo: repository.full_name }, "Attempting CI heal");
+
+  // ── Check .gitwire.yml pillar config ────────────────────────────────────
+  const repoConfig = await getConfigForRepo(repository.full_name);
+  if (!isPillarEnabled("ci_healing", repoConfig)) {
+    logger.info({ runId: run.id, repo: repository.full_name }, "CI healing disabled for repo — skipping");
+    return;
+  }
 
   // 0. Upsert the CI run row
   await upsertCIRun(run, repository);
@@ -95,8 +104,28 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repositor
   }
 
   // Patch-PR path: lint, type, format, dependency errors
+  //   Check auto_patch and file-allowlist from .gitwire.yml
   if (diagnosis.failing_file) {
-    await healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository);
+    const ciOpts = repoConfig.pillars?.ci_healing || {};
+    if (ciOpts.auto_patch === false) {
+      logger.info({ runId: run.id }, "Auto-patch disabled — posting diagnosis only");
+      await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
+      await ciService.saveHealResult(run.id, {
+        status: "skipped", failureType: diagnosis.failure_type,
+        rootCause: diagnosis.root_cause, fixApplied: null, confidence: diagnosis.confidence,
+      });
+      return;
+    }
+    if (!isFileAllowed(diagnosis.failing_file, repoConfig)) {
+      logger.info({ runId: run.id, file: diagnosis.failing_file }, "File blocked by .gitwire.yml — posting diagnosis only");
+      await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
+      await ciService.saveHealResult(run.id, {
+        status: "skipped", failureType: diagnosis.failure_type,
+        rootCause: diagnosis.root_cause + " (file blocked by policy)", fixApplied: null, confidence: diagnosis.confidence,
+      });
+      return;
+    }
+    await healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig);
   } else {
     // No file identified — fall back to comment-only
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
@@ -144,7 +173,7 @@ async function healByRerun(octokit, owner, repo, run, diagnosis) {
 
 // ── Heal strategy: create a patch PR with the fix ─────────────────────────────
 
-async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository) {
+async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig) {
   const branchName = "gitwire/heal-" + run.id;
   const failingFile = diagnosis.failing_file;
 
