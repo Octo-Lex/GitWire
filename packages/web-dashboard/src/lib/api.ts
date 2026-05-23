@@ -486,3 +486,19 @@ export async function getActivitySummary(since?: string) {
   });
   return res.json();
 }
+
+// ── Readiness Scores ───────────────────────────────────────────────────────
+
+export async function getReadiness() {
+  const res = await fetch(`${BASE}/api/readiness`, {
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+export async function getRepoReadiness(owner: string, repo: string) {
+  const res = await fetch(`${BASE}/api/readiness/${owner}/${repo}`, {
+    headers: authHeaders(),
+  });
+  return res.json();
+}

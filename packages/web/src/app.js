@@ -21,7 +21,8 @@ import { phase2Router }       from "./routes/phase2.js";
 import { phase3Router }       from "./routes/phase3.js";
 import { phase4Router }       from "./routes/phase4.js";
 import { configRouter }        from "./routes/config.js";
-import activityRouter          from "./routes/activity.js";
+import activityRouter from "./routes/activity.js";
+import readinessRouter from "./routes/readiness.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -99,6 +100,7 @@ export function createApp() {
   // ── Config: per-repo .gitwire.yml overrides ─────────────────────────────
   app.use("/api/config",          configRouter);
   app.use("/api/activity",         activityRouter);
+  app.use("/api/readiness",        readinessRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {
