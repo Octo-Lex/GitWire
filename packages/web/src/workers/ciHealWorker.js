@@ -8,12 +8,15 @@ import { getInstallationClient } from "../lib/github.js";
 import { ciService } from "../services/ciService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { HEALABLE_TYPES } from "@gitwire/core";
-import { isPillarEnabled, isFileAllowed, isDryRun, meetsConfidence, getMinPatchConfidence, scoreCIRisk } from "@gitwire/rules";
+import { isPillarEnabled, isFileAllowed, isDryRun, meetsConfidence, getMinPatchConfidence, scoreCIRisk, shouldTrigger } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
 import { recordAction, cleanupPR } from "../services/managedActionService.js";
 import { logDecision } from "../services/decisionLogService.js";
+import { checkAndMark } from "../services/idempotencyService.js";
+import { emitWorkerEvent } from "../services/workerEvents.js";
+import { isWaived } from "../services/waiverService.js";
 import { Trail } from "../services/auditTrailService.js";
 
 const anthropic = new Anthropic({
@@ -99,6 +102,11 @@ async function healWorkflowRun({ payload }) {
 
   logger.info({ runId: run.id, repo: repository.full_name }, "Attempting CI heal");
 
+  // ── Idempotency: skip duplicate heal attempts ──────────────────────────
+  if (!(await checkAndMark("ci_heal", "run-" + run.id))) {
+    return;
+  }
+
   // ── Check .gitwire.yml pillar config ────────────────────────────────────
   const repoConfig = await getConfigForRepo(repository.full_name);
   if (!isPillarEnabled("ci_healing", repoConfig)) {
@@ -108,6 +116,32 @@ async function healWorkflowRun({ payload }) {
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "skipped", reason: "Pillar ci_healing disabled in config",
       conditions: [{ check: "pillar_enabled(ci_healing)", result: false }],
+    });
+    return;
+  }
+
+  // ── Trigger filter: branch/author ──────────────────────────────────────
+  if (!shouldTrigger("ci_healing", { branch: run.head_branch, author: run.head_commit?.author?.name }, repoConfig)) {
+    logger.info({ runId: run.id, branch: run.head_branch }, "Trigger filter: CI heal skipped for branch/author");
+    await logDecision({
+      repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
+      targetType: "pr", targetNumber: 0, pillar: "ci_healing",
+      decision: "skipped", reason: "Trigger filter: branch/author not matched",
+      conditions: [{ check: "trigger_filter(ci_healing)", result: false, branch: run.head_branch }],
+    });
+    return;
+  }
+
+  // ── Policy waiver check ──────────────────────────────────────────────
+  const waiver = await isWaived({ repoId: repository.id, pillar: "ci_healing", scope: "branch", scopeValue: run.head_branch });
+  if (waiver) {
+    logger.info({ runId: run.id, waiverId: waiver.id, reason: waiver.reason }, "Policy waived — skipping CI heal");
+    await logDecision({
+      repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
+      targetType: "pr", targetNumber: 0, pillar: "ci_healing",
+      decision: "skipped",
+      reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
+      conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
     });
     return;
   }
@@ -478,6 +512,16 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       rootCause: diagnosis.root_cause,
       fixApplied: "PR #" + pr.number + ": " + fix.explanation,
       confidence: diagnosis.confidence,
+    });
+
+    // 8. Emit worker event for inter-worker chaining
+    await emitWorkerEvent("heal_pr_created", {
+      repo: repository.full_name,
+      repoId: repository.id,
+      prNumber: pr.number,
+      branch: branchName,
+      installationId: installation.id,
+      failureType: diagnosis.failure_type,
     });
 
   } catch (err) {

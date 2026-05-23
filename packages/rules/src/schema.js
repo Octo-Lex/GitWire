@@ -13,6 +13,11 @@ export const DEFAULT_CONFIG = {
       auto_label: true,
       auto_comment: true,
       duplicate_detection: true,
+      triggers: {
+        branches: [],           // empty = all branches
+        ignore_authors: [],     // glob patterns for authors to skip
+        paths: [],              // empty = all paths
+      },
     },
 
     ci_healing: {
@@ -22,6 +27,10 @@ export const DEFAULT_CONFIG = {
       min_confidence_to_patch: "medium", // low | medium | high — patches below this are comment-only
       allowed_file_patterns: ["**"],
       blocked_file_patterns: [".env*", "secrets/**", "*.pem", "*.key"],
+      triggers: {
+        branches: [],
+        ignore_authors: [],
+      },
     },
 
     maintainer: {
@@ -58,6 +67,10 @@ export const DEFAULT_CONFIG = {
         "documentation",
       ],
       blocked_paths: ["migrations/**", ".github/**", "db/**"],
+      triggers: {
+        branches: [],
+        ignore_authors: [],
+      },
     },
 
     enforcement: {
@@ -73,11 +86,20 @@ export const DEFAULT_CONFIG = {
     merge_queue: {
       enabled: false,
       required_checks: [],
+      triggers: {
+        branches: [],
+        ignore_authors: [],
+      },
     },
 
     ai_review: {
       enabled: true,
       comment_findings: true,
+      triggers: {
+        branches: [],
+        ignore_authors: [],
+        paths: [],
+      },
     },
   },
 

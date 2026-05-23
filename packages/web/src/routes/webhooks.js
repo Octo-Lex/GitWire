@@ -14,7 +14,7 @@ import { getWebhookApp, getInstallationClient } from "../lib/github.js";
 import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue, phase2Queue, phase3Queue, phase4Queue } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
-import { parseGitwireCommand, resolveCommandAction } from "../lib/commentRouter.js";
+import { parseGitwireCommand, resolveCommandAction, buildCommandResponse } from "../lib/commentRouter.js";
 import { invalidateConfigCache } from "../services/configService.js";
 import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFromDecision } from "../lib/checkStatus.js";
 
@@ -240,8 +240,57 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
         if (parsed) {
           const action = resolveCommandAction(parsed);
           if (action) {
+            // /gitwire run — manual re-evaluation
+            if (action.action === "manual_run") {
+              const isPR = !!payload.issue?.pull_request;
+              const pillar = action.pillar;
+              const repoFullName = payload.repository?.full_name;
+              const issueNumber = parsed.issueNumber;
+              const installationId = payload.installation?.id;
+              const clearedIdemKeys = [];
+
+              // Clear idempotency keys so re-run actually processes
+              const { clearIdempotencyKey } = await import("../services/idempotencyService.js");
+
+              if (isPR) {
+                // It's a PR (GitHub uses "issue" for PR comments too)
+                if (pillar === "all" || pillar === "review") {
+                  await clearIdempotencyKey("ai_review", "pr-" + issueNumber + "-" + (payload.issue?.pull_request?.url || "unknown"));
+                  await phase4Queue.add("ai-review", {
+                    pr: { number: issueNumber, base: { ref: payload.issue?.pull_request?.base?.ref }, user: payload.issue?.user },
+                    repository: payload.repository,
+                    installation: payload.installation,
+                  }, { priority: 1 });
+                }
+                if (pillar === "all" || pillar === "triage") {
+                  await clearIdempotencyKey("triage", "issue-" + issueNumber + "-reopened");
+                  await triageQueue.add("triage-issue", { payload }, { priority: 1 });
+                }
+                if (pillar === "heal") {
+                  await clearIdempotencyKey("ci_heal", "heal-pr-" + issueNumber);
+                  logger.info({ repo: repoFullName, pr: issueNumber }, "/gitwire run heal — CI heal requires a failed workflow_run event");
+                }
+              } else {
+                // It's an issue
+                if (pillar === "all" || pillar === "triage") {
+                  await clearIdempotencyKey("triage", "issue-" + issueNumber + "-reopened");
+                  await triageQueue.add("triage-issue", { payload }, { priority: 1 });
+                }
+                if (pillar === "all" || pillar === "fix") {
+                  await clearIdempotencyKey("issue_fix", "issue-" + issueNumber);
+                  await issueFixQueue.add("fix-issue", {
+                    repo: repoFullName,
+                    issueNumber,
+                    installationId,
+                    triggeredBy: parsed.authorLogin,
+                  }, { priority: 1 });
+                }
+              }
+
+              logger.info({ command: "run", pillar, repo: repoFullName, issue: issueNumber, isPR }, "/gitwire run queued");
+
             // fix_issue goes to the issue-fix queue; all others to maintainer
-            if (action.action === "fix_issue") {
+            } else if (action.action === "fix_issue") {
               await issueFixQueue.add("fix-issue", {
                 repo: payload.repository?.full_name,
                 issueNumber: parsed.issueNumber,
@@ -249,6 +298,55 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
                 triggeredBy: parsed.authorLogin,
               }, { priority: 1 });
               logger.info({ command: "fix", repo: payload.repository?.full_name, issue: parsed.issueNumber }, "Fix command queued");
+
+            // /gitwire waive/unwaive — handle directly with DB
+            } else if (action.action === "grant_waiver" || action.action === "revoke_waiver") {
+              const { grantWaiver, revokeWaiver } = await import("../services/waiverService.js");
+              const repoFullName = payload.repository?.full_name;
+              const { rows: [repoRow] } = await db.query(
+                "SELECT github_id FROM repositories WHERE full_name = $1",
+                [repoFullName]
+              );
+
+              let waiverResult;
+              if (action.action === "grant_waiver") {
+                if (!repoRow) {
+                  waiverResult = { error: "Repository not found" };
+                } else {
+                  waiverResult = await grantWaiver({
+                    repoId: repoRow.github_id,
+                    pillar: action.pillar,
+                    scope: action.scope,
+                    scopeValue: action.scopeValue,
+                    reason: action.reason,
+                    grantedBy: parsed.authorLogin,
+                    expiresAt: action.expiresAt,
+                  });
+                }
+              } else {
+                waiverResult = await revokeWaiver(action.waiverId, parsed.authorLogin);
+              }
+
+              // Post response comment
+              const respBody = buildCommandResponse(action.action, {
+                waiver: waiverResult,
+                waiverId: action.waiverId,
+              });
+              if (respBody && payload.installation?.id) {
+                try {
+                  const octokit = await getInstallationClient(payload.installation.id);
+                  await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+                    owner: repoFullName.split("/")[0],
+                    repo: repoFullName.split("/")[1],
+                    issue_number: parsed.issueNumber,
+                    body: respBody,
+                  });
+                } catch (commentErr) {
+                  logger.warn({ err: commentErr.message }, "Failed to post waiver response comment");
+                }
+              }
+              logger.info({ command: action.action, repo: repoFullName }, "Waiver command processed");
+
             } else {
               await maintainerQueue.add("comment-command", {
                 ...action,

@@ -14,6 +14,10 @@ pillars:
     auto_label: true           # Apply AI-suggested labels
     auto_comment: true         # Post triage summary as comment
     duplicate_detection: true  # Run duplicate detection on new issues
+    triggers:
+      branches: []             # Empty = all branches
+      ignore_authors: []       # Glob patterns for authors to skip (e.g., ["*[bot]", "renovate*"])
+      paths: []                # Empty = all paths
 
   # ── CI Healing ────────────────────────────────────────────────────────────
   # Diagnose failed CI runs and open fix PRs automatically.
@@ -26,6 +30,9 @@ pillars:
       - "secrets/**"
       - "*.pem"
       - "*.key"
+    triggers:
+      branches: []             # Empty = all branches (e.g., ["main", "develop"])
+      ignore_authors: []       # Skip these authors (e.g., ["dependabot[bot]"])
 
   # ── Maintainer ────────────────────────────────────────────────────────────
   # Stale issue/PR management and merged branch cleanup.
@@ -76,6 +83,10 @@ pillars:
   ai_review:
     enabled: true
     comment_findings: true     # Post review findings as PR comments
+    triggers:
+      branches: []             # Empty = all branches
+      ignore_authors: []       # Skip these authors
+      paths: []                # Only when these files change (e.g., ["src/**", "lib/**"])
 
 settings:
   dry_run: false               # true = log actions without executing

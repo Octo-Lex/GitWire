@@ -12,6 +12,7 @@ import {
   getMinFixConfidence,
   scoreCIRisk,
   scoreFixRisk,
+  shouldTrigger,
 } from "../src/helpers.js";
 import { DEFAULT_CONFIG, validateConfig } from "../src/schema.js";
 
@@ -397,5 +398,67 @@ describe("scoreFixRisk", () => {
       origFiles
     );
     expect(result.level).toBe("medium");
+  });
+});
+
+// ── shouldTrigger ─────────────────────────────────────────────────────────────
+
+describe("shouldTrigger", () => {
+  test("returns true when no triggers config", () => {
+    expect(shouldTrigger("ci_healing", { branch: "feature/foo" }, {})).toBe(true);
+  });
+
+  test("returns true when triggers are empty arrays", () => {
+    const config = { pillars: { ci_healing: { triggers: { branches: [], ignore_authors: [] } } } };
+    expect(shouldTrigger("ci_healing", { branch: "anything" }, config)).toBe(true);
+  });
+
+  test("returns true when branch matches", () => {
+    const config = { pillars: { ci_healing: { triggers: { branches: ["main", "develop"] } } } };
+    expect(shouldTrigger("ci_healing", { branch: "main" }, config)).toBe(true);
+  });
+
+  test("returns false when branch does not match", () => {
+    const config = { pillars: { ci_healing: { triggers: { branches: ["main", "develop"] } } } };
+    expect(shouldTrigger("ci_healing", { branch: "feature/foo" }, config)).toBe(false);
+  });
+
+  test("returns false when author is in ignore list", () => {
+    const config = { pillars: { triage: { triggers: { ignore_authors: ["*[bot]", "renovate*"] } } } };
+    expect(shouldTrigger("triage", { author: "dependabot[bot]" }, config)).toBe(false);
+  });
+
+  test("returns true when author is not in ignore list", () => {
+    const config = { pillars: { triage: { triggers: { ignore_authors: ["*[bot]"] } } } };
+    expect(shouldTrigger("triage", { author: "john" }, config)).toBe(true);
+  });
+
+  test("returns true when path matches", () => {
+    const config = { pillars: { ai_review: { triggers: { paths: ["src/**", "lib/**"] } } } };
+    expect(shouldTrigger("ai_review", { paths: ["src/app.js", "docs/readme.md"] }, config)).toBe(true);
+  });
+
+  test("returns false when no paths match", () => {
+    const config = { pillars: { ai_review: { triggers: { paths: ["src/**"] } } } };
+    expect(shouldTrigger("ai_review", { paths: ["docs/readme.md", "assets/logo.png"] }, config)).toBe(false);
+  });
+
+  test("returns true when no paths provided but paths filter set", () => {
+    const config = { pillars: { ai_review: { triggers: { paths: ["src/**"] } } } };
+    expect(shouldTrigger("ai_review", {}, config)).toBe(true);
+  });
+
+  test("combined: branch matches but author ignored", () => {
+    const config = {
+      pillars: {
+        ci_healing: {
+          triggers: {
+            branches: ["main"],
+            ignore_authors: ["dependabot[bot]"],
+          },
+        },
+      },
+    };
+    expect(shouldTrigger("ci_healing", { branch: "main", author: "dependabot[bot]" }, config)).toBe(false);
   });
 });

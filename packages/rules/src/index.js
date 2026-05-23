@@ -15,4 +15,5 @@ export {
   getMinFixConfidence,
   scoreCIRisk,
   scoreFixRisk,
+  shouldTrigger,
 } from "./helpers.js";

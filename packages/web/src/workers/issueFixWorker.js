@@ -15,6 +15,7 @@ import { getInstallationClient } from "../lib/github.js";
 import { maintainerService } from "../services/maintainerService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, isFixPathBlocked, isFixLabelAllowed, isDryRun, meetsConfidence, getMinFixConfidence, scoreFixRisk } from "@gitwire/rules";
+import { checkAndMark } from "../services/idempotencyService.js";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
@@ -54,6 +55,11 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   const repoName = repo.split("/")[1];
 
   logger.info({ repo, issueNumber, triggeredBy }, "Issue fix pipeline started");
+
+  // ── Idempotency: skip duplicate fix attempts ──────────────────────────
+  if (!(await checkAndMark("issue_fix", "issue-" + issueNumber))) {
+    return;
+  }
 
   // ── Check .gitwire.yml pillar config ────────────────────────────────────
   const repoConfig = await getConfigForRepo(repo);

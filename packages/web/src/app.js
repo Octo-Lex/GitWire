@@ -24,6 +24,7 @@ import { configRouter }        from "./routes/config.js";
 import activityRouter from "./routes/activity.js";
 import readinessRouter from "./routes/readiness.js";
 import { decisionsRouter } from "./routes/decisions.js";
+import waiverRouter from "./routes/waivers.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -103,6 +104,7 @@ export function createApp() {
   app.use("/api/activity",         activityRouter);
   app.use("/api/readiness",        readinessRouter);
   app.use("/api/decisions",        decisionsRouter);
+  app.use("/api/waivers",          waiverRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {

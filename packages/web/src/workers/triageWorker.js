@@ -8,11 +8,13 @@ import { getInstallationClient } from "../lib/github.js";
 import { issueService } from "../services/issueService.js";
 import { detectDuplicates } from "../services/duplicateDetectionService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled, isDryRun } from "@gitwire/rules";
+import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { recordAction } from "../services/managedActionService.js";
 import { logDecision } from "../services/decisionLogService.js";
+import { checkAndMark } from "../services/idempotencyService.js";
+import { isWaived } from "../services/waiverService.js";
 
 const anthropic = new Anthropic({ 
   apiKey: config.anthropic.apiKey,
@@ -39,6 +41,11 @@ async function triageIssue({ payload }) {
 
   logger.info({ repo: repository?.full_name, issue: issue.number }, "Triaging issue");
 
+  // ── Idempotency: skip duplicate triage ──────────────────────────────────
+  if (!(await checkAndMark("triage", "issue-" + issue.number + "-" + payload.action))) {
+    return;
+  }
+
   // ── Check .gitwire.yml pillar config ────────────────────────────────────
   const repoConfig = await getConfigForRepo(repository.full_name);
   if (!isPillarEnabled("triage", repoConfig)) {
@@ -48,6 +55,32 @@ async function triageIssue({ payload }) {
       targetType: "issue", targetNumber: issue.number, pillar: "triage",
       decision: "skipped", reason: "Pillar triage disabled in config",
       conditions: [{ check: "pillar_enabled(triage)", result: false }],
+    });
+    return;
+  }
+
+  // ── Trigger filter: author ─────────────────────────────────────────────
+  if (!shouldTrigger("triage", { author: issue.user?.login }, repoConfig)) {
+    logger.info({ issue: issue.number, author: issue.user?.login }, "Trigger filter: triage skipped for author");
+    await logDecision({
+      repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
+      targetType: "issue", targetNumber: issue.number, pillar: "triage",
+      decision: "skipped", reason: "Trigger filter: author ignored",
+      conditions: [{ check: "trigger_filter(triage)", result: false, author: issue.user?.login }],
+    });
+    return;
+  }
+
+  // ── Policy waiver check ──────────────────────────────────────────────
+  const waiver = await isWaived({ repoId: repository.id, pillar: "triage" });
+  if (waiver) {
+    logger.info({ issue: issue.number, waiverId: waiver.id }, "Policy waived — skipping triage");
+    await logDecision({
+      repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
+      targetType: "issue", targetNumber: issue.number, pillar: "triage",
+      decision: "skipped",
+      reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
+      conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
     });
     return;
   }

@@ -216,3 +216,41 @@ export function scoreFixRisk(analysis, fixes, originalFiles) {
   const level = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
   return { score: Math.min(score, 100), level, reasons };
 }
+
+// ── Trigger control ────────────────────────────────────────────────────────────
+
+/**
+ * Check if a trigger context matches the pillar's trigger filters.
+ * Returns true if the pillar should fire for this context.
+ *
+ * @param {string} pillar - pillar name (e.g., 'ci_healing')
+ * @param {object} context - { branch?: string, author?: string, paths?: string[] }
+ * @param {object} config - resolved config object
+ * @returns {boolean} true = should trigger, false = filtered out
+ */
+export function shouldTrigger(pillar, context, config) {
+  const triggers = config?.pillars?.[pillar]?.triggers;
+  if (!triggers) return true; // no triggers config = always active
+
+  // Branch filter — if specified, branch must match at least one pattern
+  if (triggers.branches?.length > 0) {
+    const branch = context.branch || "";
+    if (!triggers.branches.some((p) => matchGlob(branch, p))) return false;
+  }
+
+  // Author ignore list — if author matches any pattern, skip
+  if (triggers.ignore_authors?.length > 0) {
+    const author = context.author || "";
+    if (triggers.ignore_authors.some((p) => matchGlob(author, p))) return false;
+  }
+
+  // Path filter — if specified, at least one changed path must match
+  if (triggers.paths?.length > 0 && context.paths?.length > 0) {
+    const hasMatch = context.paths.some((fp) =>
+      triggers.paths.some((p) => matchGlob(fp, p))
+    );
+    if (!hasMatch) return false;
+  }
+
+  return true;
+}

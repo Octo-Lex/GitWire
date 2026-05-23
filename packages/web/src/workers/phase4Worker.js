@@ -7,7 +7,10 @@ import { getInstallationClient }     from "../lib/github.js";
 import { reviewPR }      from "../services/aiReviewService.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
-import { isPillarEnabled, isDryRun } from "@gitwire/rules";
+import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
+import { checkAndMark } from "../services/idempotencyService.js";
+import { emitWorkerEvent } from "../services/workerEvents.js";
+import { isWaived } from "../services/waiverService.js";
 import { QUEUES } from "@gitwire/core";
 import { logger } from "../lib/logger.js";
 
@@ -27,6 +30,21 @@ export function startPhase4Worker() {
           logger.debug({ repo: repository.full_name, pr: pr.number }, "AI review disabled — skipping");
           return;
         }
+        // ── Trigger filter: branch/author/paths ────────────────────────────
+        if (!shouldTrigger("ai_review", { branch: pr.base?.ref, author: pr.user?.login, paths: pr.changed_files }, repoConfig)) {
+          logger.info({ pr: pr.number, branch: pr.base?.ref }, "Trigger filter: AI review skipped for branch/author/paths");
+          return;
+        }
+        // ── Policy waiver check ─────────────────────────────────────────
+        const waiver = await isWaived({ repoId: repository.id, pillar: "ai_review", scope: "pr", scopeValue: String(pr.number) });
+        if (waiver) {
+          logger.info({ pr: pr.number, waiverId: waiver.id }, "Policy waived — skipping AI review");
+          return;
+        }
+        // ── Idempotency: skip duplicate reviews ───────────────────────────
+        if (!(await checkAndMark("ai_review", "pr-" + pr.number + "-" + (pr.head?.sha || "unknown")))) {
+          return;
+        }
         if (isDryRun(repoConfig)) {
           logger.info({ repo: repository.full_name, pr: pr.number }, "DRY RUN: would run AI review");
           return;
@@ -38,6 +56,14 @@ export function startPhase4Worker() {
           repository: { ...repository, id: repository.id },
           octokit,
           commentFindings: reviewOpts.comment_findings !== false,
+        });
+
+        // Emit worker event for merge queue to pick up
+        await emitWorkerEvent("review_completed", {
+          repo: repository.full_name,
+          repoId: repository.id,
+          prNumber: pr.number,
+          installationId: installation.id,
         });
         break;
       }
