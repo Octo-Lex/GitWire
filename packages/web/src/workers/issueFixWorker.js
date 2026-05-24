@@ -20,6 +20,7 @@ import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
 import { notifyIssueFix } from "../services/telegramNotifyService.js";
+import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -266,12 +267,28 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   }
 
   // ── Step 9: Create branch → commit fixes → open PR ────────────────────────
+  const repoFullName = repository.full_name;
+  const fixAction = await propose({
+    repoFullName,
+    pillar: "issue_fix",
+    actionType: "create-fix-pr",
+    source: "ai_fix",
+    evidence: { issue_number: issueNumber, fixes: fixes.length, complexity: analysis.complexity, confidence },
+    repoId: repoId,
+    targetType: "pr",
+  });
+
   if (isDryRun(repoConfig)) {
+    await cancel(fixAction.id, "Dry-run mode");
     logger.info({ repo, issueNumber, fixes: fixes.length, complexity: analysis.complexity }, "DRY RUN: would create fix PR");
     await upsertFixAttempt(repoId, issueNumber, branchName, "submitted",
       analysis.complexity, analysis.explanation, null, null);
     return;
   }
+
+  // Approve + execute
+  await approve(fixAction.id, { confidence, min_confidence: getMinFixConfidence(repoConfig), scope_ok: true });
+  await execute(fixAction.id);
 
   try {
     const { data: repoInfo } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo: repoName });
@@ -346,6 +363,9 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
 
     logger.info({ repo, issueNumber, prNumber: pr.number, prUrl: pr.html_url, confidence }, "Fix PR created");
 
+    // Mark action as succeeded
+    await succeed(fixAction.id, { pr_number: pr.number, pr_url: pr.html_url, branch: branchName });
+
     // Notify Telegram subscribers
     notifyIssueFix(repository.full_name, {
       issue_number: issueNumber,
@@ -378,6 +398,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
 
   } catch (err) {
     logger.error({ err, repo, issueNumber }, "Fix PR creation failed");
+    await fail(fixAction.id, err.message).catch(() => {});
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed",
       analysis.complexity, analysis.explanation, "PR creation failed: " + err.message);
     await postIssueComment(octokit, owner, repoName, issueNumber,

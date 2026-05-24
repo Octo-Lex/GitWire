@@ -16,6 +16,7 @@ import { logDecision } from "../services/decisionLogService.js";
 import { checkAndMark } from "../services/idempotencyService.js";
 import { isWaived } from "../services/waiverService.js";
 import { notifyTriage } from "../services/telegramNotifyService.js";
+import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
 
 const anthropic = new Anthropic({ 
   apiKey: config.anthropic.apiKey,
@@ -143,15 +144,34 @@ async function triageIssue({ payload }) {
     if (isDryRun(repoConfig)) {
       logger.info({ issue: issue.number, labels: labelsToApply }, "DRY RUN: would apply labels");
     } else {
-      await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-        owner:  repository.owner.login,
-        repo:   repository.name,
-        issue_number: issue.number,
-        labels: labelsToApply,
+      // Propose + approve the labeling action
+      const action = await propose({
+        repoFullName: repository.full_name,
+        pillar: "triage",
+        actionType: "add-label",
+        source: "ai_triage",
+        evidence: { issue_number: issue.number, labels: labelsToApply, classification },
+        repoId: repository.id,
+        targetType: "issue",
+        targetNumber: issue.number,
       });
-      // Managed action: record each label
-      for (const lbl of labelsToApply) {
-        await recordAction({ repoId: repository.id, source: "triage", issueNumber: issue.number, actionType: "label", actionKey: "label:" + lbl, actionValue: lbl, context: { issueId: issue.id, title: issue.title } });
+      await approve(action.id, { auto_label: true, confidence: classification.confidence });
+      await execute(action.id);
+
+      try {
+        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+          owner:  repository.owner.login,
+          repo:   repository.name,
+          issue_number: issue.number,
+          labels: labelsToApply,
+        });
+        await succeed(action.id, { labels: labelsToApply });
+        // Legacy record for backward compat
+        for (const lbl of labelsToApply) {
+          await recordAction({ repoId: repository.id, source: "triage", issueNumber: issue.number, actionType: "label", actionKey: "label:" + lbl, actionValue: lbl, context: { issueId: issue.id, title: issue.title } });
+        }
+      } catch (err) {
+        await fail(action.id, err.message).catch(() => {});
       }
     }
   }

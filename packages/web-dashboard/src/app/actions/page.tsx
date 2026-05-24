@@ -126,7 +126,9 @@ export default function ActionsPage() {
             <tbody>
               {rows.map((a) => (
                 <tr key={a.id} className="border-b border-border/50 hover:bg-surface-2/40">
-                  <td className="px-3 py-2 text-xs font-mono text-text-tertiary">{a.id}</td>
+                  <td className="px-3 py-2 text-xs font-mono text-text-tertiary">
+                    <a href={`/actions/${a.id}`} className="text-accent-green hover:underline">{a.id}</a>
+                  </td>
                   <td className="px-3 py-2">
                     <Badge className={STATUS_COLORS[a.status] || "bg-gray-700 text-gray-400"}>
                       {STATUS_ICONS[a.status]} {a.status}

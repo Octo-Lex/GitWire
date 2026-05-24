@@ -14,6 +14,7 @@ import { getConfigForRepo, getPluginsForRepo } from "./configService.js";
 import { getInstallationClient } from "../lib/github.js";
 import { recordAction } from "./managedActionService.js";
 import { logDecision } from "./decisionLogService.js";
+import { propose, approve, execute, succeed, fail } from "./actionStateMachine.js";
 import { logger } from "../lib/logger.js";
 
 /**
@@ -192,7 +193,7 @@ export async function evaluateAndExecuteCustomRules(eventName, payload, installa
 
     for (const action of rule.actions) {
       try {
-        const result = await executeAction(octokit, owner, repoName, issueNumber, action, repoId, rule.name);
+        const result = await executeAction(octokit, owner, repoName, issueNumber, action, repoId, rule.name, repo.full_name);
         ruleResults.push({ action: action.action, success: true, result });
       } catch (err) {
         logger.warn(
@@ -228,8 +229,24 @@ export async function evaluateAndExecuteCustomRules(eventName, payload, installa
 /**
  * Execute a single custom rule action via GitHub API.
  */
-async function executeAction(octokit, owner, repo, issueNumber, action, repoId, ruleName) {
+async function executeAction(octokit, owner, repo, issueNumber, action, repoId, ruleName, repoFullName) {
   const args = action.args || {};
+
+  // Propose the action
+  const act = await propose({
+    repoFullName: repoFullName || (owner + "/" + repo),
+    pillar: "custom_rules",
+    actionType: action.action,
+    source: "custom_rule:" + ruleName,
+    evidence: { ruleName, args, issueNumber },
+    repoId,
+    targetType: issueNumber ? "issue" : undefined,
+    targetNumber: issueNumber,
+  });
+  await approve(act.id, { rule: ruleName });
+  await execute(act.id);
+
+  try {
 
   switch (action.action) {
     case "add-label": {
@@ -247,6 +264,7 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
         actionValue: args.label,
         context: { ruleName },
       });
+      await succeed(act.id, { label: args.label });
       return { label: args.label };
     }
 
@@ -255,6 +273,7 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
       await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", {
         owner, repo, issue_number: issueNumber, name: args.label,
       });
+      await succeed(act.id, { removed_label: args.label });
       return { label: args.label };
     }
 
@@ -273,6 +292,7 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
         actionValue: comment.substring(0, 200),
         context: { ruleName },
       });
+      await succeed(act.id, { comment: true });
       return { comment: comment.substring(0, 100) };
     }
 
@@ -292,6 +312,7 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
         actionKey: "approval:custom:" + ruleName,
         context: { ruleName },
       });
+      await succeed(act.id, { approved: true });
       return { approved: true };
     }
 
@@ -318,6 +339,7 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
         actionValue: target,
         context: { ruleName },
       });
+      await succeed(act.id, { reviewer: target });
       return { reviewer: target };
     }
 
@@ -338,6 +360,11 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
 
     default:
       logger.warn({ action: action.action }, "Unknown custom rule action");
+      await succeed(act.id, { unknown: action.action });
       return { unknown: action.action };
+  }
+} catch (err) {
+    await fail(act.id, err.message).catch(() => {});
+    throw err;
   }
 }

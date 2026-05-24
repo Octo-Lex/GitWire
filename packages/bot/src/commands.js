@@ -72,22 +72,54 @@ export function registerCommands(bot) {
   // ── /help — Show commands ─────────────────────────────────────────────────
   bot.command("help", async (ctx) => {
     ctx.reply(
-      "⚡ <b>GitWire Bot Commands</b>\n\n" +
-      "<b>Overview</b>\n" +
-      "/status — System health + fleet summary\n" +
-      "/repos — Connected repositories\n" +
-      "/readiness — Fleet readiness scores\n" +
-      "/activity — Recent action summary\n\n" +
-      "<b>Quality Gates</b>\n" +
-      "/gates owner/repo — Gate status for a repo\n" +
-      "/evaluate owner/repo — Run gates now\n\n" +
-      "<b>Operations</b>\n" +
-      "/deliveries — Webhook delivery stats\n" +
-      "/decisions — Recent decision log\n" +
-      "/config owner/repo — Show .gitwire.yml config\n\n" +
-      "<b>Auth</b>\n" +
-      "/start API_KEY — Authenticate\n" +
-      "/whoami — Show auth status\n" +
+      "⚡ <b>GitWire Bot Commands</b>
+
+" +
+      "<b>Overview</b>
+" +
+      "/status — System health + fleet summary
+" +
+      "/repos — Connected repositories
+" +
+      "/readiness — Fleet readiness scores
+" +
+      "/activity — Recent action summary
+
+" +
+      "<b>Actions</b>
+" +
+      "/actions — Recent managed actions
+" +
+      "/decisions — Recent decision log
+
+" +
+      "<b>Triggers</b>
+" +
+      "/heal run_id — Trigger CI auto-heal
+" +
+      "/fix owner/repo # — Trigger issue fix
+
+" +
+      "<b>Quality Gates</b>
+" +
+      "/gates owner/repo — Gate status
+" +
+      "/evaluate owner/repo — Run gates now
+
+" +
+      "<b>Config</b>
+" +
+      "/deliveries — Webhook delivery stats
+" +
+      "/config owner/repo — .gitwire.yml config
+
+" +
+      "<b>Auth</b>
+" +
+      "/start API_KEY — Authenticate
+" +
+      "/whoami — Show auth status
+" +
       "/logout — Remove your API key",
       { parse_mode: "HTML" }
     );
@@ -411,6 +443,95 @@ export function registerCommands(bot) {
       ctx.reply(text, { parse_mode: "HTML" });
     } catch (err) {
       ctx.reply("❌ " + escHtml(err.message));
+    }
+  });
+
+  // ── /heal — Trigger CI heal for a run ───────────────────────────────────
+  bot.command("heal", async (ctx) => {
+    const apiKey = await requireAuth(ctx.from.id).catch(() => null);
+    if (!apiKey) return ctx.reply("\uD83D\uDD10 Authenticate first", { parse_mode: "HTML" });
+
+    const parts = ctx.message.text.split(/\s+/);
+    if (parts.length < 3) {
+      return ctx.reply(
+        "<b>Usage:</b> <code>/heal owner/repo run_id</code>\n" +
+        "Trigger CI auto-heal for a specific workflow run.\n" +
+        "Find run IDs via the <code>/deliveries</code> command.",
+        { parse_mode: "HTML" }
+      );
+    }
+
+    const repoArg = parts[1];
+    const runId = parts[2];
+
+    try {
+      const apiUrl = process.env.GITWIRE_API_URL || "http://gitwire-app:3000";
+      const res = await fetch(
+        apiUrl + "/api/ci/" + runId + "/heal",
+        {
+          method: "POST",
+          headers: { Authorization: "Bearer " + apiKey },
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        return ctx.reply("\u274C " + escHtml(err.error || "Heal failed"));
+      }
+
+      const result = await res.json();
+      ctx.reply(
+        "\uD83D\uDD27 <b>CI Heal triggered</b>\n" +
+        "<code>" + escHtml(repoArg) + "</code> run #" + escHtml(runId) + "\n" +
+        "Status: " + escHtml(result.status || "queued"),
+        { parse_mode: "HTML" }
+      );
+    } catch (err) {
+      ctx.reply("\u274C " + escHtml(err.message));
+    }
+  });
+
+  // ── /fix — Trigger issue fix ───────────────────────────────────────────────
+  bot.command("fix", async (ctx) => {
+    const apiKey = await requireAuth(ctx.from.id).catch(() => null);
+    if (!apiKey) return ctx.reply("\uD83D\uDD10 Authenticate first", { parse_mode: "HTML" });
+
+    const parts = ctx.message.text.split(/\s+/);
+    if (parts.length < 3) {
+      return ctx.reply(
+        "<b>Usage:</b> <code>/fix owner/repo issue_number</code>\n" +
+        "Trigger autonomous issue fix for a specific issue.",
+        { parse_mode: "HTML" }
+      );
+    }
+
+    const repoArg = parts[1];
+    const issueNumber = parts[2];
+
+    try {
+      const apiUrl = process.env.GITWIRE_API_URL || "http://gitwire-app:3000";
+      const res = await fetch(
+        apiUrl + "/api/fix/" + repoArg + "/issues/" + issueNumber,
+        {
+          method: "POST",
+          headers: { Authorization: "Bearer " + apiKey },
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        return ctx.reply("\u274C " + escHtml(err.error || "Fix failed"));
+      }
+
+      const result = await res.json();
+      ctx.reply(
+        "\uD83D\uDD27 <b>Issue Fix triggered</b>\n" +
+        "<code>" + escHtml(repoArg) + "</code> #" + escHtml(issueNumber) + "\n" +
+        "Status: " + escHtml(result.status || "queued"),
+        { parse_mode: "HTML" }
+      );
+    } catch (err) {
+      ctx.reply("\u274C " + escHtml(err.message));
     }
   });
 

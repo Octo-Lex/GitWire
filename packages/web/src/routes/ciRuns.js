@@ -170,3 +170,33 @@ ciRouter.post("/:runId/retry", async (req, res, next) => {
     next(err);
   }
 });
+
+
+// ── POST /api/ci/:runId/heal — trigger CI heal for a run ────────────────────
+ciRouter.post("/:runId/heal", async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT cr.id, cr.github_run_id, r.owner, r.name, r.github_id as repo_github_id
+       FROM ci_runs cr
+       JOIN repositories r ON r.github_id = cr.repo_id
+       WHERE cr.id = `,
+      [req.params.runId]
+    );
+
+    if (!rows.length) return res.status(404).json({ error: "Run not found" });
+
+    const run = rows[0];
+    const job = await ciHealQueue.add("heal-run", {
+      runId: run.github_run_id,
+      repoId: run.repo_github_id,
+      owner: run.owner,
+      repo: run.name,
+      repository: { full_name: run.owner + "/" + run.name, id: run.repo_github_id },
+      manual_trigger: true,
+    });
+
+    res.json({ status: "queued", run_id: run.github_run_id, job_id: job.id });
+  } catch (err) {
+    next(err);
+  }
+});
