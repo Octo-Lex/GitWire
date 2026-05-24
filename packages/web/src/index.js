@@ -12,6 +12,7 @@ import { startIssueFixWorker } from "./workers/issueFixWorker.js";
 import { startMergeQueueWorker } from "./workers/phase2Worker.js";
 import { startPhase3Worker, schedulePhase3Jobs } from "./workers/phase3Worker.js";
 import { startPhase4Worker, schedulePhase4Jobs } from "./workers/phase4Worker.js";
+import { runReconciliation } from "./workers/reconciliationWorker.js";
 import { initRuntime, getRuntime } from "@gitwire/runtime";
 import { config } from "../config/index.js";
 
@@ -55,6 +56,13 @@ async function main() {
 
   // Schedule Phase 4 recurring jobs (nightly audit export at 01:00 UTC)
   await schedulePhase4Jobs();
+
+  // Schedule reconciliation scan (every 6 hours)
+  setInterval(async () => {
+    try { await runReconciliation(); } catch (err) { logger.error({ err }, "Reconciliation failed"); }
+  }, 6 * 60 * 60 * 1000);
+  // Run first scan after 5 minutes
+  setTimeout(() => runReconciliation().catch((err) => logger.error({ err }, "Initial reconciliation failed")), 5 * 60 * 1000);
 
   logger.info(workers.length + " background workers started");
 

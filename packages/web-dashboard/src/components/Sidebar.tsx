@@ -21,6 +21,7 @@ const NAV = [
   { href: "/readiness",   label: "Readiness",     icon: "✓" },
   { href: "/gates",        label: "Quality Gates",  icon: "🛡️" },
   { href: "/maintainer",    label: "Maintainer",      icon: "⟳" },
+  { href: "/actions",      label: "Actions",         icon: "⚙️" },
   { href: "/custom-rules", label: "Custom Rules",  icon: "⚡" },
   { href: "/fix-attempts",  label: "Fix Attempts",    icon: "⚡" },
   { href: "/intelligence", label: "Intelligence",     icon: "\uD83E\uDDE0" },

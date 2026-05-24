@@ -380,6 +380,40 @@ export function registerCommands(bot) {
     }
   });
 
+  // ── /actions — Recent action lifecycle ────────────────────────────────────
+  bot.command("actions", async (ctx) => {
+    const apiKey = await requireAuth(ctx.from.id).catch(() => null);
+    if (!apiKey) return ctx.reply("🔐 Authenticate first", { parse_mode: "HTML" });
+
+    try {
+      const result = await fetch(
+        (process.env.GITWIRE_API_URL || "http://gitwire-app:3000") + "/api/actions?limit=10",
+        { headers: { Authorization: `Bearer ${apiKey}` } }
+      ).then((r) => r.json());
+
+      const actions = result?.data ?? [];
+      if (actions.length === 0) {
+        return ctx.reply("⚙️ No actions tracked yet.");
+      }
+
+      let text = "⚙️ <b>Recent Actions</b>\n\n";
+      for (const a of actions) {
+        const statusEmoji = {
+          proposed: "💡", approved: "✅", executing: "⚡", succeeded: "✅",
+          failed: "❌", retrying: "🔄", cancelled: "🚫", reconciled: "🔒",
+        }[a.status] || "•";
+        const repo = (a.repo_full_name || "").split("/").pop();
+        text += `${statusEmoji} <code>${escHtml(repo)}</code> ${escHtml(a.action_type)} — ${a.status}`;
+        if (a.retries > 0) text += ` (${a.retries} retries)`;
+        text += "\n";
+      }
+
+      ctx.reply(text, { parse_mode: "HTML" });
+    } catch (err) {
+      ctx.reply("❌ " + escHtml(err.message));
+    }
+  });
+
   // ── /logout — Remove API key ──────────────────────────────────────────────
   bot.command("logout", async (ctx) => {
     const { removeUserKey } = await import("./auth.js");

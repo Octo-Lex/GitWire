@@ -19,6 +19,7 @@ import { emitWorkerEvent } from "../services/workerEvents.js";
 import { isWaived } from "../services/waiverService.js";
 import { Trail } from "../services/auditTrailService.js";
 import { notifyCIFailure } from "../services/telegramNotifyService.js";
+import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -307,14 +308,44 @@ async function healByRerun(octokit, owner, repo, run, diagnosis, repoConfig) {
 // ── Heal strategy: create a patch PR with the fix ─────────────────────────────
 
 async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig) {
+  const repoFullName = repository.full_name;
+
+  // Propose the action
+  const action = await propose({
+    repoFullName,
+    pillar: "ci_healing",
+    actionType: "create-patch-pr",
+    source: "ai_heal",
+    evidence: {
+      run_id: run.id,
+      failure_type: diagnosis.failure_type,
+      failing_file: diagnosis.failing_file,
+      confidence: diagnosis.confidence,
+      head_branch: run.head_branch,
+    },
+    repoId: repository.id,
+    targetType: "pr",
+  });
+
   if (isDryRun(repoConfig)) {
+    await cancel(action.id, "Dry-run mode");
     logger.info({ runId: run.id, failingFile: diagnosis.failing_file, rootCause: diagnosis.root_cause }, "DRY RUN: would create patch PR");
     return;
   }
+
+  // Approve the action (confidence + policy checks passed)
+  await approve(action.id, {
+    confidence: diagnosis.confidence,
+    min_confidence: getMinPatchConfidence(repoConfig),
+    dry_run: false,
+  });
   const branchName = "gitwire/heal-" + run.id;
   const failingFile = diagnosis.failing_file;
 
   logger.info({ runId: run.id, failingFile }, "Attempting patch PR");
+
+  // Mark as executing
+  await execute(action.id);
 
   try {
     // 1. Fetch the failing file content
@@ -399,6 +430,9 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     });
 
     logger.info({ runId: run.id, prNumber: pr.number, prUrl: pr.html_url }, "Patch PR created");
+
+    // Mark action as succeeded
+    await succeed(action.id, { pr_number: pr.number, pr_url: pr.html_url, branch: branchName });
 
     // Notify Telegram subscribers
     notifyCIFailure(repository.full_name, {
@@ -535,6 +569,9 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
 
   } catch (err) {
     logger.error({ err, runId: run.id, failingFile }, "Patch PR creation failed");
+
+    // Mark action as failed
+    await fail(action.id, err.message).catch(() => {});
 
     // Fall back to comment-only
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
