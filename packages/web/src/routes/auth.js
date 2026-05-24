@@ -6,8 +6,7 @@
 // GET  /api/auth/check   — verify session is still valid
 
 import { Router } from "express";
-import { createClient } from "redis";
-import { config } from "../../config/index.js";
+import { redis } from "../lib/queue.js";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
@@ -24,13 +23,7 @@ function parseCookies(req) {
   return cookies;
 }
 
-// ── Redis client for sessions (separate from BullMQ) ────────────────────────
-const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-const sessionRedis = createClient({ url: redisUrl });
-sessionRedis.connect().catch((err) => {
-  logger.error({ err }, "Session Redis connection failed");
-});
-
+// ── Redis client for sessions (uses existing connection) ───────────────────
 const SESSION_PREFIX = "gitwire:session:";
 const SESSION_TTL = 7 * 24 * 60 * 60; // 7 days
 
@@ -59,7 +52,7 @@ router.post("/login", async (req, res) => {
     const sessionKey = SESSION_PREFIX + token;
 
     // Store in Redis
-    await sessionRedis.setEx(sessionKey, SESSION_TTL, JSON.stringify({
+    await redis.setEx(sessionKey, SESSION_TTL, JSON.stringify({
       created: new Date().toISOString(),
       ip: req.ip || "unknown",
     }));
@@ -83,7 +76,7 @@ router.post("/logout", async (req, res) => {
     const cookies = parseCookies(req);
     const token = cookies["gitwire-session"];
     if (token) {
-      await sessionRedis.del(SESSION_PREFIX + token).catch(() => {});
+      await redis.del(SESSION_PREFIX + token).catch(() => {});
     }
 
     res.setHeader("Set-Cookie", [
@@ -106,7 +99,7 @@ router.get("/check", async (req, res) => {
       return res.json({ authenticated: false });
     }
 
-    const data = await sessionRedis.get(SESSION_PREFIX + token);
+    const data = await redis.get(SESSION_PREFIX + token);
     if (!data) {
       return res.json({ authenticated: false });
     }
@@ -119,4 +112,4 @@ router.get("/check", async (req, res) => {
 });
 
 export default router;
-export { SESSION_PREFIX, sessionRedis };
+export { SESSION_PREFIX, redis };

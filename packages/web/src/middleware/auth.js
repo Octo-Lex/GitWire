@@ -8,19 +8,9 @@
 
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
-import { createClient } from "redis";
+import { redis } from "../lib/queue.js";
 
 const SESSION_PREFIX = "gitwire:session:";
-
-// Lazy Redis client for session lookups
-let sessionRedis = null;
-async function getSessionRedis() {
-  if (!sessionRedis) {
-    sessionRedis = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
-    await sessionRedis.connect();
-  }
-  return sessionRedis;
-}
 
 // Parse cookies from request header
 function parseCookies(req) {
@@ -92,7 +82,6 @@ export async function apiKeyAuth(req, res, next) {
     const sessionToken = cookies["gitwire-session"];
     if (sessionToken) {
       try {
-        const redis = await getSessionRedis();
         const data = await redis.get(SESSION_PREFIX + sessionToken);
         if (data) {
           // Valid session — refresh TTL
