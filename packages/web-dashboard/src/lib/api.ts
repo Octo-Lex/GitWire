@@ -3,11 +3,10 @@
 import useSWR, { type SWRConfiguration } from "swr";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "";
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 async function fetcher(url: string) {
   const res = await fetch(`${BASE}${url}`, {
-    headers: API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {},
+    credentials: "include",
   });
   if (!res.ok) throw new Error(`API error ${res.status}: ${url}`);
   return res.json();
@@ -154,13 +153,12 @@ export const API = {
 
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
   return {
-    ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
     ...extra,
   };
 }
 
 export async function triggerRepoSync(owner: string, repo: string) {
-  const res = await fetch(`${BASE}/api/repos/${owner}/${repo}/sync`, {
+  const res = await fetch(`${BASE}/api/repos/${owner}/${repo}/sync`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -168,7 +166,7 @@ export async function triggerRepoSync(owner: string, repo: string) {
 }
 
 export async function retryRun(runId: string) {
-  const res = await fetch(`${BASE}/api/ci/${runId}/retry`, {
+  const res = await fetch(`${BASE}/api/ci/${runId}/retry`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -176,7 +174,7 @@ export async function retryRun(runId: string) {
 }
 
 export async function triggerStaleScan(owner: string, repo: string) {
-  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/stale-scan`, {
+  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/stale-scan`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -184,7 +182,7 @@ export async function triggerStaleScan(owner: string, repo: string) {
 }
 
 export async function triggerBranchCleanup(owner: string, repo: string) {
-  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/branch-cleanup`, {
+  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/branch-cleanup`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -192,7 +190,7 @@ export async function triggerBranchCleanup(owner: string, repo: string) {
 }
 
 export async function updateSettings(owner: string, repo: string, settings: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/settings`, {
+  const res = await fetch(`${BASE}/api/maintainer/${owner}/${repo}/settings`, { credentials: 'include',
     method: "PATCH",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(settings),
@@ -201,7 +199,7 @@ export async function updateSettings(owner: string, repo: string, settings: Reco
 }
 
 export async function triggerFix(owner: string, repo: string, issueNumber: number) {
-  const res = await fetch(`${BASE}/api/fix/${owner}/${repo}/issues/${issueNumber}`, {
+  const res = await fetch(`${BASE}/api/fix/${owner}/${repo}/issues/${issueNumber}`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -211,7 +209,7 @@ export async function triggerFix(owner: string, repo: string, issueNumber: numbe
 // ── Governance actions ─────────────────────────────────────────────────────
 
 export async function syncMembers() {
-  const res = await fetch(`${BASE}/api/maintainer/members/sync`, {
+  const res = await fetch(`${BASE}/api/maintainer/members/sync`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -219,7 +217,7 @@ export async function syncMembers() {
 }
 
 export async function updateCollaborator(owner: string, repo: string, login: string, permission: string, actor = "dashboard") {
-  const res = await fetch(`${BASE}/api/maintainer/collaborators/${owner}/${repo}/${login}`, {
+  const res = await fetch(`${BASE}/api/maintainer/collaborators/${owner}/${repo}/${login}`, { credentials: 'include',
     method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json", "x-actor-login": actor }),
     body: JSON.stringify({ permission }),
@@ -228,7 +226,7 @@ export async function updateCollaborator(owner: string, repo: string, login: str
 }
 
 export async function removeCollaborator(owner: string, repo: string, login: string, actor = "dashboard") {
-  const res = await fetch(`${BASE}/api/maintainer/collaborators/${owner}/${repo}/${login}`, {
+  const res = await fetch(`${BASE}/api/maintainer/collaborators/${owner}/${repo}/${login}`, { credentials: 'include',
     method: "DELETE",
     headers: authHeaders({ "x-actor-login": actor }),
   });
@@ -250,7 +248,7 @@ export async function updateBranchRule(owner: string, repo: string, pattern: str
 // ── Duplicate detection actions ────────────────────────────────────────────
 
 export async function confirmDuplicate(signalId: number) {
-  const res = await fetch(`${BASE}/api/duplicates/${signalId}/confirm`, {
+  const res = await fetch(`${BASE}/api/duplicates/${signalId}/confirm`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -258,7 +256,7 @@ export async function confirmDuplicate(signalId: number) {
 }
 
 export async function dismissDuplicate(signalId: number) {
-  const res = await fetch(`${BASE}/api/duplicates/${signalId}/dismiss`, {
+  const res = await fetch(`${BASE}/api/duplicates/${signalId}/dismiss`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -266,7 +264,7 @@ export async function dismissDuplicate(signalId: number) {
 }
 
 export async function triggerEmbeddingBackfill(owner: string, repo: string) {
-  const res = await fetch(`${BASE}/api/duplicates/backfill/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/duplicates/backfill/${owner}/${repo}`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -276,7 +274,7 @@ export async function triggerEmbeddingBackfill(owner: string, repo: string) {
 // ── Enforcement actions (Phase 1) ──────────────────────────────────────────
 
 export async function createPolicy(policy: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/enforcement/policies`, {
+  const res = await fetch(`${BASE}/api/enforcement/policies`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(policy),
@@ -285,7 +283,7 @@ export async function createPolicy(policy: Record<string, unknown>) {
 }
 
 export async function updatePolicy(id: number, updates: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/enforcement/policies/${id}`, {
+  const res = await fetch(`${BASE}/api/enforcement/policies/${id}`, { credentials: 'include',
     method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(updates),
@@ -294,7 +292,7 @@ export async function updatePolicy(id: number, updates: Record<string, unknown>)
 }
 
 export async function deletePolicy(id: number) {
-  const res = await fetch(`${BASE}/api/enforcement/policies/${id}`, {
+  const res = await fetch(`${BASE}/api/enforcement/policies/${id}`, { credentials: 'include',
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -302,7 +300,7 @@ export async function deletePolicy(id: number) {
 }
 
 export async function suppressViolation(id: number) {
-  const res = await fetch(`${BASE}/api/enforcement/violations/${id}/suppress`, {
+  const res = await fetch(`${BASE}/api/enforcement/violations/${id}/suppress`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -310,7 +308,7 @@ export async function suppressViolation(id: number) {
 }
 
 export async function triggerEnforcementRun(repo?: string) {
-  const res = await fetch(`${BASE}/api/enforcement/run`, {
+  const res = await fetch(`${BASE}/api/enforcement/run`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ repo }),
@@ -321,7 +319,7 @@ export async function triggerEnforcementRun(repo?: string) {
 // ── Automation actions (Phase 2) ──────────────────────────────────────────
 
 export async function updateQueueConfig(owner: string, repo: string, config: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/phase2/queue/${owner}/${repo}/config`, {
+  const res = await fetch(`${BASE}/api/phase2/queue/${owner}/${repo}/config`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(config),
@@ -330,7 +328,7 @@ export async function updateQueueConfig(owner: string, repo: string, config: Rec
 }
 
 export async function dequeuePR(owner: string, repo: string, pr: number) {
-  const res = await fetch(`${BASE}/api/phase2/queue/${owner}/${repo}/${pr}/remove`, {
+  const res = await fetch(`${BASE}/api/phase2/queue/${owner}/${repo}/${pr}/remove`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -338,7 +336,7 @@ export async function dequeuePR(owner: string, repo: string, pr: number) {
 }
 
 export async function createFeedbackRule(rule: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/phase2/feedback`, {
+  const res = await fetch(`${BASE}/api/phase2/feedback`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(rule),
@@ -347,7 +345,7 @@ export async function createFeedbackRule(rule: Record<string, unknown>) {
 }
 
 export async function updateFeedbackRule(id: number, updates: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/phase2/feedback/${id}`, {
+  const res = await fetch(`${BASE}/api/phase2/feedback/${id}`, { credentials: 'include',
     method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(updates),
@@ -356,7 +354,7 @@ export async function updateFeedbackRule(id: number, updates: Record<string, unk
 }
 
 export async function deleteFeedbackRule(id: number) {
-  const res = await fetch(`${BASE}/api/phase2/feedback/${id}`, {
+  const res = await fetch(`${BASE}/api/phase2/feedback/${id}`, { credentials: 'include',
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -366,7 +364,7 @@ export async function deleteFeedbackRule(id: number) {
 // ── Trust actions (Phase 3) ──────────────────────────────────────────────
 
 export async function graduateTest(id: number) {
-  const res = await fetch(`${BASE}/api/phase3/flaky/${id}/graduate`, {
+  const res = await fetch(`${BASE}/api/phase3/flaky/${id}/graduate`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -374,7 +372,7 @@ export async function graduateTest(id: number) {
 }
 
 export async function dismissTest(id: number) {
-  const res = await fetch(`${BASE}/api/phase3/flaky/${id}/dismiss`, {
+  const res = await fetch(`${BASE}/api/phase3/flaky/${id}/dismiss`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -382,7 +380,7 @@ export async function dismissTest(id: number) {
 }
 
 export async function triggerReconciliation(repo?: string) {
-  const res = await fetch(`${BASE}/api/phase3/reconciler/run`, {
+  const res = await fetch(`${BASE}/api/phase3/reconciler/run`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ repo }),
@@ -391,7 +389,7 @@ export async function triggerReconciliation(repo?: string) {
 }
 
 export async function updateRepoReconcileConfig(owner: string, repo: string, updates: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/phase3/reconciler/repos/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/phase3/reconciler/repos/${owner}/${repo}`, { credentials: 'include',
     method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(updates),
@@ -400,7 +398,7 @@ export async function updateRepoReconcileConfig(owner: string, repo: string, upd
 }
 
 export async function triggerDepScan(owner: string, repo: string) {
-  const res = await fetch(`${BASE}/api/phase3/dependencies/${owner}/${repo}/scan`, {
+  const res = await fetch(`${BASE}/api/phase3/dependencies/${owner}/${repo}/scan`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -408,7 +406,7 @@ export async function triggerDepScan(owner: string, repo: string) {
 }
 
 export async function openBatchDepPR(owner: string, repo: string, ecosystem = "npm") {
-  const res = await fetch(`${BASE}/api/phase3/dependencies/${owner}/${repo}/batch-pr`, {
+  const res = await fetch(`${BASE}/api/phase3/dependencies/${owner}/${repo}/batch-pr`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ ecosystem }),
@@ -417,7 +415,7 @@ export async function openBatchDepPR(owner: string, repo: string, ecosystem = "n
 }
 
 export async function dismissVuln(id: number, reason?: string) {
-  const res = await fetch(`${BASE}/api/phase3/dependencies/vuln/${id}/dismiss`, {
+  const res = await fetch(`${BASE}/api/phase3/dependencies/vuln/${id}/dismiss`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ reason }),
@@ -428,7 +426,7 @@ export async function dismissVuln(id: number, reason?: string) {
 // ── Intelligence & Compliance actions (Phase 4) ──────────────────────────
 
 export async function updateReviewConfig(owner: string, repo: string, config: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/review/config/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/review/config/${owner}/${repo}`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(config),
@@ -437,7 +435,7 @@ export async function updateReviewConfig(owner: string, repo: string, config: Re
 }
 
 export async function triggerReview(owner: string, repo: string, pr: number) {
-  const res = await fetch(`${BASE}/api/review/trigger/${owner}/${repo}/${pr}`, {
+  const res = await fetch(`${BASE}/api/review/trigger/${owner}/${repo}/${pr}`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -445,14 +443,14 @@ export async function triggerReview(owner: string, repo: string, pr: number) {
 }
 
 export async function verifyAuditChain() {
-  const res = await fetch(`${BASE}/api/audit/verify`, {
+  const res = await fetch(`${BASE}/api/audit/verify`, { credentials: 'include',
     headers: authHeaders(),
   });
   return res.json();
 }
 
 export async function generateComplianceReport(reportType: string, from: string, to: string) {
-  const res = await fetch(`${BASE}/api/audit/reports`, {
+  const res = await fetch(`${BASE}/api/audit/reports`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ report_type: reportType, from, to, generated_by: "dashboard" }),
@@ -463,14 +461,14 @@ export async function generateComplianceReport(reportType: string, from: string,
 // ── Config actions (.gitwire.yml overrides) ────────────────────────────────
 
 export async function getRepoConfig(owner: string, repo: string) {
-  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, { credentials: 'include',
     headers: authHeaders(),
   });
   return res.json();
 }
 
 export async function updateRepoConfig(owner: string, repo: string, overrides: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, { credentials: 'include',
     method: "PUT",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(overrides),
@@ -479,7 +477,7 @@ export async function updateRepoConfig(owner: string, repo: string, overrides: R
 }
 
 export async function patchRepoConfig(owner: string, repo: string, patch: Record<string, unknown>) {
-  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, { credentials: 'include',
     method: "PATCH",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(patch),
@@ -488,7 +486,7 @@ export async function patchRepoConfig(owner: string, repo: string, patch: Record
 }
 
 export async function resetRepoConfig(owner: string, repo: string) {
-  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}`, { credentials: 'include',
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -496,14 +494,14 @@ export async function resetRepoConfig(owner: string, repo: string) {
 }
 
 export async function getConfigHistory(owner: string, repo: string, limit = 20) {
-  const res = await fetch(`${BASE}/api/config/${owner}/${repo}/history?limit=${limit}`, {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}/history?limit=${limit}`, { credentials: 'include',
     headers: authHeaders(),
   });
   return res.json();
 }
 
 export async function restoreConfigVersion(owner: string, repo: string, historyId: number) {
-  const res = await fetch(`${BASE}/api/config/${owner}/${repo}/restore/${historyId}`, {
+  const res = await fetch(`${BASE}/api/config/${owner}/${repo}/restore/${historyId}`, { credentials: 'include',
     method: "POST",
     headers: authHeaders(),
   });
@@ -513,7 +511,7 @@ export async function restoreConfigVersion(owner: string, repo: string, historyI
 // ── Waiver actions ────────────────────────────────────────────────────────
 
 export async function grantWaiver(repo: string, pillar: string, scope: string, scopeValue: string, reason: string, grantedBy: string, expiresAt?: string) {
-  const res = await fetch(`${BASE}/api/waivers`, {
+  const res = await fetch(`${BASE}/api/waivers`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ repo, pillar, scope, scopeValue, reason, grantedBy, expiresAt }),
@@ -522,7 +520,7 @@ export async function grantWaiver(repo: string, pillar: string, scope: string, s
 }
 
 export async function revokeWaiver(id: number, revokedBy = "dashboard") {
-  const res = await fetch(`${BASE}/api/waivers/${id}`, {
+  const res = await fetch(`${BASE}/api/waivers/${id}`, { credentials: 'include',
     method: "DELETE",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ revokedBy }),
@@ -541,7 +539,7 @@ export async function getActivity(params = "") {
 
 export async function getActivitySummary(since?: string) {
   const params = since ? `?since=${since}` : "";
-  const res = await fetch(`${BASE}/api/activity/summary${params}`, {
+  const res = await fetch(`${BASE}/api/activity/summary${params}`, { credentials: 'include',
     headers: authHeaders(),
   });
   return res.json();
@@ -550,14 +548,14 @@ export async function getActivitySummary(since?: string) {
 // ── Readiness Scores ───────────────────────────────────────────────────────
 
 export async function getReadiness() {
-  const res = await fetch(`${BASE}/api/readiness`, {
+  const res = await fetch(`${BASE}/api/readiness`, { credentials: 'include',
     headers: authHeaders(),
   });
   return res.json();
 }
 
 export async function getRepoReadiness(owner: string, repo: string) {
-  const res = await fetch(`${BASE}/api/readiness/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/readiness/${owner}/${repo}`, { credentials: 'include',
     headers: authHeaders(),
   });
   return res.json();
@@ -566,7 +564,7 @@ export async function getRepoReadiness(owner: string, repo: string) {
 // ── Quality Gates ────────────────────────────────────────────────────────
 
 export async function evaluateGates(owner: string, repo: string, headSha?: string, prNumber?: number) {
-  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}/evaluate`, {
+  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}/evaluate`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ head_sha: headSha, pr_number: prNumber }),
@@ -575,7 +573,7 @@ export async function evaluateGates(owner: string, repo: string, headSha?: strin
 }
 
 export async function createGate(owner: string, repo: string, name: string, conditions: Array<{metric: string, operator: string, threshold: number}>, blockOnFail = true) {
-  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}`, {
+  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}`, { credentials: 'include',
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ name, conditions, block_on_fail: blockOnFail }),
@@ -584,7 +582,7 @@ export async function createGate(owner: string, repo: string, name: string, cond
 }
 
 export async function deleteGate(owner: string, repo: string, name: string) {
-  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}/${encodeURIComponent(name)}`, {
+  const res = await fetch(`${BASE}/api/gates/${owner}/${repo}/${encodeURIComponent(name)}`, { credentials: 'include',
     method: "DELETE",
     headers: authHeaders(),
   });

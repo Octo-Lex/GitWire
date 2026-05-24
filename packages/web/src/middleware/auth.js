@@ -1,10 +1,38 @@
 // src/middleware/auth.js
-// Simple API key authentication for REST API routes.
-// Reads API_KEYS from env (comma-separated) or falls back to a single API_KEY.
-// Skips auth for /health and /webhooks (those handle their own verification).
+// API key + session cookie authentication for REST API routes.
+// Accepts:
+//   1. Authorization: Bearer <key> header
+//   2. ?api_key=<key> query parameter
+//   3. gitwire-session cookie (Redis-backed session)
+// Skips auth for /health, /webhooks, and /api/auth/*.
 
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
+import { createClient } from "redis";
+
+const SESSION_PREFIX = "gitwire:session:";
+
+// Lazy Redis client for session lookups
+let sessionRedis = null;
+async function getSessionRedis() {
+  if (!sessionRedis) {
+    sessionRedis = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
+    await sessionRedis.connect();
+  }
+  return sessionRedis;
+}
+
+// Parse cookies from request header
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  if (!header) return {};
+  const cookies = {};
+  for (const pair of header.split(";")) {
+    const [k, ...v] = pair.split("=");
+    cookies[k.trim()] = v.join("=").trim();
+  }
+  return cookies;
+}
 
 // ── Resolve allowed keys ────────────────────────────────────────────────────
 const keys = new Set();
@@ -37,8 +65,12 @@ if (keys.size === 0) {
  * Skips /health and /webhooks paths.
  */
 export function apiKeyAuth(req, res, next) {
-  // Skip auth for health checks and webhook endpoint
-  if (req.path === "/health" || req.path.startsWith("/webhooks")) {
+  // Skip auth for health checks, webhook endpoint, and auth routes
+  if (
+    req.path === "/health" ||
+    req.path.startsWith("/webhooks") ||
+    req.path.startsWith("/api/auth")
+  ) {
     return next();
   }
 
@@ -52,6 +84,25 @@ export function apiKeyAuth(req, res, next) {
 
   if (!providedKey && req.query?.api_key) {
     providedKey = req.query.api_key;
+  }
+
+  // Check session cookie if no Bearer token
+  if (!providedKey) {
+    const cookies = parseCookies(req);
+    const sessionToken = cookies["gitwire-session"];
+    if (sessionToken) {
+      try {
+        const redis = await getSessionRedis();
+        const data = await redis.get(SESSION_PREFIX + sessionToken);
+        if (data) {
+          // Valid session — refresh TTL
+          await redis.expire(SESSION_PREFIX + sessionToken, 7 * 24 * 60 * 60);
+          return next();
+        }
+      } catch (err) {
+        logger.warn({ err }, "Session lookup failed");
+      }
+    }
   }
 
   if (!providedKey || !keys.has(providedKey)) {
