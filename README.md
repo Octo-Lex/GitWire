@@ -232,9 +232,11 @@ Key areas:
 
 ## Telegram Bot
 
-GitWire also ships with a Telegram bot for operational checks and lightweight commands.
+<table>
+<tr>
+<td width="50%" valign="top">
 
-Example commands:
+GitWire ships with a Telegram bot for operational checks and lightweight commands.
 
 ```
 /status              system health and recent activity
@@ -248,6 +250,15 @@ Example commands:
 /activity            action summary
 /actions             recent managed actions
 ```
+
+</td>
+<td width="50%" valign="middle" align="center">
+
+<img src="TelegramBot.png" alt="GitWire Telegram Bot" width="100%">
+
+</td>
+</tr>
+</table>
 
 ---
 
