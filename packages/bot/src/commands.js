@@ -72,55 +72,28 @@ export function registerCommands(bot) {
   // ── /help — Show commands ─────────────────────────────────────────────────
   bot.command("help", async (ctx) => {
     ctx.reply(
-      "⚡ <b>GitWire Bot Commands</b>
-
-" +
-      "<b>Overview</b>
-" +
-      "/status — System health + fleet summary
-" +
-      "/repos — Connected repositories
-" +
-      "/readiness — Fleet readiness scores
-" +
-      "/activity — Recent action summary
-
-" +
-      "<b>Actions</b>
-" +
-      "/actions — Recent managed actions
-" +
-      "/decisions — Recent decision log
-
-" +
-      "<b>Triggers</b>
-" +
-      "/heal run_id — Trigger CI auto-heal
-" +
-      "/fix owner/repo # — Trigger issue fix
-
-" +
-      "<b>Quality Gates</b>
-" +
-      "/gates owner/repo — Gate status
-" +
-      "/evaluate owner/repo — Run gates now
-
-" +
-      "<b>Config</b>
-" +
-      "/deliveries — Webhook delivery stats
-" +
-      "/config owner/repo — .gitwire.yml config
-
-" +
-      "<b>Auth</b>
-" +
-      "/start API_KEY — Authenticate
-" +
-      "/whoami — Show auth status
-" +
-      "/logout — Remove your API key",
+      "\u26A1 <b>GitWire Bot Commands</b>\n\n" +
+      "<b>Overview</b>\n" +
+      "/status \u2014 System health + fleet summary\n" +
+      "/repos \u2014 Connected repositories\n" +
+      "/readiness \u2014 Fleet readiness scores\n" +
+      "/activity \u2014 Recent action summary\n\n" +
+      "<b>Actions</b>\n" +
+      "/actions \u2014 Recent managed actions\n" +
+      "/decisions \u2014 Recent decision log\n\n" +
+      "<b>Triggers</b>\n" +
+      "/heal run_id \u2014 Trigger CI auto-heal\n" +
+      "/fix owner/repo # \u2014 Trigger issue fix\n\n" +
+      "<b>Quality Gates</b>\n" +
+      "/gates owner/repo \u2014 Gate status\n" +
+      "/evaluate owner/repo \u2014 Run gates now\n\n" +
+      "<b>Config</b>\n" +
+      "/deliveries \u2014 Webhook delivery stats\n" +
+      "/config owner/repo \u2014 .gitwire.yml config\n\n" +
+      "<b>Auth</b>\n" +
+      "/start API_KEY \u2014 Authenticate\n" +
+      "/whoami \u2014 Show auth status\n" +
+      "/logout \u2014 Remove your API key",
       { parse_mode: "HTML" }
     );
   });
