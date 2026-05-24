@@ -111,6 +111,9 @@ router.get("/summary", async (req, res) => {
     const params = [];
     let whereClause = "";
     if (since) {
+      if (isNaN(Date.parse(since))) {
+        return res.status(400).json({ error: "Invalid 'since' parameter — must be a valid ISO timestamp" });
+      }
       params.push(since);
       whereClause = "WHERE created_at >= $1";
     }
