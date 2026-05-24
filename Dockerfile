@@ -12,7 +12,6 @@ COPY packages/runtime/package.json ./packages/runtime/package.json
 COPY packages/rules/package.json ./packages/rules/package.json
 COPY packages/web/package.json ./packages/web/package.json
 COPY packages/worker/package.json ./packages/worker/package.json
-
 # Install production dependencies only, skip lifecycle scripts (husky etc.)
 RUN npm ci --omit=dev --ignore-scripts 2>/dev/null || npm install --omit=dev --ignore-scripts
 

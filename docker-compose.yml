@@ -57,6 +57,29 @@ services:
       timeout: 3s
       retries: 5
 
+  bot:
+    build:
+      context: packages/bot
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      GITWIRE_API_URL: http://gitwire-app:3000
+      REDIS_URL: redis://redis:6379
+      PORT: "3002"
+    depends_on:
+      gitwire-app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - gitwire-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped

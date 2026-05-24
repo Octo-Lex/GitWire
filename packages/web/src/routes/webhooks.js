@@ -18,6 +18,7 @@ import { parseGitwireCommand, resolveCommandAction, buildCommandResponse } from 
 import { invalidateConfigCache } from "../services/configService.js";
 import { evaluateAndExecuteCustomRules } from "../services/customRulesService.js";
 import { evaluateGatesForPR as evaluateQualityGates } from "../services/qualityGateService.js";
+import { notifyCustomRule, notifyGateResult } from "../services/telegramNotifyService.js";
 import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFromDecision } from "../lib/checkStatus.js";
 
 export const webhookRouter = Router();
@@ -80,6 +81,14 @@ webhookRouter.post(
             { deliveryId, rules: customResults.map((r) => r.name) },
             "Custom rules executed"
           );
+          // Notify Telegram subscribers
+          for (const r of customResults) {
+            notifyCustomRule(payload.repository.full_name, {
+              rule_name: r.name,
+              action_type: r.actions?.[0]?.type,
+              matched: true,
+            });
+          }
         }
       } catch (err) {
         logger.warn({ err: err.message, deliveryId }, "Custom rules evaluation failed (non-fatal)");
@@ -107,6 +116,14 @@ webhookRouter.post(
               { deliveryId, pr: pr.number, gateResults: gateResults.length, failed: failed.length },
               "Quality gates evaluated"
             );
+            // Notify Telegram subscribers
+            const allPassed = failed.length === 0;
+            notifyGateResult(payload.repository.full_name, {
+              pr_number: pr.number,
+              passed: allPassed,
+              gate_name: gateResults.map((g) => g.name).join(", "),
+              summary: allPassed ? "All gates passed" : `${failed.length} gate(s) failed`,
+            });
           }
         }
       } catch (err) {

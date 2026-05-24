@@ -1,0 +1,13 @@
+{
+  "name": "@gitwire/bot",
+  "version": "0.11.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "grammy": "^1.36.0"
+  }
+}
