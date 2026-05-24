@@ -3,7 +3,7 @@ import { defineConfig } from "vitepress";
 export default defineConfig({
   title: "GitWire Docs",
   description: "Self-hosted AI that manages your GitHub",
-  base: "/docs/",
+  base: "/",
   themeConfig: {
     logo: "/logo.svg",
     siteTitle: "GitWire",
