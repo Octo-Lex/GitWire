@@ -134,11 +134,11 @@ export function registerCommands(bot) {
       }
 
       let text = `📦 <b>${repos.length} Repositories</b>\n\n`;
-      for (const r of repos.slice(0, 15)) {
+      for (const r of repos) {
         const name = r.full_name || r.name || "unknown";
         text += `• <code>${escHtml(name)}</code>\n`;
       }
-      if (repos.length > 15) text += `\n... and ${repos.length - 15} more`;
+      if (repos.length > 20) text += `\n... and ${repos.length - 20} more`;
 
       ctx.reply(text, { parse_mode: "HTML" });
     } catch (err) {
