@@ -5,7 +5,7 @@ GitWire Backend — API server and background workers for the [GitWire](https://
 ## Stack
 
 - **Express** — REST API with JSON body parsing
-- **PostgreSQL 16** — persistent storage (44 tables + 1 view, 18 migrations)
+- **PostgreSQL 16** — persistent storage (45 tables + 1 view, 19 migrations)
 - **Redis 7 + BullMQ** — 9 background job queues
 - **Octokit** — GitHub API via `@octokit/app` (REST only)
 - **Anthropic Claude** — AI triage, CI diagnosis, issue fixes, PR review
@@ -18,7 +18,7 @@ src/
   index.js           Server startup + worker initialization
   config/index.js    Environment config with runtime secret guard
 
-  routes/            HTTP endpoints (21 route files)
+  routes/            HTTP endpoints (22 route files)
     repos.js         Repository CRUD + sync trigger
     issues.js        Issue listing + triage results
     pullRequests.js  PR listing + review data
@@ -41,8 +41,8 @@ src/
     gates.js         Quality gates CRUD + evaluation
     webhookDeliveries.js  Webhook delivery stats + history
 
-  services/          Business logic (25 service files)
-  workers/           BullMQ job processors (9 workers)
+  services/          Business logic (27 service files)
+  workers/           BullMQ job processors (10 workers)
   lib/               Shared: db, queue, logger, github client, comment router
   middleware/        Auth (API key), pagination, rate limiting
 

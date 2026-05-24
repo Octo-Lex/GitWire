@@ -4,7 +4,7 @@ This file provides context for AI coding agents interacting with the GitWire cod
 
 ## About GitWire
 
-GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard. Current version: **0.11.0**.
+GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard. Current version: **0.12.0**.
 
 ## Repository Structure
 
@@ -15,17 +15,17 @@ GitWire/
 │   │   ├── src/
 │   │   │   ├── app.js           # Express app setup, route mounting
 │   │   │   ├── index.js         # Entry: starts server + all workers
-│   │   │   ├── routes/          # 21 route files
-│   │   │   ├── services/        # 25 business logic modules
-│   │   │   ├── workers/         # 9 BullMQ background workers
+│   │   │   ├── routes/          # 22 route files
+│   │   │   ├── services/        # 27 business logic modules
+│   │   │   ├── workers/         # 10 BullMQ background workers (incl. reconciliation)
 │   │   │   ├── lib/             # GitHub client, queue helpers, DB
 │   │   │   └── middleware/      # Auth, pagination, rate limiting
-│   │   ├── db/migrations/       # 18 SQL migrations (44 tables + 1 view)
+│   │   ├── db/migrations/       # 19 SQL migrations (45 tables + 1 view)
 │   │   ├── tests/               # Unit + integration tests (Jest)
 │   │   └── docker-compose.prod.yml
 │   ├── web-dashboard/       # Next.js 16 + Tailwind + SWR
 │   │   └── src/
-│   │       ├── app/             # 24 pages (App Router)
+│   │       ├── app/             # 25 pages (App Router)
 │   │       ├── components/      # UI components (Sidebar, panels)
 │   │       └── lib/             # API client, types
 │   ├── rules/               # @gitwire/rules — config, expression engine, quality gates

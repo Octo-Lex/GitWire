@@ -1,6 +1,6 @@
 {
   "name": "gitwire",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "description": "AI-powered GitHub account management platform",
   "type": "module",

@@ -59,7 +59,7 @@ npm run dev
 The server starts at `http://localhost:3000`. You should see:
 
 ```
-GitWire API v0.11.0 running on :3000
+GitWire API v0.12.0 running on :3000
 9 workers started
 Connected to PostgreSQL
 Connected to Redis

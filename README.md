@@ -311,7 +311,7 @@ npm run db:migrate   # Apply PostgreSQL migrations
 |------|--------------|
 | Backend workers | 9 BullMQ workers |
 | Database | 45 tables across 19 migrations |
-| Dashboard | 24 app sections |
+| Dashboard | 25 app sections |
 | Backend routes | Express REST API with webhook ingestion |
 | Policy engine | `.gitwire.yml`, expressions, custom rules, quality gates |
 | Interfaces | REST API, dashboard, Telegram bot |
