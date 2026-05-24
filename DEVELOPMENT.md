@@ -59,7 +59,7 @@ npm run dev
 The server starts at `http://localhost:3000`. You should see:
 
 ```
-GitWire API v0.1.0 running on :3000
+GitWire API v0.11.0 running on :3000
 9 workers started
 Connected to PostgreSQL
 Connected to Redis
@@ -90,7 +90,7 @@ cd packages/web
 npm test
 ```
 
-49 integration tests across 9 suites. Tests run against the **live production API** at `https://gitwire.erlab.uk` (not localhost). Ensure you have network access.
+251 tests across rules (184), runtime (16), web service (44), and dashboard (66) suites. Integration tests run against the **live production API** at `https://gitwire.erlab.uk` (not localhost). Ensure you have network access. Unit/service tests can run offline with `--testPathPattern="unit"`.
 
 ## Project Structure
 
@@ -112,8 +112,8 @@ packages/web/
 │       ├── auth.js          # API key authentication
 │       ├── pagination.js    # Page/limit parsing
 │       └── rateLimiter.js   # Redis rate limiting
-├── db/migrations/           # SQL migrations (001–011)
-├── tests/                   # Integration tests
+├── db/migrations/           # SQL migrations (001–018)
+├── tests/                   # Unit + integration tests
 ├── docker/                  # Docker configs
 └── docker-compose.prod.yml  # Production Docker Compose
 ```

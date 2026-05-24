@@ -28,6 +28,6 @@
     "pino-pretty": "^10.0.0"
   },
   "scripts": {
-    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js"
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --forceExit"
   }
 }

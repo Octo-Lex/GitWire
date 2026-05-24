@@ -11,7 +11,7 @@
     "dev": "npm --workspace=@gitwire/web run dev",
     "build": "npm run --workspaces build",
     "lint": "eslint packages/*/src/",
-    "test": "npm run --workspaces test",
+    "test": "npm run --workspaces --if-present test",
     "db:migrate": "node scripts/migrate.js",
     "start": "npm --workspace=@gitwire/web run start",
     "prepare": "husky 2>/dev/null || true"

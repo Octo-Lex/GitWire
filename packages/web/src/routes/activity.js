@@ -108,22 +108,27 @@ router.get("/", async (req, res) => {
 router.get("/summary", async (req, res) => {
   try {
     const { since } = req.query;
-    const sinceClause = since ? `WHERE created_at >= '${since}'` : "";
+    const params = [];
+    let whereClause = "";
+    if (since) {
+      params.push(since);
+      whereClause = "WHERE created_at >= $1";
+    }
 
     const result = await db.query(`
       SELECT
         source,
         status,
         COUNT(*)::int AS count
-      FROM action_feed ${sinceClause}
+      FROM action_feed ${whereClause}
       GROUP BY source, status
       ORDER BY source, status
-    `);
+    `, params);
 
     // Also get total counts
     const totalResult = await db.query(`
-      SELECT COUNT(*)::int AS total FROM action_feed ${sinceClause}
-    `);
+      SELECT COUNT(*)::int AS total FROM action_feed ${whereClause}
+    `, params);
 
     // Get recent counts (last 24h, last 7d)
     const recentResult = await db.query(`

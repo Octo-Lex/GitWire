@@ -5,7 +5,7 @@ GitWire Backend — API server and background workers for the [GitWire](https://
 ## Stack
 
 - **Express** — REST API with JSON body parsing
-- **PostgreSQL 16** — persistent storage (36 tables, 11 migrations)
+- **PostgreSQL 16** — persistent storage (44 tables + 1 view, 18 migrations)
 - **Redis 7 + BullMQ** — 9 background job queues
 - **Octokit** — GitHub API via `@octokit/app` (REST only)
 - **Anthropic Claude** — AI triage, CI diagnosis, issue fixes, PR review
@@ -18,7 +18,7 @@ src/
   index.js           Server startup + worker initialization
   config/index.js    Environment config with runtime secret guard
 
-  routes/            HTTP endpoints (14 route files)
+  routes/            HTTP endpoints (21 route files)
     repos.js         Repository CRUD + sync trigger
     issues.js        Issue listing + triage results
     pullRequests.js  PR listing + review data
@@ -33,13 +33,21 @@ src/
     phase3.js        Flaky tests, dependencies, policy reconciliation
     phase4.js        AI review, audit trail
     insights.js      Cross-repo aggregation
+    activity.js      Unified action feed
+    readiness.js     Repo readiness scores
+    config.js        .gitwire.yml config management + playground
+    decisions.js     Decision log
+    waivers.js       Policy waivers
+    gates.js         Quality gates CRUD + evaluation
+    webhookDeliveries.js  Webhook delivery stats + history
 
-  services/          Business logic (17 service files)
+  services/          Business logic (25 service files)
   workers/           BullMQ job processors (9 workers)
   lib/               Shared: db, queue, logger, github client, comment router
+  middleware/        Auth (API key), pagination, rate limiting
 
 db/
-  migrations/        001–011 SQL migrations
+  migrations/        001–018 SQL migrations
 ```
 
 ## Authentication
@@ -81,7 +89,8 @@ Requires a running PostgreSQL and Redis. Configure via `.env` (see `.env.example
 npm test
 ```
 
-395 tests across unit, service mock, stress, and dashboard suites.
+251 tests across rules (184), runtime (16), web service (44), and dashboard (66) suites.
+Integration tests (web `api.*.test.js`) run against a live API and require network access.
 
 ## Deployment
 

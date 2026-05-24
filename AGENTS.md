@@ -4,7 +4,7 @@ This file provides context for AI coding agents interacting with the GitWire cod
 
 ## About GitWire
 
-GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard.
+GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard. Current version: **0.11.0**.
 
 ## Repository Structure
 
@@ -15,22 +15,25 @@ GitWire/
 │   │   ├── src/
 │   │   │   ├── app.js           # Express app setup, route mounting
 │   │   │   ├── index.js         # Entry: starts server + all workers
-│   │   │   ├── routes/          # 14 route files, 102 endpoints
-│   │   │   ├── services/        # 17 business logic modules
+│   │   │   ├── routes/          # 21 route files
+│   │   │   ├── services/        # 25 business logic modules
 │   │   │   ├── workers/         # 9 BullMQ background workers
 │   │   │   ├── lib/             # GitHub client, queue helpers, DB
 │   │   │   └── middleware/      # Auth, pagination, rate limiting
-│   │   ├── db/migrations/       # 11 SQL migrations (36 tables)
-│   │   ├── tests/               # 49 integration tests (Jest + supertest)
+│   │   ├── db/migrations/       # 18 SQL migrations (44 tables + 1 view)
+│   │   ├── tests/               # Unit + integration tests (Jest)
 │   │   └── docker-compose.prod.yml
 │   ├── web-dashboard/       # Next.js 16 + Tailwind + SWR
 │   │   └── src/
-│   │       ├── app/             # 12 pages (App Router)
-│   │       ├── components/      # UI components
+│   │       ├── app/             # 24 pages (App Router)
+│   │       ├── components/      # UI components (Sidebar, panels)
 │   │       └── lib/             # API client, types
-│   └── core/                # @gitwire/core shared constants
-│       └── src/index.js         # QUEUES, HEAL_STATUS, FAILURE_TYPES, etc.
-├── docs/                    # VitePress documentation site (83 pages)
+│   ├── rules/               # @gitwire/rules — config, expression engine, quality gates
+│   ├── runtime/             # @gitwire/runtime — DB, Redis, logger, GitHub factories
+│   ├── core/                # @gitwire/core shared constants
+│   │   └── src/index.js         # QUEUES, HEAL_STATUS, FAILURE_TYPES, etc.
+│   └── (stubs: triage, healer, maintainer, mcp, cli, quality-gate, ai-skills, insights)
+├── docs/                    # VitePress documentation site (114+ pages)
 └── docker-compose.yml
 ```
 
@@ -49,7 +52,8 @@ When modifying this codebase, ALWAYS follow these rules:
 - Column naming: `triage_type`, `triage_priority`, `triage_summary` (not `type`/`priority`)
 - CI runs: `heal_failure_type` (not `failure_type`)
 - Pull requests: `head_branch` (not `head_ref`)
-- Use `addParam()` for ALL parameters including LIMIT/OFFSET in paginated queries
+- Use `addParam()` or `$N` placeholders for ALL parameters including LIMIT/OFFSET
+- NEVER interpolate user input into SQL strings
 - Append `::text` to ILIKE parameters for type casting
 
 ### Error Handling
@@ -64,7 +68,21 @@ When modifying this codebase, ALWAYS follow these rules:
 - All routes use `reposRouter.get("/")` style (camelCase variable + method)
 - API key auth via `Authorization: Bearer KEY` header
 - Pagination via `page` + `limit` query params
-- Responses: `{ data: [...], pagination: { page, limit, total, pages } }`
+- Responses: `{ data: [...], pagination: { page, limit, total, pages } }` or `{ data: [...], meta: { total, limit, offset } }`
+
+### Dashboard Patterns
+- Object-shaped API responses use raw `useSWR<T>` with `fetcher`
+- Array-shaped responses use `useApi<T>` hook (auto-unwraps)
+- UI components: Badge, StatCard, EmptyState, PageHeader from `@/components/ui`
+- NO Card, Table, MetricGrid — use raw HTML `<div className="card">` and `<table>`
+- Turbopack parser requires `catch (_e)` not bare `catch`
+
+### Rules Package
+- Expression engine: recursive-descent parser with precedence levels
+- Plugin files use CJS `module.exports` (sandbox wraps in `new Function()`)
+- Exports map must include both extensionless and `.js` patterns for ESM
+- `some()`/`all()` evaluate inner expression per array element
+- Named expressions pre-resolved before rule evaluation
 
 ## Running Locally
 
@@ -81,23 +99,27 @@ cd packages/web
 docker compose up -d postgres redis
 
 # Run migrations
-docker exec -it gitwire-postgres psql -U gitwire -d gitops_hub -f /docker-entrypoint-initdb.d/001_initial_schema.sql
+npm run db:migrate
 
 # Start the API server
 cd packages/web
 npm run dev
 
-# Run tests (against live API at https://gitwire.erlab.uk)
-cd packages/web
-npm test
+# Run tests
+npm test                    # All workspaces (251 tests)
+cd packages/rules && npm test   # 184 rules tests
+cd packages/runtime && npm test # 16 runtime tests
 ```
 
 ## Testing
 
-- 49 integration tests across 9 test suites
-- Tests use `fetch()` against the live production API
-- Located in `packages/web/tests/`
-- Run with `npm test` (uses Jest)
+- **251 tests total** across 4 suites:
+  - `@gitwire/rules`: 184 tests (expression engine, gates, parsing, plugins, helpers)
+  - `@gitwire/runtime`: 16 tests (factory patterns, compat layer)
+  - `@gitwire/web`: 44 service unit tests (+ integration tests requiring live API)
+  - `@gitwire/web-dashboard`: 66 tests (API client, components)
+- Run all: `npm test` (root, uses `--workspaces --if-present`)
+- Rules/engine tests require `--experimental-vm-modules`
 
 ## Common Tasks
 
@@ -116,9 +138,15 @@ npm test
 2. Add queue name to `packages/core/src/index.js` QUEUES constant
 3. Import and start in `packages/web/src/index.js`
 
+### Adding a new dashboard page
+1. Create page at `packages/web-dashboard/src/app/<slug>/page.tsx`
+2. Add sidebar entry in `packages/web-dashboard/src/components/Sidebar.tsx`
+3. Add API URL helper in `packages/web-dashboard/src/lib/api.ts`
+
 ## Style Guide
 
 - **JavaScript** (not TypeScript for backend) — JSDoc comments for type hints
+- **TypeScript** for dashboard (strict mode)
 - **2-space indentation**
 - **Async/await** — no raw promises or callbacks
 - **ESM** — use `import`/`export`, not `require()`
