@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/banner.png" alt="GitWire — Self-hosted AI governance for GitHub organizations" width="100%">
+</p>
+
 # GitWire
 
 > Self-hosted AI that manages your GitHub — triage, CI healing, stale management, autonomous fixes, quality gates, and more.
