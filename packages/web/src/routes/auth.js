@@ -52,7 +52,7 @@ router.post("/login", async (req, res) => {
     const sessionKey = SESSION_PREFIX + token;
 
     // Store in Redis
-    await redis.setEx(sessionKey, SESSION_TTL, JSON.stringify({
+    await redis.setex(sessionKey, SESSION_TTL, JSON.stringify({
       created: new Date().toISOString(),
       ip: req.ip || "unknown",
     }));
