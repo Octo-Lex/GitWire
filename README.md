@@ -232,11 +232,11 @@ Key areas:
 
 ## Telegram Bot
 
+GitWire ships with a Telegram bot for operational checks and lightweight commands.
+
 <table>
 <tr>
 <td width="50%" valign="top">
-
-GitWire ships with a Telegram bot for operational checks and lightweight commands.
 
 ```
 /status              system health and recent activity
