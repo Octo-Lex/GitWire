@@ -64,7 +64,7 @@ if (keys.size === 0) {
  *
  * Skips /health and /webhooks paths.
  */
-export function apiKeyAuth(req, res, next) {
+export async function apiKeyAuth(req, res, next) {
   // Skip auth for health checks, webhook endpoint, and auth routes
   if (
     req.path === "/health" ||
