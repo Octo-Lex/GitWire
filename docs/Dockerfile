@@ -13,6 +13,13 @@ RUN echo 'server { \
     listen 80; \
     root /usr/share/nginx/html; \
     index index.html; \
+    location /docs/ { \
+        alias /usr/share/nginx/html/; \
+        try_files $uri $uri/ $uri.html /index.html; \
+    } \
+    location /docs { \
+        return 301 /docs/; \
+    } \
     location / { \
         try_files $uri $uri/ $uri.html /index.html; \
     } \
