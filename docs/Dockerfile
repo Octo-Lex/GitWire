@@ -8,7 +8,7 @@ RUN npm run docs:build
 
 # Serve with nginx
 FROM nginx:alpine
-COPY --from=build /app/docs/.vitepress/dist /usr/share/nginx/html
+COPY --from=build /app/.vitepress/dist /usr/share/nginx/html
 RUN echo 'server { \
     listen 80; \
     root /usr/share/nginx/html; \
