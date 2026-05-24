@@ -153,13 +153,16 @@ export function registerCommands(bot) {
 
     try {
       const result = await getReadiness(apiKey);
-      const repos = result?.data ?? result ?? [];
+      const repos = result?.repos ?? result?.data ?? (Array.isArray(result) ? result : []);
 
       if (repos.length === 0) {
         return ctx.reply("📊 No readiness data yet.");
       }
 
-      let text = "📊 <b>Fleet Readiness</b>\n\n";
+      const avg = result?.average_score;
+      let text = "📊 <b>Fleet Readiness</b>";
+      if (avg != null) text += ` — avg: ${Math.round(avg)}`;
+      text += "\n\n";
       for (const r of repos.slice(0, 10)) {
         const score = r.readiness_score ?? r.score ?? "—";
         const emoji = score >= 70 ? "🟢" : score >= 40 ? "🟡" : "🔴";
