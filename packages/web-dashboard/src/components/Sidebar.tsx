@@ -15,7 +15,7 @@ const NAV = [
   { href: "/trust",         label: "Trust & Policy",  icon: "🛡" },
   { href: "/insights",      label: "Insights",        icon: "◈" },
   { href: "/activity",     label: "Activity",       icon: "📊" },
-  { href: "/webhooks",    label: "Webhooks",       icon: "🔗" },
+  { href: "/deliveries",  label: "Deliveries",     icon: "🔗" },
   { href: "/decisions",   label: "Decisions",     icon: "⚖" },
   { href: "/waivers",     label: "Waivers",       icon: "🛡" },
   { href: "/readiness",   label: "Readiness",     icon: "✓" },
