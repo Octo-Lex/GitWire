@@ -18,6 +18,7 @@ import { checkAndMark } from "../services/idempotencyService.js";
 import { emitWorkerEvent } from "../services/workerEvents.js";
 import { isWaived } from "../services/waiverService.js";
 import { Trail } from "../services/auditTrailService.js";
+import { notifyCIFailure } from "../services/telegramNotifyService.js";
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -398,6 +399,14 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     });
 
     logger.info({ runId: run.id, prNumber: pr.number, prUrl: pr.html_url }, "Patch PR created");
+
+    // Notify Telegram subscribers
+    notifyCIFailure(repository.full_name, {
+      pr_number: pr.number,
+      failure_type: diagnosis.failure_type,
+      confidence: diagnosis.confidence,
+      healed: true,
+    });
 
     // 6. Add labels and request review from last committer
     try {

@@ -87,6 +87,7 @@ export function registerCommands(bot) {
       "/config owner/repo — Show .gitwire.yml config\n\n" +
       "<b>Auth</b>\n" +
       "/start API_KEY — Authenticate\n" +
+      "/whoami — Show auth status\n" +
       "/logout — Remove your API key",
       { parse_mode: "HTML" }
     );
@@ -384,5 +385,26 @@ export function registerCommands(bot) {
     const { removeUserKey } = await import("./auth.js");
     await removeUserKey(ctx.from.id);
     ctx.reply("👋 Logged out. Your API key has been removed.");
+  });
+
+  // ── /whoami — Show current auth status ─────────────────────────────────────
+  bot.command("whoami", async (ctx) => {
+    const apiKey = await getUserKey(ctx.from.id);
+    if (!apiKey) {
+      return ctx.reply("🔐 Not authenticated. Use /start YOUR_API_KEY");
+    }
+
+    try {
+      const health = await getHealth(apiKey);
+      ctx.reply(
+        "✅ <b>Authenticated</b>\n" +
+        `User ID: <code>${ctx.from.id}</code>\n` +
+        `API: <code>${escHtml(apiKey.slice(0, 8))}...${escHtml(apiKey.slice(-4))}</code>\n` +
+        `Gateway: ${escHtml(health.status)}`,
+        { parse_mode: "HTML" }
+      );
+    } catch (err) {
+      ctx.reply("❌ API key invalid or server unreachable. Try /start again.");
+    }
   });
 }

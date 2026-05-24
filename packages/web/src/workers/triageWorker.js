@@ -15,6 +15,7 @@ import { recordAction } from "../services/managedActionService.js";
 import { logDecision } from "../services/decisionLogService.js";
 import { checkAndMark } from "../services/idempotencyService.js";
 import { isWaived } from "../services/waiverService.js";
+import { notifyTriage } from "../services/telegramNotifyService.js";
 
 const anthropic = new Anthropic({ 
   apiKey: config.anthropic.apiKey,
@@ -163,6 +164,13 @@ async function triageIssue({ payload }) {
   });
 
   logger.info({ issue: issue.number, type: classification.type, priority: classification.priority }, "Issue triage persisted");
+
+  // Notify Telegram subscribers
+  notifyTriage(repository.full_name, {
+    issue_number: issue.number,
+    priority: classification.priority,
+    triage_type: classification.type,
+  });
 
   // ── Log decision ──────────────────────────────────────────────────────────
   await logDecision({

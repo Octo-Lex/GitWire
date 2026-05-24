@@ -19,6 +19,7 @@ import { checkAndMark } from "../services/idempotencyService.js";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
+import { notifyIssueFix } from "../services/telegramNotifyService.js";
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -344,6 +345,12 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
     });
 
     logger.info({ repo, issueNumber, prNumber: pr.number, prUrl: pr.html_url, confidence }, "Fix PR created");
+
+    // Notify Telegram subscribers
+    notifyIssueFix(repository.full_name, {
+      issue_number: issueNumber,
+      status: "fix_pr_created",
+    });
 
     // Add labels to PR
     try {

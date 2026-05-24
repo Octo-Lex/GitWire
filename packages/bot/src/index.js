@@ -11,7 +11,7 @@
 import { Bot } from "grammy";
 import express from "express";
 import { registerCommands } from "./commands.js";
-import { handleNotification, subscribe, unsubscribe } from "./notifications.js";
+import { handleNotification, subscribe, unsubscribe, registerCallbacks } from "./notifications.js";
 import { setUserKey, getUserKey } from "./auth.js";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -27,6 +27,7 @@ const bot = new Bot(BOT_TOKEN);
 
 // ── Register all commands ───────────────────────────────────────────────────
 registerCommands(bot);
+registerCallbacks(bot);
 
 // ── Auto-subscribe on auth ──────────────────────────────────────────────────
 // When user runs /start, also subscribe them to notifications
