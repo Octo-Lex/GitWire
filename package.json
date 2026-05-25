@@ -14,7 +14,10 @@
     "test": "npm run --workspaces --if-present test",
     "db:migrate": "node scripts/migrate.js",
     "start": "npm --workspace=@gitwire/web run start",
-    "prepare": "husky 2>/dev/null || true"
+    "prepare": "husky 2>/dev/null || true",
+    "benchmark": "node scripts/benchmark.js",
+    "benchmark:api": "node scripts/benchmark.js --api",
+    "benchmark:webhook": "node scripts/benchmark.js --webhook"
   },
   "workspaces": [
     "packages/*"

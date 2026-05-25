@@ -188,6 +188,13 @@ export default defineConfig({
         ],
       },
       {
+        text: "Operations",
+        collapsed: true,
+        items: [
+          { text: "Benchmark Harness", link: "/operations/benchmark-harness" },
+        ],
+      },
+      {
         text: "Architecture",
         collapsed: true,
         items: [

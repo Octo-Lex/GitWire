@@ -52,3 +52,6 @@ docs/node_modules/
 # Local backups (production data)
 backups/
 .github/banner.html
+
+# Benchmark results
+benchmark-results-*.json
