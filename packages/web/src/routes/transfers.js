@@ -1,50 +1,57 @@
 // src/routes/transfers.js
-// Repository transfer API — migrate data or start fresh when a repo changes org/owner.
+// Repository reconciliation API — detect and resolve orphaned repos.
 //
-// POST /api/repos/:owner/:repo/transfer/preview  — preview what would happen
-// POST /api/repos/:owner/:repo/transfer           — execute the transfer
+// GET  /api/repos/reconcile          — list detected orphans
+// POST /api/repos/reconcile/merge    — merge orphan data into live repo
+// POST /api/repos/reconcile/discard  — discard orphan without merging
 
 import { Router } from "express";
-import { transferRepo, getTransferPreview } from "../services/repoTransferService.js";
+import { detectOrphans, mergeOrphan, discardOrphan } from "../services/repoTransferService.js";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
 
-// ── POST /api/repos/:owner/:repo/transfer/preview ─────────────────────────
-router.post("/:owner/:repo/transfer/preview", async (req, res) => {
+// ── GET /api/repos/reconcile ──────────────────────────────────────────────
+router.get("/reconcile", async (_req, res) => {
   try {
-    const fullName = req.params.owner + "/" + req.params.repo;
-    const preview = await getTransferPreview(fullName);
-    res.json(preview);
+    const orphans = await detectOrphans();
+    res.json({ data: orphans, meta: { total: orphans.length } });
   } catch (err) {
-    logger.error({ err }, "Transfer preview failed");
+    logger.error({ err }, "Reconcile detection failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/repos/reconcile/merge ───────────────────────────────────────
+router.post("/reconcile/merge", async (req, res) => {
+  try {
+    const { orphan, live } = req.body;
+
+    if (!orphan || !live) {
+      return res.status(400).json({ error: "orphan and live (full names) are required" });
+    }
+
+    const result = await mergeOrphan(orphan, live);
+    res.json(result);
+  } catch (err) {
+    logger.error({ err }, "Reconcile merge failed");
     res.status(400).json({ error: err.message });
   }
 });
 
-// ── POST /api/repos/:owner/:repo/transfer ─────────────────────────────────
-router.post("/:owner/:repo/transfer", async (req, res) => {
+// ── POST /api/repos/reconcile/discard ─────────────────────────────────────
+router.post("/reconcile/discard", async (req, res) => {
   try {
-    const currentFullName = req.params.owner + "/" + req.params.repo;
-    const { new_full_name, migrate } = req.body;
+    const { orphan } = req.body;
 
-    if (!new_full_name) {
-      return res.status(400).json({ error: "new_full_name is required" });
-    }
-    if (typeof migrate !== "boolean") {
-      return res.status(400).json({ error: "migrate must be true or false" });
+    if (!orphan) {
+      return res.status(400).json({ error: "orphan (full name) is required" });
     }
 
-    const result = await transferRepo({
-      currentFullName,
-      newFullName: new_full_name,
-      migrate,
-    });
-
-    const status = result.status === "already_transferred" ? 200 : 200;
+    const result = await discardOrphan(orphan);
     res.json(result);
   } catch (err) {
-    logger.error({ err }, "Repo transfer failed");
+    logger.error({ err }, "Reconcile discard failed");
     res.status(400).json({ error: err.message });
   }
 });

@@ -1,220 +1,262 @@
 // src/services/repoTransferService.js
-// Handle repository ownership transfers — migrate data or start fresh.
+// Repository reconciliation — detect and resolve orphaned repo rows.
 //
-// GitHub transfers keep the same github_id but change full_name + owner.
-// GitWire's 32 FK-linked tables auto-follow an UPDATE to repositories.
-// 4 denormalized text columns need explicit backfill.
+// When a GitHub repo is deleted and re-created under a different org
+// (NOT a transfer — a transfer keeps the same github_id), GitWire ends
+// up with TWO rows for the "same" repo name but different github_ids.
+// The webhook worker's ON CONFLICT (github_id) handles real transfers
+// automatically. This service handles the orphan cleanup case.
+//
+// Detection: repos sharing the same name with different github_ids.
+// Resolution: merge old data into the live repo, or discard the orphan.
 
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
+// All tables with FK to repositories(github_id)
+const FK_TABLES = [
+  "ai_review_config",
+  "ai_reviews",
+  "branch_rules",
+  "ci_runs",
+  "config_history",
+  "config_validation_results",
+  "decision_log",
+  "dependency_manifests",
+  "dependency_update_batches",
+  "duplicate_signals",
+  "enforcement_violations",
+  "fix_attempts",
+  "flaky_tests",
+  "gate_evaluations",
+  "heal_prs",
+  "issue_embeddings",
+  "issues",
+  "maintainer_actions",
+  "maintainer_settings",
+  "managed_actions",
+  "merge_queue_config",
+  "merge_queue_entries",
+  "pipeline_events",
+  "policy_repo_configs",
+  "policy_waivers",
+  "pull_requests",
+  "quality_gates",
+  "repo_collaborators",
+  "repo_config",
+  "rollback_events",
+  "test_results",
+  "vulnerability_advisories",
+];
+
+// Tables with denormalized text referencing repo full_name
+const DENORM_TABLES = [
+  { table: "managed_actions", column: "repo_full_name" },
+  { table: "webhook_deliveries", column: "repo" },
+  { table: "action_feed", column: "repo" },
+  { table: "audit_trail_entries", column: "repo_full_name" },
+];
+
 /**
- * Transfer a repo to a new owner/org.
- *
- * @param {object} params
- * @param {string} params.currentFullName — current "owner/repo"
- * @param {string} params.newFullName — new "owner/repo"
- * @param {boolean} params.migrate — true = keep history, false = fresh start
- * @returns {object} result
+ * Detect all orphaned repos — repos sharing a name with another active repo.
+ * Returns grouped by repo name, each with an "orphan" and a "live" candidate.
  */
-export async function transferRepo({ currentFullName, newFullName, migrate }) {
-  const [newOwner, newName] = newFullName.split("/");
+export async function detectOrphans() {
+  // Find repo names that appear more than once (active, non-deleted)
+  const { rows: duplicates } = await db.query(`
+    SELECT name
+    FROM repositories
+    WHERE deleted_at IS NULL
+    GROUP BY name
+    HAVING COUNT(*) > 1
+  `);
 
-  if (!newOwner || !newName) {
-    throw new Error("new_full_name must be in 'owner/repo' format");
-  }
+  const results = [];
 
-  // Find the existing repo
-  const { rows: [repo] } = await db.query(
-    "SELECT * FROM repositories WHERE full_name = $1 AND deleted_at IS NULL",
-    [currentFullName]
-  );
+  for (const { name } of duplicates) {
+    // Get all active repos with this name
+    const { rows: variants } = await db.query(
+      `SELECT github_id, full_name, owner, name, last_synced_at, created_at
+       FROM repositories
+       WHERE name = $1 AND deleted_at IS NULL
+       ORDER BY github_id`,
+      [name]
+    );
 
-  if (!repo) {
-    throw new Error(`Repository "${currentFullName}" not found`);
-  }
+    // Count activity for each variant to determine which is "live"
+    const withActivity = await Promise.all(
+      variants.map(async (v) => {
+        const { rows: [{ cnt }] } = await db.query(
+          `SELECT COUNT(*)::int AS cnt FROM webhook_deliveries WHERE repo = $1`,
+          [v.full_name]
+        );
+        return { ...v, delivery_count: cnt };
+      })
+    );
 
-  // Check if the target already exists
-  const { rows: [existing] } = await db.query(
-    "SELECT * FROM repositories WHERE full_name = $1 AND deleted_at IS NULL",
-    [newFullName]
-  );
+    // The variant with more recent activity is "live"
+    withActivity.sort((a, b) => b.delivery_count - a.delivery_count);
+    const live = withActivity[0];
+    const orphans = withActivity.slice(1);
 
-  if (existing) {
-    if (existing.github_id === repo.github_id) {
-      // Same repo — idempotent, already transferred
-      return { status: "already_transferred", repo_id: repo.github_id };
+    for (const orphan of orphans) {
+      // Count all data for the orphan
+      const fkData = {};
+      for (const table of FK_TABLES) {
+        const { rows: [{ count }] } = await db.query(
+          `SELECT COUNT(*)::int AS count FROM ${table} WHERE repo_id = $1`,
+          [orphan.github_id]
+        );
+        if (count > 0) fkData[table] = count;
+      }
+
+      const denormData = {};
+      for (const { table, column } of DENORM_TABLES) {
+        const { rows: [{ count }] } = await db.query(
+          `SELECT COUNT(*)::int AS count FROM ${table} WHERE ${column} = $1`,
+          [orphan.full_name]
+        );
+        if (count > 0) denormData[table] = count;
+      }
+
+      const fkTotal = Object.values(fkData).reduce((a, b) => a + b, 0);
+      const denormTotal = Object.values(denormData).reduce((a, b) => a + b, 0);
+
+      results.push({
+        orphan: {
+          github_id: orphan.github_id,
+          full_name: orphan.full_name,
+          delivery_count: orphan.delivery_count,
+        },
+        live: {
+          github_id: live.github_id,
+          full_name: live.full_name,
+          delivery_count: live.delivery_count,
+        },
+        data: {
+          fk_tables: fkData,
+          fk_total: fkTotal,
+          denorm_tables: denormData,
+          denorm_total: denormTotal,
+          grand_total: fkTotal + denormTotal,
+        },
+      });
     }
-    throw new Error(`Repository "${newFullName}" already exists with a different github_id`);
   }
 
-  if (migrate) {
-    return await migrateWithData(repo, newOwner, newName, newFullName);
-  } else {
-    return await freshStart(repo, newOwner, newName, newFullName);
-  }
+  return results;
 }
 
 /**
- * Migrate: update repo row + backfill denormalized text columns.
- * All FK-linked tables (32) auto-follow the UPDATE.
+ * Merge orphan data into the live repo.
+ * 1. Re-point all FK references: orphan.github_id → live.github_id
+ * 2. Backfill denormalized text: orphan.full_name → live.full_name
+ * 3. Soft-delete the orphan repo row
  */
-async function migrateWithData(repo, newOwner, newName, newFullName) {
+export async function mergeOrphan(orphanFullName, liveFullName) {
+  // Look up both repos
+  const { rows: [orphan] } = await db.query(
+    `SELECT * FROM repositories WHERE full_name = $1 AND deleted_at IS NULL`,
+    [orphanFullName]
+  );
+  if (!orphan) throw new Error(`Orphan "${orphanFullName}" not found`);
+
+  const { rows: [live] } = await db.query(
+    `SELECT * FROM repositories WHERE full_name = $1 AND deleted_at IS NULL`,
+    [liveFullName]
+  );
+  if (!live) throw new Error(`Live repo "${liveFullName}" not found`);
+
+  if (orphan.github_id === live.github_id) {
+    throw new Error("Both repos have the same github_id — not an orphan pair");
+  }
+
   const client = await db.connect();
   try {
     await client.query("BEGIN");
 
-    // 1. Update the repositories row
-    await client.query(
-      `UPDATE repositories
-       SET full_name = $1, owner = $2, name = $3, updated_at = NOW()
-       WHERE github_id = $4`,
-      [newFullName, newOwner, newName, repo.github_id]
-    );
+    const reparented = {};
+    const backfilled = {};
 
-    // 2. Backfill denormalized text columns
-    const backfillTables = [
-      { table: "managed_actions", column: "repo_full_name" },
-      { table: "webhook_deliveries", column: "repo" },
-      { table: "action_feed", column: "repo" },
-      { table: "audit_trail_entries", column: "repo_full_name" },
-    ];
+    // 1. Re-point FK references from orphan.github_id → live.github_id
+    for (const table of FK_TABLES) {
+      const { rowCount } = await client.query(
+        `UPDATE ${table} SET repo_id = $1 WHERE repo_id = $2`,
+        [live.github_id, orphan.github_id]
+      );
+      if (rowCount > 0) reparented[table] = rowCount;
+    }
 
-    let backfillCounts = {};
-    for (const { table, column } of backfillTables) {
+    // 2. Backfill denormalized text from orphan.full_name → live.full_name
+    for (const { table, column } of DENORM_TABLES) {
       const { rowCount } = await client.query(
         `UPDATE ${table} SET ${column} = $1 WHERE ${column} = $2`,
-        [newFullName, repo.full_name]
+        [live.full_name, orphan.full_name]
       );
-      backfillCounts[table] = rowCount;
+      if (rowCount > 0) backfilled[table] = rowCount;
     }
+
+    // 3. Soft-delete the orphan repo
+    await client.query(
+      `UPDATE repositories SET deleted_at = NOW(), updated_at = NOW() WHERE github_id = $1`,
+      [orphan.github_id]
+    );
 
     await client.query("COMMIT");
 
+    const totalReparented = Object.values(reparented).reduce((a, b) => a + b, 0);
+    const totalBackfilled = Object.values(backfilled).reduce((a, b) => a + b, 0);
+
     logger.info(
       {
-        old: repo.full_name,
-        new: newFullName,
-        github_id: repo.github_id,
-        backfill: backfillCounts,
+        orphan: orphan.full_name,
+        live: live.full_name,
+        reparented,
+        backfilled,
       },
-      "Repo transferred (migrated with data)"
+      "Orphan repo merged into live repo"
     );
 
     return {
-      status: "migrated",
-      old_name: repo.full_name,
-      new_name: newFullName,
-      github_id: repo.github_id,
-      backfilled: backfillCounts,
+      status: "merged",
+      orphan: orphan.full_name,
+      live: live.full_name,
+      reparented,
+      backfilled,
+      total_reparented: totalReparented,
+      total_backfilled: totalBackfilled,
+      total_affected: totalReparented + totalBackfilled,
     };
   } catch (err) {
     await client.query("ROLLBACK");
-    client.release();
     throw err;
   } finally {
-    if (!client._released) client.release();
+    client.release();
   }
 }
 
 /**
- * Fresh start: soft-delete old repo. Next webhook from new org
- * creates a clean repo row via normal sync flow.
+ * Discard an orphan — soft-delete it without merging data.
+ * Historical data stays in DB but is hidden (orphan repo is soft-deleted).
  */
-async function freshStart(repo, newOwner, newName, newFullName) {
-  // Soft-delete the old repo
+export async function discardOrphan(orphanFullName) {
+  const { rows: [orphan] } = await db.query(
+    `SELECT * FROM repositories WHERE full_name = $1 AND deleted_at IS NULL`,
+    [orphanFullName]
+  );
+  if (!orphan) throw new Error(`Orphan "${orphanFullName}" not found`);
+
   await db.query(
     `UPDATE repositories SET deleted_at = NOW(), updated_at = NOW() WHERE github_id = $1`,
-    [repo.github_id]
+    [orphan.github_id]
   );
 
-  logger.info(
-    {
-      old: repo.full_name,
-      new: newFullName,
-      github_id: repo.github_id,
-    },
-    "Repo transfer: fresh start (old repo soft-deleted)"
-  );
+  logger.info({ orphan: orphan.full_name, github_id: orphan.github_id }, "Orphan repo discarded");
 
   return {
-    status: "fresh_start",
-    old_name: repo.full_name,
-    new_name: newFullName,
-    github_id: repo.github_id,
-    note: "Old repo soft-deleted. It will re-appear under the new name when the next webhook arrives.",
-  };
-}
-
-/**
- * Get transfer preview — shows what would happen if a repo is transferred.
- * Useful for the dashboard to show counts before the user commits.
- */
-export async function getTransferPreview(currentFullName) {
-  const { rows: [repo] } = await db.query(
-    "SELECT * FROM repositories WHERE full_name = $1 AND deleted_at IS NULL",
-    [currentFullName]
-  );
-
-  if (!repo) {
-    throw new Error(`Repository "${currentFullName}" not found`);
-  }
-
-  // Count rows in each backfill table
-  const counts = {};
-  const backfillTables = [
-    { table: "managed_actions", column: "repo_full_name", label: "Actions" },
-    { table: "webhook_deliveries", column: "repo", label: "Webhook Deliveries" },
-    { table: "action_feed", column: "repo", label: "Activity Feed" },
-    { table: "audit_trail_entries", column: "repo_full_name", label: "Audit Entries" },
-  ];
-
-  for (const { table, column, label } of backfillTables) {
-    const { rows: [{ count }] } = await db.query(
-      `SELECT COUNT(*)::int AS count FROM ${table} WHERE ${column} = $1`,
-      [currentFullName]
-    );
-    counts[label] = count;
-  }
-
-  // Count total FK-linked rows (sampling key tables)
-  const fkCounts = {};
-  const fkTables = [
-    { table: "ci_runs", label: "CI Runs" },
-    { table: "issues", label: "Issues" },
-    { table: "pull_requests", label: "Pull Requests" },
-    { table: "decision_log", label: "Decisions" },
-    { table: "fix_attempts", label: "Fix Attempts" },
-    { table: "heal_prs", label: "Heal PRs" },
-  ];
-
-  for (const { table, label } of fkTables) {
-    const { rows: [{ count }] } = await db.query(
-      `SELECT COUNT(*)::int AS count FROM ${table} WHERE repo_id = $1`,
-      [repo.github_id]
-    );
-    if (count > 0) fkCounts[label] = count;
-  }
-
-  // Count denormalized total
-  const denormTotal = Object.values(counts).reduce((a, b) => a + b, 0);
-  const fkTotal = Object.values(fkCounts).reduce((a, b) => a + b, 0);
-
-  return {
-    repo: {
-      github_id: repo.github_id,
-      full_name: repo.full_name,
-      owner: repo.owner,
-      name: repo.name,
-    },
-    data_at_risk: {
-      denormalized_rows: counts,
-      denormalized_total: denormTotal,
-      fk_linked_rows: fkCounts,
-      fk_linked_total: fkTotal,
-      grand_total: denormTotal + fkTotal,
-    },
-    fk_auto_follow: "All 32 FK-linked tables automatically follow the transfer",
-    denormalized_need_backfill: "4 text columns updated in migrate mode",
+    status: "discarded",
+    orphan: orphan.full_name,
+    github_id: orphan.github_id,
+    note: "Orphan soft-deleted. Its data remains in DB but is hidden from queries.",
   };
 }

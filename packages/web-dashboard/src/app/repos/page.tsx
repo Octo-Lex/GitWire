@@ -11,7 +11,7 @@ import {
   PageHeader, StatCard, Badge, HealthBadge, MiniBar,
   Skeleton, EmptyState, FilterPill,
 } from "@/components/ui";
-import TransferModal from "@/components/TransferModal";
+import ReconcilePanel from "@/components/ReconcilePanel";
 import { formatDistanceToNow } from "date-fns";
 
 const LANGS = ["All", "TypeScript", "JavaScript", "Python", "Go", "Rust", "Java"];
@@ -21,7 +21,6 @@ export default function ReposPage() {
   const [lang, setLang] = useState("");
   const [page, setPage] = useState(1);
   const [syncing, setSyncing] = useState<Record<string, boolean>>({});
-  const [transferRepo, setTransferRepo] = useState<string | null>(null);
 
   const qs = new URLSearchParams({ per_page: "20", page: String(page) });
   if (search) qs.set("search", search);
@@ -32,8 +31,24 @@ export default function ReposPage() {
     keepPreviousData: true,
   });
 
+  // Fetch orphan detections
+  const { data: reconcileData, mutate: mutateReconcile } = useSWR(
+    "/api/repos/reconcile",
+    async (url: string) => {
+      try {
+        const res = await fetch(url, { credentials: "include" });
+        if (!res.ok) return { data: [] };
+        return res.json();
+      } catch (_e) {
+        return { data: [] };
+      }
+    },
+    { refreshInterval: 60000 }
+  );
+
   const repos = data?.data ?? [];
   const meta = data?.meta ?? {};
+  const orphans = reconcileData?.data ?? [];
 
   async function handleSync(owner: string, name: string) {
     const key = `${owner}/${name}`;
@@ -74,6 +89,12 @@ export default function ReposPage() {
           </FilterPill>
         ))}
       </div>
+
+      {/* Orphan reconciliation */}
+      <ReconcilePanel
+        orphans={orphans}
+        onDone={() => { mutate(); mutateReconcile(); }}
+      />
 
       {/* Table */}
       <div className="px-6 py-4">
@@ -139,19 +160,13 @@ export default function ReposPage() {
                           ? formatDistanceToNow(new Date(String(repo.last_synced_at)), { addSuffix: true })
                           : "never"}
                       </td>
-                      <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => setTransferRepo(String(repo.full_name))}
-                          className="btn text-xs opacity-0 group-hover:opacity-100 transition-opacity mr-1"
-                        >
-                          ⇗ Transfer
-                        </button>
+                      <td className="px-4 py-3 text-right">
                         <button
                           onClick={() => handleSync(String(repo.owner), String(repo.name))}
                           disabled={syncing[syncKey]}
                           className="btn text-xs opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
                         >
-                          {syncing[syncKey] ? "↻ syncing…" : "↻ sync"}
+                          {syncing[syncKey] ? "\u21BB syncing\u2026" : "\u21BB sync"}
                         </button>
                       </td>
                     </tr>
@@ -174,14 +189,6 @@ export default function ReposPage() {
           )}
         </div>
       </div>
-      {/* Transfer modal */}
-      {transferRepo && (
-        <TransferModal
-          repoFullName={transferRepo}
-          onClose={() => setTransferRepo(null)}
-          onDone={() => { setTransferRepo(null); mutate(); }}
-        />
-      )}
     </div>
   );
 }
