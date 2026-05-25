@@ -1,11 +1,11 @@
 // tests/api-fetcher.test.ts
-// Test the SWR fetcher — verifies auth headers, error handling, JSON parsing
+// Test the SWR fetcher — verifies URL construction, error handling, JSON parsing.
+// Auth is via httpOnly cookies (credentials: "include"), not Bearer headers.
+
 import { jest } from '@jest/globals';
 
 process.env.NEXT_PUBLIC_API_URL = 'https://test.local';
-process.env.NEXT_PUBLIC_API_KEY = 'secret-key';
 
-// Must re-import after env setup — use dynamic import
 describe('SWR fetcher', () => {
   let fetchCalls: Array<{ url: string; opts?: RequestInit }> = [];
 
@@ -21,13 +21,10 @@ describe('SWR fetcher', () => {
     };
   });
 
-  test('fetcher adds auth header when API_KEY set', async () => {
-    // Dynamic import to pick up env
+  test('fetcher sends credentials: include for cookie auth', async () => {
     const { fetcher } = await import('../src/lib/api');
     await fetcher('/api/repos');
-    expect(fetchCalls[0].opts?.headers).toMatchObject({
-      Authorization: 'Bearer secret-key',
-    });
+    expect(fetchCalls[0].opts?.credentials).toBe('include');
   });
 
   test('fetcher prepends BASE URL', async () => {
