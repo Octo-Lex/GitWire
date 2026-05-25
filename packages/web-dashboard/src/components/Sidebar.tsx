@@ -4,29 +4,65 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 
-const NAV = [
-  { href: "/",              label: "Dashboard",       icon: "◈" },
-  { href: "/repos",         label: "Repositories",    icon: "⎇" },
-  { href: "/issues",        label: "Issues",          icon: "◎" },
-  { href: "/pull-requests", label: "Pull Requests",   icon: "⌥" },
-  { href: "/duplicates",    label: "Duplicates",      icon: "⊗" },
-  { href: "/ci",            label: "Self-Healing CI",  icon: "⚙" },
-  { href: "/automation",    label: "Automation",      icon: "⌘" },
-  { href: "/trust",         label: "Trust & Policy",  icon: "🛡" },
-  { href: "/insights",      label: "Insights",        icon: "◈" },
-  { href: "/activity",     label: "Activity",       icon: "📊" },
-  { href: "/deliveries",  label: "Deliveries",     icon: "🔗" },
-  { href: "/decisions",   label: "Decisions",     icon: "⚖" },
-  { href: "/waivers",     label: "Waivers",       icon: "🛡" },
-  { href: "/readiness",   label: "Readiness",     icon: "✓" },
-  { href: "/gates",        label: "Quality Gates",  icon: "🛡️" },
-  { href: "/maintainer",    label: "Maintainer",      icon: "⟳" },
-  { href: "/actions",      label: "Actions",         icon: "⚙️" },
-  { href: "/custom-rules", label: "Custom Rules",  icon: "⚡" },
-  { href: "/fix-attempts",  label: "Fix Attempts",    icon: "⚡" },
-  { href: "/intelligence", label: "Intelligence",     icon: "\uD83E\uDDE0" },
-  { href: "/config",       label: "Config",           icon: "\u2699" },
-  { href: "/config/playground", label: "Playground",  icon: "\uD83E\uDDEA" },
+interface NavItem {
+  href: string;
+  label: string;
+  icon: string;
+}
+
+interface NavGroup {
+  title: string;
+  items: NavItem[];
+}
+
+const NAV: NavGroup[] = [
+  {
+    title: "Overview",
+    items: [
+      { href: "/",              label: "Dashboard",      icon: "◈" },
+      { href: "/repos",         label: "Repositories",   icon: "⎇" },
+      { href: "/readiness",     label: "Readiness",      icon: "✓" },
+      { href: "/activity",      label: "Activity",       icon: "⏱" },
+    ],
+  },
+  {
+    title: "Work",
+    items: [
+      { href: "/issues",        label: "Issues",         icon: "◎" },
+      { href: "/pull-requests", label: "Pull Requests",  icon: "⌥" },
+      { href: "/ci",            label: "CI Healing",     icon: "⚕" },
+      { href: "/fix-attempts",  label: "Fix Attempts",   icon: "🔧" },
+      { href: "/duplicates",    label: "Duplicates",     icon: "⊗" },
+    ],
+  },
+  {
+    title: "Governance",
+    items: [
+      { href: "/actions",       label: "Actions",        icon: "▶" },
+      { href: "/decisions",     label: "Decisions",      icon: "⚖" },
+      { href: "/gates",         label: "Quality Gates",  icon: "🛡" },
+      { href: "/custom-rules",  label: "Custom Rules",   icon: "⚡" },
+      { href: "/waivers",       label: "Waivers",        icon: "🎫" },
+    ],
+  },
+  {
+    title: "Operations",
+    items: [
+      { href: "/deliveries",    label: "Deliveries",     icon: "🔗" },
+      { href: "/maintainer",    label: "Maintainer",     icon: "⟳" },
+      { href: "/automation",    label: "Automation",     icon: "⌘" },
+      { href: "/trust",         label: "Trust & Policy", icon: "📜" },
+      { href: "/insights",      label: "Insights",       icon: "📊" },
+      { href: "/intelligence",  label: "Intelligence",   icon: "🧠" },
+    ],
+  },
+  {
+    title: "Config",
+    items: [
+      { href: "/config",        label: "Config",         icon: "⚙" },
+      { href: "/config/playground", label: "Playground", icon: "🧪" },
+    ],
+  },
 ];
 
 export default function Sidebar() {
@@ -45,31 +81,38 @@ export default function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 py-3 px-3 space-y-0.5 overflow-y-auto">
-        {NAV.map((item) => {
-          const active = item.href === "/" ? pathname === "/" : pathname === item.href || (pathname.startsWith(item.href + "/"));
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={clsx(
-                "flex items-center gap-2.5 px-3 py-2 rounded text-sm font-medium transition-colors",
-                active
-                  ? "bg-accent-green/10 text-accent-green"
-                  : "text-text-secondary hover:text-text-primary hover:bg-surface-2"
-              )}
-            >
-              <span className="text-base font-mono w-5 text-center">{item.icon}</span>
-              {item.label}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 py-2 px-3 overflow-y-auto">
+        {NAV.map((group, gi) => (
+          <div key={group.title} className={gi > 0 ? "mt-3" : ""}>
+            <div className="px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest text-text-tertiary">
+              {group.title}
+            </div>
+            {group.items.map((item) => {
+              const active = item.href === "/" ? pathname === "/" : pathname === item.href || (pathname.startsWith(item.href + "/"));
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={clsx(
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded text-sm font-medium transition-colors",
+                    active
+                      ? "bg-accent-green/10 text-accent-green"
+                      : "text-text-secondary hover:text-text-primary hover:bg-surface-2"
+                  )}
+                >
+                  <span className="text-sm w-5 text-center">{item.icon}</span>
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* Footer */}
       <div className="px-5 py-3 border-t border-border">
         <div className="text-[10px] font-mono text-text-tertiary">
-          GitWire v0.10
+          GitWire v0.12.0
         </div>
       </div>
     </aside>
