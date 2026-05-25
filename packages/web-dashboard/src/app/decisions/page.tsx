@@ -30,13 +30,20 @@ const DECISION_STYLES: Record<string, string> = {
 export default function DecisionsPage() {
   const [sourceFilter, setSourceFilter] = useState<string>("");
   const [decisionFilter, setDecisionFilter] = useState<string>("");
+  const [repoFilter, setRepoFilter] = useState<string>("");
   const [page, setPage] = useState(1);
 
   const params = new URLSearchParams();
   if (sourceFilter) params.set("source", sourceFilter);
   if (decisionFilter) params.set("decision", decisionFilter);
+  if (repoFilter) params.set("repo", repoFilter);
   params.set("per_page", "25");
   params.set("page", String(page));
+
+  const { data: reposData } = useSWR<{ data: Array<{ full_name: string }> }>(
+    "/api/repos?limit=100",
+    fetcher
+  );
 
   const { data, isLoading } = useSWR(API.decisions(params.toString()), fetcher, { refreshInterval: 15000 });
   const { data: summary } = useSWR(API.decisionsSummary(), fetcher, { refreshInterval: 30000 });
@@ -65,7 +72,17 @@ export default function DecisionsPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-2 px-6 py-3 border-b border-border items-center">
+      <div className="flex gap-2 px-6 py-3 border-b border-border items-center flex-wrap">
+        <select
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-xs text-text-primary"
+          value={repoFilter}
+          onChange={(e) => { setRepoFilter(e.target.value); setPage(1); }}
+        >
+          <option value="">All Repos</option>
+          {(reposData?.data ?? []).map((r) => (
+            <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+          ))}
+        </select>
         <span className="text-[10px] font-mono text-text-tertiary uppercase tracking-wider mr-2">Source</span>
         {["", "ci_heal", "triage", "ai_review", "issue_fix", "merge_queue", "enforcement", "trust"].map((s) => (
           <button

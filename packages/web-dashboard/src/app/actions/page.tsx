@@ -35,11 +35,18 @@ const STATUS_ICONS: Record<string, string> = {
 export default function ActionsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [pillarFilter, setPillarFilter] = useState<string>("");
+  const [repoFilter, setRepoFilter] = useState<string>("");
 
   const params = new URLSearchParams();
   if (statusFilter) params.set("status", statusFilter);
   if (pillarFilter) params.set("pillar", pillarFilter);
+  if (repoFilter) params.set("repo", repoFilter);
   params.set("limit", "100");
+
+  const { data: reposData } = useSWR<{ data: Array<{ full_name: string }> }>(
+    "/api/repos?limit=100",
+    fetcher
+  );
 
   const { data: summary } = useSWR<{ summary: Array<{ status: string; count: number }> }>(
     "/api/actions/summary",
@@ -86,8 +93,18 @@ export default function ActionsPage() {
         <StatCard label="Reconciled" value={reconciledCount} />
       </div>
 
-      {/* Status summary pills */}
-      <div className="px-6 py-3 flex gap-2 flex-wrap border-b border-border">
+      {/* Filters */}
+      <div className="px-6 py-3 flex gap-2 flex-wrap items-center border-b border-border">
+        <select
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-xs text-text-primary"
+          value={repoFilter}
+          onChange={(e) => setRepoFilter(e.target.value)}
+        >
+          <option value="">All Repos</option>
+          {(reposData?.data ?? []).map((r) => (
+            <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+          ))}
+        </select>
         <button
           className={"px-3 py-1 rounded-full text-xs " + (!statusFilter ? "bg-accent-green/20 text-accent-green" : "bg-gray-700 text-gray-400")}
           onClick={() => setStatusFilter("")}
