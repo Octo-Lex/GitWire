@@ -78,6 +78,7 @@ function MiniSparkline({ data, maxVal }: { data: number[]; maxVal: number }) {
 export default function WebhooksPage() {
   const [eventFilter, setEventFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [repoFilter, setRepoFilter] = useState<string>("");
 
   const { data: stats } = useSWR<DeliveryStats>(
     "/api/webhooks/deliveries/stats",
@@ -94,9 +95,17 @@ export default function WebhooksPage() {
     fetcher
   );
 
+  const { data: reposData } = useSWR<{ data: Array<{ full_name: string }> }>(
+    "/api/repos?limit=100",
+    fetcher
+  );
+
+  const repos = reposData?.data ?? [];
+
   const params = new URLSearchParams();
   if (eventFilter) params.set("event", eventFilter);
   if (statusFilter) params.set("status", statusFilter);
+  if (repoFilter) params.set("repo", repoFilter);
   params.set("limit", "50");
 
   const { data: deliveries } = useSWR<DeliveryList>(
@@ -194,7 +203,17 @@ export default function WebhooksPage() {
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold">Recent Deliveries</h2>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <select
+              className="bg-surface-2 border border-border rounded px-2 py-1 text-xs text-text-primary"
+              value={repoFilter}
+              onChange={(e) => setRepoFilter(e.target.value)}
+            >
+              <option value="">All Repos</option>
+              {repos.map((r) => (
+                <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+              ))}
+            </select>
             <button
               className={"px-2 py-1 rounded text-xs " + (statusFilter === "error" ? "bg-red-900/50 text-red-300" : "bg-gray-700 text-gray-400")}
               onClick={() => setStatusFilter(statusFilter === "error" ? "" : "error")}
