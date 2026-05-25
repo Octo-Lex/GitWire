@@ -83,3 +83,9 @@ Managed actions are cross-referenced in the audit trail's evidence bundles:
   ]
 }
 ```
+
+## See also
+
+- [Action Lifecycle](/architecture/action-lifecycle) — full state machine for action tracking
+- [Reconciliation](/architecture/reconciliation) — periodic verification of action effects
+- [Evidence Bundles](/architecture/evidence-bundles) — how evidence is structured
