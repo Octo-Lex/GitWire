@@ -6,13 +6,13 @@ COPY . .
 RUN npx next build
 
 FROM nginx:alpine
-COPY --from=builder /app/out /usr/share/nginx/html/demo
+COPY --from=builder /app/out /usr/share/nginx/html
 RUN echo 'server {\
     listen 80;\
     root /usr/share/nginx/html;\
     index index.html;\
     location / {\
-        try_files $uri $uri.html $uri/ /demo/index.html;\
+        try_files $uri $uri.html $uri/ /index.html;\
     }\
 }' > /etc/nginx/conf.d/default.conf
 EXPOSE 80

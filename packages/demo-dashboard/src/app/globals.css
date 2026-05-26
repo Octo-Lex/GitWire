@@ -28,7 +28,7 @@
 
   --color-brand: #1D9E75;
 
-  --animate-fade-in: fadeIn 0.2s ease-out;
+  --animate-fade-in: fadeIn 0.25s ease-out;
   --animate-slide-up: slideUp 0.25s ease-out;
   --animate-pulse-dot: pulseDot 2s ease-in-out infinite;
 
@@ -40,7 +40,8 @@
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
   }
-  @keyframes pulseDot {
+  @keyframes demoBadge { 0% { opacity: 1; } 100% { opacity: 1; } }
+@keyframes pulseDot {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
   }
