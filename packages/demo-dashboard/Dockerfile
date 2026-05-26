@@ -11,8 +11,13 @@ RUN echo 'server {\
     listen 80;\
     root /usr/share/nginx/html;\
     index index.html;\
+    add_header Cache-Control "public, max-age=3600";\
     location /demo {\
         return 301 /demo/;\
+    }\
+    location /demo/_next/ {\
+        alias /usr/share/nginx/html/demo/_next/;\
+        add_header Cache-Control "public, max-age=31536000, immutable";\
     }\
     location /demo/ {\
         alias /usr/share/nginx/html/demo/;\
