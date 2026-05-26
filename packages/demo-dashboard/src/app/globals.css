@@ -29,7 +29,7 @@
   --color-brand: #1D9E75;
 
   --animate-fade-in: fadeIn 0.25s ease-out;
-  --animate-slide-up: slideUp 0.25s ease-out;
+  --animate-slide-up: slideUp 0.3s ease-out;
   --animate-pulse-dot: pulseDot 2s ease-in-out infinite;
 
   @keyframes fadeIn {
