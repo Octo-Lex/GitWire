@@ -1,3 +1,4 @@
+import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -7,6 +8,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <title>GitWire Demo — Governance for GitHub Automation</title>
         <meta name="description" content="Self-hosted AI that decides, executes, and proves GitHub operations." />
         <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>" />
+
       </head>
       <body className="bg-surface-0 text-text-primary antialiased">
         <Sidebar />
