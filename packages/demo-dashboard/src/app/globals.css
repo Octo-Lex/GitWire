@@ -1,6 +1,8 @@
+/* GitWire Demo v0.12.0 */
 @import "tailwindcss";
 
 @theme {
+  --build-id: "2026-05-26b";
   --font-mono: 'JetBrains Mono', monospace;
   --font-sans: 'DM Sans', sans-serif;
   --font-display: 'Syne', sans-serif;
