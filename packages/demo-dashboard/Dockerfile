@@ -1,6 +1,12 @@
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npx next build
+
 FROM nginx:alpine
-COPY out /usr/share/nginx/html
-# SPA fallback — all routes serve index.html
+COPY --from=builder /app/out /usr/share/nginx/html
 RUN echo 'server { \
     listen 80; \
     root /usr/share/nginx/html; \
