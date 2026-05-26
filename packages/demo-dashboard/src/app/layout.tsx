@@ -14,7 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="fixed bottom-0 left-56 right-0 bg-surface-0/80 backdrop-blur border-t border-border px-6 py-2 z-50">
           <p className="text-xs text-text-tertiary text-center">
             🎭 <strong>Demo Dashboard</strong> — All data is fictional. No real repositories or events.{" "}
-            <a href="https://github.com/Elephant-Rock-Lab/GitWire" className="text-accent-green hover:underline">View on GitHub →</a>
+            <a href="https://github.com/Elephant-Rock-Lab/GitWire" target="_blank" className="text-accent-green hover:underline">View on GitHub →</a>
           </p>
         </div>
       </body>
