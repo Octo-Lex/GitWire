@@ -55,3 +55,6 @@ backups/
 
 # Benchmark results
 benchmark-results-*.json
+packages/demo-dashboard/.next/
+packages/demo-dashboard/out/
+packages/demo-dashboard/node_modules/
