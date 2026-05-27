@@ -188,6 +188,28 @@ export async function fetchMetrics(repoId) {
   );
   m.webhook_events_7d = webhook7.rows[0]?.cnt || 0;
 
+  // AI review pass rate (30d)
+  const reviewRate = await db.query(
+    `SELECT
+       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE verdict = 'approved')::int AS approved
+     FROM ai_reviews
+     WHERE repo_id = $1 AND completed_at > NOW() - INTERVAL '30 days'`,
+    [repoId]
+  );
+  const reviewTotal = reviewRate.rows[0]?.total || 0;
+  const reviewApproved = reviewRate.rows[0]?.approved || 0;
+  m.ai_review_pass_rate_30d = reviewTotal > 0 ? reviewApproved / reviewTotal : 0;
+
+  // Average review duration (ms)
+  const reviewDur = await db.query(
+    `SELECT AVG(duration_ms)::float AS avg_ms
+     FROM ai_reviews
+     WHERE repo_id = $1 AND duration_ms IS NOT NULL AND completed_at > NOW() - INTERVAL '30 days'`,
+    [repoId]
+  );
+  m.avg_review_duration_ms = reviewDur.rows[0]?.avg_ms || 0;
+
   return m;
 }
 

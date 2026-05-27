@@ -1,22 +1,25 @@
 // src/services/aiReviewService.js
-// Pre-merge AI review gate for Phase 4.
+// Pre-merge AI review gate — v2 with bundle-driven review.
 //
-// Triggered on: pull_request.opened, pull_request.synchronize
+// Adapted from prior autoreview work autoreview patterns:
+//   - Bundle-driven: one structured prompt with full PR context
+//   - Strict JSON schema enforcement at AI boundary
+//   - Out-of-scope finding rejection
+//   - JSON extraction cascade (handles all LLM output formats)
+//   - Heartbeat wrapper for long-running reviews
 //
 // Flow:
 //   1. Check repo has AI review enabled
-//   2. Create a "pending" GitHub Check Run (visible in the PR status bar)
-//   3. Fetch the PR diff, file tree, and repo context
-//   4. Split the diff into reviewable chunks (respecting max_files / max_lines)
-//   5. Run a multi-pass Claude review:
-//        Pass A: logic correctness, test coverage, edge cases
-//        Pass B: security vulnerabilities, secret exposure, injection risks
-//        Pass C: architecture alignment, cost leaks, API misuse
-//   6. Synthesise all findings into a verdict (approved / needs_discussion / request_changes)
-//   7. Post a structured GitHub PR Review with finding annotations
-//   8. Update the Check Run to pass/fail
-//   9. Write to audit trail (Trail.aiDecision)
-//  10. Persist to ai_reviews table
+//   2. Create a "pending" GitHub Check Run
+//   3. Fetch diff + build review bundle (context-enriched)
+//   4. Single-pass structured review via Claude with schema enforcement
+//   5. Extract JSON with cascade (handles fenced, JSONL, nested formats)
+//   6. Validate schema + scope-filter findings
+//   7. Compute verdict from validated report
+//   8. Post GitHub PR Review with finding annotations
+//   9. Update Check Run to pass/fail
+//  10. Write to audit trail
+//  11. Persist to ai_reviews table (with new structured columns)
 
 import Anthropic from "@anthropic-ai/sdk";
 import { db }     from "../lib/db.js";
@@ -25,6 +28,14 @@ import { Events } from "./pipelineEvents.js";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { minimatch } from "minimatch";
+import {
+  extractReviewJSON,
+  buildReviewSystemPrompt,
+  reportToLegacy,
+} from "@gitwire/rules";
+import { buildReviewBundle } from "./reviewBundleService.js";
+import { validateReview } from "./reviewValidator.js";
+import { withHeartbeat } from "./reviewHeartbeat.js";
 
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
@@ -32,6 +43,8 @@ const anthropic = new Anthropic({
 });
 
 const CHECK_RUN_NAME = "GitWire AI Review";
+const DEFAULT_MAX_DURATION_MS = 300000; // 5 minutes
+const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Entry point
@@ -42,19 +55,21 @@ const CHECK_RUN_NAME = "GitWire AI Review";
  * @param {object} opts.pr          - GitHub pull_request payload
  * @param {object} opts.repository  - GitHub repository payload
  * @param {object} opts.octokit
+ * @param {boolean} [opts.commentFindings=true]
  */
 export async function reviewPR({ pr, repository, octokit, commentFindings = true }) {
   const owner  = repository.owner.login;
   const repo   = repository.name;
   const repoId = repository.id;
+  const startTime = Date.now();
 
   // ── 1. Load config ─────────────────────────────────────────────────────────
   const cfg = await loadReviewConfig(repoId);
   if (!cfg?.enabled) return null;
 
-  logger.info({ repo: repository.full_name, pr: pr.number }, "AI review: starting");
+  logger.info({ repo: repository.full_name, pr: pr.number }, "AI review: starting (bundle-driven v2)");
 
-  // ── 2. Create pending check run (optional — requires checks:write permission) ─
+  // ── 2. Create pending check run ────────────────────────────────────────────
   let checkRunId = null;
   try {
     const { data: checkRun } = await octokit.request("POST /repos/{owner}/{repo}/check-runs", {
@@ -66,12 +81,12 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       started_at: new Date().toISOString(),
       output: {
         title:   "AI review in progress\u2026",
-        summary: "Analysing code quality, security, and architecture.",
+        summary: "Building review bundle and running structured analysis.",
       },
     });
     checkRunId = checkRun.id;
   } catch (checkErr) {
-    logger.warn({ err: checkErr.message, repo: repository.full_name }, "AI review: Check Run creation failed (non-fatal, continuing with PR Review only)");
+    logger.warn({ err: checkErr.message, repo: repository.full_name }, "AI review: Check Run creation failed (non-fatal)");
   }
 
   // ── 3. Persist review record ────────────────────────────────────────────────
@@ -99,53 +114,138 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       return null;
     }
 
-    // ── 5. Multi-pass Claude review ────────────────────────────────────────────
-    const { findings, tokensUsed } = await runMultiPassReview({
-      files, pr, repository, cfg,
+    // ── 5. Build review bundle ────────────────────────────────────────────────
+    const { bundle, changedFiles } = await buildReviewBundle({
+      files, pr, repository,
     });
 
-    // ── 6. Compute verdict ─────────────────────────────────────────────────────
-    const { verdict, confidence } = computeVerdict(findings, cfg);
+    logger.info(
+      { repo: repository.full_name, pr: pr.number, bundleChars: bundle.length, files: changedFiles.length },
+      "AI review: bundle built"
+    );
 
-    // ── 7. Post GitHub PR Review ──────────────────────────────────────────────
+    // ── 6. Run structured review with heartbeat ──────────────────────────────
+    const maxDurationMs = cfg.max_duration_seconds
+      ? cfg.max_duration_seconds * 1000
+      : DEFAULT_MAX_DURATION_MS;
+
+    const { rawText, tokensUsed } = await withHeartbeat(
+      function () {
+        return runStructuredReview(bundle, changedFiles, {
+          model: cfg.model || DEFAULT_MODEL,
+          includeSecurity: cfg.check_security !== false,
+          includeArchitecture: cfg.check_architecture !== false || cfg.check_cost_leaks !== false,
+        });
+      },
+      { label: "claude review", timeoutMs: maxDurationMs }
+    );
+
+    // ── 7. Extract JSON with cascade ─────────────────────────────────────────
+    const { json, strategy } = extractReviewJSON(rawText);
+
+    logger.info(
+      { strategy, pr: pr.number, hasJson: !!json },
+      "AI review: JSON extraction"
+    );
+
+    if (!json) {
+      // Extraction failed completely — return neutral
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+          title:   "\u26A0\uFE0F AI review: could not parse response",
+          summary: "Review completed but the response format was unexpected. Strategy: " + strategy,
+          text:    rawText.slice(0, 2000),
+        });
+      }
+
+      await db.query(
+        "UPDATE ai_reviews SET verdict = 'error', summary = $1, tokens_used = $2, " +
+        "completed_at = NOW(), duration_ms = $3 WHERE id = $4",
+        ["JSON extraction failed (strategy: " + strategy + ")", tokensUsed, Date.now() - startTime, reviewRow.id]
+      );
+
+      return null;
+    }
+
+    // ── 8. Validate + scope-filter ────────────────────────────────────────────
+    const validation = validateReview(json, changedFiles);
+
+    if (!validation.valid) {
+      logger.warn(
+        { errors: validation.schemaErrors, pr: pr.number },
+        "AI review: validation failed"
+      );
+
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+          title:   "\u26A0\uFE0F AI review: validation errors",
+          summary: "Review completed but findings could not be validated. Errors: " + validation.schemaErrors.slice(0, 3).join("; "),
+          text:    "",
+        });
+      }
+
+      await db.query(
+        "UPDATE ai_reviews SET verdict = 'error', summary = $1, tokens_used = $2, " +
+        "completed_at = NOW(), duration_ms = $3 WHERE id = $4",
+        ["Validation errors: " + validation.schemaErrors.join("; "), tokensUsed, Date.now() - startTime, reviewRow.id]
+      );
+
+      return null;
+    }
+
+    // ── 9. Use validated legacy format ────────────────────────────────────────
+    const { findings, verdict, confidence, summary, overallCorrectness, overallConfidence } = validation.legacy;
+
+    // ── 10. Post GitHub PR Review ─────────────────────────────────────────────
     let reviewId = null;
-    let summary = "";
+    let githubSummary = "";
     if (commentFindings) {
       const result = await postGitHubReview({
         octokit, owner, repo, pr, findings, verdict, confidence, cfg,
+        scopeDroppedCount: validation.scopeDroppedCount,
       });
       reviewId = result.reviewId;
-      summary = result.summary;
+      githubSummary = result.summary;
     }
 
-    // ── 8. Update check run ────────────────────────────────────────────────────
-    const shouldBlock = cfg.block_on_verdict.includes(verdict) &&
+    // ── 11. Update check run ──────────────────────────────────────────────────
+    const shouldBlock = cfg.block_on_verdict?.includes(verdict) &&
       confidenceLevel(confidence) >= confidenceLevel(cfg.min_confidence_to_block);
 
     if (checkRunId) {
       await finaliseCheckRun(octokit, owner, repo, checkRunId,
         shouldBlock ? "failure" : "success",
-        buildCheckOutput(findings, verdict, confidence, summary)
+        buildCheckOutput(findings, verdict, confidence, githubSummary, validation.scopeDroppedCount)
       );
     }
 
-    // ── 9. Persist final review ────────────────────────────────────────────────
-    const criticalFindings = findings.filter(f => f.severity === "critical").length;
+    // ── 12. Persist final review ──────────────────────────────────────────────
+    const criticalFindings = findings.filter(function (f) { return f.severity === "critical"; }).length;
+    const durationMs = Date.now() - startTime;
 
     await db.query(
       "UPDATE ai_reviews SET " +
       "  verdict = $1, confidence = $2, findings = $3, summary = $4, " +
       "  files_reviewed = $5, lines_added = $6, lines_removed = $7, " +
-      "  tokens_used = $8, github_review_id = $9, completed_at = NOW() " +
-      "WHERE id = $10",
+      "  tokens_used = $8, github_review_id = $9, completed_at = NOW(), " +
+      "  overall_correctness = $10, overall_confidence = $11, " +
+      "  overall_explanation = $12, ignored_findings = $13, " +
+      "  review_engine = $14, duration_ms = $15 " +
+      "WHERE id = $16",
       [
-        verdict, confidence, JSON.stringify(findings), summary,
+        verdict, confidence, JSON.stringify(findings), summary || githubSummary,
         files.length, totalAdded, totalRemoved,
-        tokensUsed, reviewId, reviewRow.id,
+        tokensUsed, reviewId,
+        overallCorrectness || null, overallConfidence || null,
+        summary || null,
+        JSON.stringify(validation.ignoredFindings),
+        "claude",
+        durationMs,
+        reviewRow.id,
       ]
     );
 
-    // ── 10. Audit trail ────────────────────────────────────────────────────────
+    // ── 13. Audit trail ───────────────────────────────────────────────────────
     await Trail.aiDecision({
       repoFullName:     repository.full_name,
       prNumber:         pr.number,
@@ -164,7 +264,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         commitSha:    pr.head.sha,
         verdict,
         reason:       criticalFindings + " critical finding" + (criticalFindings !== 1 ? "s" : ""),
-        findings:     findings.filter(f => f.severity === "critical").map(f => f.title),
+        findings:     findings.filter(function (f) { return f.severity === "critical"; }).map(function (f) { return f.title; }),
       });
     }
 
@@ -175,14 +275,19 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     });
 
     logger.info(
-      { repo: repository.full_name, pr: pr.number, verdict, findings: findings.length, blocked: shouldBlock },
-      "AI review: complete"
+      {
+        repo: repository.full_name, pr: pr.number, verdict, findings: findings.length,
+        blocked: shouldBlock, scopeDropped: validation.scopeDroppedCount,
+        durationMs, extractionStrategy: strategy,
+      },
+      "AI review: complete (bundle-driven v2)"
     );
 
     return { verdict, confidence, findings, blocked: shouldBlock };
 
   } catch (err) {
     logger.error({ err: err.message, pr: pr.number }, "AI review: failed");
+    const durationMs = Date.now() - startTime;
 
     if (checkRunId) {
       await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
@@ -191,6 +296,12 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         text:    "",
       });
     }
+
+    await db.query(
+      "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
+      "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
+      [err.message.slice(0, 500), durationMs, reviewRow.id]
+    );
 
     return null;
   }
@@ -208,21 +319,22 @@ async function fetchDiff(octokit, owner, repo, pr, cfg) {
 
   const ignorePatterns = cfg.ignore_patterns ?? [];
 
-  let filtered = prFiles.filter(f => {
+  var filtered = prFiles.filter(function (f) {
     if (f.status === "removed") return false;
-    if (ignorePatterns.some(pat => minimatch(f.filename, pat))) return false;
+    if (ignorePatterns.some(function (pat) { return minimatch(f.filename, pat); })) return false;
     return true;
   });
 
   // Respect limits
   filtered = filtered.slice(0, cfg.max_files_to_review);
 
-  let totalAdded = 0, totalRemoved = 0, totalLines = 0;
-  const files = [];
+  var totalAdded = 0, totalRemoved = 0, totalLines = 0;
+  var files = [];
 
-  for (const f of filtered) {
-    const added   = f.additions ?? 0;
-    const removed = f.deletions ?? 0;
+  for (var i = 0; i < filtered.length; i++) {
+    var f = filtered[i];
+    var added   = f.additions ?? 0;
+    var removed = f.deletions ?? 0;
     totalAdded   += added;
     totalRemoved += removed;
     totalLines   += added + removed;
@@ -232,7 +344,8 @@ async function fetchDiff(octokit, owner, repo, pr, cfg) {
     files.push({
       filename: f.filename,
       status:   f.status,
-      added, removed,
+      added:    added,
+      removed:  removed,
       patch:    f.patch ?? "",
       sha:      f.sha,
     });
@@ -242,121 +355,56 @@ async function fetchDiff(octokit, owner, repo, pr, cfg) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Multi-pass Claude review
+// Structured review via Claude (single-pass with schema enforcement)
 // ════════════════════════════════════════════════════════════════════════════
 
-async function runMultiPassReview({ files, pr, repository, cfg }) {
-  var diffText = files.map(function(f) {
-    return "### " + f.filename + " (+" + f.added + " -" + f.removed + ")\n" +
-      "```diff\n" + f.patch.slice(0, 3000) + "\n```";
-  }).join("\n\n");
-
-  const contextBlock = cfg.architecture_context
-    ? "\n\nArchitecture context:\n" + cfg.architecture_context
-    : "";
-
-  const passes = [];
-  if (cfg.check_logic)        passes.push("logic");
-  if (cfg.check_security)     passes.push("security");
-  if (cfg.check_architecture || cfg.check_cost_leaks) passes.push("architecture");
-
-  const allFindings = [];
-  let totalTokens = 0;
-
-  for (const pass of passes) {
-    const { findings, tokens } = await runSinglePass(pass, {
-      diffText, pr, repository, contextBlock,
-    });
-    allFindings.push(...findings);
-    totalTokens += tokens;
-  }
-
-  // De-duplicate findings by title+file
-  const seen = new Set();
-  const unique = allFindings.filter(f => {
-    const key = f.file + ":" + f.title;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+async function runStructuredReview(bundle, changedFiles, opts) {
+  var systemPrompt = buildReviewSystemPrompt({
+    changedFiles: changedFiles,
+    includeSecurity: opts.includeSecurity,
+    includeArchitecture: opts.includeArchitecture,
   });
 
-  return { findings: unique, tokensUsed: totalTokens };
-}
-
-async function runSinglePass(passType, { diffText, pr, repository, contextBlock }) {
-  var PASS_PROMPTS = {
-    logic: "You are a senior engineer performing a **logic review** of a pull request.\n" +
-      "Focus on: correctness, edge cases, null/undefined handling, off-by-one errors,\n" +
-      "race conditions, infinite loops, missing error handling, incorrect algorithms.\n" +
-      "Do NOT comment on style, formatting, or architectural concerns.",
-
-    security: "You are a security engineer performing a **security review** of a pull request.\n" +
-      "Focus on: injection vulnerabilities (SQL, XSS, command), hardcoded secrets,\n" +
-      "insecure dependencies, authentication/authorization bypasses, path traversal,\n" +
-      "unsafe deserialization, SSRF, exposed PII, improper error messages leaking internals.\n" +
-      "Do NOT comment on logic correctness or architecture.",
-
-    architecture: "You are a principal engineer performing an **architecture and cost review**.\n" +
-      "Focus on: design pattern violations, unnecessary complexity, missing abstractions,\n" +
-      "N+1 queries, missing caching, unbounded loops calling external APIs,\n" +
-      "missing pagination, synchronous operations that should be async, cost leaks\n" +
-      "(e.g. calling a paid API in a hot loop), missing rate limiting.\n" +
-      "Do NOT comment on logic or security.",
-  };
-
-  var prompt = PASS_PROMPTS[passType] + contextBlock +
-    "\n\nRepository: " + repository.full_name +
-    "\nPR: #" + pr.number + " \u2014 " + pr.title +
-    "\nAuthor: @" + pr.user.login +
-    "\n\nChanges:\n" + diffText +
-    '\n\nReturn ONLY a JSON array of findings (empty array if none). Each finding:\n' +
-    '{\n' +
-    '  "category": "' + passType + '",\n' +
-    '  "severity": "critical" | "high" | "medium" | "low" | "info",\n' +
-    '  "title": "<concise 8-word max title>",\n' +
-    '  "description": "<2-3 sentence explanation of the problem>",\n' +
-    '  "suggestion": "<concrete, actionable fix \u2014 1-2 sentences>",\n' +
-    '  "file": "<filename or null>",\n' +
-    '  "line": <line number in the diff or null>\n' +
-    '}\n' +
-    "\nRules:\n" +
-    "- Only report real issues. Do not invent findings.\n" +
-    '- Severity "critical": security vulnerabilities, data loss risks, crashes.\n' +
-    '- Severity "high": significant bugs, major performance issues.\n' +
-    '- Severity "medium": correctness issues unlikely to cause immediate breakage.\n' +
-    '- Severity "low" / "info": suggestions and improvements.\n' +
-    "- Maximum 8 findings per pass. Prioritise highest severity.";
+  var userPrompt = "Review the following PR changes:\n\n" + bundle;
 
   try {
     const message = await anthropic.messages.create({
-      model:      "claude-sonnet-4-20250514",
-      max_tokens: 2048,
-      system:     "You are a code review expert. Return ONLY a valid JSON array. No explanation, no markdown fences.",
-      messages:   [{ role: "user", content: prompt }],
+      model:      opts.model || DEFAULT_MODEL,
+      max_tokens: 4096,
+      system:     systemPrompt,
+      messages:   [{ role: "user", content: userPrompt }],
     });
 
-    const text     = message.content[0].text.trim();
-    const clean    = text.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
-    const findings = JSON.parse(clean);
-    const tokens   = (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
+    var text = "";
+    if (Array.isArray(message.content)) {
+      // Extract text blocks
+      text = message.content
+        .filter(function (b) { return b.type === "text"; })
+        .map(function (b) { return b.text; })
+        .join("\n");
+    } else if (typeof message.content === "string") {
+      text = message.content;
+    }
 
-    return { findings: Array.isArray(findings) ? findings : [], tokens };
+    var tokens = (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
+
+    return { rawText: text.trim(), tokensUsed: tokens };
   } catch (err) {
-    logger.warn({ pass: passType, err: err.message }, "AI review: pass failed");
-    return { findings: [], tokens: 0 };
+    logger.warn({ err: err.message }, "AI review: Claude call failed");
+    throw err;
   }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Verdict computation
+// Verdict computation (unchanged — kept for backward compat)
 // ════════════════════════════════════════════════════════════════════════════
 
 export function computeVerdict(findings, cfg) {
-  const critical = findings.filter(f => f.severity === "critical").length;
-  const high     = findings.filter(f => f.severity === "high").length;
+  var critical = findings.filter(function (f) { return f.severity === "critical"; }).length;
+  var high     = findings.filter(function (f) { return f.severity === "high"; }).length;
 
-  let verdict    = "approved";
-  let confidence = "high";
+  var verdict    = "approved";
+  var confidence = "high";
 
   if (critical > 0) {
     verdict    = "request_changes";
@@ -379,28 +427,30 @@ export function computeVerdict(findings, cfg) {
 // GitHub PR Review posting
 // ════════════════════════════════════════════════════════════════════════════
 
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg }) {
+async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount }) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
     request_changes:   "\u274C Changes requested",
   };
 
-  const critical = findings.filter(f => f.severity === "critical");
-  const high     = findings.filter(f => f.severity === "high");
-  const others   = findings.filter(f => !["critical","high"].includes(f.severity));
+  var critical = findings.filter(function (f) { return f.severity === "critical"; });
+  var high     = findings.filter(function (f) { return f.severity === "high"; });
+  var others   = findings.filter(function (f) { return ["critical", "high"].indexOf(f.severity) === -1; });
 
-  const summaryLines = [
+  var summaryLines = [
     "## \uD83E\uDD16 AI Code Review \u2014 " + VERDICT_LABEL[verdict],
     "",
     "**Confidence:** " + confidence + " \u00B7 **Findings:** " + findings.length,
     critical.length ? "\n**" + critical.length + " critical issue" + (critical.length > 1 ? "s" : "") + " require attention before merging.**" : "",
+    scopeDroppedCount > 0 ? "\n*" + scopeDroppedCount + " out-of-scope finding" + (scopeDroppedCount !== 1 ? "s" : "") + " filtered out.*" : "",
     "",
   ];
 
   if (critical.length || high.length) {
     summaryLines.push("### Key issues");
-    for (const f of [...critical, ...high].slice(0, 5)) {
+    for (var i = 0; i < Math.min(5, critical.length + high.length); i++) {
+      var f = (critical.concat(high))[i];
       summaryLines.push("- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " (`" + f.file + "`)" : ""));
     }
     summaryLines.push("");
@@ -408,36 +458,37 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
 
   if (others.length) {
     summaryLines.push("### Other findings (" + others.length + ")");
-    for (const f of others.slice(0, 5)) {
-      summaryLines.push("- **[" + f.severity + "]** " + f.title);
+    for (var j = 0; j < Math.min(5, others.length); j++) {
+      summaryLines.push("- **[" + others[j].severity + "]** " + others[j].title);
     }
     summaryLines.push("");
   }
 
-  var categories = [cfg.check_logic && "logic", cfg.check_security && "security", cfg.check_architecture && "architecture"].filter(Boolean).join(", ");
   summaryLines.push(
     "---",
-    "_GitWire AI Review Gate \u00B7 Categories reviewed: " + categories + "_"
+    "_GitWire AI Review Gate (bundle-driven v2) \u00B7 Structured schema \u00B7 Scope-validated_"
   );
 
-  const body    = summaryLines.filter(l => l !== "").join("\n");
-  const summary = summaryLines.slice(0, 3).join(" ");
+  var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
+  var summary = summaryLines.slice(0, 3).join(" ");
 
   // Build inline comments for findings that have file + line
-  const comments = findings
-    .filter(f => f.file && f.line)
+  var comments = findings
+    .filter(function (f) { return f.file && f.line; })
     .slice(0, 10)
-    .map(f => ({
-      path:     f.file,
-      position: f.line,
-      body:     "**[" + f.severity.toUpperCase() + "] " + f.title + "**\n\n" + f.description + "\n\n> **Suggestion:** " + f.suggestion,
-    }));
+    .map(function (f) {
+      return {
+        path:     f.file,
+        position: f.line,
+        body:     "**[" + f.severity.toUpperCase() + "] " + f.title + "**\n\n" + f.description + "\n\n> **Suggestion:** " + f.suggestion,
+      };
+    });
 
-  const ghVerdict =
+  var ghVerdict =
     verdict === "request_changes" ? "REQUEST_CHANGES" :
     verdict === "approved"        ? "APPROVE"         : "COMMENT";
 
-  const { data: review } = await octokit.request(
+  var { data: review } = await octokit.request(
     "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
     {
       owner,
@@ -469,22 +520,26 @@ async function finaliseCheckRun(octokit, owner, repo, checkRunId, conclusion, ou
       completed_at: new Date().toISOString(),
       output,
     }
-  ).catch(err => {
-    logger.warn({ err: err.message, checkRunId }, "Failed to finalise check run");
+  ).catch(function (err) {
+    logger.warn({ err: err.message, checkRunId: checkRunId }, "Failed to finalise check run");
   });
 }
 
-function buildCheckOutput(findings, verdict, confidence, summary) {
-  const ICONS = { approved: "\u2705", needs_discussion: "\uD83D\uDCAC", request_changes: "\u274C" };
-  const title = (ICONS[verdict] ?? "\uD83E\uDD16") + " AI Review \u2014 " + verdict.replace(/_/g, " ") + " (" + confidence + " confidence)";
+function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCount) {
+  var ICONS = { approved: "\u2705", needs_discussion: "\uD83D\uDCAC", request_changes: "\u274C" };
+  var title = (ICONS[verdict] ?? "\uD83E\uDD16") + " AI Review \u2014 " + verdict.replace(/_/g, " ") + " (" + confidence + " confidence)";
 
-  const details = findings.map(f =>
-    "- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " \u2014 `" + f.file + "`" : "") + "\n  " + f.description
-  ).join("\n");
+  var details = findings.map(function (f) {
+    return "- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " \u2014 `" + f.file + "`" : "") + "\n  " + f.description;
+  }).join("\n");
+
+  var scopeNote = scopeDroppedCount > 0
+    ? "\n\n*" + scopeDroppedCount + " out-of-scope findings filtered.*"
+    : "";
 
   return {
-    title,
-    summary: summary ?? findings.length + " finding" + (findings.length !== 1 ? "s" : "") + " across logic,security,architecture passes.",
+    title: title,
+    summary: (summary || findings.length + " finding" + (findings.length !== 1 ? "s" : "")) + scopeNote,
     text:    details || "No specific findings.",
   };
 }
@@ -494,10 +549,10 @@ function buildCheckOutput(findings, verdict, confidence, summary) {
 // ════════════════════════════════════════════════════════════════════════════
 
 async function loadReviewConfig(repoId) {
-  const { rows: [cfg] } = await db.query(
+  var { rows } = await db.query(
     "SELECT * FROM ai_review_config WHERE repo_id = $1", [repoId]
   );
-  return cfg ?? null;
+  return rows[0] ?? null;
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

@@ -25,3 +25,16 @@ export {
   getRequiredMetrics,
   formatGateSummary,
 } from "./gates.js";
+export {
+  VALID_PRIORITIES,
+  VALID_CATEGORIES,
+  VALID_CORRECTNESS,
+  priorityToSeverity,
+  severityToPriority,
+  categoryToPass,
+  validateFinding,
+  validateReviewReport,
+  reportToLegacy,
+  extractReviewJSON,
+  buildReviewSystemPrompt,
+} from "./reviewSchema.js";
