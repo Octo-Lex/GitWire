@@ -174,6 +174,7 @@ phase4Router.post("/review/config/:owner/:repo", async (req, res, next) => {
       enabled, check_logic, check_security, check_architecture, check_cost_leaks,
       check_tests, check_docs, block_on_verdict, min_confidence_to_block,
       max_files_to_review, max_lines_to_review, architecture_context, ignore_patterns,
+      engine, model, max_duration_seconds, bundle_max_chars, require_file_scope,
     } = req.body;
 
     const { rows: [cfg] } = await db.query(
@@ -181,8 +182,9 @@ phase4Router.post("/review/config/:owner/:repo", async (req, res, next) => {
       "  (repo_id, enabled, check_logic, check_security, check_architecture, " +
       "   check_cost_leaks, check_tests, check_docs, block_on_verdict, " +
       "   min_confidence_to_block, max_files_to_review, max_lines_to_review, " +
-      "   architecture_context, ignore_patterns) " +
-      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) " +
+      "   architecture_context, ignore_patterns, " +
+      "   engine, model, max_duration_seconds, bundle_max_chars, require_file_scope) " +
+      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) " +
       "ON CONFLICT (repo_id) DO UPDATE SET " +
       "  enabled                = COALESCE($2,  ai_review_config.enabled), " +
       "  check_logic            = COALESCE($3,  ai_review_config.check_logic), " +
@@ -197,6 +199,11 @@ phase4Router.post("/review/config/:owner/:repo", async (req, res, next) => {
       "  max_lines_to_review    = COALESCE($12, ai_review_config.max_lines_to_review), " +
       "  architecture_context   = COALESCE($13, ai_review_config.architecture_context), " +
       "  ignore_patterns        = COALESCE($14, ai_review_config.ignore_patterns), " +
+      "  engine                 = COALESCE($15, ai_review_config.engine), " +
+      "  model                  = COALESCE($16, ai_review_config.model), " +
+      "  max_duration_seconds   = COALESCE($17, ai_review_config.max_duration_seconds), " +
+      "  bundle_max_chars       = COALESCE($18, ai_review_config.bundle_max_chars), " +
+      "  require_file_scope     = COALESCE($19, ai_review_config.require_file_scope), " +
       "  updated_at             = NOW() " +
       "RETURNING *",
       [
@@ -207,6 +214,9 @@ phase4Router.post("/review/config/:owner/:repo", async (req, res, next) => {
         min_confidence_to_block ?? "medium", max_files_to_review ?? 30,
         max_lines_to_review ?? 2000, architecture_context ?? null,
         ignore_patterns ?? ["*.lock","package-lock.json","yarn.lock","*.min.js","dist/**","build/**"],
+        engine ?? "claude", model ?? "claude-sonnet-4-20250514",
+        max_duration_seconds ?? 300, bundle_max_chars ?? 180000,
+        require_file_scope ?? true,
       ]
     );
     res.json(cfg);

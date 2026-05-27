@@ -19,6 +19,14 @@ ALTER TABLE ai_reviews
   ADD COLUMN IF NOT EXISTS review_engine TEXT NOT NULL DEFAULT 'claude',
   ADD COLUMN IF NOT EXISTS duration_ms INT;
 
+-- Add new columns to ai_review_config for bundle-driven review settings
+ALTER TABLE ai_review_config
+  ADD COLUMN IF NOT EXISTS engine TEXT NOT NULL DEFAULT 'claude',
+  ADD COLUMN IF NOT EXISTS model TEXT NOT NULL DEFAULT 'claude-sonnet-4-20250514',
+  ADD COLUMN IF NOT EXISTS max_duration_seconds INT NOT NULL DEFAULT 300,
+  ADD COLUMN IF NOT EXISTS bundle_max_chars INT NOT NULL DEFAULT 180000,
+  ADD COLUMN IF NOT EXISTS require_file_scope BOOLEAN NOT NULL DEFAULT TRUE;
+
 -- Index for filtering by engine and duration analytics
 CREATE INDEX IF NOT EXISTS idx_ar_engine  ON ai_reviews(review_engine);
 CREATE INDEX IF NOT EXISTS idx_ar_duration ON ai_reviews(duration_ms) WHERE duration_ms IS NOT NULL;

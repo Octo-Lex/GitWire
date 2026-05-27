@@ -95,6 +95,16 @@ export const DEFAULT_CONFIG = {
     ai_review: {
       enabled: true,
       comment_findings: true,
+      // Review engine ("claude" default; future: "codex", "openai")
+      engine: "claude",
+      // Claude model to use for reviews
+      model: "claude-sonnet-4-20250514",
+      // Hard timeout for a single review call (seconds)
+      max_duration_seconds: 300,
+      // Maximum bundle size (chars) before truncation
+      bundle_max_chars: 180000,
+      // Reject findings about files not in the diff
+      require_file_scope: true,
       triggers: {
         branches: [],
         ignore_authors: [],
@@ -154,6 +164,26 @@ export function validateConfig(config) {
         }
       }
       // Unknown pillars are allowed for forward compatibility
+
+      // Validate ai_review-specific fields
+      if (config.pillars.ai_review) {
+        const ar = config.pillars.ai_review;
+        if (ar.engine !== undefined && typeof ar.engine !== "string") {
+          errors.push("pillars.ai_review.engine must be a string");
+        }
+        if (ar.model !== undefined && typeof ar.model !== "string") {
+          errors.push("pillars.ai_review.model must be a string");
+        }
+        if (ar.max_duration_seconds !== undefined && typeof ar.max_duration_seconds !== "number") {
+          errors.push("pillars.ai_review.max_duration_seconds must be a number");
+        }
+        if (ar.bundle_max_chars !== undefined && typeof ar.bundle_max_chars !== "number") {
+          errors.push("pillars.ai_review.bundle_max_chars must be a number");
+        }
+        if (ar.require_file_scope !== undefined && typeof ar.require_file_scope !== "boolean") {
+          errors.push("pillars.ai_review.require_file_scope must be a boolean");
+        }
+      }
     }
   }
 
