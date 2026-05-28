@@ -6,6 +6,7 @@ import { Router } from "express";
 import { db }     from "../lib/db.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { checkGraduation }  from "../services/flakyTestService.js";
 import { runFleetReconciliation, reconcileRepo } from "../services/policyReconcilerService.js";
 import { scanRepo, openBatchUpdatePR } from "../services/dependencyService.js";
@@ -22,7 +23,7 @@ async function resolveRepo(owner, repo) {
     [fullName]
   );
   if (!row) return null;
-  const octokit = await getInstallationClient(row.installation_id);
+  const octokit = wrapOctokit(await getInstallationClient(row.installation_id));
   return { repo: row, octokit };
 }
 

@@ -4,6 +4,7 @@
 
 import { db }  from "../lib/db.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { Events } from "./pipelineEvents.js";
 import { sendFeedback } from "./feedbackService.js";
 import { logger } from "../lib/logger.js";
@@ -45,7 +46,7 @@ export async function evaluateRollback({ run, repository, installation }) {
     "Rollback: deploy failure detected within merge window"
   );
 
-  const octokit = await getInstallationClient(installation.id);
+  const octokit = wrapOctokit(await getInstallationClient(installation.id));
   await initiateRollback({ recentMerge, run, repository, octokit, repoId });
 }
 

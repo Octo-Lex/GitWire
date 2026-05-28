@@ -12,6 +12,7 @@ import { evaluateRules } from "@gitwire/rules";
 import { loadPlugins } from "@gitwire/rules/plugins";
 import { getConfigForRepo, getPluginsForRepo } from "./configService.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { recordAction } from "./managedActionService.js";
 import { logDecision } from "./decisionLogService.js";
 import { propose, approve, execute, succeed, fail } from "./actionStateMachine.js";
@@ -149,7 +150,7 @@ export async function evaluateAndExecuteCustomRules(eventName, payload, installa
   const installationId = installation?.id;
   let octokit;
   try {
-    octokit = await getInstallationClient(installationId);
+    octokit = wrapOctokit(await getInstallationClient(installationId));
   } catch (_e) {
     logger.warn({ repo: repoFullName }, "Cannot get installation client for custom rules");
     return [];

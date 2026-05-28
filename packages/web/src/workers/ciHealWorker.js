@@ -5,6 +5,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { ciService } from "../services/ciService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { HEALABLE_TYPES } from "@gitwire/core";
@@ -51,7 +52,7 @@ async function reconcilePR({ payload }) {
   const { repository, pull_request, installation } = payload;
   if (!pull_request || !installation) return;
 
-  const octokit = await getInstallationClient(installation.id);
+  const octokit = wrapOctokit(await getInstallationClient(installation.id));
   const owner = repository.owner.login;
   const repo = repository.name;
   const repoId = repository.id;
@@ -99,7 +100,7 @@ async function healWorkflowRun({ payload }) {
   const { workflow_run: run, repository, installation } = payload;
   if (!run || !installation) return;
 
-  const octokit = await getInstallationClient(installation.id);
+  const octokit = wrapOctokit(await getInstallationClient(installation.id));
   const owner   = repository.owner.login;
   const repo    = repository.name;
 

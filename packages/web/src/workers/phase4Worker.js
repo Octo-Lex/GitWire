@@ -4,6 +4,7 @@
 
 import { createWorker, createQueue } from "../lib/queue.js";
 import { getInstallationClient }     from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { reviewPR }      from "../services/aiReviewService.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
@@ -49,7 +50,7 @@ export function startPhase4Worker() {
           logger.info({ repo: repository.full_name, pr: pr.number }, "DRY RUN: would run AI review");
           return;
         }
-        const octokit = await getInstallationClient(installation.id);
+        const octokit = wrapOctokit(await getInstallationClient(installation.id));
         const reviewOpts = repoConfig.pillars?.ai_review || {};
         await reviewPR({
           pr,

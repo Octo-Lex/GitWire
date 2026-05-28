@@ -7,6 +7,7 @@ import { db } from "../lib/db.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
 import { admitToQueue, removeFromQueue } from "../services/mergeQueueService.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { logger } from "../lib/logger.js";
 
 export const phase2Router = Router();
@@ -93,7 +94,7 @@ phase2Router.post("/queue/:owner/:repo/:pr/admit", async (req, res, next) => {
     const { rows: [repo] } = await db.query("SELECT github_id, full_name, owner, name, installation_id FROM repositories WHERE full_name = $1", [fullName]);
     if (!repo) return res.status(404).json({ error: "Repository not found" });
 
-    const octokit = await getInstallationClient(repo.installation_id);
+    const octokit = wrapOctokit(await getInstallationClient(repo.installation_id));
     const { data: pr } = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
       owner: repo.owner, repo: repo.name, pull_number: parseInt(req.params.pr),
     });

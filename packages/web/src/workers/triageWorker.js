@@ -5,6 +5,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { issueService } from "../services/issueService.js";
 import { detectDuplicates } from "../services/duplicateDetectionService.js";
 import { getConfigForRepo } from "../services/configService.js";
@@ -89,7 +90,7 @@ async function triageIssue({ payload }) {
 
   let octokit;
   try {
-    octokit = await getInstallationClient(installation.id);
+    octokit = wrapOctokit(await getInstallationClient(installation.id));
   } catch (err) {
     logger.error({ err, installationId: installation.id }, "Failed to get installation client");
     return;
@@ -271,7 +272,7 @@ async function triagePR({ payload }) {
     return;
   }
 
-  const octokit = await getInstallationClient(installation.id);
+  const octokit = wrapOctokit(await getInstallationClient(installation.id));
 
   const message = await anthropic.messages.create({
     model:      "claude-sonnet-4-20250514",

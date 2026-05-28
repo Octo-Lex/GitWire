@@ -11,6 +11,7 @@
 
 import { Router } from "express";
 import { getWebhookApp, getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue, phase2Queue, phase3Queue, phase4Queue } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
@@ -103,7 +104,7 @@ webhookRouter.post(
     if (eventName === "pull_request" && payload.pull_request) {
       try {
         const pr = payload.pull_request;
-        const octokit = await getInstallationClient(payload.installation?.id);
+        const octokit = wrapOctokit(await getInstallationClient(payload.installation?.id));
         if (octokit && pr.head?.sha) {
           const gateResults = await evaluateQualityGates({
             repoId: payload.repository.id,
@@ -138,7 +139,7 @@ webhookRouter.post(
     // ── 3b. Create GitWire check for PR events ──────────────────────────────
     if (eventName === "pull_request" && payload.pull_request?.head?.sha) {
       try {
-        const octokit = await getInstallationClient(payload.installation?.id);
+        const octokit = wrapOctokit(await getInstallationClient(payload.installation?.id));
         if (octokit) {
           const checkRunId = await createGitwireCheck({
             octokit,
@@ -400,7 +401,7 @@ async function routeWebhookToQueue(eventName, payload, deliveryId) {
               });
               if (respBody && payload.installation?.id) {
                 try {
-                  const octokit = await getInstallationClient(payload.installation.id);
+                  const octokit = wrapOctokit(await getInstallationClient(payload.installation.id));
                   await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
                     owner: repoFullName.split("/")[0],
                     repo: repoFullName.split("/")[1],

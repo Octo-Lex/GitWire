@@ -4,6 +4,7 @@
 
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { admitToQueue, onChecksUpdated, processQueue, removeFromQueue } from "../services/mergeQueueService.js";
 import { evaluateRollback } from "../services/errorRecoveryService.js";
 import { getConfigForRepo } from "../services/configService.js";
@@ -18,7 +19,7 @@ export function startMergeQueueWorker() {
     const installation = payload.installation;
     if (!repository || !installation) return;
 
-    const octokit = await getInstallationClient(installation.id);
+    const octokit = wrapOctokit(await getInstallationClient(installation.id));
 
     // ── Check .gitwire.yml pillar config ──────────────────────────────────
     const repoConfig = await getConfigForRepo(repository.full_name);

@@ -28,6 +28,7 @@ import { maintainerService } from "../services/maintainerService.js";
 import { syncMembers, syncCollaborators, syncBranchRules, audit } from "../services/maintainerService.js";
 import { maintainerQueue } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
 import { logger } from "../lib/logger.js";
 
@@ -52,7 +53,7 @@ async function getRepoAndOctokit(owner, repo) {
   );
   if (!rows.length) return null;
   const r = rows[0];
-  const octokit = await getInstallationClient(r.installation_id);
+  const octokit = wrapOctokit(await getInstallationClient(r.installation_id));
   return { repo: r, octokit };
 }
 
@@ -121,7 +122,7 @@ maintainerRouter.post("/members/sync", async (req, res, next) => {
     let synced = 0;
     for (const inst of installations) {
       try {
-        const octokit = await getInstallationClient(inst.github_id);
+        const octokit = wrapOctokit(await getInstallationClient(inst.github_id));
         await syncMembers(octokit, inst.github_id, inst.account_login);
         synced++;
       } catch (err) {

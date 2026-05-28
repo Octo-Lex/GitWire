@@ -12,6 +12,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { maintainerService } from "../services/maintainerService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, isFixPathBlocked, isFixLabelAllowed, isDryRun, meetsConfidence, getMinFixConfidence, scoreFixRisk } from "@gitwire/rules";
@@ -80,7 +81,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   }
   const repoId = repoRows[0].github_id;
 
-  const octokit = await getInstallationClient(installationId);
+  const octokit = wrapOctokit(await getInstallationClient(installationId));
   const branchName = "gitwire/fix-" + issueNumber;
 
   // ── Step 1: Rate limit check ──────────────────────────────────────────────

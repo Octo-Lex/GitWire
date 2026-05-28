@@ -12,6 +12,7 @@
 import { Router } from "express";
 import { db } from "../lib/db.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import {
   backfillEmbeddings,
   updateDuplicateStatus,
@@ -221,7 +222,7 @@ async function resolveSignalAndAct(signalId, status, req) {
   );
   if (!signal) return null;
 
-  const octokit = await getInstallationClient(signal.installation_id);
+  const octokit = wrapOctokit(await getInstallationClient(signal.installation_id));
 
   return updateDuplicateStatus({
     sourceIssueId: signal.source_issue_id,

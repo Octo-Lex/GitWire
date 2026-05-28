@@ -7,6 +7,7 @@ import { db }     from "../lib/db.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
 import { runEnforcementForAll, enforceRepo } from "../services/branchEnforcementService.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { logger } from "../lib/logger.js";
 
 export const enforcementRouter = Router();
@@ -238,7 +239,7 @@ enforcementRouter.post("/run", async (req, res, next) => {
         "SELECT * FROM policy_definitions WHERE installation_id = $1 AND enabled = TRUE",
         [repoRow.installation_id]
       );
-      const octokit = await getInstallationClient(repoRow.installation_id);
+      const octokit = wrapOctokit(await getInstallationClient(repoRow.installation_id));
       enforceRepo({ octokit, repo: repoRow, policies, installation: { id: repoRow.installation_id } })
         .catch(err => logger.error({ err }, "Enforcement: on-demand run failed"));
     } else {

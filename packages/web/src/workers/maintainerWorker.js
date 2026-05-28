@@ -8,6 +8,7 @@
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { maintainerQueue } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { maintainerService } from "../services/maintainerService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, getStaleConfig, isStaleExempt, isDryRun } from "@gitwire/rules";
@@ -40,7 +41,7 @@ export function startMaintainerWorker() {
 async function runStaleScan({ installationId, repoFullName }) {
   logger.info({ repo: repoFullName }, "Stale scan started");
 
-  const octokit = await getInstallationClient(installationId);
+  const octokit = wrapOctokit(await getInstallationClient(installationId));
   const [owner, repo] = repoFullName.split("/");
 
   // Load repo settings
@@ -246,7 +247,7 @@ async function closeStaleItem(octokit, owner, repo, type, number, staleDays, rep
 async function runBranchCleanup({ installationId, repoFullName }) {
   logger.info({ repo: repoFullName }, "Branch cleanup started");
 
-  const octokit = await getInstallationClient(installationId);
+  const octokit = wrapOctokit(await getInstallationClient(installationId));
   const [owner, repo] = repoFullName.split("/");
 
   const repoRow = await findRepo(repoFullName);
@@ -354,7 +355,7 @@ async function runCommentCommand(data) {
   const { action, installationId, repoFullName, issueNumber, commentId, authorLogin, value } = data;
   logger.info({ action, repo: repoFullName, author: authorLogin }, "Processing comment command");
 
-  const octokit = await getInstallationClient(installationId);
+  const octokit = wrapOctokit(await getInstallationClient(installationId));
   const [owner, repo] = repoFullName.split("/");
   const repoRow = await findRepo(repoFullName);
   if (!repoRow) return;

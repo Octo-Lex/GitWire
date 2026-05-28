@@ -10,6 +10,7 @@
 
 import { createWorker, createQueue, QUEUES } from "../lib/queue.js";
 import { forEachInstallation, forEachRepo, getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { syncMembers, syncCollaborators, syncBranchRules } from "../services/maintainerService.js";
 import { backfillEmbeddings } from "../services/duplicateDetectionService.js";
 import { db } from "../lib/db.js";
@@ -83,7 +84,7 @@ async function runFullSync() {
 
 // ── Sync a single installation ────────────────────────────────────────────────
 async function syncInstallation(installationId) {
-  const octokit = await getInstallationClient(installationId);
+  const octokit = wrapOctokit(await getInstallationClient(installationId));
 
   const { data: installation } = await octokit.request('GET /app/installations/{installation_id}', {
     installation_id: installationId,
@@ -99,7 +100,7 @@ async function syncInstallation(installationId) {
 
 // ── Sync a single repo by full name ──────────────────────────────────────────
 async function syncRepo(installationId, repoFullName) {
-  const octokit = await getInstallationClient(installationId);
+  const octokit = wrapOctokit(await getInstallationClient(installationId));
   const [owner, name] = repoFullName.split("/");
 
   const { data: repo } = await octokit.request('GET /repos/{owner}/{repo}', { owner, repo: name });

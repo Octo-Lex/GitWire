@@ -24,6 +24,7 @@ import { Router } from "express";
 import { db }     from "../lib/db.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { reviewPR }      from "../services/aiReviewService.js";
 import { generateReport, verifyChain, exportNightly } from "../services/auditTrailService.js";
 import { logger } from "../lib/logger.js";
@@ -39,7 +40,7 @@ async function resolveRepo(owner, repo) {
     [owner + "/" + repo]
   );
   if (!row) return null;
-  return { repo: row, octokit: await getInstallationClient(row.installation_id) };
+  return { repo: row, octokit: wrapOctokit(await getInstallationClient(row.installation_id)) };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

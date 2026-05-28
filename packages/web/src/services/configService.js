@@ -11,6 +11,7 @@
 import { parseConfig, DEFAULT_CONFIG, mergeDeep } from "@gitwire/rules";
 import { redis } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -246,7 +247,7 @@ async function fetchFromGitHub(repoFullName) {
   if (!rows.length) return structuredClone(DEFAULT_CONFIG);
 
   try {
-    const octokit = await getInstallationClient(rows[0].installation_id);
+    const octokit = wrapOctokit(await getInstallationClient(rows[0].installation_id));
     const [owner, repo] = repoFullName.split("/");
 
     for (const path of CONFIG_PATHS) {
@@ -314,7 +315,7 @@ async function fetchOrgConfig(repoFullName) {
     if (!repo) return { config: structuredClone(DEFAULT_CONFIG), source: null };
 
     // Try to fetch org config from {org}/gitwire-config repo
-    const octokit = await getInstallationClient(repo.installation_id);
+    const octokit = wrapOctokit(await getInstallationClient(repo.installation_id));
     const [owner] = repoFullName.split("/");
 
     for (const path of CONFIG_PATHS) {
@@ -378,7 +379,7 @@ export async function getPluginsForRepo(repoFullName) {
 
   try {
     const [owner, repo] = repoFullName.split("/");
-    const octokit = await getInstallationClient(owner);
+    const octokit = wrapOctokit(await getInstallationClient(owner));
     if (!octokit) return {};
 
     // Get the repo tree

@@ -4,6 +4,7 @@
 
 import { createWorker, phase3Queue } from "../lib/queue.js";
 import { getInstallationClient, forEachInstallation } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { ingestTestResults, checkGraduation } from "../services/flakyTestService.js";
 import { runFleetReconciliation } from "../services/policyReconcilerService.js";
 import { scanRepo } from "../services/dependencyService.js";
@@ -35,7 +36,7 @@ export function startPhase3Worker() {
           logger.info({ repo: repository.full_name }, "DRY RUN: would ingest test results");
           return;
         }
-        const octokit = await getInstallationClient(installation.id);
+        const octokit = wrapOctokit(await getInstallationClient(installation.id));
         await ingestTestResults({ run, repository, octokit });
         break;
       }
@@ -103,7 +104,7 @@ export function startPhase3Worker() {
           logger.info({ repo: repo.full_name }, "DRY RUN: would scan dependencies");
           return;
         }
-        const octokit = await getInstallationClient(installationId);
+        const octokit = wrapOctokit(await getInstallationClient(installationId));
         await scanRepo({
           repository: { ...repo, id: repo.github_id, owner: { login: repo.owner } },
           octokit,

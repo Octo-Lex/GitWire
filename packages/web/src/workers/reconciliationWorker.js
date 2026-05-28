@@ -12,6 +12,7 @@
 
 import { getActionsNeedingReconciliation, reconcile, logReconciliationCheck } from "../services/actionStateMachine.js";
 import { getInstallationClient } from "../lib/github.js";
+import { wrapOctokit } from "../lib/githubWrapper.js";
 import { logger } from "../lib/logger.js";
 
 /**
@@ -51,7 +52,7 @@ export async function runReconciliation() {
  */
 async function reconcileAction(action) {
   const [owner, repo] = action.repo_full_name.split("/");
-  const octokit = await getInstallationClient(action.repo_id);
+  const octokit = wrapOctokit(await getInstallationClient(action.repo_id));
 
   if (!octokit) {
     logger.warn({ actionId: action.id, repo: action.repo_full_name }, "No installation client for repo");
