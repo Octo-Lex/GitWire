@@ -39,21 +39,34 @@ const TERMINAL_STATES = new Set(["succeeded", "cancelled", "reconciled"]);
  * @param {number} [params.repoId] — repository DB id
  * @param {string} [params.targetType] — issue, pr, branch, etc.
  * @param {number} [params.targetNumber] — issue/PR number
+ * @param {string} [params.actionKey] — dedup key (e.g. 'label:bug'). If set, deactivates previous active actions with same key.
  * @returns {object} the created action record
  */
 export async function propose({
   repoFullName, pillar, actionType, source, evidence = {},
   parentActionId = null, repoId = null, targetType = null, targetNumber = null,
+  actionKey = null,
 }) {
+  // Dedup: deactivate previous active actions with the same key
+  if (actionKey && repoId) {
+    await db.query(
+      "UPDATE managed_actions SET active = FALSE, deactivated_at = NOW() " +
+      "WHERE repo_id = $1 AND action_key = $2 AND active = TRUE " +
+      "  AND (target_number = $3 OR (target_number IS NULL AND $3 IS NULL))",
+      [repoId, actionKey, targetNumber ?? null]
+    );
+  }
+
   const result = await db.query(
     `INSERT INTO managed_actions
-      (repo_full_name, pillar, action_type, source, status, proposed_at, evidence,
+      (repo_full_name, pillar, action_type, action_key, source, status, proposed_at, evidence,
        parent_action_id, repo_id, target_type, target_number, retries, max_retries)
-     VALUES ($1, $2, $3, $4, 'proposed', NOW(), $5, $6, $7, $8, $9, 0, 3)
+     VALUES ($1, $2, $3, $10, $4, 'proposed', NOW(), $5, $6, $7, $8, $9, 0, 3)
      RETURNING *`,
     [
       repoFullName, pillar, actionType, source,
       JSON.stringify(evidence), parentActionId, repoId, targetType, targetNumber,
+      actionKey,
     ]
   );
 

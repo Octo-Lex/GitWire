@@ -13,7 +13,7 @@ import { isPillarEnabled, isFileAllowed, isDryRun, meetsConfidence, getMinPatchC
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
-import { recordAction, cleanupPR } from "../services/managedActionService.js";
+import { cleanupPR } from "../services/managedActionService.js";
 import { logDecision } from "../services/decisionLogService.js";
 import { checkAndMark } from "../services/idempotencyService.js";
 import { emitWorkerEvent } from "../services/workerEvents.js";
@@ -450,10 +450,18 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
         owner, repo, issue_number: pr.number,
         labels: ["ci-heal", diagnosis.failure_type],
       });
-      // Managed action: record label additions
-      const repoId = repository.id;
-      await recordAction({ repoId, source: "ci_heal", prNumber: pr.number, actionType: "label", actionKey: "label:ci-heal", actionValue: "ci-heal", context: { runId: run.id, headSha: run.head_sha } });
-      await recordAction({ repoId, source: "ci_heal", prNumber: pr.number, actionType: "label", actionKey: "label:" + diagnosis.failure_type, actionValue: diagnosis.failure_type, context: { runId: run.id, headSha: run.head_sha } });
+      // Managed actions via state machine
+      for (const lbl of ["ci-heal", diagnosis.failure_type]) {
+        const labelAction = await propose({
+          repoFullName: repository.full_name, pillar: "ci_healing", actionType: "add-label",
+          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha },
+          repoId: repository.id, targetType: "pr", targetNumber: pr.number,
+          actionKey: "label:" + lbl,
+        });
+        await approve(labelAction.id, { auto_label: true });
+        await execute(labelAction.id);
+        await succeed(labelAction.id, { label: lbl });
+      }
     } catch (lblErr) {
       logger.warn({ err: lblErr.message }, "Failed to add labels to heal PR");
     }
@@ -468,8 +476,16 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
         await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", {
           owner, repo, pull_number: pr.number, reviewers: [lastCommitter],
         });
-        // Managed action: record reviewer request
-        await recordAction({ repoId: repository.id, source: "ci_heal", prNumber: pr.number, actionType: "reviewer", actionKey: "reviewer:" + lastCommitter, actionValue: lastCommitter, context: { runId: run.id, headSha: run.head_sha } });
+        // Managed action via state machine
+        const revAction = await propose({
+          repoFullName: repository.full_name, pillar: "ci_healing", actionType: "add-reviewer",
+          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha },
+          repoId: repository.id, targetType: "pr", targetNumber: pr.number,
+          actionKey: "reviewer:" + lastCommitter,
+        });
+        await approve(revAction.id, { last_committer: lastCommitter });
+        await execute(revAction.id);
+        await succeed(revAction.id, { reviewer: lastCommitter });
       }
     } catch (revErr) {
       logger.warn({ err: revErr.message }, "Failed to request review on heal PR");
@@ -510,8 +526,16 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       "_Confidence: " + diagnosis.confidence + " · Review and merge when ready._"
     );
 
-    // Managed action: record the heal PR creation
-    await recordAction({ repoId: repository.id, source: "ci_heal", prNumber: pr.number, actionType: "branch_ref", actionKey: "heal_pr", actionValue: branchName, context: { runId: run.id, headSha: run.head_sha, failureType: diagnosis.failure_type } });
+    // Managed action via state machine: record the heal PR creation
+    const healAction = await propose({
+      repoFullName: repository.full_name, pillar: "ci_healing", actionType: "create-branch",
+      source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, failureType: diagnosis.failure_type },
+      repoId: repository.id, targetType: "pr", targetNumber: pr.number,
+      actionKey: "heal_pr",
+    });
+    await approve(healAction.id, { heal_pr: true });
+    await execute(healAction.id);
+    await succeed(healAction.id, { branch: branchName, pr_number: pr.number });
 
     // Audit trail with evidence bundle
     var risk = scoreCIRisk(diagnosis);

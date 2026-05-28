@@ -45,6 +45,10 @@ export async function recordAction({
   actionType, actionKey, actionValue,
   githubId, context,
 }) {
+  logger.warn(
+    { source, actionType, actionKey, repoId, prNumber },
+    "DEPRECATED: recordAction() called — migrate to actionStateMachine.propose()"
+  );
   const contextHash = context ? hashContext(context) : null;
 
   // Deactivate any previous active action with the same key for dedup

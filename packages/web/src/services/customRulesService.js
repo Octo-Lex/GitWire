@@ -13,7 +13,7 @@ import { loadPlugins } from "@gitwire/rules/plugins";
 import { getConfigForRepo, getPluginsForRepo } from "./configService.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
-import { recordAction } from "./managedActionService.js";
+// recordAction deprecated — all actions go through actionStateMachine
 import { logDecision } from "./decisionLogService.js";
 import { propose, approve, execute, succeed, fail } from "./actionStateMachine.js";
 import { logger } from "../lib/logger.js";
@@ -256,15 +256,6 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
         owner, repo, issue_number: issueNumber,
         labels: [args.label],
       });
-      await recordAction({
-        repoId,
-        source: "custom_rules",
-        issueNumber,
-        actionType: "label",
-        actionKey: "label:" + args.label,
-        actionValue: args.label,
-        context: { ruleName },
-      });
       await succeed(act.id, { label: args.label });
       return { label: args.label };
     }
@@ -284,15 +275,6 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
       await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
         owner, repo, issue_number: issueNumber, body: comment,
       });
-      await recordAction({
-        repoId,
-        source: "custom_rules",
-        issueNumber,
-        actionType: "comment",
-        actionKey: "comment:custom:" + ruleName,
-        actionValue: comment.substring(0, 200),
-        context: { ruleName },
-      });
       await succeed(act.id, { comment: true });
       return { comment: comment.substring(0, 100) };
     }
@@ -304,14 +286,6 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
         owner, repo, pull_number: issueNumber,
         event: "APPROVE",
         body: "Auto-approved by GitWire custom rule: **" + ruleName + "**",
-      });
-      await recordAction({
-        repoId,
-        source: "custom_rules",
-        prNumber: issueNumber,
-        actionType: "approval",
-        actionKey: "approval:custom:" + ruleName,
-        context: { ruleName },
       });
       await succeed(act.id, { approved: true });
       return { approved: true };
@@ -331,15 +305,6 @@ async function executeAction(octokit, owner, repo, issueNumber, action, repoId, 
       }
       await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", reviewArgs);
       const target = args.user || args.team;
-      await recordAction({
-        repoId,
-        source: "custom_rules",
-        prNumber: issueNumber,
-        actionType: "reviewer",
-        actionKey: "reviewer:" + target,
-        actionValue: target,
-        context: { ruleName },
-      });
       await succeed(act.id, { reviewer: target });
       return { reviewer: target };
     }

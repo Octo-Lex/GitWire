@@ -12,7 +12,7 @@ import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
-import { recordAction } from "../services/managedActionService.js";
+// recordAction deprecated — all actions go through actionStateMachine
 import { logDecision } from "../services/decisionLogService.js";
 import { checkAndMark } from "../services/idempotencyService.js";
 import { isWaived } from "../services/waiverService.js";
@@ -167,10 +167,6 @@ async function triageIssue({ payload }) {
           labels: labelsToApply,
         });
         await succeed(action.id, { labels: labelsToApply });
-        // Legacy record for backward compat
-        for (const lbl of labelsToApply) {
-          await recordAction({ repoId: repository.id, source: "triage", issueNumber: issue.number, actionType: "label", actionKey: "label:" + lbl, actionValue: lbl, context: { issueId: issue.id, title: issue.title } });
-        }
       } catch (err) {
         await fail(action.id, err.message).catch(() => {});
       }
@@ -221,8 +217,16 @@ async function triageIssue({ payload }) {
         issue_number: issue.number,
         body:         buildTriageComment(classification),
       });
-      // Managed action: record comment
-      await recordAction({ repoId: repository.id, source: "triage", issueNumber: issue.number, actionType: "comment", actionKey: "comment:triage:summary", actionValue: classification.triage_summary, githubId: comment.id, context: { issueId: issue.id, title: issue.title } });
+      // Managed action via state machine
+      const commentAction = await propose({
+        repoFullName: repository.full_name, pillar: "triage", actionType: "add-comment",
+        source: "ai_triage", evidence: { summary: classification.triage_summary },
+        repoId: repository.id, targetType: "issue", targetNumber: issue.number,
+        actionKey: "comment:triage:summary",
+      });
+      await approve(commentAction.id, { auto_comment: true });
+      await execute(commentAction.id);
+      await succeed(commentAction.id, { githubId: comment.id });
     }
   }
 
@@ -298,8 +302,16 @@ async function triagePR({ payload }) {
       issue_number: pr.number,
       labels:       [classification.size_label],
     });
-    // Managed action: record size label
-    await recordAction({ repoId: repository.id, source: "triage", prNumber: pr.number, actionType: "label", actionKey: "label:" + classification.size_label, actionValue: classification.size_label, context: { prId: pr.id, additions: pr.additions, deletions: pr.deletions } });
+    // Managed action via state machine
+    const sizeAction = await propose({
+      repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
+      source: "ai_triage", evidence: { size_label: classification.size_label },
+      repoId: repository.id, targetType: "pr", targetNumber: pr.number,
+      actionKey: "label:" + classification.size_label,
+    });
+    await approve(sizeAction.id, { auto_label: true });
+    await execute(sizeAction.id);
+    await succeed(sizeAction.id, { label: classification.size_label });
   }
 
   logger.info({ pr: pr.number, classification }, "PR classified");
