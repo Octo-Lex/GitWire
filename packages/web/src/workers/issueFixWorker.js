@@ -417,9 +417,9 @@ async function checkRateLimit(repoId, issueNumber, repoFullName) {
   const dailyLimit = (settings && settings.fix_daily_limit) || 3;
   const perIssueLimit = (settings && settings.fix_per_issue_limit) || 1;
 
-  // Per-issue: check if already attempted
+  // Per-issue: check if already attempted (only count active attempts, not failed/rejected)
   const { rows: existing } = await db.query(
-    "SELECT status FROM fix_attempts WHERE repo_id = $1 AND issue_number = $2",
+    "SELECT status FROM fix_attempts WHERE repo_id = $1 AND issue_number = $2 AND status NOT IN ('failed', 'rejected', 'superseded')",
     [repoId, issueNumber]
   );
   if (existing.length >= perIssueLimit) {

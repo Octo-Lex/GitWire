@@ -63,6 +63,15 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
   const repoId = repository.id;
   const startTime = Date.now();
 
+  // ── 0. Skip if PR was created by GitWire bot ───────────────────────────────
+  // GitHub rejects reviews from the PR author. Bot-created PRs (heal, fix)
+  // will fail with "Cannot approve your own pull request".
+  const prAuthor = pr.user?.login || "";
+  if (prAuthor.endsWith("[bot]") || prAuthor.includes("gitwire")) {
+    logger.info({ repo: repository.full_name, pr: pr.number, author: prAuthor }, "AI review: skipping bot-authored PR");
+    return null;
+  }
+
   // ── 1. Load config ─────────────────────────────────────────────────────────
   const cfg = await loadReviewConfig(repoId);
   if (!cfg?.enabled) return null;

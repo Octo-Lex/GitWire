@@ -256,7 +256,7 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repositor
       });
       return;
     }
-    await healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig);
+    await healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation);
   } else {
     // No file identified — fall back to comment-only
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
@@ -308,7 +308,7 @@ async function healByRerun(octokit, owner, repo, run, diagnosis, repoConfig) {
 
 // ── Heal strategy: create a patch PR with the fix ─────────────────────────────
 
-async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig) {
+async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation) {
   const repoFullName = repository.full_name;
 
   // Propose the action
@@ -486,7 +486,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
               failure_type, files_changed, pr_title, status)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')
            ON CONFLICT DO NOTHING`,
-          [ciRow.id, rows[0]?.github_id || repository.id, pr.number, pr.html_url,
+          [ciRow.id, repository.id, pr.number, pr.html_url,
            branchName, diagnosis.failure_type, [failingFile], prTitle]
         );
 
