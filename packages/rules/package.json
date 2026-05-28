@@ -11,7 +11,9 @@
     "./plugins": "./src/plugins/index.js",
     "./plugins.js": "./src/plugins/index.js",
     "./gates": "./src/gates.js",
-    "./gates.js": "./src/gates.js"
+    "./gates.js": "./src/gates.js",
+    "./reviewSchema": "./src/reviewSchema.js",
+    "./reviewSchema.js": "./src/reviewSchema.js"
   },
   "scripts": {
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js"
