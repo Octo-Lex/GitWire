@@ -150,9 +150,12 @@ webhookRouter.post(
             title: "GitWire — evaluating…",
             summary: "GitWire is processing this PR. Results will appear here shortly.",
           });
-          // Store check run ID for workers to update (best-effort)
+          // Store check run ID in Redis for workers to finalize (24h TTL)
           if (checkRunId) {
-            logger.debug({ checkRunId, pr: payload.pull_request.number }, "GitWire check created for PR");
+            const { redis } = await import("../lib/queue.js");
+            const checkKey = "gitwire:check:" + payload.repository.id + ":" + payload.pull_request.number + ":" + payload.pull_request.head.sha;
+            await redis.setex(checkKey, 86400, String(checkRunId));
+            logger.debug({ checkRunId, pr: payload.pull_request.number }, "GitWire check created and stored in Redis");
           }
         }
       } catch (err) {
