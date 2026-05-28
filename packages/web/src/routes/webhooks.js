@@ -74,10 +74,15 @@ webhookRouter.post(
     // ── 2b. Sanitize payload (strip token-scoped fields) ──────────────────
     payload = sanitizeWebhookPayload(payload);
 
-    // ── 3. Create GitWire check for PR events BEFORE queuing jobs ─────────
-    // This must happen before routeWebhookToQueue() because the phase4 worker
-    // will look for the check run ID in Redis immediately after the job is queued.
-    if (eventName === "pull_request" && payload.pull_request?.head?.sha) {
+    // ── 3. Create GitWire check for PR open events BEFORE queuing jobs ───
+    // Only create on open/reopen/ready — NOT on every pull_request event.
+    // Labels, edits, syncs etc. will trigger pull_request webhooks that would
+    // create duplicate orphaned check runs.
+    if (
+      eventName === "pull_request" &&
+      ["opened", "reopened", "ready_for_review"].includes(payload.action) &&
+      payload.pull_request?.head?.sha
+    ) {
       try {
         const octokit = wrapOctokit(await getInstallationClient(payload.installation?.id));
         if (octokit) {

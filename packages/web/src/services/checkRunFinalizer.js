@@ -1,7 +1,8 @@
 // src/services/checkRunFinalizer.js
 // Finalizes the top-level "GitWire" check run created in the webhook route.
 //
-// The webhook route creates a "GitWire" check run (queued) for every PR.
+// The webhook route creates a "GitWire" check run (queued) for every PR
+// on open/reopen/ready_for_review events only.
 // This module retrieves the check run ID from Redis and finalizes it
 // with the appropriate conclusion based on the pipeline result.
 //
@@ -36,16 +37,13 @@ export function checkRunKey(repoId, prNumber, headSha) {
  */
 export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNumber, headSha, reviewResult }) {
   const key = checkRunKey(repoId, prNumber, headSha);
-  logger.info({ key, repo: owner + "/" + repo, pr: prNumber }, "finalizeGitwireCheck: starting");
   const checkRunIdStr = await redis.get(key);
-  logger.info({ key, checkRunIdStr }, "finalizeGitwireCheck: redis get result");
-  if (!checkRunIdStr) return; // No check run was created (may lack checks:write permission)
+  if (!checkRunIdStr) return;
   const checkRunId = parseInt(checkRunIdStr, 10);
   if (!checkRunId) return;
 
   let conclusion, title, summary;
   if (!reviewResult) {
-    // Review was skipped (no config, bot author, no files, dry-run, waiver, trigger filter)
     conclusion = "neutral";
     title = "GitWire \u2014 no review needed";
     summary = "AI review is not configured for this repository, or the PR was skipped.";
@@ -59,10 +57,7 @@ export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNum
     summary = "AI review completed. Verdict: " + reviewResult.verdict + ", " + reviewResult.findings.length + " finding(s).";
   }
 
-  logger.info({ checkRunId, conclusion, title, repo: owner + "/" + repo, pr: prNumber }, "finalizeGitwireCheck: calling updateGitwireCheck");
   await updateGitwireCheck({ octokit, owner, repo, checkRunId, conclusion, title, summary });
-  logger.info({ checkRunId, conclusion, repo: owner + "/" + repo, pr: prNumber }, "finalizeGitwireCheck: updateGitwireCheck returned");
   await redis.del(key);
-  logger.info({ key, checkRunId }, "finalizeGitwireCheck: Redis key deleted");
-  logger.debug({ checkRunId, conclusion, repo: owner + "/" + repo, pr: prNumber }, "GitWire check finalized");
+  logger.info({ checkRunId, conclusion, repo: owner + "/" + repo, pr: prNumber }, "GitWire check finalized");
 }
