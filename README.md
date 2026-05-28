@@ -1,6 +1,4 @@
-<p align="center">
-  <img src=".github/banner.png" alt="GitWire — Self-hosted AI governance for GitHub individuals and teams" width="100%">
-</p>
+![GitWire — Self-hosted AI governance for GitHub individuals and teams](https://github.com/Elephant-Rock-Lab/GitWire/blob/0503dd5807bfcdeb7dce65c9fa637362acb16bb4/banner.png)
 
 <div align="center">
 
