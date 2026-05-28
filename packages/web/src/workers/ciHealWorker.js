@@ -20,6 +20,7 @@ import { isWaived } from "../services/waiverService.js";
 import { Trail } from "../services/auditTrailService.js";
 import { notifyCIFailure } from "../services/telegramNotifyService.js";
 import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
+import { extractReviewJSON } from "@gitwire/rules/reviewSchema";
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -614,8 +615,12 @@ async function generateFixWithClaude(fileContent, filePath, logs, diagnosis, rep
     });
 
     const raw = message.content[0].text;
-    const cleaned = stripCodeFences(raw);
-    const result = JSON.parse(cleaned);
+    const { json: result, strategy } = extractReviewJSON(raw);
+    if (!result) {
+      logger.error({ filePath, strategy, raw: raw.substring(0, 200) }, "Claude fix: all extraction strategies failed");
+      return null;
+    }
+    logger.info({ filePath, strategy }, "Claude fix extracted");
 
     if (!result.fixed_content) return null;
 
@@ -710,8 +715,8 @@ async function diagnoseWithClaude(logData, run, repository) {
     });
 
     const raw = message.content[0].text;
-    const cleaned = stripCodeFences(raw);
-    return JSON.parse(cleaned);
+    const { json: result } = extractReviewJSON(raw);
+    return result || null;
   } catch (err) {
     logger.error({ err }, "Claude diagnosis failed");
     return null;
