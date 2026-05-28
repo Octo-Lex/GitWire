@@ -12,7 +12,7 @@
 import { Router } from "express";
 import { getWebhookApp, getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
-import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue, phase2Queue, phase3Queue, phase4Queue } from "../lib/queue.js";
+import { webhookQueue, triageQueue, ciHealQueue, maintainerQueue, issueFixQueue, phase2Queue, phase3Queue, phase4Queue, redis } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { parseGitwireCommand, resolveCommandAction, buildCommandResponse } from "../lib/commentRouter.js";
@@ -74,10 +74,37 @@ webhookRouter.post(
     // ── 2b. Sanitize payload (strip token-scoped fields) ──────────────────
     payload = sanitizeWebhookPayload(payload);
 
-    // ── 3. Enqueue based on event type ────────────────────────────────────
+    // ── 3. Create GitWire check for PR events BEFORE queuing jobs ─────────
+    // This must happen before routeWebhookToQueue() because the phase4 worker
+    // will look for the check run ID in Redis immediately after the job is queued.
+    if (eventName === "pull_request" && payload.pull_request?.head?.sha) {
+      try {
+        const octokit = wrapOctokit(await getInstallationClient(payload.installation?.id));
+        if (octokit) {
+          const checkRunId = await createGitwireCheck({
+            octokit,
+            owner: payload.repository.owner.login,
+            repo: payload.repository.name,
+            headSha: payload.pull_request.head.sha,
+            status: "queued",
+            title: "GitWire \u2014 evaluating\u2026",
+            summary: "GitWire is processing this PR. Results will appear here shortly.",
+          });
+          if (checkRunId) {
+            const checkKey = "gitwire:check:" + payload.repository.id + ":" + payload.pull_request.number + ":" + payload.pull_request.head.sha;
+            await redis.setex(checkKey, 86400, String(checkRunId));
+            logger.debug({ checkRunId, pr: payload.pull_request.number }, "GitWire check created and stored in Redis");
+          }
+        }
+      } catch (err) {
+        logger.warn({ err: err.message }, "Failed to create GitWire check on PR (non-fatal)");
+      }
+    }
+
+    // ── 4. Enqueue based on event type ────────────────────────────────────
     await routeWebhookToQueue(eventName, payload, deliveryId);
 
-    // ── 3a. Evaluate custom rules ────────────────────────────────────────────
+    // ── 4a. Evaluate custom rules ────────────────────────────────────────────
     if (["issues", "pull_request", "issue_comment"].includes(eventName)) {
       try {
         const customResults = await evaluateAndExecuteCustomRules(eventName, payload, payload.installation);
@@ -136,34 +163,7 @@ webhookRouter.post(
       }
     }
 
-    // ── 3b. Create GitWire check for PR events ──────────────────────────────
-    if (eventName === "pull_request" && payload.pull_request?.head?.sha) {
-      try {
-        const octokit = wrapOctokit(await getInstallationClient(payload.installation?.id));
-        if (octokit) {
-          const checkRunId = await createGitwireCheck({
-            octokit,
-            owner: payload.repository.owner.login,
-            repo: payload.repository.name,
-            headSha: payload.pull_request.head.sha,
-            status: "queued",
-            title: "GitWire — evaluating…",
-            summary: "GitWire is processing this PR. Results will appear here shortly.",
-          });
-          // Store check run ID in Redis for workers to finalize (24h TTL)
-          if (checkRunId) {
-            const { redis } = await import("../lib/queue.js");
-            const checkKey = "gitwire:check:" + payload.repository.id + ":" + payload.pull_request.number + ":" + payload.pull_request.head.sha;
-            await redis.setex(checkKey, 86400, String(checkRunId));
-            logger.debug({ checkRunId, pr: payload.pull_request.number }, "GitWire check created and stored in Redis");
-          }
-        }
-      } catch (err) {
-        logger.warn({ err: err.message }, "Failed to create GitWire check on PR (non-fatal)");
-      }
-    }
-
-    // ── 4. Log delivery for audit ──────────────────────────────────────────
+    // ── 5. Log delivery for audit ──────────────────────────────────────────
     await db.query(
       `INSERT INTO webhook_deliveries (delivery_id, event_name, action, repo, processed, received_at)
        VALUES ($1, $2, $3, $4, TRUE, NOW())
