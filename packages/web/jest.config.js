@@ -4,6 +4,7 @@ export default {
   transform: {},
   moduleFileExtensions: ['js', 'json'],
   testTimeout: 60000,
+  forceExit: true,
   moduleNameMapper: {
     "^@gitwire/runtime/compat/(.*)$": "<rootDir>/../../packages/runtime/compat/$1",
     "^@gitwire/runtime$": "<rootDir>/../../packages/runtime/src/index.js",
