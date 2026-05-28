@@ -11,8 +11,8 @@
     "lint": "eslint src/",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --testPathPattern='tests/unit'",
     "test:unit": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --testPathPattern='tests/unit'",
-    "test:integration": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --testPathPattern='tests/api|tests/helpers'",
-    "test:stress": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --testPathPattern='tests/stress'",
+    "test:integration": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --testPathPattern=\"tests/api|tests/helpers\"",
+    "test:stress": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --testPathPattern=\"tests/stress\"",
     "test:all": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js"
   },
   "dependencies": {
