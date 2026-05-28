@@ -59,7 +59,10 @@ export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNum
     summary = "AI review completed. Verdict: " + reviewResult.verdict + ", " + reviewResult.findings.length + " finding(s).";
   }
 
+  logger.info({ checkRunId, conclusion, title, repo: owner + "/" + repo, pr: prNumber }, "finalizeGitwireCheck: calling updateGitwireCheck");
   await updateGitwireCheck({ octokit, owner, repo, checkRunId, conclusion, title, summary });
+  logger.info({ checkRunId, conclusion, repo: owner + "/" + repo, pr: prNumber }, "finalizeGitwireCheck: updateGitwireCheck returned");
   await redis.del(key);
+  logger.info({ key, checkRunId }, "finalizeGitwireCheck: Redis key deleted");
   logger.debug({ checkRunId, conclusion, repo: owner + "/" + repo, pr: prNumber }, "GitWire check finalized");
 }
