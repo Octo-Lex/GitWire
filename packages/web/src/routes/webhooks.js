@@ -20,6 +20,7 @@ import { evaluateAndExecuteCustomRules } from "../services/customRulesService.js
 import { evaluateGatesForPR as evaluateQualityGates } from "../services/qualityGateService.js";
 import { notifyCustomRule, notifyGateResult } from "../services/telegramNotifyService.js";
 import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFromDecision } from "../lib/checkStatus.js";
+import { sanitizeWebhookPayload } from "../lib/githubSanitize.js";
 
 export const webhookRouter = Router();
 
@@ -68,6 +69,9 @@ webhookRouter.post(
       { event: eventName, deliveryId, action: payload.action },
       "Webhook received"
     );
+
+    // ── 2b. Sanitize payload (strip token-scoped fields) ──────────────────
+    payload = sanitizeWebhookPayload(payload);
 
     // ── 3. Enqueue based on event type ────────────────────────────────────
     await routeWebhookToQueue(eventName, payload, deliveryId);
