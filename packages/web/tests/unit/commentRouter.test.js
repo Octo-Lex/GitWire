@@ -1,6 +1,16 @@
 // tests/unit/commentRouter.test.js
 // Unit tests for comment command parsing
 
+import { setConfig } from '@gitwire/runtime/compat/_init.js';
+
+setConfig({
+  LOG_LEVEL: 'silent',
+  REDIS_URL: 'redis://localhost:6379',
+  DATABASE_URL: 'postgresql://localhost/gitops_hub',
+  GITHUB_APP_ID: 'test',
+  GITHUB_PRIVATE_KEY: 'test',
+});
+
 import { parseGitwireCommand, resolveCommandAction, buildCommandResponse } from '../../src/lib/commentRouter.js';
 
 describe('parseGitwireCommand', () => {

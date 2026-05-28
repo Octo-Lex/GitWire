@@ -153,10 +153,10 @@ export async function fetchMetrics(repoId) {
 
   // Average heal time (hours)
   const healTime = await db.query(
-    `SELECT AVG(EXTRACT(EPOCH FROM (healed_at - ci_runs.created_at)) / 3600)::float AS avg_hours
+    `SELECT AVG(EXTRACT(EPOCH FROM (ci_runs.healed_at - ci_runs.created_at)) / 3600)::float AS avg_hours
      FROM heal_prs
      JOIN ci_runs ON heal_prs.ci_run_id = ci_runs.id
-     WHERE heal_prs.repo_id = $1 AND heal_prs.healed_at IS NOT NULL`,
+     WHERE heal_prs.repo_id = $1 AND ci_runs.healed_at IS NOT NULL`,
     [repoId]
   );
   m.avg_heal_time_hours = healTime.rows[0]?.avg_hours || 0;
