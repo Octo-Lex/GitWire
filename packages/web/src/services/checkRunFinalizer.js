@@ -36,7 +36,9 @@ export function checkRunKey(repoId, prNumber, headSha) {
  */
 export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNumber, headSha, reviewResult }) {
   const key = checkRunKey(repoId, prNumber, headSha);
+  logger.info({ key, repo: owner + "/" + repo, pr: prNumber }, "finalizeGitwireCheck: starting");
   const checkRunIdStr = await redis.get(key);
+  logger.info({ key, checkRunIdStr }, "finalizeGitwireCheck: redis get result");
   if (!checkRunIdStr) return; // No check run was created (may lack checks:write permission)
   const checkRunId = parseInt(checkRunIdStr, 10);
   if (!checkRunId) return;
