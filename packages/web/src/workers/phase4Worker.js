@@ -13,40 +13,7 @@ import { checkAndMark } from "../services/idempotencyService.js";
 import { emitWorkerEvent } from "../services/workerEvents.js";
 import { isWaived } from "../services/waiverService.js";
 import { QUEUES } from "@gitwire/core";
-import { updateGitwireCheck } from "../lib/checkStatus.js";
-import { redis } from "../lib/queue.js";
-
-/**
- * Finalize the top-level "GitWire" check run created in the webhook route.
- * Reads the check run ID from Redis, updates to completed with appropriate conclusion.
- */
-async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNumber, headSha, reviewResult }) {
-  const checkKey = "gitwire:check:" + repoId + ":" + prNumber + ":" + headSha;
-  const checkRunIdStr = await redis.get(checkKey);
-  if (!checkRunIdStr) return; // No check run was created (may lack checks:write permission)
-  const checkRunId = parseInt(checkRunIdStr, 10);
-  if (!checkRunId) return;
-
-  let conclusion, title, summary;
-  if (!reviewResult) {
-    // Review was skipped (no config, bot author, no files)
-    conclusion = "neutral";
-    title = "GitWire \u2014 no review needed";
-    summary = "AI review is not configured for this repository, or the PR was skipped.";
-  } else if (reviewResult.blocked) {
-    conclusion = "failure";
-    title = "GitWire \u2014 review blocked merge";
-    summary = "AI review found " + reviewResult.findings.length + " finding(s). Verdict: " + reviewResult.verdict + ".";
-  } else {
-    conclusion = "success";
-    title = "GitWire \u2014 review passed";
-    summary = "AI review completed. Verdict: " + reviewResult.verdict + ", " + reviewResult.findings.length + " finding(s).";
-  }
-
-  await updateGitwireCheck({ octokit, owner, repo, checkRunId, conclusion, title, summary });
-  // Clean up Redis key
-  await redis.del(checkKey);
-}
+import { finalizeGitwireCheck } from "../services/checkRunFinalizer.js";
 import { logger } from "../lib/logger.js";
 
 export const phase4Queue = createQueue(QUEUES.PHASE4);
@@ -59,29 +26,42 @@ export function startPhase4Worker() {
       case "ai-review": {
         const { pr, repository, installation } = job.data;
         if (!pr || !repository || !installation) return;
+
+        // Helper to finalize check run on any skip path
+        const octokitLazy = () => wrapOctokit(getInstallationClient(installation.id));
+
         // ── Check .gitwire.yml pillar config ──────────────────────────────
         const repoConfig = await getConfigForRepo(repository.full_name);
         if (!isPillarEnabled("ai_review", repoConfig)) {
           logger.debug({ repo: repository.full_name, pr: pr.number }, "AI review disabled — skipping");
+          const octokit = await octokitLazy();
+          await finalizeGitwireCheck({ octokit, owner: repository.owner.login, repo: repository.name, repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha, reviewResult: null });
           return;
         }
         // ── Trigger filter: branch/author/paths ────────────────────────────
         if (!shouldTrigger("ai_review", { branch: pr.base?.ref, author: pr.user?.login, paths: pr.changed_files }, repoConfig)) {
           logger.info({ pr: pr.number, branch: pr.base?.ref }, "Trigger filter: AI review skipped for branch/author/paths");
+          const octokit = await octokitLazy();
+          await finalizeGitwireCheck({ octokit, owner: repository.owner.login, repo: repository.name, repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha, reviewResult: null });
           return;
         }
         // ── Policy waiver check ─────────────────────────────────────────
         const waiver = await isWaived({ repoId: repository.id, pillar: "ai_review", scope: "pr", scopeValue: String(pr.number) });
         if (waiver) {
           logger.info({ pr: pr.number, waiverId: waiver.id }, "Policy waived — skipping AI review");
+          const octokit = await octokitLazy();
+          await finalizeGitwireCheck({ octokit, owner: repository.owner.login, repo: repository.name, repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha, reviewResult: null });
           return;
         }
         // ── Idempotency: skip duplicate reviews ───────────────────────────
         if (!(await checkAndMark("ai_review", "pr-" + pr.number + "-" + (pr.head?.sha || "unknown")))) {
+          // Duplicate — check run already finalized by previous run
           return;
         }
         if (isDryRun(repoConfig)) {
           logger.info({ repo: repository.full_name, pr: pr.number }, "DRY RUN: would run AI review");
+          const octokit = await octokitLazy();
+          await finalizeGitwireCheck({ octokit, owner: repository.owner.login, repo: repository.name, repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha, reviewResult: null });
           return;
         }
         const octokit = wrapOctokit(await getInstallationClient(installation.id));
