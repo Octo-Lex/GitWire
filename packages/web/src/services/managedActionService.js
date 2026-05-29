@@ -93,7 +93,7 @@ export async function recordAction({
  */
 export async function deactivateAction(actionId) {
   const { rowCount } = await db.query(
-    "UPDATE managed_actions SET active = FALSE, deactivated_at = NOW() " +
+    "UPDATE managed_actions SET active = FALSE, status = 'cancelled', resolved_at = NOW(), deactivated_at = NOW() " +
     "WHERE id = $1 AND active = TRUE",
     [actionId]
   );
@@ -205,7 +205,7 @@ export async function cleanupPR(repoId, prNumber) {
 
   const ids = activeActions.map((a) => a.id);
   await db.query(
-    "UPDATE managed_actions SET active = FALSE, deactivated_at = NOW() " +
+    "UPDATE managed_actions SET active = FALSE, status = 'cancelled', resolved_at = NOW(), deactivated_at = NOW() " +
     "WHERE id = ANY($1)",
     [ids]
   );
@@ -256,7 +256,7 @@ export async function getActionStats() {
   const { rows } = await db.query(
     "SELECT source, action_type, COUNT(*) AS count " +
     "FROM managed_actions " +
-    "WHERE active = TRUE " +
+    "WHERE status IN ('proposed', 'approved', 'executing') " +
     "GROUP BY source, action_type " +
     "ORDER BY count DESC"
   );

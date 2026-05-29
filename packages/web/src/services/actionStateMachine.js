@@ -269,6 +269,28 @@ export async function getActionsNeedingReconciliation(maxAge = "6 hours") {
   return rows;
 }
 
+/**
+ * Find actions stuck in transient states beyond reasonable timeouts.
+ * - executing >6h: worker died mid-task
+ * - approved >12h: never picked up for execution
+ * - proposed >24h: never approved (requires manual approval)
+ */
+export async function getStaleActions() {
+  const { rows } = await db.query(`
+    SELECT *, 'executing_timeout' AS stale_reason FROM managed_actions
+      WHERE status = 'executing' AND executed_at < NOW() - INTERVAL '6 hours'
+    UNION ALL
+    SELECT *, 'approved_timeout' AS stale_reason FROM managed_actions
+      WHERE status = 'approved' AND approved_at < NOW() - INTERVAL '12 hours'
+    UNION ALL
+    SELECT *, 'proposed_timeout' AS stale_reason FROM managed_actions
+      WHERE status = 'proposed' AND proposed_at < NOW() - INTERVAL '24 hours'
+    ORDER BY proposed_at ASC
+    LIMIT 100
+  `);
+  return rows;
+}
+
 // ── Internal ─────────────────────────────────────────────────────────────────
 
 /**

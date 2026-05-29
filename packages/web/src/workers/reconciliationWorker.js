@@ -10,10 +10,11 @@
 // Drifted actions are logged to action_reconciliation_log.
 // Actions confirmed still in effect are marked as 'reconciled'.
 
-import { getActionsNeedingReconciliation, reconcile, logReconciliationCheck } from "../services/actionStateMachine.js";
+import { getActionsNeedingReconciliation, getStaleActions, reconcile, logReconciliationCheck } from "../services/actionStateMachine.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { logger } from "../lib/logger.js";
+import { db } from "../lib/db.js";
 
 /**
  * Run reconciliation for all eligible actions.
@@ -22,6 +23,35 @@ import { logger } from "../lib/logger.js";
 export async function runReconciliation() {
   logger.info("Reconciliation scan starting");
 
+  // Phase 1: Stale actions cleanup
+  const staleActions = await getStaleActions();
+  let staleFailed = 0;
+  let staleCancelled = 0;
+  for (const action of staleActions) {
+    try {
+      // Transition stale actions to failed or cancelled depending on state
+      if (action.status === "executing") {
+        await db.query(
+          `UPDATE managed_actions SET status = 'failed', resolved_at = NOW(), error_message = 'Reconciled: stuck in executing for >6h' WHERE id = $1`,
+          [action.id]
+        );
+        staleFailed++;
+      } else {
+        await db.query(
+          `UPDATE managed_actions SET status = 'cancelled', resolved_at = NOW(), error_message = 'Reconciled: stuck in ' || status || ' state' WHERE id = $1`,
+          [action.id]
+        );
+        staleCancelled++;
+      }
+    } catch (err) {
+      logger.warn({ err, actionId: action.id }, "Stale action cleanup failed");
+    }
+  }
+  if (staleActions.length > 0) {
+    logger.info({ staleFailed, staleCancelled }, "Stale actions cleaned up");
+  }
+
+  // Phase 2: Reconcile succeeded actions against GitHub
   const actions = await getActionsNeedingReconciliation("6 hours");
   logger.info({ count: actions.length }, "Actions needing reconciliation");
 
