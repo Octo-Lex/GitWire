@@ -409,20 +409,18 @@ export async function evaluateGatesForRepo(repoId, repoFullName, options = {}) {
   // DB gates: explicitly created by the user or auto-created from prior evaluations
   const dbGates = await getGatesForRepo(repoId);
 
-  // Config gates: only from .gitwire.yml, not defaults.
-  // DEFAULT_CONFIG always includes a "default" gate — using it for repos that
-  // never opted into quality gates means every repo gets a failing check run.
-  // Only use config gates when the repo has an actual .gitwire.yml.
-  const hasRepoConfig = config._meta?.layers?.repo === true;
-  const configGates = (hasRepoConfig && config.quality_gates) || {};
-
-  // Skip entirely if repo has no explicit gates (neither DB nor config file)
-  if (dbGates.length === 0 && Object.keys(configGates).length === 0) {
+  // Skip entirely if repo has no explicit gates in DB.
+  // DEFAULT_CONFIG includes a "default" quality gate, but applying it to repos
+  // that never opted in means every repo gets a failing check run.
+  // We cannot rely on config._meta.layers because fetchOrgConfig/fetchFromGitHub
+  // return structuredClone(DEFAULT_CONFIG) (new object reference) which always
+  // passes the !== DEFAULT_CONFIG check, making layers.org/repo always true.
+  if (dbGates.length === 0) {
     return [];
   }
 
-  // Build merged gate set
-  const mergedGates = { ...configGates };
+  // Build merged gate set from DB gates
+  const mergedGates = {};
   for (const dbg of dbGates) {
     mergedGates[dbg.name] = {
       conditions: typeof dbg.conditions === "string" ? JSON.parse(dbg.conditions) : dbg.conditions,

@@ -51,16 +51,16 @@ export async function getConfigForRepo(repoFullName) {
 
   // 3. Layer on org-level .gitwire.yml
   const orgResult = await fetchOrgConfig(repoFullName);
-  if (orgResult.config !== DEFAULT_CONFIG) {
-    config = orgResult.config; // already merged with defaults by parseConfig
+  if (orgResult.source !== null) {
+    config = orgResult.config;
     layers.org = true;
     orgSource = orgResult.source;
   }
 
   // 4. Layer on repo-level YAML file from GitHub
   const yamlConfig = await fetchFromGitHub(repoFullName);
-  if (yamlConfig !== DEFAULT_CONFIG) {
-    config = yamlConfig; // already merged with defaults by parseConfig
+  if (yamlConfig._hasFile === true) {
+    config = yamlConfig;
     layers.repo = true;
   }
 
@@ -263,7 +263,9 @@ async function fetchFromGitHub(repoFullName) {
         );
         if (data) {
           logger.info({ repo: repoFullName, path }, ".gitwire.yml loaded");
-          return parseConfig(data);
+          const parsed = parseConfig(data);
+          parsed._hasFile = true;
+          return parsed;
         }
       } catch (err) {
         if (err.status !== 404) throw err;
