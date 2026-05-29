@@ -213,7 +213,7 @@ async function healWorkflowRun({ payload }) {
       return;
     }
 
-    await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig);
+    await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation);
   } else {
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis);
     await ciService.saveHealResult(run.id, {
@@ -228,7 +228,7 @@ async function healWorkflowRun({ payload }) {
 
 // ── Attempt automated heal via patch PR ───────────────────────────────────────
 
-async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig) {
+async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation) {
   // Flaky test: just re-run
   if (diagnosis.failure_type === "test_flaky" && diagnosis.confidence !== "low") {
     await healByRerun(octokit, owner, repo, run, diagnosis, repoConfig);

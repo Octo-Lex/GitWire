@@ -268,13 +268,13 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   }
 
   // ── Step 9: Create branch → commit fixes → open PR ────────────────────────
-  const repoFullName = repository.full_name;
+  const repoFullName = repo;
   const fixAction = await propose({
     repoFullName,
     pillar: "issue_fix",
     actionType: "create-fix-pr",
     source: "ai_fix",
-    evidence: { issue_number: issueNumber, fixes: fixes.length, complexity: analysis.complexity, confidence },
+    evidence: { issue_number: issueNumber, fixes: fixes.length, complexity: analysis.complexity, confidence: preConfidence },
     repoId: repoId,
     targetType: "pr",
   });
@@ -288,7 +288,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
   }
 
   // Approve + execute
-  await approve(fixAction.id, { confidence, min_confidence: getMinFixConfidence(repoConfig), scope_ok: true });
+  await approve(fixAction.id, { confidence: preConfidence, min_confidence: getMinFixConfidence(repoConfig), scope_ok: true });
   await execute(fixAction.id);
 
   try {
@@ -368,7 +368,7 @@ async function processFixIssue({ repo, issueNumber, installationId, triggeredBy 
     await succeed(fixAction.id, { pr_number: pr.number, pr_url: pr.html_url, branch: branchName });
 
     // Notify Telegram subscribers
-    notifyIssueFix(repository.full_name, {
+    notifyIssueFix(repo, {
       issue_number: issueNumber,
       status: "fix_pr_created",
     });
