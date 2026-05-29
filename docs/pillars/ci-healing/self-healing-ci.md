@@ -72,6 +72,37 @@ The PR body includes:
 | `GET` | `/api/heal/run/:githubRunId` | Heal history for a specific run |
 | `GET` | `/api/heal/stats` | Heal statistics |
 
+## Rate Limiting & Cooldown
+
+GitWire protects against runaway healing with **per-branch** safeguards:
+
+### Circuit Breaker
+
+Each branch tracks recent heal outcomes. After a heal PR is created for a branch, the circuit breaker monitors whether it succeeded. If too many consecutive heals fail or the branch keeps breaking, the breaker trips and blocks further healing.
+
+### Per-Branch Cooldown
+
+After **3 heal attempts** on the same branch within 24 hours, GitWire enters a 24-hour cooldown for that branch only. Other branches are unaffected.
+
+Key pattern: `gitwire:cooldown:ci_heal:{owner}/{repo}:{branch}`
+
+### Why Per-Branch, Not Per-Repo
+
+A per-repo cooldown would block healing on unrelated branches. For example, if branch `feature/auth` hits the limit, branch `feature/payments` should still be healable. Per-branch scoping ensures only the problematic branch is throttled.
+
+### Self-Heal Filter
+
+When a heal PR is merged and triggers a new CI run, GitWire recognizes its own activity by checking for the `[gitwire-heal]` marker in commit messages. This prevents an infinite loop where heals trigger re-heals.
+
+### Configuration
+
+```yaml
+pillars:
+  ci_healing:
+    enabled: true
+    max_fix_attempts: 3  # Per branch per 24 hours
+```
+
 ## In This Section
 
 - [Failure Types](/pillars/ci-healing/failure-types) — All 9 categories and which are auto-healable
