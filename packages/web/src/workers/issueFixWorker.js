@@ -760,18 +760,8 @@ async function aiGenerateFullFile(issue, analysis, fileContents, repoFullName) {
 
     const raw = message.content[0].text;
     const cleaned = stripCodeFences(raw);
-    logger.info({ repo: repoFullName, rawLen: raw.length, cleanedLen: cleaned.length, firstChars: cleaned.substring(0, 100) }, "AI fix response");
     const fixes = extractJSON(cleaned);
-    if (!Array.isArray(fixes)) {
-      logger.warn({ repo: repoFullName, fixesType: typeof fixes }, "AI fix: extractJSON did not return array");
-      return null;
-    }
-    logger.info({ repo: repoFullName, fixesCount: fixes.length, paths: fixes.map(f => f.path) }, "AI fix: fixes extracted");
-    for (const f of fixes) {
-      if (f.fixed_content) {
-        logger.info({ path: f.path, contentLen: f.fixed_content.length, first50: f.fixed_content.substring(0, 50) }, "AI fix: content preview");
-      }
-    }
+    if (!Array.isArray(fixes)) return null;
     return fixes.filter((f) => f.path && f.fixed_content);
   } catch (err) {
     logger.error({ err }, "AI full-file fix generation failed");
