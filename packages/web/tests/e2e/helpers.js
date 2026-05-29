@@ -55,7 +55,7 @@ export async function createPR({ owner, repo, branch, base, title, body }) {
 
 export async function closePR({ owner, repo, number }) {
   try {
-    exec(`gh pr close ${number} --repo ${owner}/${repo} --delete-branch --yes 2>&1`);
+    exec(`gh pr close ${number} --repo ${owner}/${repo} --delete-branch 2>&1`);
   } catch (_e) { /* already closed */ }
 }
 
