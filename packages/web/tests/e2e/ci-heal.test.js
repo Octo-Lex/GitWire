@@ -17,7 +17,7 @@ describe("T3: CI Heal — Auto-patch", function () {
       exec(`cd /tmp/e2e-${branch} && git checkout master && git pull origin master && git push origin --delete ${branch} 2>&1`);
     } catch (_e) {}
     if (fixPRNumber) {
-      try { exec(`gh pr close ${fixPRNumber} --repo ${REPO.owner}/${REPO.repo} --delete-branch --yes 2>&1`); } catch (_e) {}
+      try { exec(`gh pr close ${fixPRNumber} --repo ${REPO.owner}/${REPO.repo} --delete-branch 2>&1`); } catch (_e) {}
     }
   });
 
@@ -31,7 +31,7 @@ describe("T3: CI Heal — Auto-patch", function () {
 
     // Wait for CI failure webhook
     await poll(async () => {
-      const res = await apiFetch("/api/webhooks/deliveries?limit=10");
+      const res = await apiFetch("/api/webhooks/deliveries?limit=50");
       const deliveries = res.data || res;
       const found = deliveries.find((d) =>
         d.repo === `${REPO.owner}/${REPO.repo}` &&
