@@ -8,6 +8,11 @@ import { DEFAULT_CONFIG, validateConfig } from "./schema.js";
  * Parse a .gitwire.yml string into a resolved config object.
  * Missing fields inherit from DEFAULT_CONFIG via deep merge.
  * Returns DEFAULT_CONFIG for null/empty/whitespace-only input.
+ *
+ * The returned object includes `_explicitKeys`: an array of top-level keys
+ * that were explicitly present in the YAML. This lets consumers distinguish
+ * between "user set quality_gates" and "DEFAULT_CONFIG's quality_gates flowed
+ * through the merge".
  */
 export function parseConfig(yamlContent) {
   if (!yamlContent || !yamlContent.trim()) return structuredClone(DEFAULT_CONFIG);
@@ -22,7 +27,9 @@ export function parseConfig(yamlContent) {
     throw new Error("Invalid .gitwire.yml: " + validation.errors.join("; "));
   }
 
-  return mergeDeep(structuredClone(DEFAULT_CONFIG), parsed);
+  const result = mergeDeep(structuredClone(DEFAULT_CONFIG), parsed);
+  result._explicitKeys = Object.keys(parsed);
+  return result;
 }
 
 /**

@@ -406,21 +406,36 @@ export async function evaluateGatesForRepo(repoId, repoFullName, options = {}) {
   const config = await getConfigForRepo(repoFullName);
   const metrics = await fetchMetrics(repoId);
 
-  // DB gates: explicitly created by the user or auto-created from prior evaluations
-  const dbGates = await getGatesForRepo(repoId);
+  // ── Gate source resolution ──────────────────────────────────────────────
+  // Gates come from three sources, in priority order:
+  //   1. DB gates — explicitly created via dashboard API
+  //   2. Config file gates — user wrote quality_gates in .gitwire.yml
+  //   3. DEFAULT_CONFIG gates — never opt-in, must NOT be evaluated
+  //
+  // parseConfig() attaches _explicitKeys listing which top-level keys the
+  // user actually wrote. configService attaches _meta.layers tracking which
+  // config layers were found. Together they let us distinguish real config
+  // from DEFAULT_CONFIG fallback.
 
-  // Skip entirely if repo has no explicit gates in DB.
-  // DEFAULT_CONFIG includes a "default" quality gate, but applying it to repos
-  // that never opted in means every repo gets a failing check run.
-  // We cannot rely on config._meta.layers because fetchOrgConfig/fetchFromGitHub
-  // return structuredClone(DEFAULT_CONFIG) (new object reference) which always
-  // passes the !== DEFAULT_CONFIG check, making layers.org/repo always true.
-  if (dbGates.length === 0) {
+  const dbGates = await getGatesForRepo(repoId);
+  const hasRepoConfig = config._meta?.layers?.repo === true;
+  const hasOrgConfig = config._meta?.layers?.org === true;
+  const hasExplicitGates = config._explicitKeys?.includes("quality_gates");
+
+  // Config file gates: only if user explicitly wrote quality_gates in YAML.
+  // DEFAULT_CONFIG always includes a "default" gate, so checking for its
+  // presence is useless — we must check provenance.
+  const configGates = ((hasRepoConfig || hasOrgConfig) && hasExplicitGates)
+    ? (config.quality_gates || {})
+    : {};
+
+  // Skip entirely if repo has no gates from any source
+  if (dbGates.length === 0 && Object.keys(configGates).length === 0) {
     return [];
   }
 
-  // Build merged gate set from DB gates
-  const mergedGates = {};
+  // Build merged gate set: DB gates override config gates by name
+  const mergedGates = { ...configGates };
   for (const dbg of dbGates) {
     mergedGates[dbg.name] = {
       conditions: typeof dbg.conditions === "string" ? JSON.parse(dbg.conditions) : dbg.conditions,

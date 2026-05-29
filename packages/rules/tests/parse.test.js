@@ -194,3 +194,50 @@ describe("validateConfig — custom_rules and expressions", () => {
     expect(result.errors[0]).toContain("custom_rules must be an object");
   });
 });
+
+describe("parseConfig — _explicitKeys provenance", () => {
+  test("no _explicitKeys for null input (DEFAULT_CONFIG)", () => {
+    const result = parseConfig(null);
+    expect(result._explicitKeys).toBeUndefined();
+  });
+
+  test("no _explicitKeys for empty string (DEFAULT_CONFIG)", () => {
+    const result = parseConfig("");
+    expect(result._explicitKeys).toBeUndefined();
+  });
+
+  test("_explicitKeys lists only user-provided top-level keys", () => {
+    const yaml = "version: 1\ndry_run: true";
+    const result = parseConfig(yaml);
+    expect(result._explicitKeys).toEqual(["version", "dry_run"]);
+    // quality_gates should exist (from DEFAULT_CONFIG merge) but NOT be explicit
+    expect(result.quality_gates).toBeDefined();
+    expect(result._explicitKeys).not.toContain("quality_gates");
+  });
+
+  test("_explicitKeys includes quality_gates when user sets it", () => {
+    const yaml = `
+version: 1
+quality_gates:
+  my-gate:
+    conditions:
+      - metric: ci_failure_rate_7d
+        operator: "<"
+        threshold: 0.5
+    block_on_fail: false
+`;
+    const result = parseConfig(yaml);
+    expect(result._explicitKeys).toContain("quality_gates");
+    expect(result.quality_gates["my-gate"]).toBeDefined();
+    // The default gate from DEFAULT_CONFIG is still present (deep merge)
+    expect(result.quality_gates["default"]).toBeDefined();
+  });
+
+  test("_explicitKeys does not include keys from DEFAULT_CONFIG", () => {
+    const yaml = "triage:\n  enabled: false";
+    const result = parseConfig(yaml);
+    expect(result._explicitKeys).toEqual(["triage"]);
+    expect(result._explicitKeys).not.toContain("pillars");
+    expect(result._explicitKeys).not.toContain("quality_gates");
+  });
+});
