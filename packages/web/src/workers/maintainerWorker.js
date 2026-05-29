@@ -84,6 +84,7 @@ async function processStaleItems(octokit, owner, repo, type, staleDays, warnDays
   const perPage = 100;
   let page = 1;
   let processed = 0;
+  logger.info({ repo: owner + "/" + repo, type, staleDays, warnDays }, "Stale scan params");
 
   while (true) {
     const { data: items } = await octokit.request(apiPath, {
