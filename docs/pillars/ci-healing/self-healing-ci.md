@@ -103,6 +103,18 @@ pillars:
     max_fix_attempts: 3  # Per branch per 24 hours
 ```
 
+## Validation Status
+
+| Component | Validated | Notes |
+|-----------|----------|-------|
+| CI failure detection | ✅ | Real failures detected and queued |
+| Failure diagnosis (Claude) | ✅ | 8 heal PRs created across 3 repos |
+| Per-branch cooldown | ✅ | 3 attempts per branch per 24h |
+| Self-heal filter | ✅ | `[gitwire-heal]` marker prevents re-healing |
+| Heal PR outcome tracking | ✅ | `heal_prs.status` + `heal_outcome` populated by reconciliation |
+| Auto-rollback | ✅ | Revert PR created on deploy failure within 30-min window |
+| Flaky test detection | ⚠️ Code complete, no test data | Requires repos to publish JUnit XML artifacts. All test repos use lint-only CI. |
+
 ## In This Section
 
 - [Failure Types](/pillars/ci-healing/failure-types) — All 9 categories and which are auto-healable

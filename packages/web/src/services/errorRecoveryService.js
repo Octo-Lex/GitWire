@@ -16,7 +16,6 @@ const ROLLBACK_WINDOW_MINS = 30;
 // ════════════════════════════════════════════════════════════════════════════
 
 export async function evaluateRollback({ run, repository, installation }) {
-  logger.info({ repo: repository.full_name, conclusion: run.conclusion, head_branch: run.head_branch, default_branch: repository.default_branch }, "Rollback evaluation triggered");
   if (run.conclusion !== "failure") return;
   if (run.head_branch !== repository.default_branch) return;
   if (!isDeployWorkflow(run.name, run.path)) return;
