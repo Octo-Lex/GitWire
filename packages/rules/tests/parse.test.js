@@ -229,8 +229,9 @@ quality_gates:
     const result = parseConfig(yaml);
     expect(result._explicitKeys).toContain("quality_gates");
     expect(result.quality_gates["my-gate"]).toBeDefined();
-    // The default gate from DEFAULT_CONFIG is still present (deep merge)
-    expect(result.quality_gates["default"]).toBeDefined();
+    // The default gate from DEFAULT_CONFIG should be stripped since user
+    // didn't explicitly include a gate named "default"
+    expect(result.quality_gates["default"]).toBeUndefined();
   });
 
   test("_explicitKeys does not include keys from DEFAULT_CONFIG", () => {
@@ -239,5 +240,37 @@ quality_gates:
     expect(result._explicitKeys).toEqual(["triage"]);
     expect(result._explicitKeys).not.toContain("pillars");
     expect(result._explicitKeys).not.toContain("quality_gates");
+  });
+
+  test("user's own 'default' gate replaces DEFAULT_CONFIG's", () => {
+    const yaml = `
+quality_gates:
+  default:
+    conditions:
+      - metric: ci_failure_rate_7d
+        operator: "<"
+        threshold: 0.9
+    block_on_fail: false
+`;
+    const result = parseConfig(yaml);
+    expect(result.quality_gates["default"]).toBeDefined();
+    // User's threshold (0.9) should win, not DEFAULT_CONFIG's (0.3)
+    expect(result.quality_gates["default"].conditions[0].threshold).toBe(0.9);
+    expect(result.quality_gates["default"].block_on_fail).toBe(false);
+  });
+
+  test("custom gate without 'default' leaves only the custom gate", () => {
+    const yaml = `
+quality_gates:
+  strict:
+    conditions:
+      - metric: readiness_score
+        operator: ">="
+        threshold: 80
+    block_on_fail: true
+`;
+    const result = parseConfig(yaml);
+    expect(Object.keys(result.quality_gates)).toEqual(["strict"]);
+    expect(result.quality_gates["default"]).toBeUndefined();
   });
 });

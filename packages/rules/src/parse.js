@@ -29,6 +29,17 @@ export function parseConfig(yamlContent) {
 
   const result = mergeDeep(structuredClone(DEFAULT_CONFIG), parsed);
   result._explicitKeys = Object.keys(parsed);
+
+  // If user explicitly set quality_gates, strip the DEFAULT_CONFIG "default"
+  // gate unless the user included one by that name. mergeDeep preserves it
+  // because it merges objects recursively.
+  if (parsed.quality_gates && typeof parsed.quality_gates === "object") {
+    const userGateNames = Object.keys(parsed.quality_gates);
+    if (!userGateNames.includes("default")) {
+      delete result.quality_gates.default;
+    }
+  }
+
   return result;
 }
 
