@@ -210,6 +210,23 @@ export async function fetchMetrics(repoId) {
   );
   m.avg_review_duration_ms = reviewDur.rows[0]?.avg_ms || 0;
 
+  // Heal efficacy rate (7d): of merged heal PRs with outcome data, what % was verified?
+  const healEff = await db.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE heal_outcome = 'verified')::int AS verified,
+       COUNT(*) FILTER (WHERE heal_outcome IN ('verified', 'ineffective', 'unknown'))::int AS with_outcome
+     FROM managed_actions
+     WHERE repo_id = $1
+       AND pillar = 'ci_healing'
+       AND action_type = 'create-patch-pr'
+       AND heal_outcome IS NOT NULL
+       AND resolved_at > NOW() - INTERVAL '7 days'`,
+    [repoId]
+  );
+  const effWithOutcome = healEff.rows[0]?.with_outcome || 0;
+  const effVerified = healEff.rows[0]?.verified || 0;
+  m.heal_efficacy_rate_7d = effWithOutcome > 0 ? effVerified / effWithOutcome : null;
+
   return m;
 }
 

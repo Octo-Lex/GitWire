@@ -74,7 +74,11 @@ export async function runReconciliation() {
   }
 
   logger.info({ confirmed, drifted, errors }, "Reconciliation scan complete");
-  return { total: actions.length, confirmed, drifted, errors };
+
+  // Phase 3: Reconcile heal PR outcomes
+  const healResult = await reconcileHealPRs();
+
+  return { total: actions.length, confirmed, drifted, errors, healPRs: healResult };
 }
 
 /**
@@ -140,6 +144,135 @@ async function reconcileAction(action) {
 /**
  * Check if a label is still present on an issue/PR.
  */
+/**
+ * Reconcile heal PRs — check GitHub state and update heal_prs.status + managed_actions.heal_outcome.
+ * Runs alongside the periodic reconciliation scan.
+ */
+async function reconcileHealPRs() {
+  const { rows: openHeals } = await db.query(
+    `SELECT h.id, h.github_pr_number, h.repo_id, h.ci_run_id, h.status, h.created_at,
+            r.full_name, r.installation_id,
+            c.branch AS ci_branch
+     FROM heal_prs h
+     JOIN repositories r ON r.github_id = h.repo_id
+     LEFT JOIN ci_runs c ON c.id = h.ci_run_id
+     WHERE h.status = 'open'
+     ORDER BY h.created_at ASC`
+  );
+
+  if (openHeals.length === 0) {
+    return { checked: 0, updated: 0 };
+  }
+
+  logger.info({ count: openHeals.length }, "Heal PR reconciliation starting");
+
+  // Group by installation to reuse octokit instances
+  const byInstallation = new Map();
+  for (const heal of openHeals) {
+    if (!byInstallation.has(heal.installation_id)) {
+      byInstallation.set(heal.installation_id, []);
+    }
+    byInstallation.get(heal.installation_id).push(heal);
+  }
+
+  let updated = 0;
+  let verified = 0;
+  let ineffective = 0;
+  let rejected = 0;
+
+  for (const [installationId, heals] of byInstallation) {
+    let octokit;
+    try {
+      octokit = wrapOctokit(await getInstallationClient(installationId));
+    } catch (_e) {
+      logger.warn({ installationId }, "Heal reconciliation: no installation client");
+      continue;
+    }
+
+    for (const heal of heals) {
+      const [owner, repo] = heal.full_name.split("/");
+      const prNumber = heal.github_pr_number;
+
+      try {
+        const { data: pr } = await octokit.request(
+          "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+          { owner, repo, pull_number: prNumber }
+        );
+
+        if (pr.state === "open") continue; // Still pending
+
+        const newStatus = pr.merged ? "merged" : "closed";
+
+        // Update heal_prs.status
+        await db.query(
+          "UPDATE heal_prs SET status = $1, updated_at = NOW() WHERE id = $2",
+          [newStatus, heal.id]
+        );
+
+        // Update managed_actions.heal_outcome
+        if (pr.merged) {
+          // Check if the next CI run on that branch passed
+          let outcome = "unknown";
+
+          if (heal.ci_branch) {
+            const { rows: nextRuns } = await db.query(
+              `SELECT conclusion FROM ci_runs
+               WHERE repo_id = $1 AND branch = $2
+                 AND created_at > $3
+               ORDER BY created_at ASC LIMIT 1`,
+              [heal.repo_id, heal.ci_branch, heal.created_at]
+            );
+
+            if (nextRuns.length > 0) {
+              outcome = nextRuns[0].conclusion === "success" ? "verified" : "ineffective";
+            }
+          }
+
+          await db.query(
+            `UPDATE managed_actions SET heal_outcome = $1
+             WHERE pillar = 'ci_healing'
+               AND action_type = 'create-patch-pr'
+               AND repo_id = $2
+               AND heal_outcome IS NULL
+               AND evidence @>('{"pr_number":' || $3 || '}')::jsonb`,
+            [outcome, heal.repo_id, prNumber]
+          );
+
+          if (outcome === "verified") verified++;
+          else if (outcome === "ineffective") ineffective++;
+        } else {
+          // Closed without merge — human rejected
+          await db.query(
+            `UPDATE managed_actions SET heal_outcome = 'rejected'
+             WHERE pillar = 'ci_healing'
+               AND action_type = 'create-patch-pr'
+               AND repo_id = $1
+               AND heal_outcome IS NULL
+               AND evidence @>('{"pr_number":' || $2 || '}')::jsonb`,
+            [heal.repo_id, prNumber]
+          );
+          rejected++;
+        }
+
+        updated++;
+        logger.info(
+          { repo: heal.full_name, pr: prNumber, newStatus, healOutcome: pr.merged ? "pending-check" : "rejected" },
+          "Heal PR reconciled"
+        );
+      } catch (err) {
+        logger.warn({ err: err.message, repo: heal.full_name, pr: prNumber }, "Heal PR reconciliation check failed");
+      }
+    }
+  }
+
+  logger.info(
+    { checked: openHeals.length, updated, verified, ineffective, rejected },
+    "Heal PR reconciliation complete"
+  );
+
+  return { checked: openHeals.length, updated, verified, ineffective, rejected };
+}
+
 async function checkLabel(octokit, owner, repo, action) {
   const targetNumber = action.target_number || action.evidence?.issue_number || action.evidence?.pr_number;
   if (!targetNumber) return false;
