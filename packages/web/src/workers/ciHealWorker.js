@@ -36,25 +36,25 @@ const HEAL_COMMIT_MARKER = "[gitwire-heal]";
 const BOT_LOGIN = (config.github?.appName || "gitwire-hq") + "[bot]";
 
 // ── Circuit breaker ──────────────────────────────────────────────────────
-// Redis key pattern: gitwire:cb:ci_heal:{owner}/{repo}
-// Tracks consecutive failures. Trips open after 3, resets on success.
+// Redis key pattern: gitwire:cb:ci_heal:{owner}/{repo}:{branch}
+// Tracks consecutive failures PER BRANCH. Trips open after 3, resets on success.
 const CB_PREFIX = "gitwire:cb:ci_heal:";
 const CB_THRESHOLD = 3;
 const CB_TTL = 86400; // 24h
 
 // ── Cooldown key ──────────────────────────────────────────────────────────
-// When attempt limit is hit, blocks all further attempts for a fixed period.
+// When attempt limit is hit, blocks all further attempts for that branch only.
 // After expiry, counter resets from zero.
 const COOLDOWN_PREFIX = "gitwire:cooldown:ci_heal:";
 const COOLDOWN_TTL = 86400; // 24h cooldown after limit hit
 
-async function getCircuitBreaker(ownerRepo) {
-  const val = await redis.get(CB_PREFIX + ownerRepo);
+async function getCircuitBreaker(ownerRepo, branch) {
+  const val = await redis.get(CB_PREFIX + ownerRepo + ":" + branch);
   return val ? Number(val) : 0;
 }
 
-async function updateCircuitBreaker(ownerRepo, success) {
-  const key = CB_PREFIX + ownerRepo;
+async function updateCircuitBreaker(ownerRepo, branch, success) {
+  const key = CB_PREFIX + ownerRepo + ":" + branch;
   if (success) {
     await redis.del(key);
     return false;
@@ -64,28 +64,27 @@ async function updateCircuitBreaker(ownerRepo, success) {
   return failures >= CB_THRESHOLD;
 }
 
-async function isOnCooldown(ownerRepo) {
-  return await redis.exists(COOLDOWN_PREFIX + ownerRepo);
+async function isOnCooldown(ownerRepo, branch) {
+  return await redis.exists(COOLDOWN_PREFIX + ownerRepo + ":" + branch);
 }
 
-async function setCooldown(ownerRepo) {
-  await redis.setex(COOLDOWN_PREFIX + ownerRepo, COOLDOWN_TTL, "1");
+async function setCooldown(ownerRepo, branch) {
+  await redis.setex(COOLDOWN_PREFIX + ownerRepo + ":" + branch, COOLDOWN_TTL, "1");
 }
 
-// ── Attempt rate limiter ──────────────────────────────────────────────────
-async function getRecentHealCount(repoId, hours) {
+// ── Attempt rate limiter (per-branch) ────────────────────────────────────
+async function getRecentHealCount(repoId, branch, hours) {
   const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
-  // Only count non-successful attempts — succeeded heals prove the system works.
-  // EXCEPTION: succeeded heals that resulted in another CI failure on the same
-  // branch are loop signals. But we can't detect that here. The cooldown mechanism
-  // (24h block after threshold) handles this — after N total attempts, pause.
-  // Counting only failures would miss the loop-when-merged scenario.
+  // Count ALL statuses (succeeded + failed + executing + approved) for this branch.
+  // Counting only failures misses the loop-when-merged scenario: heal PR merges,
+  // CI fails again on same branch — that's a loop signal too.
   const { rows: [row] } = await db.query(
     "SELECT COUNT(*)::int AS cnt FROM managed_actions " +
     "WHERE repo_id = $1 AND pillar = 'ci_healing' " +
     "AND status IN ('succeeded', 'failed', 'executing', 'approved') " +
-    "AND created_at > $2",
-    [repoId, cutoff]
+    "AND created_at > $2 " +
+    "AND evidence->>'head_branch' = $3",
+    [repoId, cutoff, branch]
   );
   return row?.cnt || 0;
 }
@@ -188,15 +187,15 @@ async function healWorkflowRun({ payload }) {
     return;
   }
 
-  // ── Guard 2: Circuit breaker ────────────────────────────────────────────
-  const cbFailures = await getCircuitBreaker(repository.full_name);
+  // ── Guard 2: Circuit breaker (per-branch) ──────────────────────────────
+  const cbFailures = await getCircuitBreaker(repository.full_name, branch);
   if (cbFailures >= CB_THRESHOLD) {
-    logger.warn({ runId: run.id, repo: repository.full_name, failures: cbFailures }, "Circuit breaker open — skipping CI heal");
+    logger.warn({ runId: run.id, repo: repository.full_name, branch, failures: cbFailures }, "Circuit breaker open — skipping CI heal");
     await logDecision({
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
-      decision: "blocked", reason: "Circuit breaker open (" + cbFailures + " consecutive failures)",
-      conditions: [{ check: "circuit_breaker", result: "open", failures: cbFailures }],
+      decision: "blocked", reason: "Circuit breaker open on branch " + branch + " (" + cbFailures + " consecutive failures)",
+      conditions: [{ check: "circuit_breaker", result: "open", failures: cbFailures, branch }],
     });
     return;
   }
@@ -219,29 +218,30 @@ async function healWorkflowRun({ payload }) {
     return;
   }
 
-  // ── Guard 3: Per-repo attempt rate limit ─────────────────────────────
+  // ── Guard 3: Per-branch attempt rate limit ─────────────────────────────
   // Two-phase: (a) check cooldown (Redis, fast), (b) count recent attempts (DB).
-  // When limit is hit, set a 24h cooldown key. After expiry, counter resets.
+  // When limit is hit, set a 24h cooldown key for this branch only. After expiry,
+  // counter resets. Other branches are unaffected.
   const maxAttempts = repoConfig?.pillars?.ci_healing?.max_fix_attempts ?? 3;
-  if (await isOnCooldown(repository.full_name)) {
-    logger.info({ runId: run.id, repo: repository.full_name }, "CI heal cooldown active — skipping");
+  if (await isOnCooldown(repository.full_name, branch)) {
+    logger.info({ runId: run.id, repo: repository.full_name, branch }, "CI heal cooldown active for branch — skipping");
     await logDecision({
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
-      decision: "blocked", reason: "Heal cooldown active (24h after " + maxAttempts + " failed attempts)",
-      conditions: [{ check: "heal_cooldown", result: true }],
+      decision: "blocked", reason: "Heal cooldown active for branch " + branch + " (24h after " + maxAttempts + " attempts)",
+      conditions: [{ check: "heal_cooldown", result: true, branch }],
     });
     return;
   }
-  const recentAttempts = await getRecentHealCount(repository.id, 24);
+  const recentAttempts = await getRecentHealCount(repository.id, branch, 24);
   if (recentAttempts >= maxAttempts) {
-    logger.warn({ runId: run.id, repo: repository.full_name, recentAttempts, maxAttempts }, "CI heal attempt limit reached — activating cooldown");
-    await setCooldown(repository.full_name);
+    logger.warn({ runId: run.id, repo: repository.full_name, branch, recentAttempts, maxAttempts }, "CI heal attempt limit reached for branch — activating cooldown");
+    await setCooldown(repository.full_name, branch);
     await logDecision({
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
-      decision: "blocked", reason: "Heal attempt limit (" + recentAttempts + "/" + maxAttempts + " failed in 24h) — cooldown activated",
-      conditions: [{ check: "max_fix_attempts", result: false, recent: recentAttempts, max: maxAttempts }],
+      decision: "blocked", reason: "Heal attempt limit for branch " + branch + " (" + recentAttempts + "/" + maxAttempts + " in 24h) — cooldown activated",
+      conditions: [{ check: "max_fix_attempts", result: false, recent: recentAttempts, max: maxAttempts, branch }],
     });
     return;
   }
@@ -336,8 +336,8 @@ async function healWorkflowRun({ payload }) {
     }
 
     await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation);
-    // Reset circuit breaker on successful heal
-    await updateCircuitBreaker(repository.full_name, true);
+    // Reset circuit breaker on successful heal (per-branch)
+    await updateCircuitBreaker(repository.full_name, branch, true);
   } else {
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis);
     await ciService.saveHealResult(run.id, {
@@ -560,6 +560,17 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     // Mark action as succeeded
     await succeed(action.id, { pr_number: pr.number, pr_url: pr.html_url, branch: branchName });
 
+    // L1.5: Structured lineage log for future closed-loop correlation
+    logger.info("heal_created", {
+      run_id: run.id,
+      target_branch: run.head_branch,
+      pr_number: pr.number,
+      heal_branch: branchName,
+      failure_type: diagnosis.failure_type,
+      confidence: diagnosis.confidence,
+      repo: repository.full_name,
+    });
+
     // Notify Telegram subscribers
     notifyCIFailure(repository.full_name, {
       pr_number: pr.number,
@@ -723,10 +734,10 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     // Mark action as failed
     await fail(action.id, err.message).catch(() => {});
 
-    // Trip circuit breaker on failure
-    const tripped = await updateCircuitBreaker(repository.full_name, false);
+    // Trip circuit breaker on failure (per-branch)
+    const tripped = await updateCircuitBreaker(repository.full_name, run.head_branch, false);
     if (tripped) {
-      logger.warn({ repo: repository.full_name }, "Circuit breaker tripped — pausing CI heals");
+      logger.warn({ repo: repository.full_name, branch: run.head_branch }, "Circuit breaker tripped for branch — pausing CI heals");
     }
 
     // Fall back to comment-only
