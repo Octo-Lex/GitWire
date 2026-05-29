@@ -76,10 +76,14 @@ async function setCooldown(ownerRepo) {
 async function getRecentHealCount(repoId, hours) {
   const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
   // Only count non-successful attempts — succeeded heals prove the system works.
+  // EXCEPTION: succeeded heals that resulted in another CI failure on the same
+  // branch are loop signals. But we can't detect that here. The cooldown mechanism
+  // (24h block after threshold) handles this — after N total attempts, pause.
+  // Counting only failures would miss the loop-when-merged scenario.
   const { rows: [row] } = await db.query(
     "SELECT COUNT(*)::int AS cnt FROM managed_actions " +
     "WHERE repo_id = $1 AND pillar = 'ci_healing' " +
-    "AND status IN ('failed', 'executing', 'approved') " +
+    "AND status IN ('succeeded', 'failed', 'executing', 'approved') " +
     "AND created_at > $2",
     [repoId, cutoff]
   );
