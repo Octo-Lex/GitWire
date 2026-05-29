@@ -109,16 +109,22 @@ export const issueService = {
   /**
    * Mark an issue as triaged (called by the triage worker after Claude runs).
    */
-  async saveTriage(githubId, { type, priority, summary }) {
+  async saveTriage(githubId, { type, priority, summary, repoId, number, title, state, labels }) {
+    // Upsert — the issue row may not exist yet (triage runs before syncWorker).
+    // INSERT creates the row with triage data; ON CONFLICT preserves existing
+    // columns and only overwrites triage fields.
     await db.query(
-      `UPDATE issues SET
-         triage_type     = $1,
-         triage_priority = $2,
-         triage_summary  = $3,
+      `INSERT INTO issues (github_id, repo_id, number, title, state, labels,
+                          triage_type, triage_priority, triage_summary, triaged_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+       ON CONFLICT (github_id) DO UPDATE SET
+         triage_type     = EXCLUDED.triage_type,
+         triage_priority = EXCLUDED.triage_priority,
+         triage_summary  = EXCLUDED.triage_summary,
          triaged_at      = NOW(),
-         updated_at      = NOW()
-       WHERE github_id = $4`,
-      [type, priority, summary, githubId]
+         updated_at      = NOW()`,
+      [githubId, repoId, number, title, state, labels,
+       type, priority, summary]
     );
   },
 };

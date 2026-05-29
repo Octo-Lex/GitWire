@@ -178,6 +178,11 @@ async function triageIssue({ payload }) {
     type:     classification.type,
     priority: classification.priority,
     summary:  classification.triage_summary,
+    repoId:   repository.id,
+    number:   issue.number,
+    title:    issue.title,
+    state:    issue.state || 'open',
+    labels:   issue.labels?.map((l) => l.name) || [],
   });
 
   logger.info({ issue: issue.number, type: classification.type, priority: classification.priority }, "Issue triage persisted");
