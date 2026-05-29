@@ -406,9 +406,20 @@ export async function evaluateGatesForRepo(repoId, repoFullName, options = {}) {
   const config = await getConfigForRepo(repoFullName);
   const metrics = await fetchMetrics(repoId);
 
-  // Merge config gates + DB gates (DB takes precedence by name)
+  // DB gates: explicitly created by the user or auto-created from prior evaluations
   const dbGates = await getGatesForRepo(repoId);
-  const configGates = config.quality_gates || {};
+
+  // Config gates: only from .gitwire.yml, not defaults.
+  // DEFAULT_CONFIG always includes a "default" gate — using it for repos that
+  // never opted into quality gates means every repo gets a failing check run.
+  // Only use config gates when the repo has an actual .gitwire.yml.
+  const hasRepoConfig = config._meta?.layers?.repo === true;
+  const configGates = (hasRepoConfig && config.quality_gates) || {};
+
+  // Skip entirely if repo has no explicit gates (neither DB nor config file)
+  if (dbGates.length === 0 && Object.keys(configGates).length === 0) {
+    return [];
+  }
 
   // Build merged gate set
   const mergedGates = { ...configGates };
