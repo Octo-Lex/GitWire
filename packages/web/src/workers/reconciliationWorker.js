@@ -81,8 +81,23 @@ export async function runReconciliation() {
  * Reconcile a single action against GitHub's current state.
  */
 async function reconcileAction(action) {
+  if (!action.repo_full_name) {
+    logger.warn({ actionId: action.id }, "Reconciliation skipped: no repo_full_name");
+    return { drifted: false };
+  }
   const [owner, repo] = action.repo_full_name.split("/");
-  const octokit = wrapOctokit(await getInstallationClient(action.repo_id));
+
+  // Resolve installation_id from repositories table
+  const { rows: repoRows } = await db.query(
+    "SELECT installation_id FROM repositories WHERE github_id = $1",
+    [action.repo_id]
+  );
+  const installationId = repoRows[0]?.installation_id;
+  if (!installationId) {
+    logger.warn({ actionId: action.id, repoId: action.repo_id }, "Reconciliation skipped: no installation found for repo");
+    return { drifted: false };
+  }
+  const octokit = wrapOctokit(await getInstallationClient(installationId));
 
   if (!octokit) {
     logger.warn({ actionId: action.id, repo: action.repo_full_name }, "No installation client for repo");
