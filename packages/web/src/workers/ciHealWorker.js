@@ -42,6 +42,12 @@ const CB_PREFIX = "gitwire:cb:ci_heal:";
 const CB_THRESHOLD = 3;
 const CB_TTL = 86400; // 24h
 
+// ── Cooldown key ──────────────────────────────────────────────────────────
+// When attempt limit is hit, blocks all further attempts for a fixed period.
+// After expiry, counter resets from zero.
+const COOLDOWN_PREFIX = "gitwire:cooldown:ci_heal:";
+const COOLDOWN_TTL = 86400; // 24h cooldown after limit hit
+
 async function getCircuitBreaker(ownerRepo) {
   const val = await redis.get(CB_PREFIX + ownerRepo);
   return val ? Number(val) : 0;
@@ -58,13 +64,22 @@ async function updateCircuitBreaker(ownerRepo, success) {
   return failures >= CB_THRESHOLD;
 }
 
+async function isOnCooldown(ownerRepo) {
+  return await redis.exists(COOLDOWN_PREFIX + ownerRepo);
+}
+
+async function setCooldown(ownerRepo) {
+  await redis.setex(COOLDOWN_PREFIX + ownerRepo, COOLDOWN_TTL, "1");
+}
+
 // ── Attempt rate limiter ──────────────────────────────────────────────────
 async function getRecentHealCount(repoId, hours) {
   const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+  // Only count non-successful attempts — succeeded heals prove the system works.
   const { rows: [row] } = await db.query(
     "SELECT COUNT(*)::int AS cnt FROM managed_actions " +
     "WHERE repo_id = $1 AND pillar = 'ci_healing' " +
-    "AND status IN ('succeeded', 'failed', 'executing', 'approved') " +
+    "AND status IN ('failed', 'executing', 'approved') " +
     "AND created_at > $2",
     [repoId, cutoff]
   );
@@ -201,14 +216,27 @@ async function healWorkflowRun({ payload }) {
   }
 
   // ── Guard 3: Per-repo attempt rate limit ─────────────────────────────
+  // Two-phase: (a) check cooldown (Redis, fast), (b) count recent attempts (DB).
+  // When limit is hit, set a 24h cooldown key. After expiry, counter resets.
   const maxAttempts = repoConfig?.pillars?.ci_healing?.max_fix_attempts ?? 3;
-  const recentAttempts = await getRecentHealCount(repository.id, 24);
-  if (recentAttempts >= maxAttempts) {
-    logger.warn({ runId: run.id, repo: repository.full_name, recentAttempts, maxAttempts }, "CI heal attempt limit reached");
+  if (await isOnCooldown(repository.full_name)) {
+    logger.info({ runId: run.id, repo: repository.full_name }, "CI heal cooldown active — skipping");
     await logDecision({
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
-      decision: "blocked", reason: "Heal attempt limit (" + recentAttempts + "/" + maxAttempts + " in 24h)",
+      decision: "blocked", reason: "Heal cooldown active (24h after " + maxAttempts + " failed attempts)",
+      conditions: [{ check: "heal_cooldown", result: true }],
+    });
+    return;
+  }
+  const recentAttempts = await getRecentHealCount(repository.id, 24);
+  if (recentAttempts >= maxAttempts) {
+    logger.warn({ runId: run.id, repo: repository.full_name, recentAttempts, maxAttempts }, "CI heal attempt limit reached — activating cooldown");
+    await setCooldown(repository.full_name);
+    await logDecision({
+      repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
+      targetType: "pr", targetNumber: 0, pillar: "ci_healing",
+      decision: "blocked", reason: "Heal attempt limit (" + recentAttempts + "/" + maxAttempts + " failed in 24h) — cooldown activated",
       conditions: [{ check: "max_fix_attempts", result: false, recent: recentAttempts, max: maxAttempts }],
     });
     return;
