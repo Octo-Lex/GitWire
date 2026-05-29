@@ -105,6 +105,7 @@ quality_gates:
 | `stale_issues_7d` | count | `issues` | Open issues with no activity in 7+ days |
 | `heal_success_rate_7d` | ratio (0-1) | `heal_prs` | % of CI heal PRs merged in last 7 days |
 | `heal_success_rate_30d` | ratio (0-1) | `heal_prs` | % of CI heal PRs merged in last 30 days |
+| `heal_efficacy_rate_7d` | ratio (0-1) or null | `managed_actions` | Of merged heal PRs with outcome data, % where the next CI run passed (null if no data) |
 | `fix_success_rate_7d` | ratio (0-1) | `fix_attempts` | % of fix attempts that succeeded in last 7 days |
 | `duplicate_rate` | ratio (0-1) | `issues` | % of issues flagged as duplicates |
 | `avg_triage_time_hours` | number | `issues` | Average hours from issue creation to triage |
