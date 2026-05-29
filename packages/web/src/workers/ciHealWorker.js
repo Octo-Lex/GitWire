@@ -22,11 +22,54 @@ import { Trail } from "../services/auditTrailService.js";
 import { notifyCIFailure } from "../services/telegramNotifyService.js";
 import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
 import { extractReviewJSON } from "@gitwire/rules/reviewSchema";
+import { redis } from "../lib/queue.js";
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
 });
+
+// ── Self-activity filter ──────────────────────────────────────────────────
+// Prevent GitWire from healing its own heal PRs (feedback loop prevention).
+const HEAL_BRANCH_PREFIX = "gitwire/heal-";
+const HEAL_COMMIT_MARKER = "[gitwire-heal]";
+const BOT_LOGIN = (config.github?.appName || "gitwire-hq") + "[bot]";
+
+// ── Circuit breaker ──────────────────────────────────────────────────────
+// Redis key pattern: gitwire:cb:ci_heal:{owner}/{repo}
+// Tracks consecutive failures. Trips open after 3, resets on success.
+const CB_PREFIX = "gitwire:cb:ci_heal:";
+const CB_THRESHOLD = 3;
+const CB_TTL = 86400; // 24h
+
+async function getCircuitBreaker(ownerRepo) {
+  const val = await redis.get(CB_PREFIX + ownerRepo);
+  return val ? Number(val) : 0;
+}
+
+async function updateCircuitBreaker(ownerRepo, success) {
+  const key = CB_PREFIX + ownerRepo;
+  if (success) {
+    await redis.del(key);
+    return false;
+  }
+  const failures = await redis.incr(key);
+  if (failures === 1) await redis.expire(key, CB_TTL);
+  return failures >= CB_THRESHOLD;
+}
+
+// ── Attempt rate limiter ──────────────────────────────────────────────────
+async function getRecentHealCount(repoId, hours) {
+  const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+  const { rows: [row] } = await db.query(
+    "SELECT COUNT(*)::int AS cnt FROM managed_actions " +
+    "WHERE repo_id = $1 AND pillar = 'ci_healing' " +
+    "AND status IN ('succeeded', 'failed', 'executing', 'approved') " +
+    "AND created_at > $2",
+    [repoId, cutoff]
+  );
+  return row?.cnt || 0;
+}
 
 // Code fence regex for stripping ```json blocks from Claude responses
 const FENCE_RE = /^```(?:json)?\s*\n?/i;
@@ -106,6 +149,39 @@ async function healWorkflowRun({ payload }) {
 
   logger.info({ runId: run.id, repo: repository.full_name }, "Attempting CI heal");
 
+  // ── Guard 1: Self-activity filter ────────────────────────────────────────
+  // Never heal our own heal branches or bot-authored runs.
+  const branch = run.head_branch;
+  const commitMsg = run.head_commit?.message || "";
+  const commitAuthor = run.head_commit?.author?.username || "";
+  const sender = payload.sender?.login || "";
+
+  if (branch?.startsWith(HEAL_BRANCH_PREFIX)) {
+    logger.info({ runId: run.id, branch }, "Skipping self-heal branch (feedback loop prevention)");
+    return;
+  }
+  if (commitMsg.includes(HEAL_COMMIT_MARKER)) {
+    logger.info({ runId: run.id, branch }, "Skipping marked heal commit (feedback loop prevention)");
+    return;
+  }
+  if (sender === BOT_LOGIN || commitAuthor === BOT_LOGIN) {
+    logger.info({ runId: run.id, sender }, "Skipping bot-authored workflow run");
+    return;
+  }
+
+  // ── Guard 2: Circuit breaker ────────────────────────────────────────────
+  const cbFailures = await getCircuitBreaker(repository.full_name);
+  if (cbFailures >= CB_THRESHOLD) {
+    logger.warn({ runId: run.id, repo: repository.full_name, failures: cbFailures }, "Circuit breaker open — skipping CI heal");
+    await logDecision({
+      repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
+      targetType: "pr", targetNumber: 0, pillar: "ci_healing",
+      decision: "blocked", reason: "Circuit breaker open (" + cbFailures + " consecutive failures)",
+      conditions: [{ check: "circuit_breaker", result: "open", failures: cbFailures }],
+    });
+    return;
+  }
+
   // ── Idempotency: skip duplicate heal attempts ──────────────────────────
   if (!(await checkAndMark("ci_heal", "run-" + run.id))) {
     return;
@@ -120,6 +196,20 @@ async function healWorkflowRun({ payload }) {
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "skipped", reason: "Pillar ci_healing disabled in config",
       conditions: [{ check: "pillar_enabled(ci_healing)", result: false }],
+    });
+    return;
+  }
+
+  // ── Guard 3: Per-repo attempt rate limit ─────────────────────────────
+  const maxAttempts = repoConfig?.pillars?.ci_healing?.max_fix_attempts ?? 3;
+  const recentAttempts = await getRecentHealCount(repository.id, 24);
+  if (recentAttempts >= maxAttempts) {
+    logger.warn({ runId: run.id, repo: repository.full_name, recentAttempts, maxAttempts }, "CI heal attempt limit reached");
+    await logDecision({
+      repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
+      targetType: "pr", targetNumber: 0, pillar: "ci_healing",
+      decision: "blocked", reason: "Heal attempt limit (" + recentAttempts + "/" + maxAttempts + " in 24h)",
+      conditions: [{ check: "max_fix_attempts", result: false, recent: recentAttempts, max: maxAttempts }],
     });
     return;
   }
@@ -214,6 +304,8 @@ async function healWorkflowRun({ payload }) {
     }
 
     await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation);
+    // Reset circuit breaker on successful heal
+    await updateCircuitBreaker(repository.full_name, true);
   } else {
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis);
     await ciService.saveHealResult(run.id, {
@@ -393,7 +485,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
       owner, repo,
       path: failingFile,
-      message: "fix(" + failing_file_ext(failingFile) + "): " + truncate(diagnosis.root_cause, 72) + "\n\nApplied by GitWire AI self-healing CI.\n\n" + fix.explanation,
+      message: "[gitwire-heal] fix(" + failing_file_ext(failingFile) + "): " + truncate(diagnosis.root_cause, 72) + "\n\nApplied by GitWire AI self-healing CI.\n\n" + fix.explanation,
       content: fixedContent,
       sha: fileSha,
       branch: branchName,
@@ -598,6 +690,12 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
 
     // Mark action as failed
     await fail(action.id, err.message).catch(() => {});
+
+    // Trip circuit breaker on failure
+    const tripped = await updateCircuitBreaker(repository.full_name, false);
+    if (tripped) {
+      logger.warn({ repo: repository.full_name }, "Circuit breaker tripped — pausing CI heals");
+    }
 
     // Fall back to comment-only
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
