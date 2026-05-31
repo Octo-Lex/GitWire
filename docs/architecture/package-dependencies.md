@@ -1,14 +1,14 @@
 # Package Dependencies
 
-## Current State (v0.12.0)
+## Current State (v0.12.1)
 
 ```mermaid
 graph TD
     core["@gitwire/core<br/>Constants + Enums<br/>72 lines, 0 deps"]
     runtime["@gitwire/runtime<br/>db, queue, logger, GitHub client<br/>8 deps: pg, bullmq, ioredis, pino, @octokit/*"]
     rules["@gitwire/rules<br/>Config schema, validation, helpers<br/>251 tests"]
-    web["@gitwire/web<br/>Express API + Workers + Routes<br/>34 services, 10 workers"]
-    dashboard["@gitwire/web-dashboard<br/>Next.js dashboard<br/>22 pages"]
+    web["@gitwire/web<br/>Express API + Workers + Routes<br/>34 services, 10 workers, 25 routes"]
+    dashboard["@gitwire/web-dashboard<br/>Next.js dashboard<br/>25 pages"]
     bot["@gitwire/bot<br/>Telegram bot (grammy)<br/>13 commands"]
     demo["@gitwire/demo-dashboard<br/>Static demo site<br/>15 pages"]
 
@@ -79,8 +79,11 @@ Workers call `createQueue()` at module top level (before `main()` runs). The com
 | Config schema + helpers | `@gitwire/rules` | ~600 | js-yaml, minimatch |
 | Config validation | `@gitwire/web/config/` | 172 | zod, dotenv |
 | Services (34) | `@gitwire/web/src/services/` | ~8,000 | runtime, rules, anthropic |
+| Webhook routing | `@gitwire/web/src/lib/webhookHandlers/` | ~500 | runtime, services |
 | Workers (10) | `@gitwire/web/src/workers/` | ~4,000 | runtime, rules, services |
-| Routes (26) | `@gitwire/web/src/routes/` | ~3,000 | runtime, services |
+| Issue Fix pipeline | `@gitwire/web/src/workers/issueFix/` | ~500 | runtime, services, anthropic |
+| Maintainer commands | `@gitwire/web/src/workers/maintainer/` | ~200 | runtime, services |
+| Routes (25) | `@gitwire/web/src/routes/` | ~3,000 | runtime, services |
 
 ### Test coverage
 
@@ -103,3 +106,5 @@ Workers call `createQueue()` at module top level (before `main()` runs). The com
 | `@gitwire/web-dashboard` | Browser UI | next, swr, tailwind | ✅ Yes (mock API) |
 | `@gitwire/bot` | Telegram bot | grammy | ❌ No — needs Redis + API |
 | `@gitwire/demo-dashboard` | Static demo | next (export) | ✅ Yes |
+
+> **Last validated:** v0.12.1

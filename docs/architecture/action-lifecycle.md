@@ -292,3 +292,5 @@ The **Actions** page (`/actions`) provides:
 - [Worker Events](/architecture/worker-events) — real-time event bus for worker actions
 - [Quality Gates](/configuration/quality-gates) — policy checks that create actions
 - [Evidence Bundles](/architecture/evidence-bundles) — how evidence is structured and stored
+
+> **Last validated:** v0.12.1

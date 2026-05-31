@@ -201,6 +201,7 @@ export default defineConfig({
           { text: "System Architecture", link: "/architecture/system-architecture" },
           { text: "Runtime Architecture", link: "/architecture/runtime-architecture" },
           { text: "Data Flow", link: "/architecture/data-flow" },
+          { text: "Webhook Routing", link: "/architecture/webhook-routing" },
           { text: "Worker Events", link: "/architecture/worker-events" },
           { text: "Managed Actions", link: "/architecture/managed-actions" },
           { text: "Evidence Bundles", link: "/architecture/evidence-bundles" },
