@@ -347,3 +347,4 @@ async function checkPRState(octokit, owner, repo, action) {
     logger.debug({ actionId: action?.id, err: _e }, "Review drift check failed — assuming no drift");
     return false;
   }
+}
