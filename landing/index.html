@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitWire — AI Governance for GitHub Automation</title>
+  <meta name="description" content="GitWire is a self-hosted governance layer for GitHub. It triages issues, heals CI failures, reviews PRs, and enforces policy — automatically.">
+  <meta property="og:title" content="GitWire — AI Governance for GitHub Automation">
+  <meta property="og:description" content="Decide, execute, prove. Self-hosted GitHub automation with policy-as-code.">
+  <meta property="og:image" content="/banner.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #050508;
+      --surface: #0c0c10;
+      --border: #1d1d22;
+      --text: #e4e4e7;
+      --text-muted: #71717a;
+      --brand: #ff4e2b;
+      --brand-glow: rgba(255, 78, 43, 0.15);
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+    .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+    /* Nav */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: rgba(5, 5, 8, 0.8);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+    }
+    nav .container {
+      display: flex; align-items: center; justify-content: space-between;
+      height: 64px;
+    }
+    .logo { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+    .logo span { color: var(--brand); }
+    .nav-links { display: flex; gap: 32px; align-items: center; }
+    .nav-links a {
+      color: var(--text-muted); text-decoration: none; font-size: 14px;
+      font-weight: 500; transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 20px; border-radius: 8px; font-size: 14px;
+      font-weight: 600; text-decoration: none; transition: all 0.2s;
+      border: none; cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--brand); color: white;
+      box-shadow: 0 0 20px var(--brand-glow);
+    }
+    .btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+    .btn-ghost {
+      background: transparent; color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { border-color: var(--text-muted); }
+
+    /* Hero */
+    .hero {
+      padding: 160px 0 80px;
+      text-align: center;
+      position: relative;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+      width: 800px; height: 400px;
+      background: radial-gradient(ellipse, var(--brand-glow) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 11px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--brand);
+      background: var(--brand-glow);
+      border: 1px solid rgba(255, 78, 43, 0.2);
+      padding: 6px 16px; border-radius: 20px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      font-size: 56px; font-weight: 800; letter-spacing: -2px;
+      line-height: 1.1; margin-bottom: 24px;
+    }
+    h1 .gradient {
+      background: linear-gradient(135deg, #ff4e2b, #ff8c42, #ffb347);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 18px; color: var(--text-muted); max-width: 640px;
+      margin: 0 auto 40px; line-height: 1.7;
+    }
+    .hero-actions { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+
+    /* Stats */
+    .stats {
+      display: flex; gap: 48px; justify-content: center;
+      padding: 48px 0; margin: 32px 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .stat { text-align: center; }
+    .stat-value { font-size: 32px; font-weight: 800; color: var(--brand); }
+    .stat-label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+    /* Pillars */
+    .pillars { padding: 80px 0; }
+    .pillars h2 { font-size: 32px; font-weight: 800; text-align: center; margin-bottom: 48px; letter-spacing: -1px; }
+    .pillar-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+    }
+    .pillar-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .pillar-card:hover { border-color: var(--brand); transform: translateY(-2px); }
+    .pillar-icon { font-size: 28px; margin-bottom: 12px; }
+    .pillar-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .pillar-card p { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
+
+    /* How it works */
+    .how-it-works { padding: 80px 0; }
+    .how-it-works h2 { font-size: 32px; font-weight: 800; text-align: center; margin-bottom: 48px; letter-spacing: -1px; }
+    .steps {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px;
+    }
+    .step { text-align: center; }
+    .step-number {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 48px; height: 48px; border-radius: 50%;
+      background: var(--brand-glow); color: var(--brand);
+      font-size: 20px; font-weight: 800; margin-bottom: 16px;
+    }
+    .step h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    .step p { font-size: 14px; color: var(--text-muted); max-width: 280px; margin: 0 auto; }
+
+    /* CTA */
+    .cta {
+      padding: 80px 0; text-align: center;
+    }
+    .cta-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 64px 48px;
+      position: relative;
+      overflow: hidden;
+    }
+    .cta-box::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, var(--brand), #ff8c42, #ffb347, var(--brand));
+    }
+    .cta-box h2 { font-size: 32px; font-weight: 800; margin-bottom: 16px; letter-spacing: -1px; }
+    .cta-box p { color: var(--text-muted); margin-bottom: 32px; font-size: 16px; }
+
+    /* Footer */
+    footer {
+      padding: 32px 0; border-top: 1px solid var(--border);
+      text-align: center; color: var(--text-muted); font-size: 13px;
+    }
+    footer a { color: var(--text-muted); text-decoration: none; }
+    footer a:hover { color: var(--text); }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      h1 { font-size: 36px; }
+      .pillar-grid, .steps { grid-template-columns: 1fr; }
+      .stats { gap: 24px; flex-wrap: wrap; }
+      .nav-links { gap: 16px; }
+      .nav-links .hide-mobile { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <div class="logo">Git<span>Wire</span></div>
+    <div class="nav-links">
+      <a href="/docs/" class="hide-mobile">Docs</a>
+      <a href="/demo/" class="hide-mobile">Demo</a>
+      <a href="https://github.com/Elephant-Rock-Lab/GitWire">GitHub</a>
+      <a href="/dashboard/" class="btn btn-ghost" style="padding:8px 16px;">Dashboard</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <div class="badge">Self-Hosted &middot; Open Source &middot; GitHub App</div>
+    <h1>
+      Decide. Execute.<br>
+      <span class="gradient">Prove.</span>
+    </h1>
+    <p>
+      GitWire is a governance layer for GitHub automation. It triages issues,
+      heals CI failures, reviews PRs, and enforces policy — all from a
+      self-hosted GitHub App you control.
+    </p>
+    <div class="hero-actions">
+      <a href="/docs/installation/prerequisites" class="btn btn-primary">Get Started →</a>
+      <a href="/demo/" class="btn btn-ghost">See Demo</a>
+    </div>
+  </div>
+</section>
+
+<section class="stats">
+  <div class="container" style="display:flex;gap:48px;justify-content:center;">
+    <div class="stat">
+      <div class="stat-value">9</div>
+      <div class="stat-label">Automation Pillars</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">512+</div>
+      <div class="stat-label">Tests Passing</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">47+</div>
+      <div class="stat-label">DB Migrations</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">256+</div>
+      <div class="stat-label">Doc Pages</div>
+    </div>
+  </div>
+</section>
+
+<section class="pillars">
+  <div class="container">
+    <h2>What GitWire Does</h2>
+    <div class="pillar-grid">
+      <div class="pillar-card">
+        <div class="pillar-icon">🎯</div>
+        <h3>Issue Triage</h3>
+        <p>AI-powered classification, labeling, duplicate detection, and priority scoring on every new issue.</p>
+      </div>
+      <div class="pillar-card">
+        <div class="pillar-icon">🔧</div>
+        <h3>CI Self-Healing</h3>
+        <p>Diagnoses failed workflows, generates patches, and opens fix PRs — with per-branch rate limiting.</p>
+      </div>
+      <div class="pillar-card">
+        <div class="pillar-icon">🔍</div>
+        <h3>AI Code Review</h3>
+        <p>Bundle-driven PR review with schema enforcement, scope validation, and structured findings.</p>
+      </div>
+      <div class="pillar-card">
+        <div class="pillar-icon">🛡️</div>
+        <h3>Policy as Code</h3>
+        <p>Define rules in <code>.gitwire.yml</code> — trigger control, quality gates, file restrictions, and waivers.</p>
+      </div>
+      <div class="pillar-card">
+        <div class="pillar-icon">🚀</div>
+        <h3>Autonomous Fixes</h3>
+        <p>Post <code>/gitwire fix</code> on an issue. GitWire analyzes, generates a fix, and opens a PR.</p>
+      </div>
+      <div class="pillar-card">
+        <div class="pillar-icon">📊</div>
+        <h3>Quality Gates</h3>
+        <p>Configurable confidence thresholds, risk scoring, and gate conditions on every action.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="how-it-works">
+  <div class="container">
+    <h2>How It Works</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <h3>Install the GitHub App</h3>
+        <p>Add GitWire to your repos. One click, no CI changes needed.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <h3>Configure Policy</h3>
+        <p>Add <code>.gitwire.yml</code> to enable pillars, set triggers, and define quality gates.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <h3>Watch It Govern</h3>
+        <p>GitWire triages, heals, reviews, and enforces — with full audit trail and dashboard.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="container">
+    <div class="cta-box">
+      <h2>Ready to automate?</h2>
+      <p>Self-hosted on your infrastructure. Your code never leaves your network.</p>
+      <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+        <a href="/docs/installation/prerequisites" class="btn btn-primary">Install GitWire →</a>
+        <a href="/docs/" class="btn btn-ghost">Read the Docs</a>
+        <a href="https://github.com/Elephant-Rock-Lab/GitWire" class="btn btn-ghost">View Source</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>
+      GitWire &middot; Built by <a href="https://github.com/Elephant-Rock-Lab">Elephant Rock Lab</a>
+      &middot; <a href="https://github.com/Elephant-Rock-Lab/GitWire">GitHub</a>
+      &middot; <a href="/docs/">Docs</a>
+      &middot; <a href="/demo/">Demo</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
