@@ -18,7 +18,7 @@ import {
   ShieldCheckered,
   Lightning,
   Ticket,
-  Inbox,
+  EnvelopeSimple,
   ArrowsClockwise,
   GearSix,
   Scroll,
@@ -26,7 +26,7 @@ import {
   Brain,
   SlidersHorizontal,
   Flask,
-  Activity,
+  Pulse,
 } from "@phosphor-icons/react";
 
 import type { IconProps } from "@phosphor-icons/react";
@@ -46,7 +46,7 @@ function icon(Comp: React.ForwardRefExoticComponent<IconProps & React.RefAttribu
 export const DashboardIcon   = icon(SquaresFour,          "Dashboard");
 export const ReposIcon       = icon(FolderSimple,         "Repositories");
 export const ReadinessIcon   = icon(ShieldCheck,          "Readiness");
-export const ActivityIcon    = icon(Activity,             "Activity");
+export const ActivityIcon    = icon(Pulse,                "Activity");
 export const IssuesIcon      = icon(WarningCircle,        "Issues");
 export const PullRequestsIcon = icon(GitPullRequest,      "Pull Requests");
 export const CIHealingIcon   = icon(Wrench,               "CI Healing");
@@ -57,7 +57,7 @@ export const DecisionsIcon   = icon(Scales,               "Decisions");
 export const QualityGatesIcon = icon(ShieldCheckered,     "Quality Gates");
 export const CustomRulesIcon = icon(Lightning,            "Custom Rules");
 export const WaiversIcon     = icon(Ticket,               "Waivers");
-export const DeliveriesIcon  = icon(Inbox,                "Deliveries");
+export const DeliveriesIcon  = icon(EnvelopeSimple,      "Deliveries");
 export const MaintainerIcon  = icon(ArrowsClockwise,      "Maintainer");
 export const AutomationIcon  = icon(GearSix,              "Automation");
 export const TrustPolicyIcon = icon(Scroll,               "Trust & Policy");
@@ -68,5 +68,5 @@ export const PlaygroundIcon  = icon(Flask,                "Playground");
 
 // ── Status / misc icons ───────────────────────────────────────────────────
 
-export const LiveDot = icon(Activity, "Live");
+export const LiveDot = icon(Pulse, "Live");
 export const ClockIcon = icon(ClockCounterClockwise, "Time");
