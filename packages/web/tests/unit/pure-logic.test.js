@@ -1,16 +1,36 @@
 // tests/unit/pure-logic.test.js
 // Unit tests for all exported pure-logic functions across services
 
-import { similarityLabel } from '../../src/services/duplicateDetectionService.js';
-import { computeVerdict, confidenceLevel } from '../../src/services/aiReviewService.js';
-import { formatVal, computeViolations, buildProtectionPayload } from '../../src/services/branchEnforcementService.js';
-import { inferEcosystem } from '../../src/services/dependencyService.js';
-import { matchGlob } from '../../src/services/feedbackService.js';
-import { makeTestId } from '../../src/services/flakyTestService.js';
-import { getFileType } from '../../src/services/configValidationService.js';
-import { computeDiff } from '../../src/services/policyReconcilerService.js';
-import { extractJSON } from '../../src/workers/issueFixWorker.js';
-import { stripCodeFences, truncate, failing_file_ext } from '../../src/workers/ciHealWorker.js';
+import { jest } from "@jest/globals";
+
+// Mock config before any imports that use it
+jest.unstable_mockModule("../../config/index.js", () => ({
+  config: {
+    port: 3000, nodeEnv: "test",
+    database: { url: "postgres://test:test@localhost/test" },
+    redis: { url: "redis://localhost:6379" },
+    anthropic: { apiKey: "test", baseURL: "https://test.com" },
+    github: { appId: "1", privateKey: "test", webhookSecret: "test", clientId: "test", clientSecret: "test" },
+    apiKey: "test", telegram: { botToken: "test" }, dashboard: { url: "http://localhost:3001" },
+  },
+}));
+
+// Mock db to prevent pg connection
+jest.unstable_mockModule("../../src/lib/db.js", () => ({ db: {} }));
+jest.unstable_mockModule("../../src/lib/queue.js", () => ({ redis: {}, createWorker: jest.fn(), QUEUES: {} }));
+jest.unstable_mockModule("../../src/lib/logger.js", () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
+jest.unstable_mockModule("../../src/lib/github.js", () => ({ getInstallationClient: jest.fn(), forEachInstallation: jest.fn(), getWebhookApp: jest.fn(), forEachRepo: jest.fn() }));
+
+const { similarityLabel } = await import("../../src/services/duplicateDetectionService.js");
+const { computeVerdict, confidenceLevel } = await import("../../src/services/aiReviewService.js");
+const { formatVal, computeViolations, buildProtectionPayload } = await import("../../src/services/branchEnforcementService.js");
+const { inferEcosystem } = await import("../../src/services/dependencyService.js");
+const { matchGlob } = await import("../../src/services/feedbackService.js");
+const { makeTestId } = await import("../../src/services/flakyTestService.js");
+const { getFileType } = await import("../../src/services/configValidationService.js");
+const { computeDiff } = await import("../../src/services/policyReconcilerService.js");
+const { extractJSON } = await import("../../src/workers/issueFixWorker.js");
+const { stripCodeFences, truncate, failing_file_ext } = await import("../../src/workers/ciHealWorker.js");
 
 // ── similarityLabel ─────────────────────────────────────────────────────────
 

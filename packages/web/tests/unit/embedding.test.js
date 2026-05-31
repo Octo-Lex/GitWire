@@ -1,7 +1,23 @@
 // tests/unit/embedding.test.js
 // Unit tests for pure-logic embedding functions
 
-import { cosineSimilarity, rankBySimilarity, fallbackEmbed, buildEmbedText } from '../../src/services/embeddingService.js';
+import { jest } from "@jest/globals";
+
+// Mock config before any imports that use it
+jest.unstable_mockModule("../../config/index.js", () => ({
+  config: {
+    port: 3000, nodeEnv: "test",
+    database: { url: "postgres://test:test@localhost/test" },
+    redis: { url: "redis://localhost:6379" },
+    anthropic: { apiKey: "test", baseURL: "https://test.com" },
+    github: { appId: "1", privateKey: "test", webhookSecret: "test", clientId: "test", clientSecret: "test" },
+    apiKey: "test", telegram: { botToken: "test" }, dashboard: { url: "http://localhost:3001" },
+  },
+}));
+jest.unstable_mockModule("../../src/lib/db.js", () => ({ db: {} }));
+jest.unstable_mockModule("../../src/lib/logger.js", () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
+
+const { cosineSimilarity, rankBySimilarity, fallbackEmbed, buildEmbedText } = await import("../../src/services/embeddingService.js");
 
 describe('cosineSimilarity', () => {
   test('identical vectors → 1.0', () => {
