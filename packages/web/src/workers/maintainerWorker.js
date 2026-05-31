@@ -5,8 +5,7 @@
 // Pattern: scan repos → find stale items → warn → close → cleanup branches.
 // All mutations check idempotency key before acting.
 
-import { createWorker, QUEUES } from "../lib/queue.js";
-import { maintainerQueue } from "../lib/queue.js";
+import { createWorker, QUEUES, maintainerQueue } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { maintainerService } from "../services/maintainerService.js";
@@ -14,6 +13,7 @@ import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, getStaleConfig, isStaleExempt, isDryRun } from "@gitwire/rules";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { dispatchCommand } from "./maintainer/commands.js";
 
 const DEFAULT_STALE_ISSUE_DAYS = 60;
 const DEFAULT_STALE_PR_DAYS = 30;
@@ -352,155 +352,16 @@ async function runBranchCleanup({ installationId, repoFullName }) {
 // ── Comment Command Handler ──────────────────────────────────────────────────
 
 async function runCommentCommand(data) {
-  const { action, installationId, repoFullName, issueNumber, commentId, authorLogin, value } = data;
-  logger.info({ action, repo: repoFullName, author: authorLogin }, "Processing comment command");
+  const { installationId, repoFullName, issueNumber } = data;
+  logger.info({ action: data.action, repo: repoFullName, author: data.authorLogin }, "Processing comment command");
 
-  const octokit = wrapOctokit(await getInstallationClient(installationId));
-  const [owner, repo] = repoFullName.split("/");
-  const repoRow = await findRepo(repoFullName);
-  if (!repoRow) return;
-
-  let responseText = null;
-
-  switch (action) {
-    case "stale_scan":
-      await maintainerQueue.add("stale-scan", {
-        installationId, repoFullName,
-      });
-      responseText = "\u2705 **GitWire:** Stale scan triggered for this repo. Results will appear as comments on stale items.";
-      break;
-
-    case "branch_cleanup":
-      await maintainerQueue.add("branch-cleanup", {
-        installationId, repoFullName,
-      });
-      responseText = "\u2705 **GitWire:** Branch cleanup triggered for this repo.";
-      break;
-
-    case "set_stale_issue_days":
-      await maintainerService.upsertSettings(repoRow.github_id, { stale_issue_days: value });
-      responseText = "\u2705 **GitWire:** Stale issue threshold set to **" + value + " days**.";
-      break;
-
-    case "set_stale_pr_days":
-      await maintainerService.upsertSettings(repoRow.github_id, { stale_pr_days: value });
-      responseText = "\u2705 **GitWire:** Stale PR threshold set to **" + value + " days**.";
-      break;
-
-    case "stop":
-      await maintainerService.upsertSettings(repoRow.github_id, { enabled: false });
-      responseText = "\u23f8\ufe0f **GitWire:** Maintainer automation paused for this repo.";
-      break;
-
-    case "status": {
-      // Fetch the specific issue/PR for context
-      const { data: ghItem } = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
-        owner, repo, issue_number: issueNumber,
-      });
-      const isPR = !!ghItem.pull_request;
-      const daysSinceUpdate = ((Date.now() - new Date(ghItem.updated_at).getTime()) / (1000 * 60 * 60 * 24)).toFixed(1);
-      const settings = await maintainerService.getSettings(repoRow.github_id);
-      const staleIssueDays = settings?.stale_issue_days ?? DEFAULT_STALE_ISSUE_DAYS;
-      const stalePrDays = settings?.stale_pr_days ?? DEFAULT_STALE_PR_DAYS;
-      const staleThreshold = isPR ? stalePrDays : staleIssueDays;
-      const daysUntilStale = Math.max(0, staleThreshold - parseFloat(daysSinceUpdate));
-
-      // Build context about THIS item
-      const lines = [];
-      lines.push("**GitWire Status for #" + issueNumber + "**");
-      lines.push("");
-      lines.push("Type: **" + (isPR ? "Pull Request" : "Issue") + "** | State: **" + ghItem.state + "** | Updated **" + daysSinceUpdate + "d ago**");
-
-      // Triage info from DB - try issues first, then PRs
-      const { rows: issueRows } = await db.query(
-        "SELECT triage_type, triage_priority, triage_summary FROM issues WHERE repo_id = $1 AND number = $2",
-        [repoRow.github_id, issueNumber]
-      );
-      const { rows: prRows } = await db.query(
-        "SELECT triage_type, triage_size, triage_risk, triage_summary, head_branch FROM pull_requests WHERE repo_id = $1 AND number = $2",
-        [repoRow.github_id, issueNumber]
-      );
-      const triageRow = issueRows[0] || prRows[0];
-      if (triageRow && triageRow.triage_type) {
-        const t = triageRow;
-        const priorityLabel = isPR ? (t.triage_size || t.triage_risk) : t.triage_priority;
-        lines.push("Triage: **" + t.triage_type + "** (" + (priorityLabel || "unknown") + ") — " + (t.triage_summary || "no summary"));
-      } else {
-        lines.push("Triage: _not yet classified_");
-      }
-
-      // Labels
-      const labelNames = (ghItem.labels || []).map(l => l.name).filter(Boolean);
-      if (labelNames.length > 0) {
-        lines.push("Labels: " + labelNames.map(l => "`" + l + "`").join(", "));
-      }
-
-      // CI info (PRs only) - match by head_branch
-      if (isPR) {
-        const prRow = prRows[0];
-        if (prRow) {
-          const { rows: ciRows } = await db.query(
-            "SELECT heal_status, heal_failure_type FROM ci_runs WHERE repo_id = $1 AND branch = $2 ORDER BY created_at DESC LIMIT 3",
-            [repoRow.github_id, prRow.head_branch]
-          );
-          if (ciRows.length > 0) {
-            const ci = ciRows[0];
-            lines.push("CI heal: **" + (ci.heal_status || "unknown") + "**" + (ci.heal_failure_type ? " (" + ci.heal_failure_type + ")" : ""));
-          } else {
-            lines.push("CI heal: _no CI runs found for this PR_");
-          }
-        }
-      }
-
-      // Stale countdown
-      if (ghItem.state === "open") {
-        if (daysUntilStale <= 0) {
-          lines.push("Stale: \u26a0\ufe0f **Past threshold** — eligible for closure");
-        } else if (daysUntilStale <= (settings?.stale_warn_days ?? DEFAULT_WARN_DAYS)) {
-          lines.push("Stale: \u23f0 **" + Math.ceil(daysUntilStale) + " days** until closure");
-        } else {
-          lines.push("Stale: \u2705 " + Math.ceil(daysUntilStale) + " days until stale threshold");
-        }
-      }
-
-      // Maintainer actions on this item
-      const { rows: itemActions } = await db.query(
-        "SELECT action_type, status, created_at FROM maintainer_actions WHERE repo_id = $1 AND target_number = $2 ORDER BY created_at DESC LIMIT 3",
-        [repoRow.github_id, String(issueNumber)]
-      );
-      if (itemActions.length > 0) {
-        lines.push("Actions: " + itemActions.map(a => a.action_type + " (" + a.status + " " + new Date(a.created_at).toISOString().split("T")[0] + ")").join(", "));
-      }
-
-      // Footer with repo-level info
-      const stats = await maintainerService.getActionStats(repoRow.github_id);
-      lines.push("");
-      lines.push("---");
-      lines.push("_Repo: maintainer " + ((settings?.enabled ?? true) ? "\u2705 on" : "\u23f8\ufe0f paused") + " | " + (stats?.last_7_days || 0) + " actions (7d) | stale issue " + staleIssueDays + "d / PR " + stalePrDays + "d_");
-
-      responseText = lines.join("\n");
-      break;
-    }
-
-    case "show_settings": {
-      const s = await maintainerService.getSettings(repoRow.github_id);
-      responseText = [
-        "**GitWire Maintainer Settings**",
-        "",
-        "Stale issue threshold: **" + (s?.stale_issue_days || 60) + " days**",
-        "Stale PR threshold: **" + (s?.stale_pr_days || 30) + " days**",
-        "Warning period: **" + (s?.stale_warn_days || 7) + " days**",
-        "Branch cleanup: **" + ((s?.cleanup_branches ?? true) ? "on" : "off") + "**",
-        "",
-        "Change with: `/gitwire settings stale <days>` or `/gitwire settings pr-stale <days>`",
-      ].join("\n");
-      break;
-    }
-  }
+  const responseText = await dispatchCommand(data);
 
   // Post response as a comment
   if (responseText) {
     try {
+      const octokit = wrapOctokit(await getInstallationClient(installationId));
+      const [owner, repo] = repoFullName.split("/");
       await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
         owner, repo, issue_number: issueNumber, body: responseText,
       });
