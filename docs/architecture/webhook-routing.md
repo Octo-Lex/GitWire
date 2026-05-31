@@ -8,7 +8,7 @@ The original webhook router was a single function in `routes/webhooks.js` with c
 
 ## The Solution: Handler Registry
 
-The router was refactored (v0.12.0) using the **extract-dispatch-delegate** pattern:
+The router was refactored (v0.13.0) using the **extract-dispatch-delegate** pattern:
 
 1. **Extract** — each event type's logic moved to its own file in `lib/webhookHandlers/`
 2. **Dispatch** — a registry lookup replaces the switch-case
@@ -90,4 +90,4 @@ Each handler receives a shared `ctx` object instead of importing queues directly
 
 → [Webhook Worker](/workers/webhook-worker) | [Data Flow](/architecture/data-flow) | [Comment Commands](/pillars/triage/comment-commands)
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0

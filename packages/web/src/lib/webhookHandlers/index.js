@@ -21,6 +21,7 @@ import { handleWorkflowRun } from "./handleWorkflowRun.js";
 import { handleInstallation } from "./handleInstallation.js";
 import { handlePush } from "./handlePush.js";
 import { handleIssueComment } from "./handleIssueComment.js";
+import { handleRelease } from "./handleRelease.js";
 
 // Shared context passed to every handler — avoids importing queues in each file.
 const ctx = {
@@ -49,6 +50,7 @@ const handlers = {
   installation_repositories:  handleInstallation,
   push:                 handlePush,
   issue_comment:        handleIssueComment,
+  release:              handleRelease,
 };
 
 /**

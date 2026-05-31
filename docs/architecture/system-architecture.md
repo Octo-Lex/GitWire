@@ -90,4 +90,4 @@ See [Data Flow](/architecture/data-flow) for the full webhook-to-action pipeline
 
 See [Security](/architecture/security) for authentication, rate limiting, and webhook verification.
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0

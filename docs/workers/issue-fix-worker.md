@@ -111,4 +111,4 @@ The fix pipeline is triggered by:
 
 → [Maintainer Worker](/workers/maintainer-worker) | [Comment Commands](/pillars/triage/comment-commands) | [Action Lifecycle](/architecture/action-lifecycle)
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0

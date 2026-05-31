@@ -4,6 +4,7 @@
 import { getMinFixConfidence } from "@gitwire/rules";
 import { succeed, fail } from "../../services/actionStateMachine.js";
 import { notifyIssueFix } from "../../services/telegramNotifyService.js";
+import { detectConvention, formatPRTitle, extractScope } from "../../services/conventionDetector.js";
 import { logger } from "../../lib/logger.js";
 import { upsertFixAttempt, postIssueComment, truncate } from "./helpers.js";
 
@@ -72,8 +73,11 @@ export async function submitFix(ctx, analysis, validated) {
     // Calibrate confidence
     const confidence = calibrateConfidence(analysis, fileContents.length, fixes.length);
 
-    // Open PR
-    var prTitle = "\u{1F527} [GitWire] Fix #" + issueNumber + ": " + truncate(ctx._scope.issue.title, 60);
+    // Detect repo commit convention and format PR title accordingly
+    const convention = await detectConvention(octokit, owner, repoName);
+    const mainFile = fixes[0]?.path || "";
+    const scope = extractScope(mainFile);
+    var prTitle = formatPRTitle(convention, "fix", scope, truncate(ctx._scope.issue.title, 60), issueNumber);
     var prBody = buildPRBodyFullFile(ctx._scope.issue, analysis, fixes, issueNumber, confidence);
 
     const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {

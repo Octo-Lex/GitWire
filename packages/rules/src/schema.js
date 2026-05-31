@@ -111,10 +111,21 @@ export const DEFAULT_CONFIG = {
         paths: [],
       },
     },
+
+    spam_gate: {
+      enabled: false,  // opt-in — auto-closes items
+      max_open_prs: 10,       // auto-close PR if author has more open
+      max_open_issues: 15,    // auto-close issue if author has more open
+      exempt_users: [],        // always allow these usernames
+      exempt_labels: ["pinned", "security"],  // don't close items with these labels
+      close_message: "Automatically closed: too many open items from this author. Contact maintainers if this is a mistake.",
+    },
   },
 
   settings: {
     dry_run: false,
+    // On release.published, close issues that were fixed by GitWire PRs
+    release_close_fixed_issues: true,
   },
 
   // Named reusable expressions

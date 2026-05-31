@@ -139,4 +139,4 @@ sequenceDiagram
 
 → [Security](/architecture/security) | [Webhook Routing](/architecture/webhook-routing) | [Action Lifecycle](/architecture/action-lifecycle)
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0

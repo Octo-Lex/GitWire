@@ -1,8 +1,19 @@
 // src/lib/webhookHandlers/handlePullRequest.js
 // Handler for "pull_request" webhook events.
 
+import { checkSpamGate } from "./handleSpamGate.js";
+
 export async function handlePullRequest(payload, deliveryId, ctx) {
   const jobData = { eventName: "pull_request", payload, deliveryId, receivedAt: Date.now() };
+
+  // Spam gate check on opened PRs (before triage)
+  if (payload.action === "opened") {
+    const spamResult = await checkSpamGate(ctx, payload, "pull_request");
+    if (spamResult.blocked) {
+      ctx.logger.info({ pr: payload.pull_request?.number, reason: spamResult.reason }, "PR blocked by spam gate");
+      return; // Don't triage spam
+    }
+  }
 
   // Triage + AI review on open / reopen / ready
   if (["opened", "reopened", "ready_for_review"].includes(payload.action)) {

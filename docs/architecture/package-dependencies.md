@@ -1,6 +1,6 @@
 # Package Dependencies
 
-## Current State (v0.12.1)
+## Current State (v0.13.0)
 
 ```mermaid
 graph TD
@@ -107,4 +107,4 @@ Workers call `createQueue()` at module top level (before `main()` runs). The com
 | `@gitwire/bot` | Telegram bot | grammy | ❌ No — needs Redis + API |
 | `@gitwire/demo-dashboard` | Static demo | next (export) | ✅ Yes |
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0

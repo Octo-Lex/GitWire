@@ -12,6 +12,7 @@ import { HEALABLE_TYPES } from "@gitwire/core";
 import { isPillarEnabled, isFileAllowed, isDryRun, meetsConfidence, getMinPatchConfidence, scoreCIRisk, shouldTrigger } from "@gitwire/rules";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
+import { detectConvention, formatPRTitle, extractScope } from "../services/conventionDetector.js";
 import { db } from "../lib/db.js";
 import { cleanupPR } from "../services/managedActionService.js";
 import { logDecision } from "../services/decisionLogService.js";
@@ -526,7 +527,10 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     logger.info({ runId: run.id, failingFile }, "Fixed file committed to heal branch");
 
     // 5. Open a Pull Request
-    var prTitle = "🔧 [GitWire] Fix " + diagnosis.failure_type.replace(/_/g, " ") + " in " + failingFile;
+    const convention = await detectConvention(octokit, owner, repo);
+    const healScope = extractScope(failingFile);
+    const healDesc = "resolve " + diagnosis.failure_type.replace(/_/g, " ") + " in " + failingFile;
+    var prTitle = formatPRTitle(convention, "fix", healScope, truncate(healDesc, 60), null);
 
     var prBody = [
       "## 🔧 GitWire Auto-Heal PR",

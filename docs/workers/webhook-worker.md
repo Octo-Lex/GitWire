@@ -80,4 +80,4 @@ All webhooks are logged in `webhook_deliveries` with:
 
 → [Webhook Routing](/architecture/webhook-routing) | [Comment Commands](/pillars/triage/comment-commands) | [Triage Worker](/workers/triage-worker)
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0

@@ -77,4 +77,4 @@ All worker errors are logged via structured logging (`logger.error`). Failed job
 
 → [Webhook Worker](/workers/webhook-worker) | [Action Lifecycle](/architecture/action-lifecycle)
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0

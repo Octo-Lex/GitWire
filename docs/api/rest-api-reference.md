@@ -124,4 +124,4 @@ https://gitwire.yourdomain.com/api
 - [Waivers](/api/waivers)
 - [Webhooks](/api/webhooks)
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0

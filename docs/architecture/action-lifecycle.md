@@ -293,4 +293,4 @@ The **Actions** page (`/actions`) provides:
 - [Quality Gates](/configuration/quality-gates) — policy checks that create actions
 - [Evidence Bundles](/architecture/evidence-bundles) — how evidence is structured and stored
 
-> **Last validated:** v0.12.1
+> **Last validated:** v0.13.0
