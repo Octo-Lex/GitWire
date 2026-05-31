@@ -1,8 +1,0 @@
-{
-  "name": "@gitwire/maintainer",
-  "version": "0.1.0",
-  "type": "module",
-  "main": "src/index.js",
-  "scripts": { "test": "echo \"@gitwire/maintainer: stub\"" },
-  "description": "Team access, permissions, branch rules, release management"
-}

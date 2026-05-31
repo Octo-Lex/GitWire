@@ -1,8 +1,0 @@
-{
-  "name": "@gitwire/ai-skills",
-  "version": "0.1.0",
-  "type": "module",
-  "main": "src/index.js",
-  "scripts": { "test": "echo \"@gitwire/ai-skills: stub\"" },
-  "description": "Prompt templates and LLM provider routing"
-}

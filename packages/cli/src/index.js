@@ -1,1 +1,0 @@
-// @gitwire/cli — coming soon

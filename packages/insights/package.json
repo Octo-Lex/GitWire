@@ -1,8 +1,0 @@
-{
-  "name": "@gitwire/insights",
-  "version": "0.1.0",
-  "type": "module",
-  "main": "src/index.js",
-  "scripts": { "test": "echo \"@gitwire/insights: stub\"" },
-  "description": "Multi-repo analytics, health scores, CI trends"
-}

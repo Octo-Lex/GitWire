@@ -1,8 +1,0 @@
-{
-  "name": "@gitwire/healer",
-  "version": "0.1.0",
-  "type": "module",
-  "main": "src/index.js",
-  "scripts": { "test": "echo \"@gitwire/healer: stub\"" },
-  "description": "CI failure diagnosis and automated patching"
-}
