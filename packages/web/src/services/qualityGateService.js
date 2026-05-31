@@ -172,6 +172,7 @@ export async function fetchMetrics(repoId) {
     const checks = await computeReadinessScore(repoId);
     m.readiness_score = checks.score;
   } catch (_e) {
+    logger.debug({ repoId, err: _e }, "Readiness score computation failed — defaulting to 0");
     m.readiness_score = 0;
   }
 

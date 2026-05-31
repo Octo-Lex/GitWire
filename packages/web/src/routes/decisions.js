@@ -4,6 +4,7 @@
 
 import { Router } from "express";
 import { getDecisions, getDecisionSummary } from "../services/decisionLogService.js";
+import { logger } from "../lib/logger.js";
 
 export const decisionsRouter = Router();
 
@@ -26,7 +27,7 @@ decisionsRouter.get("/", async (req, res) => {
     });
     res.json(result);
   } catch (err) {
-    console.error("Decisions API error:", err);
+    logger.error({ err }, "Decisions API error");
     res.status(500).json({ error: "Failed to fetch decisions" });
   }
 });
@@ -40,7 +41,7 @@ decisionsRouter.get("/summary", async (_req, res) => {
     const data = await getDecisionSummary();
     res.json({ data });
   } catch (err) {
-    console.error("Decision summary error:", err);
+    logger.error({ err }, "Decision summary error");
     res.status(500).json({ error: "Failed to fetch decision summary" });
   }
 });

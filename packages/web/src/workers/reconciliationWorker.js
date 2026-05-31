@@ -293,6 +293,7 @@ async function checkLabel(octokit, owner, repo, action) {
     await logReconciliationCheck(action.id, "label", expected, actual, drifted);
     return drifted;
   } catch (_e) {
+    logger.debug({ actionId: action?.id, err: _e }, "Label drift check failed — assuming no drift");
     return false; // Can't check — assume ok
   }
 }
@@ -343,6 +344,6 @@ async function checkPRState(octokit, owner, repo, action) {
 
     return false;
   } catch (_e) {
+    logger.debug({ actionId: action?.id, err: _e }, "Review drift check failed — assuming no drift");
     return false;
   }
-}

@@ -40,6 +40,7 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
     try {
       config = await getConfigForRepo(repoFullName);
     } catch (_e) {
+      logger.debug({ repoFullName, err: _e }, "Config load failed in review bundle — defaulting to empty");
       config = {};
     }
   }
@@ -109,7 +110,7 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
       }
     }
   } catch (_e) {
-    // Non-critical context enrichment — skip on error
+    logger.debug({ err: _e }, "Issue context enrichment failed — non-critical");
   }
 
   // Recent CI runs
@@ -129,10 +130,8 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
       }
     }
   } catch (_e) {
-    // Non-critical
+    logger.debug({ err: _e }, "CI run context enrichment failed — non-critical");
   }
-
-  // Prior reviews on this repo
   try {
     const { rows: priorReviews } = await db.query(
       "SELECT pr_number, verdict, confidence, " +
@@ -150,7 +149,7 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
       }
     }
   } catch (_e) {
-    // Non-critical
+    logger.debug({ err: _e }, "Prior reviews enrichment failed — non-critical");
   }
 
   // ── 4. Config Snapshot ─────────────────────────────────────────────────

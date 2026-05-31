@@ -66,6 +66,7 @@ export async function processWorkerEvents(subscriber, eventNames, handler) {
       try {
         payload = JSON.parse(item);
       } catch (_e) {
+        logger.debug({ item: item?.substring(0, 80) }, "Invalid JSON in worker event — skipping");
         continue;
       }
 
