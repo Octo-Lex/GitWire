@@ -62,7 +62,15 @@ export async function detectConvention(octokit, owner, repo) {
       }
     }
 
-    // Strategy 3: Check package.json for commitlint/semantic-release deps
+    // Strategy 3: Check recent commit messages (for repos with few/no PRs)
+    if (style === "default") {
+      const commitPattern = await checkRecentCommits(octokit, owner, repo);
+      if (commitPattern) {
+        style = "conventional";
+      }
+    }
+
+    // Strategy 4: Check package.json for commitlint/semantic-release deps
     if (style === "default") {
       const hasDeps = await checkPackageDeps(octokit, owner, repo);
       if (hasDeps) {
@@ -156,6 +164,34 @@ async function checkRecentPRs(octokit, owner, repo) {
     for (const pr of data) {
       if (pr.merged_at && CONVENTIONAL_RE.test(pr.title)) {
         const typeMatch = pr.title.match(/^([a-z]+)/);
+        if (typeMatch && CONVENTIONAL_TYPES.has(typeMatch[1])) {
+          matches++;
+        }
+      }
+    }
+
+    return matches >= 6;
+  } catch (_e) {
+    return false;
+  }
+}
+
+async function checkRecentCommits(octokit, owner, repo) {
+  try {
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/commits", {
+      owner, repo,
+      per_page: 10,
+    });
+
+    if (data.length === 0) return false;
+
+    // If 6+ of last 10 commit subjects match conventional pattern → conventional
+    let matches = 0;
+    for (const commit of data) {
+      // Commit message first line
+      const subject = (commit.commit.message || "").split("\n")[0].trim();
+      if (CONVENTIONAL_RE.test(subject)) {
+        const typeMatch = subject.match(/^([a-z]+)/);
         if (typeMatch && CONVENTIONAL_TYPES.has(typeMatch[1])) {
           matches++;
         }
