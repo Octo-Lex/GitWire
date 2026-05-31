@@ -3,11 +3,35 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
+import {
+  DashboardIcon,
+  ReposIcon,
+  ReadinessIcon,
+  ActivityIcon,
+  IssuesIcon,
+  PullRequestsIcon,
+  CIHealingIcon,
+  FixAttemptsIcon,
+  DuplicatesIcon,
+  ActionsIcon,
+  DecisionsIcon,
+  QualityGatesIcon,
+  CustomRulesIcon,
+  WaiversIcon,
+  DeliveriesIcon,
+  MaintainerIcon,
+  AutomationIcon,
+  TrustPolicyIcon,
+  InsightsIcon,
+  IntelligenceIcon,
+  ConfigIcon,
+  PlaygroundIcon,
+} from "./Icons";
 
 interface NavItem {
   href: string;
   label: string;
-  icon: string;
+  icon: React.FC<{ size?: number }>;
 }
 
 interface NavGroup {
@@ -19,48 +43,48 @@ const NAV: NavGroup[] = [
   {
     title: "Overview",
     items: [
-      { href: "/",              label: "Dashboard",      icon: "◈" },
-      { href: "/repos",         label: "Repositories",   icon: "⎇" },
-      { href: "/readiness",     label: "Readiness",      icon: "✓" },
-      { href: "/activity",      label: "Activity",       icon: "⏱" },
+      { href: "/",              label: "Dashboard",      icon: DashboardIcon },
+      { href: "/repos",         label: "Repositories",   icon: ReposIcon },
+      { href: "/readiness",     label: "Readiness",      icon: ReadinessIcon },
+      { href: "/activity",      label: "Activity",       icon: ActivityIcon },
     ],
   },
   {
     title: "Work",
     items: [
-      { href: "/issues",        label: "Issues",         icon: "◎" },
-      { href: "/pull-requests", label: "Pull Requests",  icon: "⌥" },
-      { href: "/ci",            label: "CI Healing",     icon: "⚕" },
-      { href: "/fix-attempts",  label: "Fix Attempts",   icon: "🔧" },
-      { href: "/duplicates",    label: "Duplicates",     icon: "⊗" },
+      { href: "/issues",        label: "Issues",         icon: IssuesIcon },
+      { href: "/pull-requests", label: "Pull Requests",  icon: PullRequestsIcon },
+      { href: "/ci",            label: "CI Healing",     icon: CIHealingIcon },
+      { href: "/fix-attempts",  label: "Fix Attempts",   icon: FixAttemptsIcon },
+      { href: "/duplicates",    label: "Duplicates",     icon: DuplicatesIcon },
     ],
   },
   {
     title: "Governance",
     items: [
-      { href: "/actions",       label: "Actions",        icon: "▶" },
-      { href: "/decisions",     label: "Decisions",      icon: "⚖" },
-      { href: "/gates",         label: "Quality Gates",  icon: "🛡" },
-      { href: "/custom-rules",  label: "Custom Rules",   icon: "⚡" },
-      { href: "/waivers",       label: "Waivers",        icon: "🎫" },
+      { href: "/actions",       label: "Actions",        icon: ActionsIcon },
+      { href: "/decisions",     label: "Decisions",      icon: DecisionsIcon },
+      { href: "/gates",         label: "Quality Gates",  icon: QualityGatesIcon },
+      { href: "/custom-rules",  label: "Custom Rules",   icon: CustomRulesIcon },
+      { href: "/waivers",       label: "Waivers",        icon: WaiversIcon },
     ],
   },
   {
     title: "Operations",
     items: [
-      { href: "/deliveries",    label: "Deliveries",     icon: "🔗" },
-      { href: "/maintainer",    label: "Maintainer",     icon: "⟳" },
-      { href: "/automation",    label: "Automation",     icon: "⌘" },
-      { href: "/trust",         label: "Trust & Policy", icon: "📜" },
-      { href: "/insights",      label: "Insights",       icon: "📊" },
-      { href: "/intelligence",  label: "Intelligence",   icon: "🧠" },
+      { href: "/deliveries",    label: "Deliveries",     icon: DeliveriesIcon },
+      { href: "/maintainer",    label: "Maintainer",     icon: MaintainerIcon },
+      { href: "/automation",    label: "Automation",     icon: AutomationIcon },
+      { href: "/trust",         label: "Trust & Policy", icon: TrustPolicyIcon },
+      { href: "/insights",      label: "Insights",       icon: InsightsIcon },
+      { href: "/intelligence",  label: "Intelligence",   icon: IntelligenceIcon },
     ],
   },
   {
     title: "Config",
     items: [
-      { href: "/config",        label: "Config",         icon: "⚙" },
-      { href: "/config/playground", label: "Playground", icon: "🧪" },
+      { href: "/config",        label: "Config",         icon: ConfigIcon },
+      { href: "/config/playground", label: "Playground", icon: PlaygroundIcon },
     ],
   },
 ];
@@ -89,18 +113,21 @@ export default function Sidebar() {
             </div>
             {group.items.map((item) => {
               const active = item.href === "/" ? pathname === "/" : pathname === item.href || (pathname.startsWith(item.href + "/"));
+              const IconComp = item.icon;
               return (
                 <Link
                   key={item.href}
                   href={item.href}
                   className={clsx(
-                    "flex items-center gap-2.5 px-3 py-1.5 rounded text-sm font-medium transition-colors",
+                    "flex items-center gap-2.5 px-3 py-1.5 rounded text-sm font-medium transition-all duration-150",
                     active
-                      ? "bg-accent-green/10 text-accent-green"
-                      : "text-text-secondary hover:text-text-primary hover:bg-surface-2"
+                      ? "bg-accent-green/10 text-accent-green border-l-2 border-l-accent-green pl-[10px]"
+                      : "text-text-secondary hover:text-text-primary hover:bg-surface-2 border-l-2 border-l-transparent"
                   )}
                 >
-                  <span className="text-sm w-5 text-center">{item.icon}</span>
+                  <span className="flex items-center justify-center w-5">
+                    <IconComp size={18} />
+                  </span>
                   {item.label}
                 </Link>
               );

@@ -19,6 +19,7 @@ export default {
       },
       moduleNameMapper: {
         '^@/(.*)$': '<rootDir>/src/$1',
+        '^@phosphor-icons/react$': '<rootDir>/tests/helpers/__mocks__/phosphor-icons.tsx',
       },
       moduleFileExtensions: ['ts', 'tsx', 'js', 'json'],
     },

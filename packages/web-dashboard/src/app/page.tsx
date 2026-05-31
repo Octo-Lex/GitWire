@@ -47,9 +47,24 @@ export default function DashboardPage() {
 
   return (
     <div className="animate-fade-in">
+      {/* ── Gradient accent bar ── */}
+      <div className="h-0.5 bg-gradient-to-r from-accent-green via-accent-blue to-accent-purple" />
+
       <PageHeader
         title="Dashboard"
         subtitle="Real-time overview across all repositories"
+        actions={
+          <div className="flex items-center gap-3">
+            {actSummary?.recent?.last_24h != null && (
+              <div className="flex items-center gap-1.5 text-xs font-mono text-text-tertiary">
+                <span className="w-1.5 h-1.5 rounded-full bg-accent-green animate-pulse-dot" />
+                <span>{last24h ?? 0} events (24h)</span>
+              </div>
+            )}
+            <Link href="/deliveries" className="btn text-xs">Deliveries</Link>
+            <Link href="/gates" className="btn btn-primary text-xs">Gates</Link>
+          </div>
+        }
       />
 
       {/* ── Hero stats row ── */}

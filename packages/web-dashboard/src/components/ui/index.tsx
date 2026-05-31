@@ -72,15 +72,15 @@ export function StatusDot({ status }: { status: string }) {
   return <span className={clsx("status-dot", colors[status] ?? "bg-text-tertiary")} />;
 }
 
-// ── Skeleton loader ────────────────────────────────────────────────────────
+// ── Skeleton loader (shimmer effect) ────────────────────────────────────────
 export function Skeleton({ className }: { className?: string }) {
   return (
-    <div className={clsx("rounded animate-pulse bg-surface-3", className)} />
+    <div className={clsx("rounded shimmer", className)} />
   );
 }
 
 // ── Empty state ────────────────────────────────────────────────────────────
-export function EmptyState({ icon = "◎", title, body }: { icon?: string; title: string; body?: string }) {
+export function EmptyState({ icon = "\u25CE", title, body }: { icon?: string; title: string; body?: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <span className="text-3xl text-text-tertiary mb-3 font-mono">{icon}</span>
@@ -103,8 +103,8 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-// ── Stat card ─────────────────────────────────────────────────────────────
-export function StatCard({ label, value, sub, accent, loading }: { label: string; value?: string | number | null; sub?: string; accent?: string; loading?: boolean }) {
+// ── Stat card with optional sparkline trend ────────────────────────────────
+export function StatCard({ label, value, sub, accent, loading, trend }: { label: string; value?: string | number | null; sub?: string; accent?: string; loading?: boolean; trend?: number[] }) {
   const accentColor: Record<string, string> = {
     green:  "text-accent-green",
     red:    "text-accent-red",
@@ -119,12 +119,53 @@ export function StatCard({ label, value, sub, accent, loading }: { label: string
       {loading ? (
         <Skeleton className="h-8 w-20 mb-1" />
       ) : (
-        <div className={clsx("text-3xl font-display font-bold tabular-nums", accent ? accentColor[accent] ?? "text-text-primary" : "text-text-primary")}>
-          {value ?? "—"}
+        <div className="flex items-end gap-2">
+          <div className={clsx("text-3xl font-display font-bold tabular-nums", accent ? accentColor[accent] ?? "text-text-primary" : "text-text-primary")}>
+            {value ?? "\u2014"}
+          </div>
+          {trend && trend.length >= 2 && <Sparkline data={trend} width={48} height={20} />}
         </div>
       )}
       {sub && <div className="text-xs text-text-tertiary mt-1">{sub}</div>}
     </div>
+  );
+}
+
+// ── Sparkline (inline SVG trend) ───────────────────────────────────────────
+function Sparkline({ data, width = 48, height = 20 }: { data: number[]; width?: number; height?: number }) {
+  if (data.length < 2) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const pad = 2;
+  const w = width - pad * 2;
+  const h = height - pad * 2;
+
+  const points = data.map(function (v, i) {
+    const x = pad + (i / (data.length - 1)) * w;
+    const y = pad + h - ((v - min) / range) * h;
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+
+  // Determine if trend is up or down
+  const firstHalf = data.slice(0, Math.ceil(data.length / 2));
+  const secondHalf = data.slice(Math.ceil(data.length / 2));
+  const avgFirst = firstHalf.reduce(function (a, b) { return a + b; }, 0) / firstHalf.length;
+  const avgSecond = secondHalf.reduce(function (a, b) { return a + b; }, 0) / secondHalf.length;
+  const isUp = avgSecond >= avgFirst;
+  const color = isUp ? "#00d97e" : "#ff4d6a";
+
+  return (
+    <svg width={width} height={height} className="shrink-0 self-center mb-1">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

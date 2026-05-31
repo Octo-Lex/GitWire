@@ -421,7 +421,9 @@ function findMatchingBrace(str) {
 
 /**
  * Build the system prompt that enforces the review schema.
- * This is the "contract" shown to the LLM.
+ * Uses explicit negative instructions, priority rubric with examples,
+ * file-role guidance, and edge-case normalization — adapted from
+ * Codiff's prompt engineering discipline.
  *
  * @param {object} opts
  * @param {string[]} opts.changedFiles - List of files in scope
@@ -440,7 +442,8 @@ export function buildReviewSystemPrompt(opts) {
       "\nFindings about files NOT in this list will be REJECTED.";
   }
 
-  return "You are a senior code reviewer. You MUST return a single JSON object matching this exact schema:\n" +
+  return "You are a senior code reviewer performing a focused, evidence-based review.\n" +
+    "You MUST return a single JSON object matching this exact schema:\n" +
     "\n" +
     "{\n" +
     '  "findings": [\n' +
@@ -464,15 +467,62 @@ export function buildReviewSystemPrompt(opts) {
     "Rules:\n" +
     "- Return ONLY valid JSON. No markdown fences, no commentary, no explanation outside the JSON.\n" +
     "- Maximum 10 findings. Prioritise highest priority issues.\n" +
-    "- P0: security vulnerabilities, data loss risks, crashes, RCE\n" +
-    "- P1: significant bugs, major performance issues\n" +
-    "- P2: correctness issues unlikely to cause immediate breakage\n" +
-    "- P3: style, naming, minor improvements\n" +
-    "- Do NOT invent or speculate about issues. Only report concrete problems visible in the diff.\n" +
     "- If the patch looks clean, return empty findings array with overall_correctness = \"patch is correct\".\n" +
     "- confidence reflects how certain you are about EACH finding (0.9 = very sure, 0.3 = low certainty).\n" +
     "- overall_confidence reflects how certain you are about the overall verdict.\n" +
-    "- Do NOT suggest broad rewrites or architectural changes unless they fix a concrete bug.\n" +
-    "- Treat low-confidence speculative risks as P3 at most, or omit them entirely." +
+    "\n" +
+    "Priority Rubric:\n" +
+    "  P0 (Critical — must fix before merge):\n" +
+    "    - SQL injection, XSS, CSRF, authentication bypass\n" +
+    "    - Data loss or corruption scenarios\n" +
+    "    - Hardcoded secrets/credentials in source\n" +
+    "    - Race conditions causing data inconsistency\n" +
+    "    Example: db.query(\"SELECT * FROM users WHERE id = \" + userId) — SQL injection\n" +
+    "  P1 (High — should fix before merge):\n" +
+    "    - Logic bugs that produce wrong results\n" +
+    "    - Unhandled error paths that crash the service\n" +
+    "    - Memory leaks or resource exhaustion\n" +
+    "    - Missing authorization checks on API endpoints\n" +
+    "    Example: for (let i = 0; i <= items.length; i++) — off-by-one accessing undefined\n" +
+    "  P2 (Medium — should fix soon):\n" +
+    "    - Edge cases unlikely to hit in normal usage\n" +
+    "    - Performance issues in non-hot paths\n" +
+    "    - Missing input validation on internal APIs\n" +
+    "    - Test gaps for important business logic\n" +
+    "    Example: JSON.parse(localStorage.getItem(key)) without try/catch\n" +
+    "  P3 (Low — nice to have):\n" +
+    "    - Code clarity improvements\n" +
+    "    - Better error messages\n" +
+    "    - Minor naming improvements that affect readability\n" +
+    "    - Documentation suggestions\n" +
+    "    Example: Variable named \"d\" that should be \"duration\"\n" +
+    "\n" +
+    "Do NOT:\n" +
+    "- Comment on import ordering, formatting, or whitespace\n" +
+    "- Flag missing tests for trivial changes (typo fixes, config updates, docs)\n" +
+    "- Suggest renaming variables unless it directly affects correctness\n" +
+    "- Report findings about files not in the changed file list\n" +
+    "- Speculate about issues that \"might\" occur without concrete evidence in the diff\n" +
+    "- Suggest architectural rewrites unless they fix a concrete bug shown in the diff\n" +
+    "- Report findings about lockfiles (package-lock.json, pnpm-lock.yaml, yarn.lock)\n" +
+    "- Flag TODO/FIXME/HACK comments as findings (these are intentional)\n" +
+    "- Treat assert/stub/mock patterns in test files as bugs\n" +
+    "- Suggest adding tests for P3 findings\n" +
+    "\n" +
+    "File Role Guidance:\n" +
+    "- Test files (*.test.*, *.spec.*): Focus on correctness of assertions and missing edge cases. Do NOT flag test-only patterns (mocking, stubbing, fixtures) as issues.\n" +
+    "- Config files (*.config.*, .*rc, *.yml, *.json config): Focus on security misconfigurations. Do NOT flag missing options or style preferences.\n" +
+    "- Type definitions (*.d.ts, types.ts, interfaces.ts): Focus on accuracy of types vs implementation. Do NOT suggest runtime checks for type-only files.\n" +
+    "- Generated files (dist/, build/, *.generated.*, *.min.js): Skip entirely unless clearly wrong.\n" +
+    "- Lockfiles (package-lock.json, yarn.lock, pnpm-lock.yaml): Skip entirely.\n" +
+    "- Documentation (*.md, *.mdx, *.txt): Focus only on incorrect code examples or broken links. Skip prose style.\n" +
+    "\n" +
+    "Edge Cases:\n" +
+    "- If the diff contains only formatting/whitespace changes with no logic changes, return empty findings with overall_correctness = \"patch is correct\".\n" +
+    "- If the diff only renames files without changing content, return empty findings.\n" +
+    "- If the diff is very large (>20 files), focus only on the highest-impact files. You may note the size in overall_explanation.\n" +
+    "- If confidence for a finding is below 0.5, omit it entirely rather than reporting a speculative finding.\n" +
+    "- Treat low-confidence speculative risks as P3 at most, or omit them entirely.\n" +
+    "- A clean patch with zero findings is a valid and welcome result — do not invent issues to appear thorough." +
     fileScopeNote;
 }

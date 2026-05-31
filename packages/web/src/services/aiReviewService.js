@@ -144,6 +144,10 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           model: cfg.model || DEFAULT_MODEL,
           includeSecurity: cfg.check_security !== false,
           includeArchitecture: cfg.check_architecture !== false || cfg.check_cost_leaks !== false,
+          prTitle: pr.title || "",
+          prAuthor: "@" + (pr.user?.login || "unknown"),
+          prBranch: (pr.base?.ref || "main") + " ← " + (pr.head?.ref || "unknown"),
+          repoName: repository.full_name,
         });
       },
       { label: "claude review", timeoutMs: maxDurationMs }
@@ -374,7 +378,32 @@ async function runStructuredReview(bundle, changedFiles, opts) {
     includeArchitecture: opts.includeArchitecture,
   });
 
-  var userPrompt = "Review the following PR changes:\n\n" + bundle;
+  // Build a rich user prompt with PR metadata for context
+  // The bundle already contains structured sections (metadata, diff, files, repo context)
+  // but the framing prompt helps the model understand intent
+  var prTitle = opts.prTitle || "";
+  var prAuthor = opts.prAuthor || "";
+  var prBranch = opts.prBranch || "";
+  var repoName = opts.repoName || "";
+  var fileCount = changedFiles.length;
+
+  var headerLines = [
+    "You are reviewing a pull request for " + repoName + ".",
+    "",
+    "PR: " + prTitle,
+    "Author: " + prAuthor,
+    "Branch: " + prBranch,
+    "Changed files: " + fileCount,
+    "",
+    "Focus on correctness, security, and regressions.",
+    "Prioritize concrete issues visible in the diff.",
+    "A clean patch with no findings is a valid and welcome result.",
+    "",
+    "--- BEGIN REVIEW BUNDLE ---",
+    "",
+  ];
+
+  var userPrompt = headerLines.join("\n") + bundle;
 
   try {
     const message = await anthropic.messages.create({

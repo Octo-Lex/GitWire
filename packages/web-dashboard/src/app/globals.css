@@ -29,6 +29,7 @@
   --animate-fade-in: fadeIn 0.2s ease-out;
   --animate-slide-up: slideUp 0.25s ease-out;
   --animate-pulse-dot: pulseDot 2s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.5s ease-in-out infinite;
 
   @keyframes fadeIn {
     from { opacity: 0; }
@@ -41,6 +42,10 @@
   @keyframes pulseDot {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
 }
 
@@ -81,6 +86,16 @@
   .btn-primary {
     @apply bg-accent-green/10 border-accent-green/40 text-accent-green
            hover:bg-accent-green/20 hover:border-accent-green/60;
+  }
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-surface-2) 25%,
+      var(--color-surface-3) 50%,
+      var(--color-surface-2) 75%
+    );
+    background-size: 200% 100%;
+    animation: var(--animate-shimmer);
   }
   .status-dot {
     @apply w-1.5 h-1.5 rounded-full shrink-0;
