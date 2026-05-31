@@ -31,12 +31,12 @@ import {
 
 import type { IconProps } from "@phosphor-icons/react";
 
-type IconSize = 16 | 18 | 20;
+interface GitWireIconProps {
+  size?: number;
+}
 
-const defaultSize: IconSize = 18;
-
-function icon(Comp: React.ForwardRefExoticComponent<IconProps & React.RefAttributes<unknown>>, label: string) {
-  return function GitWireIcon({ size = defaultSize }: { size?: IconSize }) {
+function icon(Comp: React.ForwardRefExoticComponent<IconProps & React.RefAttributes<unknown>>, label: string): React.FC<GitWireIconProps> {
+  return function GitWireIcon({ size = 18 }: GitWireIconProps) {
     return <Comp size={size} weight="regular" aria-label={label} />;
   };
 }
@@ -57,7 +57,7 @@ export const DecisionsIcon   = icon(Scales,               "Decisions");
 export const QualityGatesIcon = icon(ShieldCheckered,     "Quality Gates");
 export const CustomRulesIcon = icon(Lightning,            "Custom Rules");
 export const WaiversIcon     = icon(Ticket,               "Waivers");
-export const DeliveriesIcon  = icon(EnvelopeSimple,      "Deliveries");
+export const DeliveriesIcon  = icon(EnvelopeSimple,       "Deliveries");
 export const MaintainerIcon  = icon(ArrowsClockwise,      "Maintainer");
 export const AutomationIcon  = icon(GearSix,              "Automation");
 export const TrustPolicyIcon = icon(Scroll,               "Trust & Policy");
