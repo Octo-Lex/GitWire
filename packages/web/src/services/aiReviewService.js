@@ -36,6 +36,7 @@ import {
 import { buildReviewBundle } from "./reviewBundleService.js";
 import { validateReview } from "./reviewValidator.js";
 import { withHeartbeat } from "./reviewHeartbeat.js";
+import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
 
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
@@ -207,15 +208,59 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 9. Use validated legacy format ────────────────────────────────────────
-    const { findings, verdict, confidence, summary, overallCorrectness, overallConfidence } = validation.legacy;
+    let { findings, verdict, confidence, summary, overallCorrectness, overallConfidence } = validation.legacy;
 
-    // ── 10. Post GitHub PR Review ─────────────────────────────────────────────
+    // ── 9b. Devil's Advocate: adversarial challenge pass ──────────────────────
+    let adversarialMeta = null;
+    if (cfg.adversarial_review !== false && findings.length > 0) {
+      try {
+        const challenge = await runAdversarialChallenge(findings, {
+          prTitle: pr.title || "",
+          repoName: repository.full_name,
+          model: cfg.adversarial_model || undefined,
+        });
+
+        const refined = refineFindings(findings, challenge.challenges, challenge.missedRisks);
+
+        adversarialMeta = {
+          dropped: refined.dropped.length,
+          downgraded: findings.length - refined.dropped.length - refined.upheld.length,
+          missedRisks: refined.missed.length,
+          tokensUsed: challenge.tokensUsed,
+        };
+
+        // Replace findings with refined set
+        findings = refined.refined;
+
+        // Recompute verdict with refined findings
+        const recomputed = computeVerdict(findings, cfg);
+        verdict = recomputed.verdict;
+        confidence = recomputed.confidence;
+
+        logger.info(
+          {
+            pr: pr.number, adversarialMeta,
+            originalFindings: validation.legacy.findings.length,
+            refinedFindings: findings.length,
+          },
+          "AI review: adversarial challenge complete"
+        );
+      } catch (advErr) {
+        logger.warn(
+          { err: advErr.message, pr: pr.number },
+          "AI review: adversarial pass failed, using original findings"
+        );
+      }
+    }
+
+    // ── 10. Post GitHub PR Review ──────────────────────────────────────────────
     let reviewId = null;
     let githubSummary = "";
     if (commentFindings) {
       const result = await postGitHubReview({
         octokit, owner, repo, pr, findings, verdict, confidence, cfg,
         scopeDroppedCount: validation.scopeDroppedCount,
+        adversarialMeta,
       });
       reviewId = result.reviewId;
       githubSummary = result.summary;
@@ -235,6 +280,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     // ── 12. Persist final review ──────────────────────────────────────────────
     const criticalFindings = findings.filter(function (f) { return f.severity === "critical"; }).length;
     const durationMs = Date.now() - startTime;
+    const totalTokens = tokensUsed + (adversarialMeta ? adversarialMeta.tokensUsed : 0);
 
     await db.query(
       "UPDATE ai_reviews SET " +
@@ -248,11 +294,11 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       [
         verdict, confidence, JSON.stringify(findings), summary || githubSummary,
         files.length, totalAdded, totalRemoved,
-        tokensUsed, reviewId,
+        totalTokens, reviewId,
         overallCorrectness || null, overallConfidence || null,
         summary || null,
         JSON.stringify(validation.ignoredFindings),
-        "claude",
+        adversarialMeta ? "claude+adversarial" : "claude",
         durationMs,
         reviewRow.id,
       ]
@@ -465,7 +511,7 @@ export function computeVerdict(findings, cfg) {
 // GitHub PR Review posting
 // ════════════════════════════════════════════════════════════════════════════
 
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount }) {
+async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta }) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
@@ -475,6 +521,10 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   var critical = findings.filter(function (f) { return f.severity === "critical"; });
   var high     = findings.filter(function (f) { return f.severity === "high"; });
   var others   = findings.filter(function (f) { return ["critical", "high"].indexOf(f.severity) === -1; });
+
+  // Separate adversarial-discovered findings
+  var adversarialFindings = findings.filter(function (f) { return f.adversarial_status === "missed_risk"; });
+  var upheldFindings = findings.filter(function (f) { return f.adversarial_status === "upheld"; });
 
   var summaryLines = [
     "## \uD83E\uDD16 AI Code Review \u2014 " + VERDICT_LABEL[verdict],
@@ -489,7 +539,8 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     summaryLines.push("### Key issues");
     for (var i = 0; i < Math.min(5, critical.length + high.length); i++) {
       var f = (critical.concat(high))[i];
-      summaryLines.push("- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " (`" + f.file + "`)" : ""));
+      var badge = f.adversarial_status === "upheld" ? " 🔮" : (f.adversarial_status === "missed_risk" ? " 🔍" : "");
+      summaryLines.push("- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " (`" + f.file + "`)" : "") + badge);
     }
     summaryLines.push("");
   }
@@ -502,9 +553,31 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     summaryLines.push("");
   }
 
+  // Devil's Advocate summary
+  if (adversarialMeta) {
+    var advParts = [];
+    if (adversarialMeta.dropped > 0) advParts.push(adversarialMeta.dropped + " false positive" + (adversarialMeta.dropped !== 1 ? "s" : "") + " dropped");
+    if (adversarialMeta.downgraded > 0) advParts.push(adversarialMeta.downgraded + " downgraded");
+    if (adversarialMeta.missedRisks > 0) advParts.push(adversarialMeta.missedRisks + " missed risk" + (adversarialMeta.missedRisks !== 1 ? "s" : "") + " found");
+    if (upheldFindings.length > 0) advParts.push(upheldFindings.length + " upheld");
+    if (advParts.length > 0) {
+      summaryLines.push("> 🔮 **Devil's Advocate:** " + advParts.join(" · "));
+      summaryLines.push("");
+    }
+  }
+
+  // Dropped findings section
+  if (adversarialMeta && adversarialMeta.dropped > 0) {
+    summaryLines.push("<details><summary>❌ " + adversarialMeta.dropped + " finding" + (adversarialMeta.dropped !== 1 ? "s" : "") + " overruled by Devil's Advocate</summary>");
+    summaryLines.push("<em>False positives eliminated by adversarial challenge pass.</em>");
+    summaryLines.push("</details>");
+    summaryLines.push("");
+  }
+
   summaryLines.push(
     "---",
-    "_GitWire AI Review Gate (bundle-driven v2) \u00B7 Structured schema \u00B7 Scope-validated_"
+    "_GitWire AI Review Gate (bundle-driven v2) · Structured schema · Scope-validated" +
+    (adversarialMeta ? " · Devil's Advocate" : "") + "_"
   );
 
   var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");

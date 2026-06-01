@@ -105,6 +105,10 @@ export const DEFAULT_CONFIG = {
       bundle_max_chars: 180000,
       // Reject findings about files not in the diff
       require_file_scope: true,
+      // Devil's Advocate: second pass to challenge findings (drops false positives)
+      adversarial_review: true,
+      // Cheaper model for adversarial challenge pass
+      adversarial_model: "claude-haiku-4-20250414",
       triggers: {
         branches: [],
         ignore_authors: [],
