@@ -40,10 +40,10 @@ export async function handleRelease(payload, deliveryId, ctx) {
   // and haven't been marked as released yet
   try {
     const result = await db.query(`
-      SELECT fa.id, fa.issue_number, fa.pr_number, fa.repo_id, a.id as action_id
+      SELECT fa.id, fa.issue_number, fa.pr_number, fa.repo_id, ma.id as action_id
       FROM fix_attempts fa
-      LEFT JOIN actions a ON a.key = ('issue_fix:' || fa.repo_id || ':' || fa.issue_number)
-      WHERE fa.repo_id = (SELECT id FROM repos WHERE full_name = $1)
+      LEFT JOIN managed_actions ma ON ma.action_key = ('issue_fix:' || fa.repo_id || ':' || fa.issue_number)
+      WHERE fa.repo_id = (SELECT id FROM repositories WHERE full_name = $1)
         AND fa.status = 'submitted'
         AND fa.pr_number IS NOT NULL
         AND fa.released_at IS NULL
