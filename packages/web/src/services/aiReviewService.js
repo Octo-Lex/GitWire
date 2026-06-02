@@ -221,30 +221,65 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           model: cfg.adversarial_model || undefined,
         });
 
-        // Turn 3: Defense pass — reviewer responds to challenges
-        const defense = await runDefensePass(validation.legacy.findings, challenge.challenges, {
-          prTitle: pr.title || "",
-          repoName: repository.full_name,
-          model: cfg.adversarial_model || undefined,
-        });
-
-        // Merge: challenge + defense → final refined findings
-        const refined = refineWithDefense(
-          validation.legacy.findings,
-          challenge.challenges,
-          defense.defenses,
-          challenge.missedRisks,
-          defense.additionalMissed
+        // ── 9c. Defense pass — dynamic trigger ────────────────────────────────
+        //  Turn 3 runs only when Turn 2 reveals disagreement or escalated risk.
+        //  Config: adversarial_defense = "auto" | "always" | "never"
+        const defenseMode = cfg.adversarial_defense || "auto";
+        const triggers = cfg.adversarial_defense_triggers || [
+          "dropped_findings",
+          "critical_downgraded",
+          "new_criticals",
+        ];
+        const triggerResult = shouldRunDefense(
+          defenseMode, triggers, findings, challenge.challenges, challenge.missedRisks
         );
+
+        let defense = null;
+        if (triggerResult.run) {
+          defense = await runDefensePass(validation.legacy.findings, challenge.challenges, {
+            prTitle: pr.title || "",
+            repoName: repository.full_name,
+            model: cfg.adversarial_defense_model || cfg.adversarial_model || undefined,
+          });
+          logger.info(
+            { pr: pr.number, trigger: triggerResult.reason },
+            "AI review: defense pass triggered (turn 3)"
+          );
+        } else {
+          logger.info(
+            { pr: pr.number, mode: defenseMode },
+            "AI review: defense pass skipped (" + triggerResult.reason + ")"
+          );
+        }
+
+        // Merge: challenge (+ optional defense) → final refined findings
+        const refined = defense
+          ? refineWithDefense(
+              validation.legacy.findings,
+              challenge.challenges,
+              defense.defenses,
+              challenge.missedRisks,
+              defense.additionalMissed
+            )
+          : refineFindings(
+              validation.legacy.findings,
+              challenge.challenges,
+              challenge.missedRisks
+            );
 
         adversarialMeta = {
           dropped: refined.dropped.length,
           downgraded: findings.length - refined.dropped.length - refined.upheld.length,
           missedRisks: refined.missed.length,
-          tokensUsed: challenge.tokensUsed + defense.tokensUsed,
-          turns: 3,
-          defended: (defense.defenses || []).filter(function (d) { return d.action === 'defend' || d.action === 'upgrade'; }).length,
-          accepted: (defense.defenses || []).filter(function (d) { return d.action === 'accept'; }).length,
+          tokensUsed: challenge.tokensUsed + (defense ? defense.tokensUsed : 0),
+          turns: defense ? 3 : 2,
+          defenseTrigger: triggerResult.reason,
+          defended: defense
+            ? (defense.defenses || []).filter(function (d) { return d.action === "defend" || d.action === "upgrade"; }).length
+            : 0,
+          accepted: defense
+            ? (defense.defenses || []).filter(function (d) { return d.action === "accept"; }).length
+            : 0,
         };
 
         // Replace findings with refined set
@@ -579,7 +614,8 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     if (adversarialMeta.missedRisks > 0) advParts.push(adversarialMeta.missedRisks + " missed risk" + (adversarialMeta.missedRisks !== 1 ? "s" : "") + " found");
     if (upheldFindings.length > 0) advParts.push(upheldFindings.length + " upheld");
     if (advParts.length > 0) {
-      summaryLines.push("> 🔮 **Devil's Advocate:** " + advParts.join(" · "));
+      var turnLabel = adversarialMeta.turns === 3 ? "3 turns" : "2 turns";
+      summaryLines.push("> 🔮 **Devil's Advocate** (" + turnLabel + "): " + advParts.join(" · "));
       summaryLines.push("");
     }
   }
@@ -671,6 +707,77 @@ function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCo
     summary: (summary || findings.length + " finding" + (findings.length !== 1 ? "s" : "")) + scopeNote,
     text:    details || "No specific findings.",
   };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Dynamic defense-pass trigger (turn 3 gating)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Evaluate whether Turn 3 (defense pass) should run based on config mode
+ * and the outcomes of Turn 2 (adversarial challenge).
+ *
+ * Modes:
+ *   "always"  — unconditionally run Turn 3
+ *   "never"   — never run Turn 3
+ *   "auto"    — run only if a trigger condition fires
+ *
+ * Trigger conditions (all on by default):
+ *   dropped_findings     — any finding was disproven (suggested_action=drop)
+ *   critical_downgraded  — a critical or high finding was challenged with downgrade
+ *   new_criticals        — advocate discovered new critical or high risks
+ *
+ * @param {string} mode
+ * @param {string[]} triggers
+ * @param {Array} findings - Original findings
+ * @param {Array} challenges - Challenge results from Turn 2
+ * @param {Array} missedRisks - Missed risks from Turn 2
+ * @returns {{ run: boolean, reason: string }}
+ */
+export function shouldRunDefense(mode, triggers, findings, challenges, missedRisks) {
+  if (mode === "always") {
+    return { run: true, reason: "mode=always" };
+  }
+  if (mode === "never") {
+    return { run: false, reason: "mode=never" };
+  }
+
+  // mode === "auto"
+  var enabledTriggers = Array.isArray(triggers) && triggers.length > 0
+    ? triggers
+    : ["dropped_findings", "critical_downgraded", "new_criticals"];
+
+  // Check: dropped findings
+  if (enabledTriggers.indexOf("dropped_findings") !== -1) {
+    var dropped = (challenges || []).some(function (c) { return c.suggested_action === "drop"; });
+    if (dropped) {
+      return { run: true, reason: "dropped_findings" };
+    }
+  }
+
+  // Check: critical/high findings downgraded
+  if (enabledTriggers.indexOf("critical_downgraded") !== -1) {
+    var downgraded = (challenges || []).some(function (c) {
+      if (c.suggested_action !== "downgrade") return false;
+      var original = findings[c.finding_index];
+      return original && (original.severity === "critical" || original.severity === "high");
+    });
+    if (downgraded) {
+      return { run: true, reason: "critical_downgraded" };
+    }
+  }
+
+  // Check: new criticals from advocate
+  if (enabledTriggers.indexOf("new_criticals") !== -1) {
+    var newCrits = (missedRisks || []).some(function (r) {
+      return r.severity === "critical" || r.severity === "high";
+    });
+    if (newCrits) {
+      return { run: true, reason: "new_criticals" };
+    }
+  }
+
+  return { run: false, reason: "no_triggers_matched" };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
