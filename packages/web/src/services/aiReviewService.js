@@ -37,6 +37,7 @@ import { buildReviewBundle } from "./reviewBundleService.js";
 import { validateReview } from "./reviewValidator.js";
 import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
+import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
 
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
@@ -220,13 +221,30 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           model: cfg.adversarial_model || undefined,
         });
 
-        const refined = refineFindings(findings, challenge.challenges, challenge.missedRisks);
+        // Turn 3: Defense pass — reviewer responds to challenges
+        const defense = await runDefensePass(validation.legacy.findings, challenge.challenges, {
+          prTitle: pr.title || "",
+          repoName: repository.full_name,
+          model: cfg.adversarial_model || undefined,
+        });
+
+        // Merge: challenge + defense → final refined findings
+        const refined = refineWithDefense(
+          validation.legacy.findings,
+          challenge.challenges,
+          defense.defenses,
+          challenge.missedRisks,
+          defense.additionalMissed
+        );
 
         adversarialMeta = {
           dropped: refined.dropped.length,
           downgraded: findings.length - refined.dropped.length - refined.upheld.length,
           missedRisks: refined.missed.length,
-          tokensUsed: challenge.tokensUsed,
+          tokensUsed: challenge.tokensUsed + defense.tokensUsed,
+          turns: 3,
+          defended: (defense.defenses || []).filter(function (d) { return d.action === 'defend' || d.action === 'upgrade'; }).length,
+          accepted: (defense.defenses || []).filter(function (d) { return d.action === 'accept'; }).length,
         };
 
         // Replace findings with refined set
