@@ -1,6 +1,13 @@
-
+import Anthropic from "@anthropic-ai/sdk";
+import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { extractReviewJSON } from "@gitwire/rules";
+import { refineFindings } from "./adversarialReview.js";
+
+const anthropic = new Anthropic({
+  apiKey:  config.anthropic.apiKey,
+  baseURL: config.anthropic.baseURL,
+});
 
 // ==============================================================================
 // Turn 3: Defense Pass — reviewer responds to Devil's Advocate challenges
@@ -186,10 +193,8 @@ export function refineWithDefense(findings, challenges, defenses, missedRisks, a
     if (!defense) return challenge;
 
     if (defense.action === "accept") {
-      // Reviewer agrees with challenge — use challenge's suggested action
       return Object.assign({}, challenge, { defense_action: "accepted" });
     } else if (defense.action === "defend") {
-      // Reviewer defends — override to keep, optionally adjust severity
       return {
         finding_index: i,
         disproven: false,
@@ -199,7 +204,6 @@ export function refineWithDefense(findings, challenges, defenses, missedRisks, a
         defense_action: "defended",
       };
     } else if (defense.action === "upgrade") {
-      // Reviewer says it's worse — use defense severity
       return {
         finding_index: i,
         disproven: false,
@@ -212,9 +216,7 @@ export function refineWithDefense(findings, challenges, defenses, missedRisks, a
     return challenge;
   });
 
-  // Merge missed risks
   var allMissed = (missedRisks || []).concat(additionalMissed || []);
 
-  // Use existing refineFindings with the adjusted challenges
   return refineFindings(findings, finalChallenges, allMissed);
 }
