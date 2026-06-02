@@ -1,4 +1,6 @@
 
+import { logger } from "../lib/logger.js";
+import { extractReviewJSON } from "@gitwire/rules";
 
 // ==============================================================================
 // Turn 3: Defense Pass — reviewer responds to Devil's Advocate challenges
