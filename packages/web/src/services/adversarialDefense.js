@@ -88,7 +88,7 @@ export async function runDefensePass(findings, challenges, opts) {
     };
   }
 
-  var model = opts.model || ADVERSARIAL_MODEL;
+  var model = opts.model || "claude-haiku-4-20250414";
   var userPrompt = buildDefensePrompt(findings, challenges, opts.prTitle || "", opts.repoName || "");
 
   logger.info(
