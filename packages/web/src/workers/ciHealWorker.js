@@ -447,6 +447,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       run_id: run.id,
       failure_type: diagnosis.failure_type,
       failing_file: diagnosis.failing_file,
+      source_file: diagnosis.source_file || null,
       confidence: diagnosis.confidence,
       head_branch: run.head_branch,
     },
@@ -467,7 +468,8 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     dry_run: false,
   });
   const branchName = "gitwire/heal-" + run.id;
-  const failingFile = diagnosis.failing_file;
+  // Prefer source_file (import-chain target) over failing_file (test entry point)
+  const failingFile = diagnosis.source_file || diagnosis.failing_file;
 
   logger.info({ runId: run.id, failingFile }, "Attempting patch PR");
 
@@ -867,6 +869,7 @@ async function diagnoseWithClaude(logData, run, repository) {
     '{"failure_type": "lint_error" | "type_error" | "test_flaky" | "test_permanent" | "dependency_missing" | "format_error" | "build_error" | "infra_error" | "unknown",\n' +
     ' "root_cause": "<one sentence>",\n' +
     ' "failing_file": "<filename or null>",\n' +
+    ' "source_file": "<the file that needs patching, or null>",\n' +
     ' "failing_line": "<line number or null>",\n' +
     ' "suggested_fix": "<concrete action>",\n' +
     ' "auto_fixable": true | false,\n' +
@@ -874,7 +877,10 @@ async function diagnoseWithClaude(logData, run, repository) {
     "Important rules:\n" +
     "- If failure_type is lint_error, format_error, type_error, or dependency_missing, set auto_fixable to true\n" +
     "- Only set auto_fixable to false for test_permanent, infra_error, build_error, or unknown\n" +
-    "- Always identify the failing_file if possible";
+    "- Always identify the failing_file if possible\n" +
+    "- TRACE IMPORT CHAINS: When a test file fails during collection/import, the traceback shows test_file.py -> source_file.py. The test file is just the entry point. Look at the DEEPEST frame in the traceback - that is the file with the actual bug. Set source_file to that file.\n" +
+    "- If the error is in a source file (not the test file), set source_file to that source file path. failing_file stays as the test file for context.\n" +
+    "- Example: tests/test_api.py imports src/api.py, and src/api.py:18 has a TypeError. Then failing_file=\"tests/test_api.py\", source_file=\"src/api.py\", failing_line=18";
 
   try {
     const message = await anthropic.messages.create({
@@ -903,6 +909,7 @@ async function postDiagnosisComment(octokit, owner, repo, run, diagnosis, healab
     "**Failure type:** " + diagnosis.failure_type,
     "**Root cause:** " + diagnosis.root_cause,
     diagnosis.failing_file ? "**Location:** " + diagnosis.failing_file + (diagnosis.failing_line ? ":" + diagnosis.failing_line : "") : null,
+    diagnosis.source_file && diagnosis.source_file !== diagnosis.failing_file ? "**Source file:** " + diagnosis.source_file + " (import-chain target)" : null,
     "",
     "**Suggested fix:** " + diagnosis.suggested_fix,
     "",
