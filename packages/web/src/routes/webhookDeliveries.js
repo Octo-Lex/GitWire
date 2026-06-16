@@ -157,7 +157,7 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const { rows: [row] } = await db.query(
-      "SELECT * FROM webhook_deliveries WHERE delivery_id = $1 OR id = $1",
+      "SELECT * FROM webhook_deliveries WHERE delivery_id = $1 OR id::text = $1",
       [req.params.id]
     );
 
