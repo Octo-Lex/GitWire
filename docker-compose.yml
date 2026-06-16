@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     env_file: packages/web/.env
     environment:
-      DATABASE_URL: postgresql://gitwire:${DB_PASSWORD:-changeme}@postgres:5432/gitops_hub
+      DATABASE_URL: postgresql://gitwire:${DB_PASSWORD:?DB_PASSWORD must be set}@postgres:5432/gitops_hub
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
       PORT: 3000
@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: gitwire
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
       POSTGRES_DB: gitops_hub
     volumes:
       - postgres_data:/var/lib/postgresql/data

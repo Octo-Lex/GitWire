@@ -20,7 +20,6 @@ export function rateLimiter(req, res, next) {
 
   // Identity: prefer API key, fall back to IP
   const identity = req.headers.authorization?.slice(7)?.trim()
-    || req.query?.api_key
     || req.ip
     || "unknown";
 

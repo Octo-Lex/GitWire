@@ -274,14 +274,61 @@ async function triagePR({ payload }) {
 
   logger.info({ repo: repository.full_name, pr: pr.number }, "Triaging PR");
 
-  // ── Check .gitwire.yml pillar config ────────────────────────────────────
-  const repoConfig = await getConfigForRepo(repository.full_name);
-  if (!isPillarEnabled("triage", repoConfig)) {
-    logger.info({ repo: repository.full_name, pr: pr.number }, "Triage disabled for repo — skipping PR");
+  // Guard 1: Idempotency
+  if (!(await checkAndMark("triage", "pr-" + pr.number + "-" + payload.action))) {
     return;
   }
 
-  const octokit = wrapOctokit(await getInstallationClient(installation.id));
+  // Guard 2: Pillar enabled
+  const repoConfig = await getConfigForRepo(repository.full_name);
+  if (!isPillarEnabled("triage", repoConfig)) {
+    logger.info({ repo: repository.full_name, pr: pr.number }, "Triage disabled for repo - skipping PR");
+    await logDecision({
+      repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
+      targetType: "pr", targetNumber: pr.number, pillar: "triage",
+      decision: "skipped", reason: "Pillar triage disabled in config",
+      conditions: [{ check: "pillar_enabled(triage)", result: false }],
+    });
+    return;
+  }
+
+  // Guard 3: Trigger filter
+  if (!shouldTrigger("triage", { author: pr.user?.login, branch: pr.head?.ref }, repoConfig)) {
+    logger.info({ pr: pr.number, author: pr.user?.login }, "Trigger filter: triage skipped for author/branch");
+    await logDecision({
+      repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
+      targetType: "pr", targetNumber: pr.number, pillar: "triage",
+      decision: "skipped", reason: "Trigger filter: author/branch not matched",
+      conditions: [{ check: "trigger_filter(triage)", result: false }],
+    });
+    return;
+  }
+
+  // Guard 4: Policy waiver
+  const waiver = await isWaived({ repoId: repository.id, pillar: "triage", scope: "target_type", scopeValue: "pr" });
+  if (waiver) {
+    logger.info({ pr: pr.number, waiverId: waiver.id }, "Policy waived - skipping PR triage");
+    await logDecision({
+      repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
+      targetType: "pr", targetNumber: pr.number, pillar: "triage",
+      decision: "skipped",
+      reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
+      conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
+    });
+    return;
+  }
+
+  let octokit;
+  try {
+    octokit = wrapOctokit(await getInstallationClient(installation.id));
+  } catch (err) {
+    logger.error({ err, installationId: installation.id }, "Failed to get installation client");
+    return;
+  }
+  if (!octokit?.request) {
+    logger.error({ installationId: installation.id }, "Invalid Octokit client");
+    return;
+  }
 
   const message = await anthropic.messages.create({
     model:      "claude-sonnet-4-20250514",
@@ -293,33 +340,69 @@ async function triagePR({ payload }) {
 
   let classification;
   try {
-    classification = JSON.parse(message.content[0].text);
+    let raw = message.content[0].text.trim();
+    if (raw.startsWith("```")) {
+      var fenceRe = new RegExp("^" + "```" + "(?:json)?\s*\n?", "");
+      var fenceEndRe = new RegExp("\n?" + "```" + "\s*$", "");
+      raw = raw.replace(fenceRe, "").replace(fenceEndRe, "").trim();
+    }
+    classification = JSON.parse(raw);
   } catch (err) {
-    logger.error({ err }, "Failed to parse Claude PR triage response");
+    logger.error({ err, raw: message.content[0].text }, "Failed to parse Claude PR triage response");
     return;
   }
 
-  // Apply size label
-  if (classification.size_label) {
-    await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-      owner:        repository.owner.login,
-      repo:         repository.name,
-      issue_number: pr.number,
-      labels:       [classification.size_label],
-    });
-    // Managed action via state machine
-    const sizeAction = await propose({
-      repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
-      source: "ai_triage", evidence: { size_label: classification.size_label },
-      repoId: repository.id, targetType: "pr", targetNumber: pr.number,
-      actionKey: "label:" + classification.size_label,
-    });
-    await approve(sizeAction.id, { auto_label: true });
-    await execute(sizeAction.id);
-    await succeed(sizeAction.id, { label: classification.size_label });
+  logger.info({ pr: pr.number, classification }, "PR classified");
+
+  // Apply size label with full lifecycle
+  const triageOpts = repoConfig.pillars?.triage || {};
+  if (classification.size_label && triageOpts.auto_label !== false) {
+    if (isDryRun(repoConfig)) {
+      logger.info({ pr: pr.number, label: classification.size_label }, "DRY RUN: would apply size label");
+    } else {
+      const sizeAction = await propose({
+        repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
+        source: "ai_triage", evidence: { size_label: classification.size_label, classification },
+        repoId: repository.id, targetType: "pr", targetNumber: pr.number,
+        actionKey: "label:" + classification.size_label,
+      });
+      await approve(sizeAction.id, { auto_label: true });
+      await execute(sizeAction.id);
+      try {
+        await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+          owner: repository.owner.login,
+          repo: repository.name,
+          issue_number: pr.number,
+          labels: [classification.size_label],
+        });
+        await succeed(sizeAction.id, { label: classification.size_label });
+      } catch (err) {
+        await fail(sizeAction.id, err.message).catch(() => {});
+      }
+    }
   }
 
-  logger.info({ pr: pr.number, classification }, "PR classified");
+  // Log decision
+  await logDecision({
+    repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
+    targetType: "pr", targetNumber: pr.number, pillar: "triage",
+    decision: classification.size_label ? (isDryRun(repoConfig) ? "dry_run" : "acted") : "skipped",
+    reason: classification.size_label
+      ? "PR classified as " + (classification.type || "unknown") + ", size: " + classification.size_label + ", risk: " + (classification.risk || "?")
+      : "PR classified as " + (classification.type || "unknown") + ", no size label to apply",
+    conditions: [
+      { check: "pillar_enabled(triage)", result: true },
+      { check: "auto_label", result: triageOpts.auto_label !== false },
+      { check: "is_dry_run()", result: isDryRun(repoConfig) },
+    ],
+    configUsed: { auto_label: triageOpts.auto_label !== false },
+  });
+
+  notifyTriage(repository.full_name, {
+    pr_number: pr.number,
+    risk: classification.risk,
+    triage_type: classification.type,
+  });
 }
 
 // ── Prompt builders ──────────────────────────────────────────────────────────

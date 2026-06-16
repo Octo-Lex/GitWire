@@ -12,7 +12,8 @@ COPY packages/runtime/package.json ./packages/runtime/package.json
 COPY packages/rules/package.json ./packages/rules/package.json
 COPY packages/web/package.json ./packages/web/package.json
 # Install production dependencies only, skip lifecycle scripts (husky etc.)
-RUN npm ci --omit=dev --ignore-scripts 2>/dev/null || npm install --omit=dev --ignore-scripts
+# Strict npm ci — no fallback to npm install. Lockfile must be correct.
+RUN npm ci --omit=dev --ignore-scripts
 
 # Copy source (this layer only rebuilds when source actually changes)
 COPY . .

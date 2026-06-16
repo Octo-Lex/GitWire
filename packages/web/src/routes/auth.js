@@ -58,8 +58,10 @@ router.post("/login", async (req, res) => {
     }));
 
     // Set httpOnly cookie — 7 days
+    // Secure flag only in production (HTTPS). Local dev uses HTTP.
+    const secureFlag = process.env.NODE_ENV === "production" ? "; Secure" : "";
     res.setHeader("Set-Cookie", [
-      `gitwire-session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL}`,
+      `gitwire-session=${token}; HttpOnly${secureFlag}; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL}`,
     ]);
 
     logger.info({ ip: req.ip }, "Dashboard login successful");
@@ -80,7 +82,7 @@ router.post("/logout", async (req, res) => {
     }
 
     res.setHeader("Set-Cookie", [
-      "gitwire-session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0",
+      "gitwire-session=; HttpOnly" + (process.env.NODE_ENV === "production" ? "; Secure" : "") + "; SameSite=Strict; Path=/; Max-Age=0",
     ]);
 
     res.json({ ok: true });

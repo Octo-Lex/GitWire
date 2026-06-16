@@ -2,8 +2,7 @@
 // API key + session cookie authentication for REST API routes.
 // Accepts:
 //   1. Authorization: Bearer <key> header
-//   2. ?api_key=<key> query parameter
-//   3. gitwire-session cookie (Redis-backed session)
+//   2. gitwire-session cookie (Redis-backed session)
 // Skips auth for /health, /webhooks, and /api/auth/*.
 
 import { config } from "../../config/index.js";
@@ -50,7 +49,6 @@ if (keys.size === 0) {
  * Express middleware that checks for a valid API key.
  * Accepts key via:
  *   - Authorization: Bearer <key> header
- *   - ?api_key=<key> query parameter
  *
  * Skips /health and /webhooks paths.
  */
@@ -70,10 +68,6 @@ export async function apiKeyAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     providedKey = authHeader.slice(7).trim();
-  }
-
-  if (!providedKey && req.query?.api_key) {
-    providedKey = req.query.api_key;
   }
 
   // Check session cookie if no Bearer token

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Verify lockfile consistency
+        run: |
+          if [ "$(node -p "require('./package.json').version")" != "$(node -p "require('./package-lock.json').version")" ]; then
+            echo "::error::package.json and package-lock.json versions do not match"
+            exit 1
+          fi
+      - name: Verify core VERSION constant
+        run: |
+          CORE_VER=$(node -e "import('./packages/core/src/index.js').then(m => console.log(m.VERSION))" 2>/dev/null || grep -oP 'VERSION = "\K[^"]+' packages/core/src/index.js)
+          PKG_VER=$(node -p "require('./package.json').version")
+          if [ "$CORE_VER" != "$PKG_VER" ]; then
+            echo "::error::core VERSION ($CORE_VER) != package.json ($PKG_VER)"
+            exit 1
+          fi
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Syntax check all source files
+        run: |
+          find packages/web/src packages/core/src packages/rules/src packages/runtime/src \
+            -name '*.js' -not -path '*/node_modules/*' \
+            -exec node --check {} \;
+
+  rules-tests:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Run rules tests
+        run: cd packages/rules && NODE_OPTIONS='--experimental-vm-modules' npx jest --passWithNoTests --forceExit
+        env:
+          NODE_ENV: test
+
+  web-tests:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Run web unit tests
+        run: cd packages/web && NODE_OPTIONS='--experimental-vm-modules' npx jest --passWithNoTests --forceExit
+        env:
+          NODE_ENV: test
