@@ -128,7 +128,7 @@ export const API = {
   decisionsSummary: () => `/api/decisions/summary`,
 
   // Waivers
-  waivers:          (repo: string, q = "") => `/api/waivers?repo=${encodeURIComponent(repo)}${q ? `&${q}` : ""}`,
+  waivers:          (repo: string, q = "") => repo ? `/api/waivers?repo=${encodeURIComponent(repo)}${q ? `&${q}` : ""}` : `/api/waivers?${q}`,
   waiverCheck:      (repo: string, pillar: string, scope = "", scopeValue = "") =>
     `/api/waivers/check?repo=${encodeURIComponent(repo)}&pillar=${pillar}${scope ? `&scope=${scope}` : ""}${scopeValue ? `&scopeValue=${scopeValue}` : ""}`,
 

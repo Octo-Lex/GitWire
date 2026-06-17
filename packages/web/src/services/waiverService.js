@@ -188,3 +188,97 @@ export async function listWaivers({ repoId, pillar, activeOnly = true }) {
   const { rows } = await db.query(query, params);
   return rows;
 }
+
+/**
+ * List ALL waivers across all repos, with global filters.
+ * Used by the dashboard's global waiver visibility view.
+ *
+ * @param {object} [filters]
+ * @param {string} [filters.repo]       - filter by repo full_name
+ * @param {string} [filters.pillar]     - filter by pillar
+ * @param {string} [filters.scope]      - 'repo', 'branch', 'pr', 'issue'
+ * @param {string} [filters.status]     - 'active', 'expired', 'expiring'
+ * @param {string} [filters.grantedBy]  - filter by grantor username
+ * @param {string} [filters.q]          - free-text ILIKE search on reason
+ * @param {number} [filters.limit=50]
+ * @param {number} [filters.offset=0]
+ * @returns {Promise<{data: Array, meta: {total, limit, offset}}>} includes repo full_name
+ */
+export async function listAllWaivers(filters = {}) {
+  const {
+    repo, pillar, scope, status, grantedBy, q,
+    limit = 50, offset = 0,
+  } = filters;
+
+  var pIdx = 0;
+  var params = [];
+  var conditions = [];
+
+  // Join with repositories to get full_name
+  var joins = " JOIN repositories r ON r.github_id = w.repo_id ";
+
+  if (repo) {
+    pIdx++;
+    params.push(repo);
+    conditions.push("r.full_name = $" + pIdx);
+  }
+  if (pillar) {
+    pIdx++;
+    params.push(pillar);
+    conditions.push("w.pillar = $" + pIdx);
+  }
+  if (scope) {
+    pIdx++;
+    params.push(scope);
+    conditions.push("w.scope = $" + pIdx);
+  }
+  if (grantedBy) {
+    pIdx++;
+    params.push(grantedBy);
+    conditions.push("w.granted_by = $" + pIdx);
+  }
+  if (q) {
+    pIdx++;
+    params.push("%" + q + "%");
+    conditions.push("w.reason ILIKE $" + pIdx);
+  }
+
+  // Status filter
+  if (status === "active") {
+    conditions.push("w.active = TRUE AND (w.expires_at IS NULL OR w.expires_at > NOW())");
+  } else if (status === "expired") {
+    conditions.push("(w.active = FALSE OR w.expires_at <= NOW())");
+  } else if (status === "expiring") {
+    conditions.push(
+      "w.active = TRUE AND w.expires_at > NOW() AND w.expires_at <= NOW() + INTERVAL '7 days'"
+    );
+  }
+
+  var where = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
+
+  // Count
+  const { rows: [{ count }] } = await db.query(
+    "SELECT COUNT(*) AS count FROM policy_waivers w" + joins + where,
+    params
+  );
+  var total = Number(count);
+
+  // Fetch page
+  pIdx++;
+  params.push(limit);
+  pIdx++;
+  params.push(offset);
+
+  const { rows } = await db.query(
+    "SELECT w.*, r.full_name AS repo_full_name" +
+    " FROM policy_waivers w" + joins + where +
+    " ORDER BY w.created_at DESC" +
+    " LIMIT $" + (pIdx - 1) + " OFFSET $" + pIdx,
+    params
+  );
+
+  return {
+    data: rows,
+    meta: { total, limit, offset },
+  };
+}

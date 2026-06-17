@@ -7,20 +7,32 @@
 
 import { Router } from "express";
 import { db } from "../lib/db.js";
-import { isWaived, grantWaiver, revokeWaiver, listWaivers, expireWaivers } from "../services/waiverService.js";
+import { isWaived, grantWaiver, revokeWaiver, listWaivers, listAllWaivers, expireWaivers } from "../services/waiverService.js";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
 
-// List waivers for a repo
+// List waivers — global or repo-specific
 router.get("/", async (req, res) => {
   try {
     const { repo, pillar, active } = req.query;
+
+    // Global view: no repo specified → list all waivers across repos
     if (!repo) {
-      return res.status(400).json({ error: "repo query parameter is required (owner/repo)" });
+      const result = await listAllWaivers({
+        repo: undefined,
+        pillar: pillar || undefined,
+        scope: req.query.scope,
+        status: req.query.status,
+        grantedBy: req.query.granted_by || req.query.grantedBy,
+        q: req.query.q,
+        limit: Math.min(Number(req.query.limit) || 50, 200),
+        offset: Number(req.query.offset) || 0,
+      });
+      return res.json(result);
     }
 
-    // Look up repo_id
+    // Repo-specific view
     const { rows: [repoRow] } = await db.query(
       "SELECT github_id FROM repositories WHERE full_name = $1",
       [repo]
