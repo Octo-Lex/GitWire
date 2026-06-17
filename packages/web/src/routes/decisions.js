@@ -22,6 +22,11 @@ decisionsRouter.get("/", async (req, res) => {
         ? Number(req.query.targetNumber || req.query.target_number)
         : undefined,
       decision: req.query.decision,
+      pillar: req.query.pillar,
+      triggerEvent: req.query.trigger_event || req.query.triggerEvent,
+      q: req.query.q,
+      from: req.query.from,
+      to: req.query.to,
       perPage: Math.min(Number(req.query.per_page) || 20, 100),
       page: Number(req.query.page) || 1,
     });

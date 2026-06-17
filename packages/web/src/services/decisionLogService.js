@@ -84,6 +84,7 @@ export async function logDecision({
 export async function getDecisions(filters = {}) {
   const {
     repo, source, targetType, targetNumber, decision,
+    pillar, triggerEvent, q, from, to,
     perPage = 20, page = 1,
   } = filters;
 
@@ -119,6 +120,31 @@ export async function getDecisions(filters = {}) {
     pIdx++;
     params.push(decision);
     conditions.push("d.decision = $" + pIdx);
+  }
+  if (pillar) {
+    pIdx++;
+    params.push(pillar);
+    conditions.push("d.pillar = $" + pIdx);
+  }
+  if (triggerEvent) {
+    pIdx++;
+    params.push(triggerEvent);
+    conditions.push("d.trigger_event = $" + pIdx);
+  }
+  if (q) {
+    pIdx++;
+    params.push("%" + q + "%");
+    conditions.push("d.reason ILIKE $" + pIdx);
+  }
+  if (from) {
+    pIdx++;
+    params.push(from);
+    conditions.push("d.created_at >= $" + pIdx);
+  }
+  if (to) {
+    pIdx++;
+    params.push(to);
+    conditions.push("d.created_at <= $" + pIdx);
   }
 
   var where = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
