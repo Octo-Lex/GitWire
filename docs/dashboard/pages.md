@@ -113,12 +113,36 @@ Per-repository configuration management:
 
 ## Decisions (`/decisions`)
 
-Worker decision log:
-- **Source filter bar** — Filter by worker (ci_heal, triage, ai_review, etc.)
-- **Decision type filter** — acted, skipped, blocked
-- **Color-coded badges** — Green (acted), yellow (skipped), red (blocked)
-- **Condition details** — Expandable rows showing the checks evaluated
+Worker decision log with full search/filter:
+- **Free-text search** — Search across decision reasons
+- **Source filter** — Filter by worker (ci_heal, triage, ai_review, etc.)
+- **Decision filter** — acted, skipped, dry_run, blocked
+- **Pillar filter** — 9 pillar dropdown
+- **Date range** — From/to date pickers
+- **Expandable detail** — Metadata, config_used JSON, conditions
+- **Export** — JSON and Markdown audit bundles
 - **Pagination** — Server-side paginated results
+
+## Dry-Run Proof (`/dry-run`)
+
+Non-mutating evaluation evidence:
+- **Safety-first labels** — "Would have", "Skipped mutation", never implies execution
+- **Decision pinned to dry_run** — Cannot view executed actions here
+- **Filters** — Repo, pillar, source, target type, date range, free-text
+- **Expandable detail** — Planned reason, config used, metadata, conditions
+- **Deep links** — Links to decision log and managed actions
+- **Export** — JSON and Markdown audit bundles
+
+## Waivers (`/waivers`)
+
+Policy waiver visibility across all repos:
+- **Global view** — All repos, not just one at a time
+- **Status computation** — Active, expiring (within 7 days), expired
+- **Filters** — Repo, pillar, scope, status, free-text search
+- **Expandable detail** — Metadata, reason, decision linkage
+- **Decision linkage** — Links to decision log filtered by matching pillar+repo+skipped
+- **Grant/revoke** — Create and revoke waivers (time-limited exceptions)
+- **Export** — JSON audit bundle
 
 ## Activity (`/activity`)
 

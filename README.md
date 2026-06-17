@@ -93,7 +93,19 @@ GitWire is built around three jobs:
 
 ---
 
-## Policy-as-Code
+## Operator Trust & Observability
+
+GitWire is built around a simple operating model: **Decide. Execute. Prove.**
+
+The dashboard gives operators a proof-oriented view of GitWire automation:
+
+- **Managed actions** — inspect the lifecycle of proposed, approved, executed, succeeded, failed, and reconciled actions.
+- **Decision logs** — search and filter decisions by repository, pillar, source, target, outcome, trigger event, and time range.
+- **Waiver visibility** — review active, expiring, and expired policy waivers, including who granted them and why.
+- **Dry-run proof** — see what GitWire would have done without mutating GitHub.
+- **Audit bundles** — export bounded JSON or Markdown evidence packages for repositories, targets, pillars, and time windows.
+
+Audit bundles use the `audit-bundle/v1` schema and apply recursive redaction for secret-like fields before export.
 
 Place `.gitwire.yml` in `.github/.gitwire.yml` or the repository root:
 
@@ -225,8 +237,10 @@ Key areas:
 - Custom rules
 - Config playground
 - Quality gates
-- Decision logs
-- Waivers
+- Decision logs (search/filter by repo, pillar, source, outcome, trigger, time range)
+- Dry-run proof view (non-mutating evaluation evidence)
+- Policy waivers (active, expiring, expired, with decision linkage)
+- Audit bundle export (JSON + Markdown, redacted)
 - Webhook deliveries
 - Trust and dependency workflows
 
@@ -354,6 +368,9 @@ GitWire is designed around explicit control and auditability:
 - Decision logs for skipped, blocked, and executed actions
 - Managed action records for GitWire-created mutations
 - Reconciliation to detect stale or invalidated actions
+- Dry-run proof view — non-mutating evidence labeled distinctly from executed actions
+- Audit bundle export — recursive redaction of secret-like fields (token, secret, password, private_key, api_key, pem, etc.) before any export
+- Policy waivers — time-limited exceptions with full audit trail (who, why, when, expiry)
 
 For production, run GitWire behind HTTPS, restrict dashboard access, rotate API keys, and give the GitHub App only the permissions required for the enabled workflows.
 

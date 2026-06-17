@@ -4,7 +4,7 @@ layout: home
 hero:
   name: "GitWire"
   text: "Self-hosted AI that manages your GitHub"
-  tagline: 8 pillars of autonomous repository management — triage, CI healing, code fixes, enforcement, and more.
+  tagline: Self-hosted AI that manages your GitHub — decide, execute, prove. 8 pillars of autonomous repository management with full operator observability.
   actions:
     - theme: brand
       text: Get Started

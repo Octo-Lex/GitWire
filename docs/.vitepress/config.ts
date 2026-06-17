@@ -144,6 +144,7 @@ export default defineConfig({
           { text: "Intelligence & Audit", link: "/api/phase4" },
           { text: "Decisions", link: "/api/decisions" },
           { text: "Waivers", link: "/api/waivers" },
+          { text: "Audit Bundles", link: "/api/audit-bundles" },
           { text: "Quality Gates", link: "/api/gates" },
           { text: "Webhooks", link: "/api/webhooks" },
         ],
