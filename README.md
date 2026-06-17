@@ -230,6 +230,62 @@ See [Policy Preview API](docs/api/policy-preview.md) for full reference.
 
 ---
 
+## Policy Rollout Controls
+
+GitWire turns policy preview into a **controlled rollout workflow** with approval, promotion, and rollback evidence.
+
+### Rollout lifecycle
+
+```mermaid
+graph LR
+    D[draft] --> V[validated]
+    V --> R[review_ready]
+    R -->|approve| A[approved]
+    R -->|reject| RJ[rejected]
+    A -->|promote| P[promoted]
+    P -->|rollback| RB[rolled_back]
+    D -->|cancel| C[cancelled]
+    V -->|cancel| C
+    A -->|cancel| C
+```
+
+### How it works
+
+1. **Create** a rollout plan in `draft` state with a proposed `.gitwire.yml`
+2. **Attach evidence** — validation, simulation, diff impact, recommendations
+3. **Request review** — transition to `review_ready`
+4. **Approve or reject** — requires all evidence attached and critical recommendations acknowledged
+5. **Promote** — writes the approved policy as the active repo policy (previous policy snapshot preserved)
+6. **Roll back** — restores the previous policy if something goes wrong (full audit evidence captured)
+
+### Safety guarantees
+
+- **Promotion is the only path that writes policy** — generic transitions are blocked
+- **Write-before-transition** — if policy write fails, state does not change
+- **Previous policy snapshot** captured before every promotion
+- **Rollback evidence** includes config hashes for audit proof
+- **Approval requires critical recommendation acknowledgement**
+- **All 4 evidence types required** before approval (validation, simulation, diff, recommendations)
+
+### API endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/rollouts` | Create rollout plan |
+| `GET /api/rollouts` | List plans with filters |
+| `GET /api/rollouts/:id` | Get plan detail |
+| `PATCH /api/rollouts/:id/evidence` | Attach evidence |
+| `POST /api/rollouts/:id/approve` | Approve plan |
+| `POST /api/rollouts/:id/reject` | Reject plan |
+| `POST /api/rollouts/:id/promote` | Promote to live policy |
+| `POST /api/rollouts/:id/rollback` | Roll back to previous policy |
+
+See [Rollout API](docs/api/rollouts.md) for full reference.
+
+Dashboard: `/rollouts` page with lifecycle timeline, evidence cards, audit trail, and state-driven actions.
+
+---
+
 ## Architecture
 
 ```
@@ -318,6 +374,7 @@ GitWire ships with a Telegram bot for operational checks and lightweight command
 /actions             recent managed actions
 /dry-run             dry-run proof view
 /policy-preview      policy validation, simulation, diff, recommendations
+/rollouts            policy rollout lifecycle with approval, promotion, rollback
 ```
 
 </td>
@@ -426,6 +483,9 @@ GitWire is designed around explicit control and auditability:
 - Policy waivers — time-limited exceptions with full audit trail (who, why, when, expiry)
 - **Policy preview workflow** — validation, simulation, diff impact, and recommendations are all non-mutating: no config saves, no queue jobs, no GitHub writes
 - **Guardrail recommendations** — deterministic, rule-based rollout advice (no AI-generated guidance in policy preview)
+- **Policy rollout controls** — governed lifecycle (draft → validated → approved → promoted → rolled_back) with approval workflow, evidence requirements, and rollback evidence
+- **Promotion is the only write path** — policy writes only happen through the dedicated promote endpoint, never through generic transitions
+- **Previous policy snapshots** — captured before every promotion for safe rollback
 
 For production, run GitWire behind HTTPS, restrict dashboard access, rotate API keys, and give the GitHub App only the permissions required for the enabled workflows.
 

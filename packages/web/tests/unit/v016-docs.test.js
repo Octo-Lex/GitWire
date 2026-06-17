@@ -172,13 +172,13 @@ describe("v0.16.0 — VitePress sidebar", () => {
 });
 
 describe("v0.16.0 — version bump", () => {
-  it("package.json version is 0.16.0", () => {
+  it("package.json version is at least 0.16.0", () => {
     const pkg = readSource("package.json");
-    expect(pkg).toMatch(/"version": "0.16.0"/);
+    expect(pkg).toMatch(/"version": "0\.1[6-9]\.0"/);
   });
 
-  it("core/src/index.js VERSION is 0.16.0", () => {
+  it("core/src/index.js VERSION is at least 0.16.0", () => {
     const core = readSource("packages/core/src/index.js");
-    expect(core).toMatch(/VERSION = "0.16.0"/);
+    expect(core).toMatch(/VERSION = "0\.1[6-9]\.0"/);
   });
 });

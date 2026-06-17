@@ -172,6 +172,34 @@ Non-mutating policy analysis workflow:
 
 ## Readiness (`/readiness`)
 
+## Rollouts (`/rollouts`)
+
+Controlled policy lifecycle dashboard:
+- **List view** — All rollout plans with status badges, repo, dry-run indicator, risk counts, and actor trail
+- **Filters** — Status (8 states), repo full name
+- **Detail view** — Lifecycle timeline, evidence cards (validation, simulation, diff, recommendations), audit trail (all actors with timestamps and reasons)
+- **Policy snapshots** — Collapsible redacted JSON blocks (proposed, previous, replaced)
+- **Rollback evidence** — Config hashes and capture booleans
+- **Actions panel** — State-driven buttons showing only valid next actions
+- **Confirmation modal** — Actor input, reason textarea, consequence warnings
+  - Promote/rollback: amber warning (writes policy)
+  - Reject/cancel: red warning (terminal)
+  - Approve: explains no policy written yet
+- **Critical recommendation acknowledgement** — Checkboxes for critical recs on approve
+
+### State-driven actions
+
+| State | Actions |
+|---|---|
+| `draft` | cancel |
+| `validated` | cancel |
+| `review_ready` | approve, reject, cancel |
+| `approved` | promote, cancel |
+| `promoted` | rollback |
+| terminal | (none) |
+
+## Readiness (`/readiness`) — original
+
 Fleet-wide repo readiness scores:
 - **Fleet overview** — All repos scored out of 100, sorted by score
 - **Per-repo detail** — 9 weighted checks with pass/fail status
