@@ -13,7 +13,7 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { redactSecrets } from "../lib/redact.js";
-import { getConfigForRepo } from "./configService.js";
+import { getConfigForRepo, setConfigOverrides } from "./configService.js";
 import { validatePolicy } from "./policyValidationService.js";
 
 // ── Valid state transitions ──────────────────────────────────────────────────
@@ -280,21 +280,7 @@ export async function transitionRolloutPlan(id, params = {}) {
   } else if (targetStatus === "rejected") {
     throw new Error("Rejection must go through POST /api/rollouts/:id/reject — use the rejection endpoint");
   } else if (targetStatus === "promoted") {
-    if (!actor) throw new Error("actor is required for promotion");
-    updates.push(`promoted_by = $${paramIdx++}`);
-    values.push(actor);
-    updates.push(`promoted_at = $${paramIdx++}`);
-    values.push(new Date().toISOString());
-
-    // Snapshot current policy for rollback
-    try {
-      const currentConfig = await getConfigForRepo(plan.repo_id);
-      updates.push(`previous_config = $${paramIdx++}`);
-      values.push(redactSecrets(currentConfig));
-    } catch (err) {
-      logger.warn({ err: err.message, plan_id: id }, "Could not snapshot current policy for rollback");
-    }
-  } else if (targetStatus === "rolled_back") {
+    throw new Error("Promotion must go through POST /api/rollouts/:id/promote — use the promotion endpoint");
     if (!actor) throw new Error("actor is required for rollback");
     updates.push(`rolled_back_by = $${paramIdx++}`);
     values.push(actor);
@@ -453,6 +439,124 @@ export async function rejectRolloutPlan(id, params = {}) {
   );
 
   logger.info({ plan_id: id, actor, reason: !!reason }, "Rollout plan rejected");
+  return redactPlan(updated);
+}
+
+/**
+ * Promote an approved rollout plan to live policy.
+ *
+ * This is the ONLY path that writes policy. What was approved is what was promoted.
+ * Promotion:
+ * 1. Verifies the plan is approved with all metadata
+ * 2. Re-verifies validation result
+ * 3. Snapshots the current repo config
+ * 4. Writes proposed config as the active policy
+ * 5. Transitions to promoted
+ *
+ * If the write fails, state remains approved (no transition).
+ *
+ * @param {number} id - plan ID
+ * @param {object} params
+ * @param {string} params.actor - GitHub username (required)
+ * @param {string} [params.reason] - promotion reason
+ * @returns {Promise<object>} updated plan
+ */
+export async function promoteRolloutPlan(id, params = {}) {
+  const { actor, reason } = params;
+
+  if (!id) throw new Error("id is required");
+  if (!actor) throw new Error("actor is required for promotion");
+
+  const { rows: [plan] } = await db.query(
+    "SELECT * FROM policy_rollout_plans WHERE id = $1", [id]
+  );
+  if (!plan) throw new Error(`Rollout plan not found: ${id}`);
+
+  // ── Check state ────────────────────────────────────────────────────
+  if (plan.status !== "approved") {
+    throw new Error(
+      `Cannot promote plan in '${plan.status}' state — must be 'approved'`
+    );
+  }
+
+  // ── Check approval metadata ────────────────────────────────────────
+  if (!plan.approved_by || !plan.approved_at) {
+    throw new Error("Cannot promote: missing approval metadata (approved_by/approved_at)");
+  }
+
+  // ── Check all evidence attached ────────────────────────────────────
+  const missingEvidence = REQUIRED_EVIDENCE_FOR_APPROVAL.filter(f => !plan[f]);
+  if (missingEvidence.length > 0) {
+    throw new Error(
+      `Cannot promote: missing required evidence: ${missingEvidence.join(", ")}`
+    );
+  }
+
+  // ── Re-verify validation result ────────────────────────────────────
+  const validation = plan.validation_result;
+  if (!validation || validation.valid === false) {
+    throw new Error("Cannot promote: proposed policy validation failed or missing");
+  }
+
+  // ── Check proposed config present ──────────────────────────────────
+  if (!plan.proposed_config) {
+    throw new Error("Cannot promote: no proposed_config to write");
+  }
+
+  // ── Resolve repo full_name for config write ────────────────────────
+  const { rows: [repoRow] } = await db.query(
+    "SELECT full_name FROM repositories WHERE github_id = $1", [plan.repo_id]
+  );
+  if (!repoRow) {
+    throw new Error(`Cannot promote: repository not found for repo_id ${plan.repo_id}`);
+  }
+
+  // ── Snapshot current config BEFORE writing ─────────────────────────
+  let previousConfig;
+  try {
+    previousConfig = await getConfigForRepo(repoRow.full_name);
+  } catch (err) {
+    logger.warn({ err: err.message, plan_id: id }, "Could not load current config for snapshot");
+    previousConfig = null;
+  }
+
+  // ── Write proposed config as active policy ─────────────────────────
+  // This is the actual mutation. If it throws, we do NOT transition.
+  try {
+    await setConfigOverrides(
+      repoRow.full_name,
+      plan.proposed_config,
+      `rollout-promote:${actor}:${id}`,
+      "set"
+    );
+  } catch (err) {
+    logger.error({ err: err.message, plan_id: id }, "Policy write failed during promotion");
+    throw new Error(`Promotion failed: could not write policy — ${err.message}`);
+  }
+
+  // ── Transition to promoted (with snapshot) ─────────────────────────
+  const { rows: [updated] } = await db.query(
+    `UPDATE policy_rollout_plans
+     SET status = 'promoted',
+         promoted_by = $1,
+         promoted_at = $2,
+         promotion_reason = $3,
+         previous_config = $4
+     WHERE id = $5
+     RETURNING *`,
+    [
+      actor,
+      new Date().toISOString(),
+      reason || null,
+      previousConfig ? redactSecrets(previousConfig) : null,
+      id,
+    ]
+  );
+
+  logger.info(
+    { plan_id: id, actor, repo: repoRow.full_name, reason: !!reason },
+    "Rollout plan promoted to live policy"
+  );
   return redactPlan(updated);
 }
 

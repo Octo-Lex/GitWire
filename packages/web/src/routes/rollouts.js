@@ -14,6 +14,7 @@ import {
   transitionRolloutPlan,
   approveRolloutPlan,
   rejectRolloutPlan,
+  promoteRolloutPlan,
 } from "../services/policyRolloutService.js";
 
 export const rolloutRouter = Router();
@@ -223,5 +224,47 @@ rolloutRouter.post("/:id/reject", async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: "Failed to reject rollout plan" });
+  }
+});
+
+/**
+ * POST /api/rollouts/:id/promote
+ *
+ * Promote an approved rollout plan to live policy.
+ * This is the ONLY path that writes policy.
+ *
+ * Requires:
+ * - Plan in approved state
+ * - Approval metadata (approved_by, approved_at)
+ * - All evidence attached
+ * - Validation result still valid
+ *
+ * Captures previous config snapshot before writing.
+ * If write fails, state remains approved.
+ *
+ * Body: { actor, reason? }
+ */
+rolloutRouter.post("/:id/promote", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { actor, reason } = req.body;
+
+    if (!actor || typeof actor !== "string") {
+      return res.status(400).json({ error: "actor is required (GitHub username)" });
+    }
+
+    const plan = await promoteRolloutPlan(id, { actor, reason });
+
+    res.json(plan);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to promote rollout plan");
+    if (err.message.includes("not found") ||
+        err.message.includes("Cannot promote") ||
+        err.message.includes("missing") ||
+        err.message.includes("validation failed") ||
+        err.message.includes("Promotion failed")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to promote rollout plan" });
   }
 });
