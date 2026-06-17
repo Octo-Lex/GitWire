@@ -32,8 +32,7 @@ jobs:
       - name: Secret scan
         run: |
           cd /opt/gitwire
-          echo "🔍 Scanning repository for leaked secrets..."
-          # CI ignores gitleaks:allow bypass comments — no silent escape hatch
+          echo "Scanning repository for leaked secrets..."
           gitleaks git -c .gitleaks.toml --no-banner --verbose \
             --ignore-gitleaks-allow \
             --redact=50 \
@@ -42,12 +41,12 @@ jobs:
           exit_code=${PIPESTATUS[0]:-0}
           if [ "$exit_code" -eq 1 ]; then
             echo ""
-            echo "🚨 DEPLOYMENT BLOCKED — Secrets detected!"
+            echo "DEPLOYMENT BLOCKED -- Secrets detected!"
             echo "   Report: /tmp/gitleaks-report.json"
             echo "   Rotate the exposed secret and remove it from the codebase."
             exit 1
           fi
-          echo "✅ No secrets detected (full history + working tree scanned)"
+          echo "No secrets detected (full history + working tree scanned)"
 
       - name: Dependency audit
         run: |
@@ -74,6 +73,15 @@ jobs:
           cd /opt/gitwire
           git fetch origin master
           git reset --hard origin/master
+
+      - name: Capture deploy context
+        id: ctx
+        run: |
+          cd /opt/gitwire
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "actor=${{ github.actor }}" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
       - name: Clean up disk (if needed)
         run: |
@@ -103,18 +111,54 @@ jobs:
             sleep 5
           done
 
-      - name: Health check
+      - name: Health check + Deploy summary
+        if: always()
         run: |
+          # ── Health checks ───────────────────────────────────────
           APP_HEALTH=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo "FAILED")
           DASH_HEALTH=$(docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" 2>/dev/null > /dev/null && echo "OK" || echo "FAILED")
+
           echo "gitwire-app:   $APP_HEALTH"
           echo "dashboard:     $DASH_HEALTH"
+
+          # ── Capture image IDs ───────────────────────────────────
+          APP_IMAGE=$(docker images gitwire-gitwire-app --format '{{.ID}}' | head -1)
+          DASH_IMAGE=$(docker images gitwire-dashboard --format '{{.ID}}' | head -1)
+
+          # ── Capture container status ────────────────────────────
+          CONTAINER_STATUS=$(docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'gitwire|NAMES')
+
+          # ── Write GitHub step summary ───────────────────────────
+          echo "## GitWire Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ steps.ctx.outputs.sha_short }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Actor | \`${{ steps.ctx.outputs.actor }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployed at | \`${{ steps.ctx.outputs.timestamp }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| App image | \`${APP_IMAGE:-unknown}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dashboard image | \`${DASH_IMAGE:-unknown}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| API health | \`$(echo $APP_HEALTH | grep -q ok && echo 'OK' || echo 'FAILED')\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dashboard health | \`$(echo $DASH_HEALTH | grep -q OK && echo 'OK' || echo 'FAILED')\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Containers" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$CONTAINER_STATUS" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # ── Final gate ──────────────────────────────────────────
           if echo "$APP_HEALTH" | grep -q "FAILED"; then
             echo "::error::gitwire-app health check failed"
+            echo "--- Last 20 lines of app logs ---"
+            docker logs --tail 20 gitwire-gitwire-app-1 2>&1 || true
             exit 1
           fi
           if echo "$DASH_HEALTH" | grep -q "FAILED"; then
             echo "::error::dashboard health check failed"
+            echo "--- Last 20 lines of dashboard logs ---"
+            docker logs --tail 20 gitwire-dashboard-1 2>&1 || true
             exit 1
           fi
+
           echo "All services healthy"
