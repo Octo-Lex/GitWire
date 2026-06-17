@@ -12,6 +12,8 @@ import {
   listRolloutPlans,
   attachEvidence,
   transitionRolloutPlan,
+  approveRolloutPlan,
+  rejectRolloutPlan,
 } from "../services/policyRolloutService.js";
 
 export const rolloutRouter = Router();
@@ -146,9 +148,80 @@ rolloutRouter.post("/:id/transition", async (req, res) => {
         err.message.includes("not found") ||
         err.message.includes("terminal") ||
         err.message.includes("missing required") ||
-        err.message.includes("required")) {
+        err.message.includes("required") ||
+        err.message.includes("must go through")) {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: "Failed to transition rollout plan" });
+  }
+});
+
+/**
+ * POST /api/rollouts/:id/approve
+ *
+ * Approve a rollout plan. Requires:
+ * - Plan in review_ready state
+ * - All evidence attached (validation, simulation, diff, recommendations)
+ * - Proposed policy valid
+ * - All critical recommendations acknowledged
+ *
+ * Body: { actor, reason?, acknowledged_recommendations? }
+ */
+rolloutRouter.post("/:id/approve", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { actor, reason, acknowledged_recommendations } = req.body;
+
+    if (!actor || typeof actor !== "string") {
+      return res.status(400).json({ error: "actor is required (GitHub username)" });
+    }
+
+    const plan = await approveRolloutPlan(id, {
+      actor,
+      reason,
+      acknowledged_recommendations: acknowledged_recommendations || [],
+    });
+
+    res.json(plan);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to approve rollout plan");
+    if (err.message.includes("not found") ||
+        err.message.includes("Cannot approve") ||
+        err.message.includes("missing") ||
+        err.message.includes("not acknowledged") ||
+        err.message.includes("validation failed")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to approve rollout plan" });
+  }
+});
+
+/**
+ * POST /api/rollouts/:id/reject
+ *
+ * Reject a rollout plan. Records rejection actor, timestamp, and reason.
+ * Plan must be in review_ready state.
+ *
+ * Body: { actor, reason? }
+ */
+rolloutRouter.post("/:id/reject", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { actor, reason } = req.body;
+
+    if (!actor || typeof actor !== "string") {
+      return res.status(400).json({ error: "actor is required (GitHub username)" });
+    }
+
+    const plan = await rejectRolloutPlan(id, { actor, reason });
+
+    res.json(plan);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to reject rollout plan");
+    if (err.message.includes("not found") ||
+        err.message.includes("Cannot reject")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to reject rollout plan" });
   }
 });
