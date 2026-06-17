@@ -127,12 +127,26 @@ export default function WaiversPage() {
         title="Policy Waivers"
         subtitle="Time-limited exceptions to pillar enforcement"
         actions={
-          <button
-            onClick={() => setShowGrant(!showGrant)}
-            className="px-4 py-2 bg-accent-green/15 border border-accent-green/40 text-accent-green text-xs font-mono rounded hover:bg-accent-green/25 transition-colors"
-          >
-            {showGrant ? "Cancel" : "+ Grant Waiver"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowGrant(!showGrant)}
+              className="px-4 py-2 bg-accent-green/15 border border-accent-green/40 text-accent-green text-xs font-mono rounded hover:bg-accent-green/25 transition-colors"
+            >
+              {showGrant ? "Cancel" : "+ Grant Waiver"}
+            </button>
+            <button
+              onClick={() => {
+                const p = new URLSearchParams();
+                if (repoFilter) p.set("repo", repoFilter);
+                if (pillarFilter) p.set("pillar", pillarFilter);
+                p.set("format", "json");
+                window.open("/api/audit-bundles/export?" + p.toString(), "_blank");
+              }}
+              className="px-3 py-1.5 text-xs font-mono rounded border border-border bg-surface-2 text-text-secondary hover:border-text-tertiary transition-colors"
+            >
+              Export JSON
+            </button>
+          </div>
         }
       />
 

@@ -31,6 +31,7 @@ import authRouter from "./routes/auth.js";
 import actionsRouter from "./routes/actions.js";
 import transfersRouter from "./routes/transfers.js";
 import githubRelayRouter from "./routes/githubRelay.js";
+import { auditBundlesRouter } from "./routes/auditBundles.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -121,6 +122,7 @@ export function createApp() {
 
   // ── GitHub API resilience: cache + rate limits + cooldowns ────────────
   app.use("/api/github-relay",      githubRelayRouter);
+  app.use("/api/audit-bundles",     auditBundlesRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {

@@ -10,6 +10,18 @@ import Link from "next/link";
 import { useState } from "react";
 
 /**
+ * Export current view as audit bundle (decision=dry_run pinned)
+ */
+function exportAuditBundle(params: URLSearchParams, format: string) {
+  const exportParams = new URLSearchParams(params);
+  exportParams.delete("per_page");
+  exportParams.delete("page");
+  exportParams.set("format", format);
+  const url = "/api/audit-bundles/export?" + exportParams.toString();
+  window.open(url, "_blank");
+}
+
+/**
  * Dry-Run Proof View
  *
  * Shows decisions where GitWire would have acted but did NOT mutate GitHub
@@ -93,6 +105,22 @@ export default function DryRunProofPage() {
       <PageHeader
         title="Dry-Run Proof"
         subtitle="What GitWire would have done — evidence of non-mutating evaluations"
+        actions={
+          <div className="flex gap-2">
+            <button
+              onClick={() => exportAuditBundle(params, "json")}
+              className="px-3 py-1.5 text-xs font-mono rounded border border-border bg-surface-2 text-text-secondary hover:border-text-tertiary transition-colors"
+            >
+              Export JSON
+            </button>
+            <button
+              onClick={() => exportAuditBundle(params, "markdown")}
+              className="px-3 py-1.5 text-xs font-mono rounded border border-border bg-surface-2 text-text-secondary hover:border-text-tertiary transition-colors"
+            >
+              Export MD
+            </button>
+          </div>
+        }
       />
 
       {/* Safety banner */}

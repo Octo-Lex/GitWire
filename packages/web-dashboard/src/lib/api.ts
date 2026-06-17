@@ -127,6 +127,9 @@ export const API = {
   decisions:        (q = "") => `/api/decisions${q ? `?${q}` : ""}`,
   decisionsSummary: () => `/api/decisions/summary`,
 
+  // Audit bundles
+  auditBundle:      (q = "") => `/api/audit-bundles/export${q ? `?${q}` : ""}`,
+
   // Waivers
   waivers:          (repo: string, q = "") => repo ? `/api/waivers?repo=${encodeURIComponent(repo)}${q ? `&${q}` : ""}` : `/api/waivers?${q}`,
   waiverCheck:      (repo: string, pillar: string, scope = "", scopeValue = "") =>

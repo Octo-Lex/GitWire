@@ -8,6 +8,19 @@ import {
 import { formatDistanceToNow } from "date-fns";
 import { useState, useMemo } from "react";
 
+/**
+ * Export current view as audit bundle (JSON or Markdown)
+ */
+function exportAuditBundle(params: URLSearchParams, format: string) {
+  // Strip pagination params — bundle has its own limit
+  const exportParams = new URLSearchParams(params);
+  exportParams.delete("per_page");
+  exportParams.delete("page");
+  exportParams.set("format", format);
+  const url = "/api/audit-bundles/export?" + exportParams.toString();
+  window.open(url, "_blank");
+}
+
 const SOURCE_COLORS: Record<string, string> = {
   ci_heal: "bg-blue-500/10 text-blue-400 border-blue-500/20",
   triage: "bg-purple-500/10 text-purple-400 border-purple-500/20",
@@ -89,6 +102,22 @@ export default function DecisionsPage() {
       <PageHeader
         title="Decisions"
         subtitle="Why GitWire acted — or chose not to"
+        actions={
+          <div className="flex gap-2">
+            <button
+              onClick={() => exportAuditBundle(params, "json")}
+              className="px-3 py-1.5 text-xs font-mono rounded border border-border bg-surface-2 text-text-secondary hover:border-text-tertiary transition-colors"
+            >
+              Export JSON
+            </button>
+            <button
+              onClick={() => exportAuditBundle(params, "markdown")}
+              className="px-3 py-1.5 text-xs font-mono rounded border border-border bg-surface-2 text-text-secondary hover:border-text-tertiary transition-colors"
+            >
+              Export MD
+            </button>
+          </div>
+        }
       />
 
       {/* Stats */}

@@ -108,7 +108,22 @@ export default function ActionsPage() {
 
   return (
     <div>
-      <PageHeader title="Actions" subtitle="Action lifecycle — every GitWire mutation tracked from proposal to reconciliation" />
+      <PageHeader title="Actions" subtitle="Action lifecycle — every GitWire mutation tracked from proposal to reconciliation" actions={
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              const p = new URLSearchParams();
+              if (repoFilter) p.set("repo", repoFilter);
+              if (pillarFilter) p.set("pillar", pillarFilter);
+              p.set("format", "json");
+              window.open("/api/audit-bundles/export?" + p.toString(), "_blank");
+            }}
+            className="px-3 py-1.5 text-xs font-mono rounded border border-border bg-surface-2 text-text-secondary hover:border-text-tertiary transition-colors"
+          >
+            Export JSON
+          </button>
+        </div>
+      } />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 px-6 py-4 border-b border-border">
         <StatCard label="Total Actions" value={totalCount} />
