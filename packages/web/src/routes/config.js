@@ -13,6 +13,7 @@ import { loadPlugins } from "@gitwire/rules/plugins";
 import { validatePolicy } from "../services/policyValidationService.js";
 import { simulatePolicy } from "../services/policySimulationService.js";
 import { diffPolicyImpact } from "../services/policyDiffService.js";
+import { recommendGuardrails } from "../services/policyRecommendationService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -397,6 +398,48 @@ configRouter.post("/diff-impact", async (req, res) => {
   } catch (err) {
     logger.error({ err: err.message }, "Policy diff impact failed");
     res.status(500).json({ error: "Failed to compute policy diff impact" });
+  }
+});
+
+// ── Policy recommendations (non-mutating) ──────────────────────────────────
+
+/**
+ * POST /api/config/recommendations
+ *
+ * Generate deterministic, rule-based guardrail recommendations for a proposed policy.
+ * Non-mutating: no config writes, no GitHub writes, no queue jobs.
+ *
+ * Body: { yaml: string, repo?: string }
+ *       If repo is provided, recommendations include diff-aware guidance.
+ */
+configRouter.post("/recommendations", async (req, res) => {
+  try {
+    const { yaml: yamlText, repo } = req.body;
+
+    if (!yamlText || typeof yamlText !== "string") {
+      return res.status(400).json({ error: "yaml is required (string)" });
+    }
+
+    // If repo provided, compute diff impact for diff-aware recommendations
+    let diffImpact = null;
+    if (repo && typeof repo === "string") {
+      try {
+        diffImpact = await diffPolicyImpact({ repo, yaml: yamlText, limit: 50 });
+      } catch (err) {
+        logger.warn({ err: err.message }, "Diff impact failed for recommendations, continuing without");
+      }
+    }
+
+    const result = await recommendGuardrails({
+      yaml: yamlText,
+      repo: repo || undefined,
+      diffImpact,
+    });
+
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Policy recommendations failed");
+    res.status(500).json({ error: "Failed to generate policy recommendations" });
   }
 });
 

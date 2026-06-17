@@ -79,6 +79,12 @@ export default function PolicyPreviewPage() {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
 
+  // Recommendations state
+  const [recRepo, setRecRepo] = useState<string>("");
+  const [recResult, setRecResult] = useState<any>(null);
+  const [recLoading, setRecLoading] = useState(false);
+  const [recError, setRecError] = useState<string | null>(null);
+
   const { data: reposData } = useSWR<{ data: Array<{ full_name: string }> }>(
     "/api/repos?limit=100", fetcher, { refreshInterval: 60000 }
   );
@@ -180,6 +186,38 @@ export default function PolicyPreviewPage() {
       setDiffLoading(false);
     }
   }, [diffRepo, yamlInput, simFrom, simTo, simLimit]);
+
+  const runRecommendations = useCallback(async () => {
+    if (!yamlInput.trim()) return;
+    setRecLoading(true);
+    setRecError(null);
+    setRecResult(null);
+    try {
+      const BASE = process.env.NEXT_PUBLIC_API_URL || "";
+      const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
+      const res = await fetch(`${BASE}/api/config/recommendations`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          yaml: yamlInput,
+          repo: recRepo || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setRecResult(data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Recommendations request failed";
+      setRecError(msg);
+    } finally {
+      setRecLoading(false);
+    }
+  }, [recRepo, yamlInput]);
 
   const highRisks = result?.risky_settings.filter(r => r.severity === "high") ?? [];
   const mediumRisks = result?.risky_settings.filter(r => r.severity === "medium") ?? [];
@@ -705,6 +743,117 @@ export default function PolicyPreviewPage() {
               </div>
             )}
           </div>
+
+          {/* Recommendations section */}
+          <div className="mt-8 pt-6 border-t border-border">
+            <div className="text-xs font-mono uppercase text-text-tertiary tracking-wider mb-3">
+              Guardrail Recommendations
+            </div>
+            <div className="text-[11px] text-text-tertiary mb-3">
+              Deterministic, rule-based suggestions. No AI advice. Each recommendation includes a suggested config change.
+            </div>
+
+            <div className="flex flex-wrap gap-2 items-center mb-4">
+              <select
+                value={recRepo}
+                onChange={(e) => setRecRepo(e.target.value)}
+                className="bg-surface-2 border border-border rounded px-2 py-1.5 text-xs text-text-primary"
+                title="Optional: select repo for diff-aware recommendations"
+              >
+                <option value="">No repo (policy-only)</option>
+                {(reposData?.data ?? []).map((r) => (
+                  <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+                ))}
+              </select>
+              <button
+                onClick={runRecommendations}
+                disabled={recLoading || !result?.valid}
+                className="px-4 py-1.5 bg-accent-green text-surface-0 text-xs font-mono font-bold rounded hover:bg-accent-green/90 transition-colors disabled:opacity-50"
+              >
+                {recLoading ? "Generating..." : "Generate recommendations"}
+              </button>
+            </div>
+
+            {recError && (
+              <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 mb-4">
+                <div className="text-red-400 text-sm font-mono mb-1">Recommendations failed</div>
+                <div className="text-red-400/70 text-xs">{recError}</div>
+              </div>
+            )}
+
+            {recLoading && (
+              <div className="space-y-2">
+                <Skeleton className="h-20 w-full" />
+                <Skeleton className="h-40 w-full" />
+              </div>
+            )}
+
+            {recResult && !recLoading && (
+              <div className="space-y-4">
+                {/* Summary counts */}
+                <div className="grid grid-cols-3 gap-2">
+                  <RecStat label="Critical" value={recResult.summary?.critical ?? 0} color="text-red-400" />
+                  <RecStat label="Warning" value={recResult.summary?.warning ?? 0} color="text-amber-400" />
+                  <RecStat label="Info" value={recResult.summary?.info ?? 0} color="text-blue-400" />
+                </div>
+
+                {/* Recommendation cards */}
+                {recResult.recommendations?.map((rec: any, i: number) => (
+                  <div
+                    key={rec.id + "-" + i}
+                    className={"rounded-lg border p-3 " + (
+                      rec.severity === "critical"
+                        ? "border-red-500/30 bg-red-500/5" :
+                      rec.severity === "warning"
+                        ? "border-amber-500/30 bg-amber-500/5" :
+                        "border-blue-500/30 bg-blue-500/5"
+                    )}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className={"text-[10px] font-mono px-1.5 py-0.5 rounded border mt-0.5 " + (
+                        rec.severity === "critical"
+                          ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                        rec.severity === "warning"
+                          ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                          "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                      )}>
+                        {rec.severity}
+                      </span>
+                      <div className="flex-1">
+                        <div className="text-sm font-mono text-text-primary">{rec.title}</div>
+                        <div className="text-xs text-text-secondary mt-1">{rec.reason}</div>
+                        {rec.suggested_change && (
+                          <div className="text-xs text-green-400 mt-1 font-mono">
+                            {"-> "} {rec.suggested_change}
+                          </div>
+                        )}
+                        {rec.path && (
+                          <div className="text-[10px] text-text-tertiary mt-1 font-mono">
+                            path: {rec.path}
+                          </div>
+                        )}
+                        {/* Evidence chips */}
+                        {rec.evidence && Object.entries(rec.evidence).slice(0, 4).map(([k, v]: any) => (
+                          <span
+                            key={k}
+                            className="inline-block text-[10px] font-mono bg-surface-2 border border-border rounded px-1.5 py-0.5 mr-1 mt-2 text-text-tertiary"
+                          >
+                            {k}: {String(v)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {recResult.generated_at && (
+                  <div className="text-[10px] text-text-tertiary text-center">
+                    Generated at {new Date(recResult.generated_at).toLocaleString()}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -752,6 +901,16 @@ function DiffStat({ label, value, color }: { label: string; value: number | stri
     <div className="rounded-lg border border-border bg-surface-2 p-2 text-center">
       <div className="text-[10px] font-mono uppercase text-text-tertiary tracking-wider">{label}</div>
       <div className={"text-sm font-bold " + color}>{value}</div>
+    </div>
+  );
+}
+
+/** Recommendation summary stat card */
+function RecStat({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 p-2 text-center">
+      <div className="text-[10px] font-mono uppercase text-text-tertiary tracking-wider">{label}</div>
+      <div className={"text-lg font-bold " + color}>{value}</div>
     </div>
   );
 }
