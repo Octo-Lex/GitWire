@@ -145,6 +145,7 @@ export default defineConfig({
           { text: "Decisions", link: "/api/decisions" },
           { text: "Waivers", link: "/api/waivers" },
           { text: "Audit Bundles", link: "/api/audit-bundles" },
+          { text: "Policy Preview", link: "/api/policy-preview" },
           { text: "Quality Gates", link: "/api/gates" },
           { text: "Webhooks", link: "/api/webhooks" },
         ],

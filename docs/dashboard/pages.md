@@ -151,6 +151,25 @@ Unified action feed across 9 source tables:
 - **Color-coded badges** — Per-source coloring
 - **Pagination** — Server-side paginated results
 
+## Policy Preview (`/policy-preview`)
+
+Non-mutating policy analysis workflow:
+- **YAML editor** — Paste proposed `.gitwire.yml` for analysis
+- **Validation panel** — Errors, warnings, enabled pillars, dry-run state, risky settings with mitigation badges, collapsible normalized config
+- **Simulation panel** — Replay proposed policy against historical events; summary cards (Considered, Would act, Would skip, Dry-run, Block, Unsupported); per-event expandable rows with conditions, would_do, and original decision
+- **Impact comparison panel** — Compare current vs proposed policy; summary cards for dry-run change, pillar changes, risk changes; per-event impact table with `current → proposed` decision transitions
+- **Recommendations panel** — Deterministic guardrail recommendations grouped by severity (critical/warning/info); each card includes reason, suggested change, config path, and evidence chips
+- **Safety banner** — All operations are non-mutating: no config saves, no queue jobs, no GitHub writes
+
+### Recommended workflow
+
+1. Paste proposed `.gitwire.yml` and click **Validate**
+2. Review risks, warnings, and enabled pillars
+3. Select a repo and click **Run simulation** to see historical impact
+4. Select the same repo and click **Compare impact** to see what changes vs current policy
+5. Optionally select a repo and click **Generate recommendations** for rollout guardrails
+6. Roll out with dry-run first when enabling risky or newly permissive automation
+
 ## Readiness (`/readiness`)
 
 Fleet-wide repo readiness scores:
