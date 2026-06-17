@@ -7,7 +7,9 @@ import { jest } from "@jest/globals";
 import fs from "fs";
 import path from "path";
 
-const ROOT = path.resolve(import.meta.dirname, "../../../..");
+import { fileURLToPath } from "url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 function readSource(relPath) {
   return fs.readFileSync(path.resolve(ROOT, relPath), "utf-8");
