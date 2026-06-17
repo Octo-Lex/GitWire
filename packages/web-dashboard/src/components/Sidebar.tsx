@@ -18,6 +18,7 @@ import {
   QualityGatesIcon,
   CustomRulesIcon,
   WaiversIcon,
+  DryRunProofIcon,
   DeliveriesIcon,
   MaintainerIcon,
   AutomationIcon,
@@ -67,6 +68,7 @@ const NAV: NavGroup[] = [
       { href: "/gates",         label: "Quality Gates",  icon: QualityGatesIcon },
       { href: "/custom-rules",  label: "Custom Rules",   icon: CustomRulesIcon },
       { href: "/waivers",       label: "Waivers",        icon: WaiversIcon },
+      { href: "/dry-run",       label: "Dry-Run Proof", icon: DryRunProofIcon },
     ],
   },
   {

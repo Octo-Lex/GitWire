@@ -27,6 +27,7 @@ import {
   SlidersHorizontal,
   Flask,
   Pulse,
+  Eye,
 } from "@phosphor-icons/react";
 
 import type { IconProps } from "@phosphor-icons/react";
@@ -65,6 +66,7 @@ export const InsightsIcon    = icon(ChartBar,             "Insights");
 export const IntelligenceIcon = icon(Brain,               "Intelligence");
 export const ConfigIcon      = icon(SlidersHorizontal,    "Config");
 export const PlaygroundIcon  = icon(Flask,                "Playground");
+export const DryRunProofIcon = icon(Eye,                   "Dry-Run Proof");
 
 // ── Status / misc icons ───────────────────────────────────────────────────
 
