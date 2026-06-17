@@ -67,7 +67,7 @@ export default function ActionDetailPage() {
   const actionId = params.id as string;
   const [retrying, setRetrying] = useState(false);
 
-  const { data: action, mutate } = useSWR<Action>(
+  const { data: action, error: actionError, mutate } = useSWR<Action>(
     "/api/actions/" + actionId,
     fetcher
   );
@@ -77,8 +77,28 @@ export default function ActionDetailPage() {
     fetcher
   );
 
+  if (actionError) {
+    return (
+      <div className="p-6">
+        <div className="text-red-400 text-sm mb-2">Failed to load action #{actionId}</div>
+        <button
+          className="text-xs text-accent-green hover:underline"
+          onClick={() => mutate()}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   if (!action) {
-    return <div className="p-6 text-text-tertiary text-sm">Loading...</div>;
+    return (
+      <div className="p-6 space-y-3">
+        <div className="rounded shimmer h-8 w-48" />
+        <div className="rounded shimmer h-32" />
+        <div className="rounded shimmer h-32" />
+      </div>
+    );
   }
 
   const retryCount = children?.data?.filter(

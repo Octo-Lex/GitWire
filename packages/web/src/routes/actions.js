@@ -42,6 +42,7 @@ router.get("/", async (req, res) => {
       repo: req.query.repo,
       status: req.query.status,
       pillar: req.query.pillar,
+      actionType: req.query.action_type,
       limit,
       offset,
     });

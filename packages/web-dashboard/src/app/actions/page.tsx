@@ -32,14 +32,38 @@ const STATUS_ICONS: Record<string, string> = {
   reconciled: "🔒",
 };
 
+const PILLAR_OPTIONS = [
+  "triage",
+  "ci_healing",
+  "contributor_fix",
+  "review_gate",
+  "merge_queue",
+  "enforcement",
+  "maintainer",
+  "trust",
+  "insights",
+];
+
+const ACTION_TYPE_OPTIONS = [
+  "add-label",
+  "add-comment",
+  "create-pr",
+  "commit-patch",
+  "merge-pr",
+  "close-issue",
+  "close-pr",
+];
+
 export default function ActionsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [pillarFilter, setPillarFilter] = useState<string>("");
+  const [actionTypeFilter, setActionTypeFilter] = useState<string>("");
   const [repoFilter, setRepoFilter] = useState<string>("");
 
   const params = new URLSearchParams();
   if (statusFilter) params.set("status", statusFilter);
   if (pillarFilter) params.set("pillar", pillarFilter);
+  if (actionTypeFilter) params.set("action_type", actionTypeFilter);
   if (repoFilter) params.set("repo", repoFilter);
   params.set("limit", "100");
 
@@ -53,7 +77,7 @@ export default function ActionsPage() {
     fetcher
   );
 
-  const { data: actions } = useSWR<{
+  const { data: actions, error: actionsError, isLoading: actionsLoading } = useSWR<{
     data: Array<{
       id: number;
       repo_full_name: string;
@@ -80,7 +104,7 @@ export default function ActionsPage() {
     (stats.find((s) => s.status === "executing")?.count || 0);
   const reconciledCount = stats.find((s) => s.status === "reconciled")?.count || 0;
 
-  const pillars = [...new Set(rows.map((r) => r.pillar))];
+  const hasActiveFilters = statusFilter || pillarFilter || actionTypeFilter || repoFilter;
 
   return (
     <div>
@@ -105,6 +129,26 @@ export default function ActionsPage() {
             <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
           ))}
         </select>
+        <select
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-xs text-text-primary"
+          value={pillarFilter}
+          onChange={(e) => setPillarFilter(e.target.value)}
+        >
+          <option value="">All Pillars</option>
+          {PILLAR_OPTIONS.map((p) => (
+            <option key={p} value={p}>{p}</option>
+          ))}
+        </select>
+        <select
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-xs text-text-primary"
+          value={actionTypeFilter}
+          onChange={(e) => setActionTypeFilter(e.target.value)}
+        >
+          <option value="">All Types</option>
+          {ACTION_TYPE_OPTIONS.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
         <button
           className={"px-3 py-1 rounded-full text-xs " + (!statusFilter ? "bg-accent-green/20 text-accent-green" : "bg-gray-700 text-gray-400")}
           onClick={() => setStatusFilter("")}
@@ -120,12 +164,41 @@ export default function ActionsPage() {
             {STATUS_ICONS[s.status] || "•"} {s.status} ({s.count})
           </button>
         ))}
+        {hasActiveFilters && (
+          <button
+            className="px-3 py-1 rounded-full text-xs bg-red-900/30 text-red-400 hover:bg-red-900/50"
+            onClick={() => { setStatusFilter(""); setPillarFilter(""); setActionTypeFilter(""); setRepoFilter(""); }}
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Actions table */}
       <div className="px-6 py-4">
-        {rows.length === 0 ? (
-          <EmptyState title="No actions found" body="Actions appear when GitWire takes or proposes mutations on your repositories" />
+        {actionsLoading ? (
+          <div className="space-y-2">
+            {[1,2,3,4,5].map((i) => (
+              <div key={i} className="rounded shimmer h-10" />
+            ))}
+          </div>
+        ) : actionsError ? (
+          <div className="p-6 text-center">
+            <div className="text-red-400 text-sm mb-2">Failed to load actions</div>
+            <button
+              className="text-xs text-accent-green hover:underline"
+              onClick={() => window.location.reload()}
+            >
+              Retry
+            </button>
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title={hasActiveFilters ? "No actions match your filters" : "No actions found"}
+            body={hasActiveFilters
+              ? "Try adjusting or clearing your filters"
+              : "Actions appear when GitWire takes or proposes mutations on your repositories"}
+          />
         ) : (
           <table className="w-full text-sm">
             <thead>

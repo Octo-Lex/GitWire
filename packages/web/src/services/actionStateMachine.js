@@ -219,7 +219,7 @@ export async function getAction(actionId) {
 /**
  * List actions with optional filters.
  */
-export async function listActions({ repo, status, pillar, limit = 50, offset = 0 } = {}) {
+export async function listActions({ repo, status, pillar, actionType, limit = 50, offset = 0 } = {}) {
   const conditions = [];
   const params = [];
   let idx = 1;
@@ -227,6 +227,7 @@ export async function listActions({ repo, status, pillar, limit = 50, offset = 0
   if (repo) { conditions.push(`repo_full_name = $${idx++}`); params.push(repo); }
   if (status) { conditions.push(`status = $${idx++}`); params.push(status); }
   if (pillar) { conditions.push(`pillar = $${idx++}`); params.push(pillar); }
+  if (actionType) { conditions.push(`action_type = $${idx++}`); params.push(actionType); }
 
   const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
 
