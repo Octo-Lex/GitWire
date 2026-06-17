@@ -12,7 +12,7 @@ export default defineConfig({
       { text: "Concepts", link: "/concepts/autonomous-github-management" },
       { text: "API", link: "/api/rest-api-reference" },
       { text: "Guides", link: "/guides/full-walkthrough" },
-      { text: "GitHub", link: "https://github.com/Elephant-Rock-Lab/GitWire" },
+      { text: "GitHub", link: "https://github.com/Octo-Lex/GitWire" },
     ],
     sidebar: [
       {
@@ -253,7 +253,7 @@ export default defineConfig({
       },
     ],
     socialLinks: [
-      { icon: "github", link: "https://github.com/Elephant-Rock-Lab/GitWire" },
+      { icon: "github", link: "https://github.com/Octo-Lex/GitWire" },
     ],
     search: {
       provider: "local",

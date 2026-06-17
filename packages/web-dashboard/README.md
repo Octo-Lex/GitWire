@@ -1,6 +1,6 @@
 # @gitwire/web-dashboard
 
-GitWire Dashboard — monitoring UI for the [GitWire](https://github.com/Elephant-Rock-Lab/GitWire) AI GitHub App platform.
+GitWire Dashboard — monitoring UI for the [GitWire](https://github.com/Octo-Lex/GitWire) AI GitHub App platform.
 
 ## Stack
 

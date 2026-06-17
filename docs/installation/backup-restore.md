@@ -81,7 +81,7 @@ Restore drops the existing database. Make a fresh backup before restoring if you
 
 ```bash
 # On the production server
-ssh root@192.168.3.151
+ssh root@your-server
 cd /opt/gitwire
 ./scripts/backup.sh
 ```
@@ -92,7 +92,7 @@ Copy the latest backup to your local machine:
 
 ```bash
 # From your local machine
-scp -r root@192.168.3.151:/opt/gitwire/backups/$(ssh root@192.168.3.151 'ls -t /opt/gitwire/backups/ | head -1') ./backups/
+scp -r root@your-server:/opt/gitwire/backups/$(ssh root@your-server 'ls -t /opt/gitwire/backups/ | head -1') ./backups/
 ```
 
 ## Database Migrations

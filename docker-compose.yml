@@ -11,7 +11,7 @@ services:
       NODE_ENV: production
       PORT: 3000
     volumes:
-      - ./secrets/gitwire-hq.pem:/app/packages/web/gitwire-hq.2026-05-15.private-key.pem:ro
+      - ./secrets/gitwire-hq.pem:/app/packages/web/gitwire-hq.private-key.pem:ro
     depends_on:
       postgres:
         condition: service_healthy

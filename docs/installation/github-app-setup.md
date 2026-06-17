@@ -77,7 +77,7 @@ Copy the **App ID** from the top of the app settings page. This is your `GITHUB_
 Add these values to your `.env`:
 
 ```bash
-GITHUB_APP_ID=3727207
+GITHUB_APP_ID=your_app_id
 GITHUB_APP_CLIENT_ID=Iv1.xxxxxxx
 GITHUB_APP_CLIENT_SECRET=your-client-secret
 GITHUB_WEBHOOK_SECRET=your-webhook-secret

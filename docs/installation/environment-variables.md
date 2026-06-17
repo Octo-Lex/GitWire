@@ -93,7 +93,7 @@ If no `API_KEY` or `API_KEYS` is set, a random key is generated on startup and l
 
 ```bash
 # ─── GitHub App ───────────────────────────────────────────────
-GITHUB_APP_ID=3727207
+GITHUB_APP_ID=your_app_id
 GITHUB_APP_CLIENT_ID=Iv1.abc123
 GITHUB_APP_CLIENT_SECRET=your-client-secret
 GITHUB_WEBHOOK_SECRET=your-webhook-secret

@@ -217,7 +217,7 @@ All three fonts are Google Fonts / open-source.
 | **Background** | `#0D0D0F` with subtle grid |
 | **Content** | Same as GitHub social preview but wider aspect |
 
-### 6C. GitHub Profile Avatar (Elephant-Rock-Lab org or GitWire specifically)
+### 6C. GitHub Profile Avatar (Octo-Lex org or GitWire specifically)
 
 | Property | Specification |
 |----------|--------------|

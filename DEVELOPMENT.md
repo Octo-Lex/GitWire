@@ -16,7 +16,7 @@ How to set up and run GitWire locally for development.
 ### 1. Clone and Install
 
 ```bash
-git clone https://github.com/Elephant-Rock-Lab/GitWire.git
+git clone https://github.com/Octo-Lex/GitWire.git
 cd GitWire
 npm install
 ```

@@ -17,7 +17,7 @@ GitWire runs 5 containers:
 ## Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/Elephant-Rock-Lab/GitWire.git
+git clone https://github.com/Octo-Lex/GitWire.git
 cd GitWire
 ```
 
@@ -32,7 +32,7 @@ Edit `.env` and fill in all required values. See the [Environment Variables](/in
 **Minimum required variables:**
 
 ```bash
-GITHUB_APP_ID=3727207
+GITHUB_APP_ID=your_app_id
 GITHUB_WEBHOOK_SECRET=your-webhook-secret
 GITHUB_PRIVATE_KEY_PATH=./gitwire-hq.private-key.pem
 DATABASE_URL=postgresql://gitwire:changeme@postgres:5432/gitops_hub

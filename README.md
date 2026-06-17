@@ -1,4 +1,4 @@
-![GitWire — Self-hosted AI governance for GitHub individuals and teams](https://github.com/Elephant-Rock-Lab/GitWire/blob/0503dd5807bfcdeb7dce65c9fa637362acb16bb4/banner.png)
+![GitWire — Self-hosted AI governance for GitHub individuals and teams](https://github.com/Octo-Lex/GitWire/blob/0503dd5807bfcdeb7dce65c9fa637362acb16bb4/banner.png)
 
 <div align="center">
 
@@ -273,7 +273,7 @@ GitWire ships with a Telegram bot for operational checks and lightweight command
 ### Run Locally
 
 ```bash
-git clone https://github.com/Elephant-Rock-Lab/GitWire.git
+git clone https://github.com/Octo-Lex/GitWire.git
 cd GitWire
 npm install
 

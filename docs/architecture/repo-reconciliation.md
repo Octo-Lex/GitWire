@@ -4,7 +4,7 @@ Detecting and resolving orphaned repository data when repos move between GitHub 
 
 ## The problem
 
-When a GitHub repository is deleted and re-created under a different owner (e.g. `xjeddah/GitWire` → `Elephant-Rock-Lab/GitWire`), GitWire ends up with **two rows** in the `repositories` table sharing the same repo name but with different `github_id` values.
+When a GitHub repository is deleted and re-created under a different owner (e.g. `xjeddah/GitWire` → `Octo-Lex/GitWire`), GitWire ends up with **two rows** in the `repositories` table sharing the same repo name but with different `github_id` values.
 
 This happens because:
 
@@ -125,7 +125,7 @@ Returns detected orphan pairs with data counts:
       },
       "live": {
         "github_id": "1242582513",
-        "full_name": "Elephant-Rock-Lab/GitWire",
+        "full_name": "Octo-Lex/GitWire",
         "delivery_count": 393
       },
       "data": {
@@ -144,7 +144,7 @@ Returns detected orphan pairs with data counts:
 
 ```
 POST /api/repos/reconcile/merge
-Body: { "orphan": "xjeddah/GitWire", "live": "Elephant-Rock-Lab/GitWire" }
+Body: { "orphan": "xjeddah/GitWire", "live": "Octo-Lex/GitWire" }
 ```
 
 Returns merge results with per-table counts:
@@ -153,7 +153,7 @@ Returns merge results with per-table counts:
 {
   "status": "merged",
   "orphan": "xjeddah/GitWire",
-  "live": "Elephant-Rock-Lab/GitWire",
+  "live": "Octo-Lex/GitWire",
   "reparented": { "ci_runs": 32, "issues": 2, "pull_requests": 5 },
   "backfilled": { "webhook_deliveries": 131, "action_feed": 137 },
   "total_affected": 327

@@ -14,7 +14,7 @@ hero:
       link: /api/rest-api-reference
     - theme: alt
       text: GitHub
-      link: https://github.com/Elephant-Rock-Lab/GitWire
+      link: https://github.com/Octo-Lex/GitWire
 
 features:
   - title: Issue & PR Triage
