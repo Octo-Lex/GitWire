@@ -7,16 +7,17 @@ on:
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
   syntax-check:
-    runs-on:
-  workflow_dispatch: ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version:
-  workflow_dispatch: '20'
+          node-version: '20'
           cache: 'npm'
       - name: Verify lockfile consistency
         run: |
@@ -42,15 +43,13 @@ jobs:
             -exec node --check {} \;
 
   rules-tests:
-    runs-on:
-  workflow_dispatch: ubuntu-latest
+    runs-on: ubuntu-latest
     needs: syntax-check
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version:
-  workflow_dispatch: '20'
+          node-version: '20'
           cache: 'npm'
       - run: npm ci --ignore-scripts
       - name: Run rules tests
@@ -59,15 +58,13 @@ jobs:
           NODE_ENV: test
 
   web-tests:
-    runs-on:
-  workflow_dispatch: ubuntu-latest
+    runs-on: ubuntu-latest
     needs: syntax-check
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version:
-  workflow_dispatch: '20'
+          node-version: '20'
           cache: 'npm'
       - run: npm ci --ignore-scripts
       - name: Run web unit tests
