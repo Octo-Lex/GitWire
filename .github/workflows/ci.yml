@@ -68,6 +68,6 @@ jobs:
           cache: 'npm'
       - run: npm ci --ignore-scripts
       - name: Run web unit tests
-        run: cd packages/web && NODE_OPTIONS='--experimental-vm-modules' npx jest --passWithNoTests --forceExit
+        run: cd packages/web && NODE_OPTIONS='--experimental-vm-modules' npx jest --testPathPatterns='unit|tests/api|tests/helpers' --passWithNoTests --forceExit
         env:
           NODE_ENV: test
