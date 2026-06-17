@@ -12,6 +12,7 @@ import { evaluateExpr, evaluateExprWithTrace } from "@gitwire/rules/expr";
 import { loadPlugins } from "@gitwire/rules/plugins";
 import { validatePolicy } from "../services/policyValidationService.js";
 import { simulatePolicy } from "../services/policySimulationService.js";
+import { diffPolicyImpact } from "../services/policyDiffService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -360,6 +361,42 @@ configRouter.post("/simulate", async (req, res) => {
   } catch (err) {
     logger.error({ err: err.message }, "Policy simulation failed");
     res.status(500).json({ error: "Failed to simulate policy" });
+  }
+});
+
+// ── Policy diff impact (non-mutating) ─────────────────────────────────────
+
+/**
+ * POST /api/config/diff-impact
+ *
+ * Compare current repo policy against proposed policy and show behavioral changes.
+ * Non-mutating: no config writes, no GitHub writes, no queue jobs.
+ *
+ * Body: { repo: string, yaml: string, from?: ISO, to?: ISO, limit?: number }
+ */
+configRouter.post("/diff-impact", async (req, res) => {
+  try {
+    const { repo, yaml: yamlText, from, to, limit } = req.body;
+
+    if (!repo || typeof repo !== "string") {
+      return res.status(400).json({ error: "repo is required (owner/repo)" });
+    }
+    if (!yamlText || typeof yamlText !== "string") {
+      return res.status(400).json({ error: "yaml is required (string)" });
+    }
+
+    const result = await diffPolicyImpact({
+      repo,
+      yaml: yamlText,
+      from,
+      to,
+      limit: limit ? Math.min(Number(limit), 200) : 50,
+    });
+
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Policy diff impact failed");
+    res.status(500).json({ error: "Failed to compute policy diff impact" });
   }
 });
 

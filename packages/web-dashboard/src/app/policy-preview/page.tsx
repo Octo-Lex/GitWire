@@ -73,6 +73,12 @@ export default function PolicyPreviewPage() {
   const [simError, setSimError] = useState<string | null>(null);
   const [simExpandedId, setSimExpandedId] = useState<string | null>(null);
 
+  // Diff impact state
+  const [diffRepo, setDiffRepo] = useState<string>("");
+  const [diffResult, setDiffResult] = useState<any>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+
   const { data: reposData } = useSWR<{ data: Array<{ full_name: string }> }>(
     "/api/repos?limit=100", fetcher, { refreshInterval: 60000 }
   );
@@ -139,6 +145,41 @@ export default function PolicyPreviewPage() {
       setSimLoading(false);
     }
   }, [simRepo, yamlInput, simFrom, simTo, simLimit]);
+
+  const runDiff = useCallback(async () => {
+    if (!diffRepo || !yamlInput.trim()) return;
+    setDiffLoading(true);
+    setDiffError(null);
+    setDiffResult(null);
+    try {
+      const BASE = process.env.NEXT_PUBLIC_API_URL || "";
+      const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
+      const res = await fetch(`${BASE}/api/config/diff-impact`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          repo: diffRepo,
+          yaml: yamlInput,
+          from: simFrom || undefined,
+          to: simTo || undefined,
+          limit: simLimit,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setDiffResult(data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Comparison request failed";
+      setDiffError(msg);
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [diffRepo, yamlInput, simFrom, simTo, simLimit]);
 
   const highRisks = result?.risky_settings.filter(r => r.severity === "high") ?? [];
   const mediumRisks = result?.risky_settings.filter(r => r.severity === "medium") ?? [];
@@ -528,6 +569,142 @@ export default function PolicyPreviewPage() {
               )}
             </div>
           )}
+
+          {/* Diff Impact section */}
+          <div className="mt-8 pt-6 border-t border-border">
+            <div className="text-xs font-mono uppercase text-text-tertiary tracking-wider mb-3">
+              Impact Comparison
+            </div>
+            <div className="text-[11px] text-text-tertiary mb-3">
+              Compare the repo's current policy against your proposed YAML. Shows what changes operationally.
+            </div>
+
+            <div className="flex flex-wrap gap-2 items-center mb-4">
+              <select
+                value={diffRepo}
+                onChange={(e) => setDiffRepo(e.target.value)}
+                className="bg-surface-2 border border-border rounded px-2 py-1.5 text-xs text-text-primary"
+              >
+                <option value="">Select repo...</option>
+                {(reposData?.data ?? []).map((r) => (
+                  <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+                ))}
+              </select>
+              <button
+                onClick={runDiff}
+                disabled={diffLoading || !diffRepo || !result?.valid}
+                className="px-4 py-1.5 bg-accent-green text-surface-0 text-xs font-mono font-bold rounded hover:bg-accent-green/90 transition-colors disabled:opacity-50"
+              >
+                {diffLoading ? "Comparing..." : "Compare impact"}
+              </button>
+            </div>
+
+            {diffError && (
+              <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 mb-4">
+                <div className="text-red-400 text-sm font-mono mb-1">Comparison failed</div>
+                <div className="text-red-400/70 text-xs">{diffError}</div>
+              </div>
+            )}
+
+            {diffLoading && (
+              <div className="space-y-2">
+                <Skeleton className="h-20 w-full" />
+                <Skeleton className="h-40 w-full" />
+              </div>
+            )}
+
+            {diffResult && !diffLoading && (
+              <div className="space-y-4">
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                  <DiffStat label="Dry-run" value={
+                    diffResult.changes?.dry_run
+                      ? (diffResult.changes.dry_run.from ? "On" : "Off") + " -> " + (diffResult.changes.dry_run.to ? "On" : "Off")
+                      : "No change"
+                  } color={
+                    diffResult.changes?.dry_run
+                      ? diffResult.changes.dry_run.risk === "increased" ? "text-red-400" : "text-green-400"
+                      : "text-text-primary"
+                  } />
+                  <DiffStat label="Pillars enabled" value={diffResult.changes?.pillars_enabled?.length ?? 0} color="text-green-400" />
+                  <DiffStat label="Pillars disabled" value={diffResult.changes?.pillars_disabled?.length ?? 0} color="text-red-400" />
+                  <DiffStat label="Risks added" value={diffResult.changes?.risks_added?.length ?? 0} color="text-red-400" />
+                  <DiffStat label="Risks removed" value={diffResult.changes?.risks_removed?.length ?? 0} color="text-green-400" />
+                </div>
+
+                {/* Simulation impact summary */}
+                {diffResult.simulation_impact && (
+                  <div className="grid grid-cols-4 gap-2">
+                    <DiffStat label="Newly would act" value={diffResult.simulation_impact.newly_would_act} color="text-amber-400" />
+                    <DiffStat label="Newly would skip" value={diffResult.simulation_impact.newly_would_skip} color="text-blue-400" />
+                    <DiffStat label="Unchanged" value={diffResult.simulation_impact.unchanged} color="text-text-primary" />
+                    <DiffStat label="Unsupported" value={diffResult.simulation_impact.unsupported} color="text-text-tertiary" />
+                  </div>
+                )}
+
+                {/* Pillar changes */}
+                {(diffResult.changes?.pillars_enabled?.length > 0 || diffResult.changes?.pillars_disabled?.length > 0) && (
+                  <div className="rounded-lg border border-border bg-surface-2 p-3">
+                    <div className="text-[10px] font-mono uppercase text-text-tertiary mb-2">Pillar Changes</div>
+                    {diffResult.changes.pillars_enabled.map((p: string) => (
+                      <div key={"en" + p} className="text-xs text-green-400">+ {p} (newly enabled)</div>
+                    ))}
+                    {diffResult.changes.pillars_disabled.map((p: string) => (
+                      <div key={"dis" + p} className="text-xs text-red-400">- {p} (newly disabled)</div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Risk changes */}
+                {(diffResult.changes?.risks_added?.length > 0 || diffResult.changes?.risks_removed?.length > 0) && (
+                  <div className="rounded-lg border border-border bg-surface-2 p-3">
+                    <div className="text-[10px] font-mono uppercase text-text-tertiary mb-2">Risk Changes</div>
+                    {diffResult.changes.risks_added.map((r: any, i: number) => (
+                      <div key={"ra" + i} className="text-xs text-red-400">+ {r.path}: {r.reason}</div>
+                    ))}
+                    {diffResult.changes.risks_removed.map((r: any, i: number) => (
+                      <div key={"rr" + i} className="text-xs text-green-400">- {r.path}: {r.reason}</div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Event impact table */}
+                {diffResult.results?.length > 0 && (
+                  <div className="divide-y divide-border rounded-lg border border-border">
+                    {diffResult.results.map((r: any) => (
+                      <div key={r.event_id} className="px-4 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className={"text-[10px] font-mono px-1.5 py-0.5 rounded border " + (
+                            r.impact === "more_permissive" || r.impact === "removes_dry_run"
+                              ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                            r.impact === "more_restrictive" || r.impact === "new_dry_run"
+                              ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                            r.impact === "unchanged"
+                              ? "bg-gray-500/10 text-gray-400 border-gray-500/20" :
+                              "bg-gray-500/10 text-gray-400 border-gray-500/20"
+                          )}>
+                            {r.impact}
+                          </span>
+                          <span className="text-xs font-mono text-text-secondary">{r.source}</span>
+                          <span className="text-xs text-text-tertiary">{r.target_type}#{r.target_number}</span>
+                          <span className="text-[10px] font-mono text-text-tertiary">
+                            {r.current_decision} -> {r.proposed_decision}
+                          </span>
+                          <span className="text-xs text-text-primary truncate flex-1">{r.reason}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {diffResult.compared_at && (
+                  <div className="text-[10px] text-text-tertiary text-center">
+                    Compared at {new Date(diffResult.compared_at).toLocaleString()}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -565,6 +742,16 @@ function SimStat({ label, value, color }: { label: string; value: number; color:
     <div className="rounded-lg border border-border bg-surface-2 p-2 text-center">
       <div className="text-[10px] font-mono uppercase text-text-tertiary tracking-wider">{label}</div>
       <div className={"text-lg font-bold " + color}>{value}</div>
+    </div>
+  );
+}
+
+/** Diff impact stat card */
+function DiffStat({ label, value, color }: { label: string; value: number | string; color: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 p-2 text-center">
+      <div className="text-[10px] font-mono uppercase text-text-tertiary tracking-wider">{label}</div>
+      <div className={"text-sm font-bold " + color}>{value}</div>
     </div>
   );
 }
