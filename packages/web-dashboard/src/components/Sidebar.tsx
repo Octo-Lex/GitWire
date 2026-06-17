@@ -89,6 +89,7 @@ const NAV: NavGroup[] = [
       { href: "/config",        label: "Config",         icon: ConfigIcon },
       { href: "/config/playground", label: "Playground", icon: PlaygroundIcon },
       { href: "/policy-preview", label: "Policy Preview", icon: DryRunProofIcon },
+      { href: "/rollouts", label: "Rollouts", icon: DryRunProofIcon },
     ],
   },
 ];
