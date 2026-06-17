@@ -11,6 +11,7 @@ import { DEFAULT_CONFIG, validateConfig } from "@gitwire/rules";
 import { evaluateExpr, evaluateExprWithTrace } from "@gitwire/rules/expr";
 import { loadPlugins } from "@gitwire/rules/plugins";
 import { validatePolicy } from "../services/policyValidationService.js";
+import { simulatePolicy } from "../services/policySimulationService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -326,7 +327,43 @@ configRouter.post("/validate", async (req, res) => {
   }
 });
 
-// ── Helper ──────────────────────────────────────────────────────────────────
+// ── Policy simulation (non-mutating) ──────────────────────────────────────────
+
+/**
+ * POST /api/config/simulate
+ *
+ * Simulate a proposed .gitwire.yml policy against recent decision_log events.
+ * Non-mutating: no GitHub writes, no queue jobs.
+ *
+ * Body: { repo: string, yaml: string, from?: ISO, to?: ISO, limit?: number }
+ */
+configRouter.post("/simulate", async (req, res) => {
+  try {
+    const { repo, yaml: yamlText, from, to, limit } = req.body;
+
+    if (!repo || typeof repo !== "string") {
+      return res.status(400).json({ error: "repo is required (owner/repo)" });
+    }
+    if (!yamlText || typeof yamlText !== "string") {
+      return res.status(400).json({ error: "yaml is required (string)" });
+    }
+
+    const result = await simulatePolicy({
+      repo,
+      yaml: yamlText,
+      from,
+      to,
+      limit: limit ? Math.min(Number(limit), 200) : 50,
+    });
+
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Policy simulation failed");
+    res.status(500).json({ error: "Failed to simulate policy" });
+  }
+});
+
+// ── Helper ────────────────────────────────────────────────────────────────────
 function deepMerge(target, source) {
   const result = { ...target };
   for (const key of Object.keys(source)) {

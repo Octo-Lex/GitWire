@@ -1,9 +1,13 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import useSWR from "swr";
+import { fetcher } from "@/lib/api";
 import {
   PageHeader, Skeleton,
 } from "@/components/ui";
+
+import { formatDistanceToNow } from "date-fns";
 
 /**
  * Policy Preview Dashboard
@@ -12,6 +16,7 @@ import {
  * against the policy validation API. Never saves, never mutates GitHub.
  *
  * Calls POST /api/config/validate and renders the structured response.
+ * Also includes simulation panel to replay policy against historical events.
  */
 
 const SEVERITY_STYLES: Record<string, string> = {
@@ -58,6 +63,20 @@ export default function PolicyPreviewPage() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [showConfig, setShowConfig] = useState(false);
 
+  // Simulation state
+  const [simRepo, setSimRepo] = useState<string>("");
+  const [simFrom, setSimFrom] = useState<string>("");
+  const [simTo, setSimTo] = useState<string>("");
+  const [simLimit, setSimLimit] = useState<number>(25);
+  const [simResult, setSimResult] = useState<any>(null);
+  const [simLoading, setSimLoading] = useState(false);
+  const [simError, setSimError] = useState<string | null>(null);
+  const [simExpandedId, setSimExpandedId] = useState<string | null>(null);
+
+  const { data: reposData } = useSWR<{ data: Array<{ full_name: string }> }>(
+    "/api/repos?limit=100", fetcher, { refreshInterval: 60000 }
+  );
+
   const validate = useCallback(async () => {
     setLoading(true);
     setApiError(null);
@@ -85,6 +104,41 @@ export default function PolicyPreviewPage() {
       setLoading(false);
     }
   }, [yamlInput]);
+
+  const runSimulation = useCallback(async () => {
+    if (!simRepo || !yamlInput.trim()) return;
+    setSimLoading(true);
+    setSimError(null);
+    setSimResult(null);
+    try {
+      const BASE = process.env.NEXT_PUBLIC_API_URL || "";
+      const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
+      const res = await fetch(`${BASE}/api/config/simulate`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          repo: simRepo,
+          yaml: yamlInput,
+          from: simFrom || undefined,
+          to: simTo || undefined,
+          limit: simLimit,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setSimResult(data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Simulation request failed";
+      setSimError(msg);
+    } finally {
+      setSimLoading(false);
+    }
+  }, [simRepo, yamlInput, simFrom, simTo, simLimit]);
 
   const highRisks = result?.risky_settings.filter(r => r.severity === "high") ?? [];
   const mediumRisks = result?.risky_settings.filter(r => r.severity === "medium") ?? [];
@@ -323,6 +377,158 @@ export default function PolicyPreviewPage() {
             )}
           </div>
         )}
+
+        {/* Simulation section */}
+        <div className="mt-8 pt-6 border-t border-border">
+          <div className="text-xs font-mono uppercase text-text-tertiary tracking-wider mb-3">
+            Historical Simulation
+          </div>
+          <div className="text-[11px] text-text-tertiary mb-3">
+            Replay this policy against recent decision-log events. Approximate, policy/guard-focused. AI-dependent outcomes are labeled honestly.
+          </div>
+
+          {/* Simulation controls */}
+          <div className="flex flex-wrap gap-2 items-center mb-4">
+            <select
+              value={simRepo}
+              onChange={(e) => setSimRepo(e.target.value)}
+              className="bg-surface-2 border border-border rounded px-2 py-1.5 text-xs text-text-primary"
+            >
+              <option value="">Select repo...</option>
+              {(reposData?.data ?? []).map((r) => (
+                <option key={r.full_name} value={r.full_name}>{r.full_name}</option>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={simFrom}
+              onChange={(e) => setSimFrom(e.target.value)}
+              className="bg-surface-2 border border-border rounded px-2 py-1.5 text-xs text-text-primary"
+              title="From date (default: 14 days ago)"
+            />
+            <span className="text-text-tertiary text-xs">to</span>
+            <input
+              type="date"
+              value={simTo}
+              onChange={(e) => setSimTo(e.target.value)}
+              className="bg-surface-2 border border-border rounded px-2 py-1.5 text-xs text-text-primary"
+              title="To date (default: now)"
+            />
+            <select
+              value={simLimit}
+              onChange={(e) => setSimLimit(Number(e.target.value))}
+              className="bg-surface-2 border border-border rounded px-2 py-1.5 text-xs text-text-primary"
+            >
+              <option value={25}>25 events</option>
+              <option value={50}>50 events</option>
+              <option value={100}>100 events</option>
+            </select>
+            <button
+              onClick={runSimulation}
+              disabled={simLoading || !simRepo || !result?.valid}
+              className="px-4 py-1.5 bg-accent-green text-surface-0 text-xs font-mono font-bold rounded hover:bg-accent-green/90 transition-colors disabled:opacity-50"
+            >
+              {simLoading ? "Simulating..." : "Run simulation"}
+            </button>
+          </div>
+
+          {/* Simulation error */}
+          {simError && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 mb-4">
+              <div className="text-red-400 text-sm font-mono mb-1">Simulation failed</div>
+              <div className="text-red-400/70 text-xs">{simError}</div>
+            </div>
+          )}
+
+          {/* Simulation loading */}
+          {simLoading && (
+            <div className="space-y-2">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-40 w-full" />
+            </div>
+          )}
+
+          {/* Simulation results */}
+          {simResult && !simLoading && (
+            <div className="space-y-4">
+              {/* Simulation summary cards */}
+              <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                <SimStat label="Considered" value={simResult.summary.events_considered} color="text-text-primary" />
+                <SimStat label="Would act" value={simResult.summary.would_act} color="text-green-400" />
+                <SimStat label="Would skip" value={simResult.summary.would_skip} color="text-gray-400" />
+                <SimStat label="Dry-run" value={simResult.summary.dry_run} color="text-amber-400" />
+                <SimStat label="Block" value={simResult.summary.would_block} color="text-red-400" />
+                <SimStat label="Unsupported" value={simResult.summary.unsupported} color="text-blue-400" />
+              </div>
+
+              {/* Per-event results */}
+              {simResult.results.length > 0 && (
+                <div className="divide-y divide-border rounded-lg border border-border">
+                  {simResult.results.map((r: any) => (
+                    <div key={r.event_id} className="hover:bg-surface-2/50 transition-colors">
+                      <div
+                        className="px-4 py-2 cursor-pointer"
+                        onClick={() => setSimExpandedId(simExpandedId === r.event_id ? null : r.event_id)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className={"text-[10px] font-mono px-1.5 py-0.5 rounded border " + (
+                            r.simulated_decision === "would_act" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                            r.simulated_decision === "would_skip" ? "bg-gray-500/10 text-gray-400 border-gray-500/20" :
+                            r.simulated_decision === "dry_run" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                            r.simulated_decision === "would_block" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                            "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                          )}>
+                            {r.simulated_decision}
+                          </span>
+                          <span className="text-xs font-mono text-text-secondary">{r.source}</span>
+                          <span className="text-xs text-text-tertiary">{r.target_type}#{r.target_number}</span>
+                          <span className="text-xs text-text-primary truncate flex-1">{r.reason}</span>
+                          <span className="text-[10px] text-text-tertiary">
+                            {simExpandedId === r.event_id ? "\u25B2" : "\u25BC"}
+                          </span>
+                        </div>
+                      </div>
+                      {simExpandedId === r.event_id && (
+                        <div className="px-4 pb-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="bg-surface-2 rounded p-2">
+                            <div className="text-[10px] font-mono uppercase text-text-tertiary mb-1">Conditions</div>
+                            {r.conditions.map((c: any, i: number) => (
+                              <div key={i} className="text-[10px] font-mono flex gap-2">
+                                <span className={c.result ? "text-green-400" : "text-red-400"}>{c.result ? "[+]" : "[x]"}</span>
+                                <span className="text-text-secondary">{c.check}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="bg-surface-2 rounded p-2">
+                            <div className="text-[10px] font-mono uppercase text-text-tertiary mb-1">Would do</div>
+                            {r.would_do.length > 0 ? (
+                              r.would_do.map((d: string, i: number) => (
+                                <div key={i} className="text-[10px] font-mono text-text-secondary">{d}</div>
+                              ))
+                            ) : (
+                              <div className="text-[10px] text-text-tertiary">No mutation planned</div>
+                            )}
+                            <div className="mt-2 pt-1 border-t border-border">
+                              <div className="text-[10px] font-mono text-text-tertiary">
+                                Original: {r.original_decision}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {simResult.simulated_at && (
+                <div className="text-[10px] text-text-tertiary text-center">
+                  Simulated at {new Date(simResult.simulated_at).toLocaleString()}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -349,6 +555,16 @@ function RiskRow({ risk, dryRun }: { risk: { path: string; reason: string; sever
           not mitigated
         </span>
       )}
+    </div>
+  );
+}
+
+/** Simulation summary stat card */
+function SimStat({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 p-2 text-center">
+      <div className="text-[10px] font-mono uppercase text-text-tertiary tracking-wider">{label}</div>
+      <div className={"text-lg font-bold " + color}>{value}</div>
     </div>
   );
 }
