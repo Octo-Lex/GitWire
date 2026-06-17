@@ -281,14 +281,8 @@ export async function transitionRolloutPlan(id, params = {}) {
     throw new Error("Rejection must go through POST /api/rollouts/:id/reject — use the rejection endpoint");
   } else if (targetStatus === "promoted") {
     throw new Error("Promotion must go through POST /api/rollouts/:id/promote — use the promotion endpoint");
-    if (!actor) throw new Error("actor is required for rollback");
-    updates.push(`rolled_back_by = $${paramIdx++}`);
-    values.push(actor);
-    updates.push(`rolled_back_at = $${paramIdx++}`);
-    values.push(new Date().toISOString());
-    if (!plan.previous_config) {
-      throw new Error("Cannot roll back: no previous_config snapshot available");
-    }
+  } else if (targetStatus === "rolled_back") {
+    throw new Error("Rollback must go through POST /api/rollouts/:id/rollback — use the rollback endpoint");
   } else if (targetStatus === "cancelled") {
     if (!actor) throw new Error("actor is required for cancellation");
     updates.push(`cancelled_by = $${paramIdx++}`);
@@ -561,9 +555,143 @@ export async function promoteRolloutPlan(id, params = {}) {
 }
 
 /**
+ * Roll back a promoted rollout plan — restore the previous policy.
+ *
+ * This is a governed mutation that writes policy. Rollback:
+ * 1. Verifies the plan is promoted with a previous_config snapshot
+ * 2. Captures the current (to-be-replaced) config as evidence
+ * 3. Writes previous_config back as the active policy
+ * 4. Transitions to rolled_back (terminal)
+ *
+ * If the write fails, state remains promoted (no transition).
+ *
+ * @param {number} id - plan ID
+ * @param {object} params
+ * @param {string} params.actor - GitHub username (required)
+ * @param {string} params.reason - rollback reason (required)
+ * @returns {Promise<object>} updated plan
+ */
+export async function rollbackRolloutPlan(id, params = {}) {
+  const { actor, reason } = params;
+
+  if (!id) throw new Error("id is required");
+  if (!actor) throw new Error("actor is required for rollback");
+  if (!reason) throw new Error("reason is required for rollback");
+
+  const { rows: [plan] } = await db.query(
+    "SELECT * FROM policy_rollout_plans WHERE id = $1", [id]
+  );
+  if (!plan) throw new Error(`Rollout plan not found: ${id}`);
+
+  // ── Check state ────────────────────────────────────────────────────
+  if (plan.status !== "promoted") {
+    throw new Error(
+      `Cannot roll back plan in '${plan.status}' state — must be 'promoted'`
+    );
+  }
+
+  // ── Check previous config snapshot exists ───────────────────────────
+  if (!plan.previous_config) {
+    throw new Error(
+      "Cannot roll back: no previous_config snapshot available"
+    );
+  }
+
+  // ── Resolve repo full_name for config write ────────────────────────
+  const { rows: [repoRow] } = await db.query(
+    "SELECT full_name FROM repositories WHERE github_id = $1", [plan.repo_id]
+  );
+  if (!repoRow) {
+    throw new Error(`Cannot roll back: repository not found for repo_id ${plan.repo_id}`);
+  }
+
+  // ── Capture current config as replaced evidence BEFORE rollback ────
+  let replacedConfig;
+  try {
+    replacedConfig = await getConfigForRepo(repoRow.full_name);
+  } catch (err) {
+    logger.warn({ err: err.message, plan_id: id }, "Could not capture replaced config for evidence");
+    replacedConfig = null;
+  }
+
+  // ── Write previous_config back as active policy ────────────────────
+  // This is the actual rollback mutation. If it throws, we do NOT transition.
+  try {
+    await setConfigOverrides(
+      repoRow.full_name,
+      plan.previous_config,
+      `rollout-rollback:${actor}:${id}`,
+      "set"
+    );
+  } catch (err) {
+    logger.error({ err: err.message, plan_id: id }, "Policy write failed during rollback");
+    throw new Error(`Rollback failed: could not restore previous policy — ${err.message}`);
+  }
+
+  // ── Build rollback evidence for audit ──────────────────────────────
+  const rollbackEvidence = {
+    restored_previous_config: true,
+    replaced_config_captured: !!replacedConfig,
+    previous_config_hash: hashConfig(plan.previous_config),
+    promoted_config_hash: hashConfig(plan.proposed_config),
+    replaced_config_hash: replacedConfig ? hashConfig(replacedConfig) : null,
+  };
+
+  // ── Transition to rolled_back (terminal) ───────────────────────────
+  const { rows: [updated] } = await db.query(
+    `UPDATE policy_rollout_plans
+     SET status = 'rolled_back',
+         rolled_back_by = $1,
+         rolled_back_at = $2,
+         rollback_reason = $3,
+         rollback_evidence = $4,
+         replaced_config_snapshot = $5
+     WHERE id = $6
+     RETURNING *`,
+    [
+      actor,
+      new Date().toISOString(),
+      reason,
+      rollbackEvidence,
+      replacedConfig ? redactSecrets(replacedConfig) : null,
+      id,
+    ]
+  );
+
+  logger.info(
+    { plan_id: id, actor, repo: repoRow.full_name, reason: !!reason },
+    "Rollout plan rolled back — previous policy restored"
+  );
+  return redactPlan(updated);
+}
+
+/**
  * Extract critical recommendation IDs from recommendations summary.
  */
 function getCriticalRecommendations(recSummary) {
+  if (!recSummary || !recSummary.recommendations) return [];
+  return recSummary.recommendations
+    .filter(r => r.severity === "critical")
+    .map(r => r.id);
+}
+
+/**
+ * Deterministic hash for config evidence.
+ * Uses stable JSON serialization before hashing so object key ordering
+ * does not create noisy hashes.
+ */
+function hashConfig(config) {
+  if (!config) return null;
+  const stable = JSON.stringify(config, Object.keys(config).sort());
+  let hash = 0;
+  for (let i = 0; i < stable.length; i++) {
+    const ch = stable.charCodeAt(i);
+    hash = ((hash << 5) - hash + ch) | 0;
+  }
+  return "sha0:" + Math.abs(hash).toString(16).padStart(8, "0");
+}
+
+
   if (!recSummary || !recSummary.recommendations) return [];
   return recSummary.recommendations
     .filter(r => r.severity === "critical")
@@ -591,6 +719,8 @@ function redactPlan(plan) {
     "previous_config",
     "acknowledged_recommendations",
     "reviewed_evidence",
+    "rollback_evidence",
+    "replaced_config_snapshot",
   ];
 
   for (const field of jsonbFields) {

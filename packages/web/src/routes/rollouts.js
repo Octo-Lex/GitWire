@@ -15,6 +15,7 @@ import {
   approveRolloutPlan,
   rejectRolloutPlan,
   promoteRolloutPlan,
+  rollbackRolloutPlan,
 } from "../services/policyRolloutService.js";
 
 export const rolloutRouter = Router();
@@ -266,5 +267,49 @@ rolloutRouter.post("/:id/promote", async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: "Failed to promote rollout plan" });
+  }
+});
+
+/**
+ * POST /api/rollouts/:id/rollback
+ *
+ * Roll back a promoted rollout plan — restore the previous policy.
+ * This is a governed mutation that writes policy.
+ *
+ * Requires:
+ * - Plan in promoted state
+ * - previous_config snapshot exists
+ * - Actor and reason provided
+ *
+ * Captures current config as replaced evidence before restoring.
+ * If write fails, state remains promoted.
+ *
+ * Body: { actor, reason }
+ */
+rolloutRouter.post("/:id/rollback", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { actor, reason } = req.body;
+
+    if (!actor || typeof actor !== "string") {
+      return res.status(400).json({ error: "actor is required (GitHub username)" });
+    }
+    if (!reason || typeof reason !== "string") {
+      return res.status(400).json({ error: "reason is required for rollback" });
+    }
+
+    const plan = await rollbackRolloutPlan(id, { actor, reason });
+
+    res.json(plan);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to rollback rollout plan");
+    if (err.message.includes("not found") ||
+        err.message.includes("Cannot roll back") ||
+        err.message.includes("no previous_config") ||
+        err.message.includes("Rollback failed") ||
+        err.message.includes("required")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to rollback rollout plan" });
   }
 });
