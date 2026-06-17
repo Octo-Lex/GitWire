@@ -10,6 +10,7 @@ import { getConfigForRepo, getConfigOverrides, setConfigOverrides, deleteConfigO
 import { DEFAULT_CONFIG, validateConfig } from "@gitwire/rules";
 import { evaluateExpr, evaluateExprWithTrace } from "@gitwire/rules/expr";
 import { loadPlugins } from "@gitwire/rules/plugins";
+import { validatePolicy } from "../services/policyValidationService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
@@ -284,6 +285,44 @@ configRouter.post("/playground", async (req, res) => {
       error: err.message,
       trace: [],
     });
+  }
+});
+
+// ── Policy validation (non-mutating) ─────────────────────────────────────
+
+/**
+ * POST /api/config/validate
+ *
+ * Validate a .gitwire.yml policy string without writing or mutating anything.
+ * Returns structured output: valid, errors, warnings, enabled_pillars,
+ * dry_run, risky_settings, normalized_config.
+ *
+ * Body: { yaml: string }  or  { config: object }
+ */
+configRouter.post("/validate", async (req, res) => {
+  try {
+    const { yaml: yamlText, config: configObj } = req.body;
+
+    // Accept either raw YAML string or pre-parsed config object
+    let yamlInput;
+    if (typeof yamlText === "string") {
+      yamlInput = yamlText;
+    } else if (configObj && typeof configObj === "object") {
+      // Convert object to YAML for the validator
+      // (parseConfig handles the merge + validation pipeline)
+      const { dump } = await import("js-yaml");
+      yamlInput = dump(configObj);
+    } else {
+      return res.status(400).json({
+        error: "Request body must include 'yaml' (string) or 'config' (object)",
+      });
+    }
+
+    const result = await validatePolicy(yamlInput);
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Policy validation failed");
+    res.status(500).json({ error: "Failed to validate policy" });
   }
 });
 
