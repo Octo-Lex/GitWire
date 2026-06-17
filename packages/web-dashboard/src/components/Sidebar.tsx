@@ -27,6 +27,7 @@ import {
   IntelligenceIcon,
   ConfigIcon,
   PlaygroundIcon,
+  DryRunProofIcon,
 } from "./Icons";
 
 interface NavItem {
@@ -87,6 +88,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/config",        label: "Config",         icon: ConfigIcon },
       { href: "/config/playground", label: "Playground", icon: PlaygroundIcon },
+      { href: "/policy-preview", label: "Policy Preview", icon: DryRunProofIcon },
     ],
   },
 ];
