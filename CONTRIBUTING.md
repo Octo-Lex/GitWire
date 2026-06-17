@@ -50,10 +50,21 @@ See [DEVELOPMENT.md](./DEVELOPMENT.md) for local development instructions.
 ## Pull Request Process
 
 1. **One PR per feature** — keep changes focused
-2. **Add tests** — integration tests in `packages/web/tests/`
+2. **Add tests** — unit tests in `packages/web/tests/unit/`, see existing patterns
 3. **Update docs** — if you add an endpoint or change behavior
-4. **Pass CI** — all tests must pass (`npm test`)
+4. **Pass CI** — all required checks must pass: `syntax-check`, `rules-tests`, `web-tests`
 5. **Describe changes** — use the PR template
+6. **Sign your commits** — DCO is enforced (use `git commit --signoff`)
+
+### Commit Sign-Off (DCO)
+
+All commits must include a `Signed-off-by` line:
+
+```bash
+git commit --signoff -m "your message"
+```
+
+This certifies that you have the right to submit the work under the project's MIT license.
 
 ## Reporting Issues
 
