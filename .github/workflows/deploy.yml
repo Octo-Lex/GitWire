@@ -94,8 +94,7 @@ jobs:
           echo "Waiting for containers to start..."
           for i in $(seq 1 12); do
             APP=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo '')
-            DASH_IP=$(docker exec gitwire-dashboard-1 sh -c "ip -4 addr show eth0 | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1" 2>/dev/null)
-            DASH=$(docker exec gitwire-dashboard-1 wget -qO- "http://${DASH_IP}:3001/dashboard" 2>/dev/null > /dev/null 2>&1 && echo 'ok' || echo '')
+            DASH=$(docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" 2>/dev/null > /dev/null 2>&1 && echo 'ok' || echo '')
             echo "  Attempt $i/12: app=${APP:+healthy} dash=${DASH:+healthy}"
             if [ -n "$APP" ] && [ -n "$DASH" ]; then
               echo "Both healthy!"
@@ -107,8 +106,7 @@ jobs:
       - name: Health check
         run: |
           APP_HEALTH=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo "FAILED")
-          DASH_IP=$(docker exec gitwire-dashboard-1 sh -c "ip -4 addr show eth0 | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1" 2>/dev/null)
-          DASH_HEALTH=$(docker exec gitwire-dashboard-1 wget -qO- "http://${DASH_IP}:3001/dashboard" 2>/dev/null > /dev/null && echo "OK" || echo "FAILED")
+          DASH_HEALTH=$(docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" 2>/dev/null > /dev/null && echo "OK" || echo "FAILED")
           echo "gitwire-app:   $APP_HEALTH"
           echo "dashboard:     $DASH_HEALTH"
           if echo "$APP_HEALTH" | grep -q "FAILED"; then
