@@ -10,6 +10,10 @@ GitWire watches your repositories, evaluates policy, runs safe automations, and 
 
 **Decide. Execute. Prove.**
 
+[![CI](https://github.com/Octo-Lex/GitWire/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Octo-Lex/GitWire/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Octo-Lex/GitWire?label=release)](https://github.com/Octo-Lex/GitWire/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
