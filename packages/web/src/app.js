@@ -34,6 +34,7 @@ import githubRelayRouter from "./routes/githubRelay.js";
 import { auditBundlesRouter } from "./routes/auditBundles.js";
 import { rolloutRouter }        from "./routes/rollouts.js";
 import setupRouter               from "./routes/setup.js";
+import repairsRouter              from "./routes/repairs.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
@@ -127,6 +128,7 @@ export function createApp() {
   app.use("/api/audit-bundles",     auditBundlesRouter);
   app.use("/api/rollouts",           rolloutRouter);
   app.use("/api/setup",              setupRouter);
+  app.use("/api/repairs",             repairsRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {
