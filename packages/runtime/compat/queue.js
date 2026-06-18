@@ -63,6 +63,7 @@ const QUEUE_NAMES = {
   webhookQueue:    QUEUES.WEBHOOK_EVENTS,
   triageQueue:     QUEUES.TRIAGE,
   ciHealQueue:     QUEUES.CI_HEALING,
+  ciEvidenceQueue: QUEUES.CI_EVIDENCE,
   syncQueue:       QUEUES.SYNC,
   maintainerQueue: QUEUES.MAINTAINER,
   issueFixQueue:   QUEUES.ISSUE_FIX,
@@ -104,6 +105,7 @@ function queueProxy(name) {
 export const webhookQueue    = queueProxy("webhookQueue");
 export const triageQueue     = queueProxy("triageQueue");
 export const ciHealQueue     = queueProxy("ciHealQueue");
+export const ciEvidenceQueue = queueProxy("ciEvidenceQueue");
 export const syncQueue       = queueProxy("syncQueue");
 export const maintainerQueue = queueProxy("maintainerQueue");
 export const issueFixQueue   = queueProxy("issueFixQueue");

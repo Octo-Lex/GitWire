@@ -17,6 +17,24 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import crypto from "crypto";
+import {
+  ACTOR_KINDS,
+  canCreateProposal,
+  canAttachField,
+  canTransitionTo,
+} from "./repairAuthorityService.js";
+
+// ── Actor-kind enforcement ────────────────────────────────────────────────────
+// Every canonical mutation method must receive a recognized actor_kind.
+// This makes authority checks unconditional — no caller can bypass the matrix
+// by simply omitting the parameter.
+const VALID_ACTOR_KINDS = new Set(Object.values(ACTOR_KINDS));
+
+function requireActorKind(actorKind) {
+  if (!VALID_ACTOR_KINDS.has(actorKind)) {
+    throw new Error("actor_kind is required and must be a recognized value");
+  }
+}
 
 // ── Valid state transitions ──────────────────────────────────────────────────
 export const VALID_TRANSITIONS = {
@@ -103,11 +121,16 @@ export const VALID_CRITIC_VERDICTS = new Set(["approve", "reject"]);
 
 // ── Valid evidence_ref types ─────────────────────────────────────────────────
 export const VALID_EVIDENCE_REF_TYPES = new Set([
+  // Original types
   "ci_log",
   "workflow_file",
   "repository_file",
   "test_output",
   "build_output",
+  // CI evidence collector types (v0.19 Item 2)
+  "workflow_run",
+  "ci_job",
+  "ci_log_excerpt",
 ]);
 
 // ── Max field lengths ────────────────────────────────────────────────────────
@@ -703,10 +726,16 @@ export function redactProposal(proposal) {
  * at the database level — no state/version heuristics.
  */
 export async function createProposal(params = {}) {
-  const { repo, envelope, created_by = "system" } = params;
+  const { repo, envelope, created_by = "system", actor_kind } = params;
 
   if (!repo) throw new Error("repo is required");
   if (!envelope) throw new Error("envelope is required");
+
+  // MANDATORY actor-kind enforcement — unconditional, before any validation
+  requireActorKind(actor_kind);
+  if (!canCreateProposal(actor_kind)) {
+    throw new Error(`Actor '${actor_kind}' is not authorized to create repair proposals`);
+  }
 
   const envCheck = validateEnvelope(envelope);
   if (!envCheck.valid) {
@@ -880,15 +909,20 @@ export async function listProposals(params = {}) {
  * @param {object} evidence - evidence fields
  * @param {string} [actor='system'] - actor identity from auth
  * @param {number} expected_version - MANDATORY optimistic concurrency version
+ * @param {string} [correlation_id] - optional correlation ID for audit trail
  * @returns {Promise<object>} updated proposal
  */
-export async function attachEvidence(id, evidence = {}, actor = "system", expected_version) {
+export async function attachEvidence(id, evidence = {}, actor = "system", expected_version, correlation_id, actor_kind) {
   if (!id) throw new Error("id is required");
 
   // MANDATORY expected_version
   if (!Number.isInteger(expected_version) || expected_version < 1) {
     throw new Error("expected_version is required and must be a positive integer");
+
   }
+
+  // MANDATORY actor-kind enforcement — unconditional, before any validation
+  requireActorKind(actor_kind);
 
   // Validate ALL evidence types before touching the database
   if (evidence.diagnosis) {
@@ -923,6 +957,13 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
   const providedFields = fields.filter(([, v]) => v !== undefined);
   if (providedFields.length === 0) {
     throw new Error("No evidence fields provided");
+  }
+
+  // MANDATORY actor-kind enforcement — per-field authority check
+  for (const [field] of providedFields) {
+    if (!canAttachField(actor_kind, field)) {
+      throw new Error(`Actor '${actor_kind}' is not authorized to attach evidence field: ${field}`);
+    }
   }
 
   return db.transaction(async (client) => {
@@ -987,12 +1028,12 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
 
     const updated = rows[0];
 
-    // Record evidence event with full snapshot + content hashes
+    // Record evidence event with full snapshot + content hashes + correlation
     const snapshot = buildEvidenceSnapshot(Object.fromEntries(providedFields));
     await client.query(
       `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         id,
         "evidence_attached",
@@ -1000,6 +1041,7 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
         proposal.status,
         actor,
         JSON.stringify(snapshot),
+        correlation_id || null,
       ]
     );
 
@@ -1025,17 +1067,26 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
  * @param {string} [params.actor='system'] - actor from auth
  * @param {string} [params.reason] - optional reason
  * @param {number} params.expected_version - MANDATORY optimistic concurrency version
+ * @param {string} [params.correlation_id] - optional correlation ID for audit trail
  * @returns {Promise<object>} updated proposal
  */
 export async function transitionProposal(id, params = {}) {
-  const { status: targetStatus, actor = "system", reason, expected_version } = params;
+  const { status: targetStatus, actor = "system", reason, expected_version, correlation_id, actor_kind } = params;
 
   if (!id) throw new Error("id is required");
   if (!targetStatus) throw new Error("status is required");
 
+  // MANDATORY actor-kind enforcement — unconditional, before any validation
+  requireActorKind(actor_kind);
+
   // MANDATORY expected_version
   if (!Number.isInteger(expected_version) || expected_version < 1) {
     throw new Error("expected_version is required and must be a positive integer");
+  }
+
+  // Unconditional authority check
+  if (!canTransitionTo(actor_kind, targetStatus)) {
+    throw new Error(`Actor '${actor_kind}' is not authorized to transition to '${targetStatus}'`);
   }
 
   // Block authority-bearing states from generic transition
@@ -1141,11 +1192,11 @@ export async function transitionProposal(id, params = {}) {
 
     const updated = rows[0];
 
-    // Record transition event in the SAME transaction
+    // Record transition event in the SAME transaction (with correlation)
     await client.query(
       `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, reason)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+         (proposal_id, event_type, from_status, to_status, actor, reason, correlation_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         id,
         "state_transition",
@@ -1153,12 +1204,157 @@ export async function transitionProposal(id, params = {}) {
         targetStatus,
         actor,
         reason || null,
+        correlation_id || null,
       ]
     );
 
     logger.info(
       { proposal_id: id, from: currentStatus, to: targetStatus, actor },
       "Repair proposal transitioned"
+    );
+    return redactProposal(updated);
+  });
+}
+
+/**
+ * Record CI evidence collection atomically.
+ *
+ * This is a SINGLE transactional operation that replaces the two-step
+ * attach-then-transition sequence for the CI evidence collector.
+ *
+ * Replay safety:
+ * - If proposal is already 'evidence_collected' → return unchanged (no-op)
+ * - If proposal is 'detected' → validate, attach, transition, record event
+ * - Any other status → reject (unexpected intermediate state)
+ *
+ * All in one transaction with row lock + CAS.
+ *
+ * @param {number} id - proposal ID
+ * @param {object} evidence - { evidence_refs: [...] }
+ * @param {object} options
+ * @param {string} [options.actor='ci_evidence_collector']
+ * @param {number} options.expected_version - MANDATORY CAS version
+ * @param {string} [options.correlation_id] - for audit trail
+ * @returns {Promise<object>} updated proposal
+ */
+export async function recordCiEvidenceCollection(id, evidence = {}, options = {}) {
+  const {
+    actor = "ci_evidence_collector",
+    expected_version,
+    correlation_id,
+    source_delivery_id,
+    actor_kind = actor,
+  } = options;
+
+  if (!id) throw new Error("id is required");
+
+  // MANDATORY actor-kind enforcement — unconditional
+  requireActorKind(actor_kind);
+
+  if (!Number.isInteger(expected_version) || expected_version < 1) {
+    throw new Error("expected_version is required and must be a positive integer");
+  }
+  if (!evidence.evidence_refs) {
+    throw new Error("evidence_refs is required for CI evidence collection");
+  }
+
+  // Enforce actor-kind authority at service boundary
+  if (!canAttachField(actor_kind, "evidence_refs")) {
+    throw new Error(`Actor '${actor_kind}' is not authorized to attach evidence_refs`);
+  }
+  if (!canTransitionTo(actor_kind, "evidence_collected")) {
+    throw new Error(`Actor '${actor_kind}' is not authorized to transition to evidence_collected`);
+  }
+
+  // Validate evidence_refs before touching the database
+  const check = validateEvidenceRefs(evidence.evidence_refs);
+  if (!check.valid) {
+    throw new Error(`Invalid evidence_refs: ${check.errors.join("; ")}`);
+  }
+
+  return db.transaction(async (client) => {
+    // Lock the row
+    const { rows: [proposal] } = await client.query(
+      "SELECT * FROM repair_proposals WHERE id = $1 FOR UPDATE",
+      [id]
+    );
+    if (!proposal) throw new Error(`Repair proposal not found: ${id}`);
+
+    // REPLAY SAFETY: already collected → no-op return
+    if (proposal.status === "evidence_collected") {
+      logger.info(
+        { proposal_id: id, correlation_id },
+        "Proposal already evidence_collected — replay no-op"
+      );
+      return redactProposal(proposal);
+    }
+
+    // Only allow collection from 'detected' state
+    if (proposal.status !== "detected") {
+      throw new Error(
+        `CI evidence collection requires status 'detected', got '${proposal.status}'`
+      );
+    }
+
+    // CAS: version check before update
+    const setClauses = [
+      "evidence_refs = $1",
+      "status = $2",
+      "version = version + 1",
+    ];
+    const values = [
+      JSON.stringify(evidence.evidence_refs),
+      "evidence_collected",
+    ];
+    let paramIdx = 3;
+
+    // WHERE id = $N AND version = $N+1 (separate placeholders)
+    const whereClauses = [];
+    whereClauses.push(`id = $${paramIdx++}`);
+    values.push(id);
+    whereClauses.push(`version = $${paramIdx++}`);
+    values.push(expected_version);
+
+    const { rows } = await client.query(
+      `UPDATE repair_proposals
+       SET ${setClauses.join(", ")}
+       WHERE ${whereClauses.join(" AND ")}
+       RETURNING *`,
+      values
+    );
+
+    // Zero rows = version mismatch (race condition)
+    if (rows.length === 0) {
+      throw new Error(
+        `Version mismatch: expected version ${expected_version}. ` +
+        `Another process may have modified this proposal.`
+      );
+    }
+
+    const updated = rows[0];
+
+    // Record ONE collection event — carries both the evidence snapshot
+    // and the state transition info, with correlation_id and source_delivery_id
+    const snapshot = buildEvidenceSnapshot({ evidence_refs: evidence.evidence_refs });
+    await client.query(
+      `INSERT INTO repair_proposal_events
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id,
+        "ci_evidence_collected",
+        "detected",
+        "evidence_collected",
+        actor,
+        JSON.stringify(snapshot),
+        correlation_id || null,
+        source_delivery_id || null,
+      ]
+    );
+
+    logger.info(
+      { proposal_id: id, evidence_count: evidence.evidence_refs.length, correlation_id },
+      "CI evidence recorded atomically"
     );
     return redactProposal(updated);
   });

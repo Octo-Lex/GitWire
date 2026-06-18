@@ -11,6 +11,7 @@ export {
   webhookQueue,
   triageQueue,
   ciHealQueue,
+  ciEvidenceQueue,
   syncQueue,
   maintainerQueue,
   issueFixQueue,

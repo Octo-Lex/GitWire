@@ -698,60 +698,48 @@ describe("Repair Proposal — service CAS contract", () => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// ROUTE CONTRACT (round 2)
+// ROUTE CONTRACT (round 3 — read-only public API)
 // ════════════════════════════════════════════════════════════════════════════
 
 describe("Repair Proposal — route contract", () => {
   const route = readSource("packages/web/src/routes/repairs.js");
   const app = readSource("packages/web/src/app.js");
 
-  it("has all CRUD + transition endpoints", () => {
+  it("has GET routes (read-only access)", () => {
     expect(route).toMatch(/router\.get\("\/"/);
     expect(route).toMatch(/router\.get\("\/:id"/);
     expect(route).toMatch(/router\.get\("\/:id\/events"/);
+  });
+
+  it("mutation routes exist but return 403", () => {
     expect(route).toMatch(/router\.post\("\/"/);
     expect(route).toMatch(/router\.patch\("\/:id\/evidence"/);
     expect(route).toMatch(/router\.post\("\/:id\/transition"/);
   });
 
-  // FIX 2: expected_version mandatory in route
-  it("evidence endpoint validates expected_version before calling service", () => {
-    // The validation spans multiple lines — check each piece independently
-    expect(route).toMatch(/Number\.isInteger\(versionNum\)/);
-    expect(route).toMatch(/positive integer/);
+  // Round 3: public API is read-only
+  it("POST / returns 403", () => {
+    expect(route).toMatch(/router\.post\("\/".*403/s);
   });
 
-  it("transition endpoint validates expected_version before calling service", () => {
-    // Should have two occurrences of the validation (one per endpoint)
-    const matches = route.match(/Number\.isInteger\(versionNum\)/g);
-    expect(matches.length).toBeGreaterThanOrEqual(2);
+  it("PATCH /:id/evidence returns 403", () => {
+    expect(route).toMatch(/router\.patch\("\/:id\/evidence".*403/s);
   });
 
-  it("returns 400 for missing expected_version", () => {
-    expect(route).toMatch(/expected_version is required/);
+  it("POST /:id/transition returns 403", () => {
+    expect(route).toMatch(/router\.post\("\/:id\/transition".*403/s);
   });
 
-  it("returns 403 for authority states", () => {
-    expect(route).toMatch(/authority-bound/);
-    expect(route).toMatch(/status\(403\)/);
+  it("does not import createProposal in routes", () => {
+    expect(route).not.toMatch(/createProposal/);
   });
 
-  it("returns 409 for version mismatch", () => {
-    expect(route).toMatch(/Version mismatch/);
-    expect(route).toMatch(/status\(409\)/);
+  it("does not import attachEvidence in routes", () => {
+    expect(route).not.toMatch(/attachEvidence/);
   });
 
-  it("returns 400 for envelope scope violations", () => {
-    expect(route).toMatch(/exceeds envelope/);
-  });
-
-  it("returns 400 for semantic gate failures", () => {
-    expect(route).toMatch(/Cannot verify/);
-    expect(route).toMatch(/Cannot mark review_ready/);
-  });
-
-  it("actor from req.user", () => {
-    expect(route).toMatch(/req\.user\?\.login/);
+  it("does not import transitionProposal in routes", () => {
+    expect(route).not.toMatch(/transitionProposal/);
   });
 
   it("mounted at /api/repairs", () => {

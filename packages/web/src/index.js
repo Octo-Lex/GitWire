@@ -6,6 +6,7 @@ import { createApp } from "./app.js";
 import { startWebhookWorker } from "./workers/webhookWorker.js";
 import { startTriageWorker }  from "./workers/triageWorker.js";
 import { startCIHealWorker }  from "./workers/ciHealWorker.js";
+import { startCIEvidenceWorker } from "./workers/ciEvidenceWorker.js";
 import { startSyncWorker, scheduleSyncJobs } from "./workers/syncWorker.js";
 import { startMaintainerWorker, scheduleMaintainerJobs } from "./workers/maintainerWorker.js";
 import { startIssueFixWorker } from "./workers/issueFixWorker.js";
@@ -37,6 +38,7 @@ async function main() {
     startWebhookWorker(),
     startTriageWorker(),
     startCIHealWorker(),
+    startCIEvidenceWorker(),
     startSyncWorker(),
     startMaintainerWorker(),
     startIssueFixWorker(),

@@ -11,6 +11,7 @@ export const QUEUES = Object.freeze({
   WEBHOOK_EVENTS: "webhook-events",
   TRIAGE:         "triage",
   CI_HEALING:     "ci-healing",
+  CI_EVIDENCE:    "ci-evidence",
   SYNC:           "sync",
   MAINTAINER:     "maintainer",
   ISSUE_FIX:      "issue-fix",
