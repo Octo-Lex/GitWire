@@ -1,0 +1,53 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# triage-only.yml
+#
+# Minimal scope: AI triage and labeling only. No CI healing, no auto-fixes,
+# no branch cleanup, no merge queue. Perfect for teams that want to start
+# with issue/PR classification and nothing else.
+#
+# When to use this:
+#   • You only want AI-powered issue labeling and duplicate detection
+#   • You have existing CI tooling and don't want GitWire touching builds
+#   • You want the lightest possible footprint
+#
+# What to change before going live:
+#   1. Review the triage triggers — restrict branches/authors if needed
+#   2. Set `dry_run: false` when you're happy with label accuracy
+#   3. Enable other pillars one at a time as confidence grows
+# ──────────────────────────────────────────────────────────────────────────────
+
+version: 1
+
+pillars:
+  triage:
+    enabled: true
+    auto_label: true
+    auto_comment: true
+    duplicate_detection: true
+    triggers:
+      branches: []               # All branches
+      ignore_authors: ["*[bot]", "renovate*"]  # Skip bots
+
+  ci_healing:
+    enabled: false               # Off — you handle CI failures yourself
+
+  maintainer:
+    enabled: false               # Off — no stale management or branch cleanup
+
+  issue_fix:
+    enabled: false
+
+  enforcement:
+    enabled: false               # Off — no branch protection validation
+
+  trust:
+    enabled: false               # Off — no flaky detection or dep scanning
+
+  ai_review:
+    enabled: false               # Off — no automated PR reviews
+
+  merge_queue:
+    enabled: false
+
+settings:
+  dry_run: false                 # Live — triage labels are non-destructive and safe

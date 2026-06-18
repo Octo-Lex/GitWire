@@ -6,6 +6,7 @@ import {
   PageHeader, StatCard, Badge, CIBadge, HealthBadge, MiniBar,
   Skeleton, EmptyState,
 } from "@/components/ui";
+import SetupChecklist from "@/components/SetupChecklist";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 
@@ -47,6 +48,9 @@ export default function DashboardPage() {
 
   return (
     <div className="animate-fade-in">
+      {/* ── First-run setup checklist (auto-hides when ready) ── */}
+      <SetupChecklist />
+
       {/* ── Gradient accent bar ── */}
       <div className="h-0.5 bg-gradient-to-r from-accent-green via-accent-blue to-accent-purple" />
 

@@ -286,6 +286,66 @@ Dashboard: `/rollouts` page with lifecycle timeline, evidence cards, audit trail
 
 ---
 
+## Operator Onboarding
+
+GitWire guides new operators from first dashboard login to safe governed rollout.
+
+### Setup Checklist
+
+The dashboard shows a **first-run setup checklist** with 8 checks that surface installation state immediately:
+
+| Check | Blocking | What it verifies |
+|-------|----------|----------------|
+| GitHub App configured | yes | App ID and private key are set |
+| Database connected | yes | PostgreSQL is reachable |
+| Redis connected | yes | Redis is reachable |
+| GitHub App installed | yes | At least one installation is linked |
+| Repositories synced | yes | At least one repo has been imported |
+| Webhook events received | no (warn) | Webhooks are flowing within the last 7 days |
+| Policy file configured | no (warn) | `.gitwire.yml` or dashboard overrides exist |
+| Dry-run mode | no (info) | Shows whether dry-run is active |
+
+The checklist **auto-hides when ready** and provides a "next step" CTA with specific recommendations. No secret values are returned — checks report boolean presence only.
+
+### Starter Policy Templates
+
+When `.gitwire.yml` is missing, the checklist shows **safe starter templates** with explicit safety labels:
+
+| Template | Safety Label | Best For |
+|----------|-------------|----------|
+| **Starter (Dry-Run)** | Dry-run protected | Safest first config — all pillars observe only |
+| **Triage Only** | Low-risk live | Issue/PR labeling — labels and comments only |
+| **CI Healing (Preview)** | Safe to preview | CI diagnosis without patching |
+| **Open-Source Maintainer** | Review before rollout | Balanced automation for public repos |
+| **Strict Governance** | Dry-run protected | Enterprise/regulated repos — audit-first |
+
+### Onboarding Walkthrough
+
+A complete [10-step walkthrough](docs/guides/first-run-onboarding.md) takes operators from install to first governed rollout:
+
+```mermaid
+graph LR
+    A[Install] --> B[Configure App]
+    B --> C[Start Services]
+    C --> D[Open Dashboard]
+    D --> E[Use Checklist]
+    E --> F[Pick Template]
+    F --> G[Validate]
+    G --> H[Simulate]
+    H --> I[Create Rollout]
+    I --> J[Approve & Promote]
+```
+
+### API endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/setup` | Return 8-check setup status with overall state and next step |
+| `GET /api/setup/templates` | List all starter policy templates with metadata |
+| `GET /api/setup/templates/:id` | Get a single template with full YAML content |
+
+---
+
 ## Architecture
 
 ```
@@ -333,6 +393,7 @@ The dashboard provides real-time visibility into the GitWire control plane.
 Key areas:
 
 - Overview and fleet health
+- **Setup checklist** (first-run guided onboarding)
 - Repository readiness
 - Action lifecycle
 - Activity feed
@@ -440,9 +501,10 @@ npm run db:migrate   # Apply PostgreSQL migrations
 | Dashboard | 25 app sections |
 | Backend routes | Express REST API with webhook ingestion |
 | Policy engine | `.gitwire.yml`, expressions, custom rules, quality gates |
+| Onboarding | Setup checklist, 5 starter templates, 10-step walkthrough |
 | Interfaces | REST API, dashboard, Telegram bot |
-| Tests | 251 across rules, runtime, web services, and dashboard |
-| Documentation | 114+ pages |
+| Tests | 1,497 across rules, runtime, web services, and dashboard |
+| Documentation | 120+ pages |
 
 ---
 
@@ -452,6 +514,7 @@ Documentation lives in [`docs/`](docs/).
 
 Recommended starting points:
 
+- [First-run onboarding walkthrough](docs/guides/first-run-onboarding.md)
 - [Docker Compose setup](docs/installation/docker-compose.md)
 - [GitHub App setup](docs/installation/github-app-setup.md)
 - [Environment variables](docs/installation/environment-variables.md)

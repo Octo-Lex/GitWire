@@ -29,18 +29,18 @@ features:
   - title: Maintainer Tools
     details: Stale issue scanner, branch cleanup, comment commands, and repository settings management.
     link: /pillars/maintainer/maintainer-tools
-  - title: Multi-Repo Insights
-    details: Real-time dashboard across all your repos. SWR polling, Recharts, fleet-wide health.
-    link: /pillars/insights/multi-repo-insights
-  - title: Branch Enforcement
-    details: Policy-as-code for branch protection, naming conventions, and config drift detection.
-    link: /pillars/enforcement/branch-enforcement
-  - title: Merge Queue
-    details: Batched merge queue with error recovery, rollback events, and configurable feedback rules.
-    link: /pillars/merge-queue/merge-queue
-  - title: AI Review Gate
-    details: Pre-merge AI review with secret detection, SHA-256 audit trail, and SOC2 compliance reports.
-    link: /pillars/review-gate/ai-review-gate
+  - title: First-Run Setup Checklist
+    details: Dashboard shows what's configured, what's missing, and what to do next — guided operator onboarding.
+    link: /guides/first-run-onboarding
+  - title: Safe Starter Templates
+    details: Five policy templates with explicit safety labels — from dry-run observer to strict governance.
+    link: /guides/first-run-onboarding
+  - title: Policy Preview & Simulation
+    details: Validate, simulate, and compare policy changes before they affect repositories.
+    link: /api/policy-preview
+  - title: Governed Rollout Controls
+    details: Controlled policy lifecycle — draft, validate, approve, promote, and roll back with audit evidence.
+    link: /api/rollouts
 ---
 
 ## What is GitWire?
@@ -52,10 +52,11 @@ GitWire is a self-hosted GitHub App that runs on your infrastructure. It connect
 | Metric | Count |
 |--------|-------|
 | Pillars | 8 |
-| API Endpoints | 102 |
-| Database Tables | 36 |
+| API Endpoints | 110+ |
+| Database Tables | 45 |
 | Background Workers | 9 |
-| Dashboard Pages | 12 |
+| Tests | 1,500+ |
+| Starter Templates | 5 |
 
 ## Tech Stack
 

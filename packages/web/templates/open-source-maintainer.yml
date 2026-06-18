@@ -1,0 +1,98 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# open-source-maintainer.yml
+#
+# Designed for public/open-source repositories. Balances helpful automation
+# with contributor-friendly behavior: triage incoming issues, detect spam,
+# manage stale items, and review PRs — without being aggressive.
+#
+# When to use this:
+#   • Public GitHub repositories with external contributors
+#   • Open-source projects that receive community issues and PRs
+#   • Maintainer teams that need help scaling beyond manual review
+#
+# What to change before going live:
+#   1. Adjust stale thresholds to match your community's expectations
+#   2. Tune spam_gate limits if you get more or less drive-by traffic
+#   3. Review ai_review triggers to skip bot-generated PRs
+#   4. Add your security disclosure process to exempt_labels
+# ──────────────────────────────────────────────────────────────────────────────
+
+version: 1
+
+pillars:
+  triage:
+    enabled: true
+    auto_label: true
+    auto_comment: true           # Helps contributors understand how their issue was classified
+    duplicate_detection: true    # Catches repeat issues from different contributors
+    triggers:
+      branches: []
+      ignore_authors: ["*[bot]"]
+
+  ci_healing:
+    enabled: true
+    auto_patch: true             # Fix PRs are helpful for OSS — contributors expect automation
+    max_fix_attempts: 2
+    min_confidence_to_patch: "medium"
+    blocked_file_patterns:
+      - ".env*"
+      - "secrets/**"
+      - "*.pem"
+      - "*.key"
+    triggers:
+      branches: []               # All branches
+      ignore_authors: ["dependabot[bot]", "renovate[bot]"]
+
+  maintainer:
+    enabled: true
+    stale:
+      issues:
+        warn_days: 60
+        close_days: null         # Warn only — don't auto-close community issues
+        exempt_labels: ["pinned", "security", "good first issue", "help wanted"]
+      prs:
+        warn_days: 30
+        close_days: null
+        exempt_labels: ["pinned", "WIP"]
+    branch_cleanup:
+      enabled: true
+      protected_branches: ["main", "master", "develop", "release/*"]
+      min_age_days: 14           # Generous window for contributor branches
+
+  issue_fix:
+    enabled: true                # Help with good first issues and bug reports
+    max_file_changes: 3
+    max_line_changes: 150
+    min_confidence_to_submit: "high"  # High bar for autonomous fixes in public
+    allowed_labels: ["bug", "good first issue", "documentation"]
+    blocked_paths: ["migrations/**", ".github/**", "db/**", "docs/**"]
+
+  enforcement:
+    enabled: true
+
+  trust:
+    enabled: true
+    flaky_test_detection: true
+    dependency_scanning: true
+
+  merge_queue:
+    enabled: false               # Most OSS repos use GitHub's merge button
+
+  ai_review:
+    enabled: true
+    comment_findings: true
+    triggers:
+      branches: []
+      ignore_authors: ["dependabot[bot]", "renovate[bot]", "*[bot]"]
+
+  spam_gate:
+    enabled: true                # Protect against drive-by spam on public repos
+    max_open_prs: 5
+    max_open_issues: 10
+    exempt_users: []
+    exempt_labels: ["pinned", "security"]
+    close_message: "Automatically closed: this account has too many open items. Please focus on existing issues/PRs first or contact maintainers."
+
+settings:
+  dry_run: false                 # Live — this is a production config for active repos
+  release_close_fixed_issues: true

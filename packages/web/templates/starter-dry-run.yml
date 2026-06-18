@@ -1,0 +1,67 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# starter-dry-run.yml
+#
+# The safest possible first config. Every pillar runs in OBSERVATION mode —
+# GitWire triages issues, diagnoses CI failures, and reviews PRs, but
+# performs ZERO mutations on GitHub. Nothing is labeled, closed, patched,
+# or commented until you explicitly turn dry_run off.
+#
+# When to use this:
+#   • First-time GitWire installation
+#   • Evaluating whether the AI actions match your expectations
+#   • Any repo where you want to see proof before trusting automation
+#
+# What to change before going live:
+#   1. Set `dry_run: false` once you've reviewed the dry-run proofs
+#   2. Enable `auto_patch: true` in ci_healing if you want fix PRs
+#   3. Review the quality_gates thresholds and adjust to your team's standards
+# ──────────────────────────────────────────────────────────────────────────────
+
+version: 1
+
+pillars:
+  triage:
+    enabled: true
+    auto_label: true             # Labels are non-destructive — safe even in dry-run
+    auto_comment: true           # Triage summary comments help you evaluate quality
+    duplicate_detection: true
+
+  ci_healing:
+    enabled: true
+    auto_patch: false            # Diagnosis only — no fix PRs until you opt in
+    max_fix_attempts: 1          # Conservative: one attempt, review the result
+    blocked_file_patterns:       # Safety net even in diagnosis mode
+      - ".env*"
+      - "secrets/**"
+      - "*.pem"
+      - "*.key"
+
+  maintainer:
+    enabled: true
+    stale:
+      issues:
+        warn_days: 90            # Generous window for a new setup
+        close_days: null         # Never auto-close in starter mode
+      prs:
+        warn_days: 60
+        close_days: null
+    branch_cleanup:
+      enabled: false             # Don't delete branches until you're confident
+
+  issue_fix:
+    enabled: false               # Always off in dry-run — autonomous fixes are destructive
+
+  enforcement:
+    enabled: true                # Read-only validation — safe
+
+  trust:
+    enabled: true
+    flaky_test_detection: true
+    dependency_scanning: true
+
+  ai_review:
+    enabled: true
+    comment_findings: true       # Review comments are informational and non-destructive
+
+settings:
+  dry_run: true                  # ← THE KEY SETTING: observe-only mode

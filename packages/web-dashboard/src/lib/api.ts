@@ -143,6 +143,11 @@ export const API = {
   readiness:        () => `/api/readiness`,
   readinessRepo:    (owner: string, repo: string) => `/api/readiness/${owner}/${repo}`,
 
+  // Setup checklist
+  setup:            () => `/api/setup`,
+  setupTemplates:   () => `/api/setup/templates`,
+  setupTemplate:    (id: string) => `/api/setup/templates/${id}`,
+
   // Quality Gates
   gates:             () => `/api/gates`,
   gatesRepo:         (owner: string, repo: string) => `/api/gates/${owner}/${repo}`,

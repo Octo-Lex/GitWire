@@ -1,0 +1,61 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# ci-healing-dry-run.yml
+#
+# Focus on CI healing — diagnose every failed build and generate fix
+# suggestions, but don't open fix PRs yet. You'll see exactly what GitWire
+# would patch, with root-cause analysis, before allowing autonomous fixes.
+#
+# When to use this:
+#   • Your team wastes time on repeated CI failures
+#   • You want to evaluate AI patch quality before trusting autonomous fixes
+#   • You're onboarding a new codebase with fragile CI
+#
+# What to change before going live:
+#   1. Set `auto_patch: true` when you're confident in the fix quality
+#   2. Increase `max_fix_attempts` from 1 to 3 once you trust the success rate
+#   3. Add specific branches to triggers.branches if you want to limit scope
+#   4. Review blocked_file_patterns and add any repo-specific sensitive paths
+# ──────────────────────────────────────────────────────────────────────────────
+
+version: 1
+
+pillars:
+  triage:
+    enabled: false               # Off — this template focuses on CI only
+
+  ci_healing:
+    enabled: true
+    auto_patch: false            # ← KEY: diagnosis only, no fix PRs yet
+    max_fix_attempts: 1
+    min_confidence_to_patch: "high"  # When you enable patching, only high-confidence fixes
+    allowed_file_patterns: ["**"]
+    blocked_file_patterns:       # Never touch these — add your own
+      - ".env*"
+      - "secrets/**"
+      - "*.pem"
+      - "*.key"
+      - "*.lock"
+      - "package-lock.json"
+      - "yarn.lock"
+    triggers:
+      branches: []               # All branches (e.g., ["main"] to limit)
+      ignore_authors: ["dependabot[bot]", "renovate[bot]"]
+
+  maintainer:
+    enabled: false
+
+  issue_fix:
+    enabled: false
+
+  enforcement:
+    enabled: true                # Validate config so you catch policy drift early
+
+  trust:
+    enabled: true
+    flaky_test_detection: true   # Identify flaky tests that cause false CI failures
+
+  ai_review:
+    enabled: false
+
+settings:
+  dry_run: false                 # Live for read-only pillars, but auto_patch: false keeps CI safe

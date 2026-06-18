@@ -1,0 +1,112 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# strict-governance.yml
+#
+# Maximum control and safety. Every automated action is gated behind dry-run,
+# high confidence thresholds, and quality gates. Designed for regulated
+# industries, enterprise repos, or teams where every change must be auditable.
+#
+# When to use this:
+#   • Enterprise or regulated environments requiring audit trails
+#   • Repos with strict change-management policies
+#   • Teams that need evidence for every automated action
+#   • Production-critical repos where mistakes are costly
+#
+# What to change before going live:
+#   1. Keep dry_run: true until you've reviewed at least 2 weeks of proofs
+#   2. Adjust quality_gates thresholds to your compliance requirements
+#   3. Review exempt_labels and add any governance-specific labels
+#   4. When ready, promote specific pillars to live one at a time via
+#      the policy rollout workflow (validate → simulate → approve → promote)
+# ──────────────────────────────────────────────────────────────────────────────
+
+version: 1
+
+pillars:
+  triage:
+    enabled: true
+    auto_label: true             # Labels are auditable and reversible
+    auto_comment: false          # No automated comments in strict mode — audit log only
+    duplicate_detection: true
+
+  ci_healing:
+    enabled: true
+    auto_patch: false            # No autonomous patches — diagnosis only
+    max_fix_attempts: 1
+    min_confidence_to_patch: "high"
+    blocked_file_patterns:
+      - ".env*"
+      - "secrets/**"
+      - "*.pem"
+      - "*.key"
+      - "*.lock"
+      - "package-lock.json"
+      - "yarn.lock"
+      - "pnpm-lock.yaml"
+      - "*.tfstate"
+      - "migrations/**"
+    triggers:
+      branches: ["main"]         # Only heal CI on the main branch
+      ignore_authors: ["*[bot]"]
+
+  maintainer:
+    enabled: true
+    stale:
+      issues:
+        warn_days: 120           # Conservative — don't rush governance items
+        close_days: null         # Never auto-close in strict mode
+        exempt_labels: ["pinned", "security", "compliance", "audit"]
+      prs:
+        warn_days: 60
+        close_days: null
+        exempt_labels: ["pinned", "security", "WIP"]
+    branch_cleanup:
+      enabled: false             # No automatic branch deletion in strict mode
+
+  issue_fix:
+    enabled: false               # Never autonomous in strict mode
+
+  enforcement:
+    enabled: true                # Always validate policies and branch protection
+
+  trust:
+    enabled: true
+    flaky_test_detection: true
+    dependency_scanning: true    # Security scanning is always on
+
+  merge_queue:
+    enabled: false               # Manual merge control only
+
+  ai_review:
+    enabled: true
+    comment_findings: false      # Findings logged to audit trail, not posted as comments
+    adversarial_review: true     # Double-check all findings
+    require_file_scope: true     # Reject out-of-scope findings
+    triggers:
+      branches: ["main", "develop"]
+      ignore_authors: ["*[bot]"]
+
+  spam_gate:
+    enabled: true
+    max_open_prs: 3
+    max_open_issues: 5
+    exempt_users: []
+    exempt_labels: ["pinned", "security", "compliance"]
+    close_message: "Automatically closed per governance policy: too many open items from this author. Contact the repository maintainers."
+
+settings:
+  dry_run: true                  # ← STRICT MODE: observe and log everything first
+  release_close_fixed_issues: false  # Manual control over issue lifecycle
+
+quality_gates:
+  default:
+    conditions:
+      - metric: "ci_failure_rate_7d"
+        operator: "<"
+        threshold: 0.15          # Stricter: max 15% CI failure rate
+      - metric: "triage_coverage"
+        operator: ">="
+        threshold: 0.8           # Stricter: 80% of issues must be triaged
+      - metric: "readiness_score"
+        operator: ">="
+        threshold: 60            # Higher readiness bar
+    block_on_fail: true

@@ -11,7 +11,7 @@ export default defineConfig({
       { text: "Docs", link: "/" },
       { text: "Concepts", link: "/concepts/autonomous-github-management" },
       { text: "API", link: "/api/rest-api-reference" },
-      { text: "Guides", link: "/guides/full-walkthrough" },
+      { text: "Guides", link: "/guides/first-run-onboarding" },
       { text: "GitHub", link: "https://github.com/Octo-Lex/GitWire" },
     ],
     sidebar: [
@@ -246,6 +246,7 @@ export default defineConfig({
         text: "Guides",
         collapsed: true,
         items: [
+          { text: "First-Run Onboarding", link: "/guides/first-run-onboarding" },
           { text: "Full Walkthrough", link: "/guides/full-walkthrough" },
           { text: "First Triage", link: "/guides/first-triage" },
           { text: "First CI Heal", link: "/guides/first-ci-heal" },
