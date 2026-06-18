@@ -13,6 +13,8 @@ import { wrapOctokit } from "../lib/githubWrapper.js";
 import { collectForFailedRun } from "../services/ciEvidenceCollectorService.js";
 import { logger } from "../lib/logger.js";
 
+import { diagnosisQueue } from "../lib/queue.js";
+
 export function startCIEvidenceWorker() {
   const worker = createWorker(
     "ci-evidence",
@@ -50,6 +52,30 @@ export function startCIEvidenceWorker() {
         { jobId: job.id, proposalId: proposal.id, runId },
         "CI evidence collection completed"
       );
+
+      // ── Enqueue diagnosis job for the collected proposal ─────────────────
+      // Only enqueue when evidence collection actually moved the proposal
+      // to evidence_collected. The diagnosis worker is idempotent (skips
+      // proposals that already have a diagnosis), so duplicate deliveries
+      // are safe.
+      if (proposal.status === "evidence_collected") {
+        const diagnosisCorrelationId = `diagnosis-${proposal.id}-${Date.now()}`;
+        await diagnosisQueue.add(
+          "diagnose-proposal",
+          {
+            proposalId: proposal.id,
+            correlationId: diagnosisCorrelationId,
+          },
+          {
+            priority: 3,
+            jobId: `diagnosis:${proposal.id}`,
+          }
+        );
+        logger.info(
+          { jobId: job.id, proposalId: proposal.id },
+          "Diagnosis job enqueued"
+        );
+      }
 
       return { proposalId: proposal.id };
     },

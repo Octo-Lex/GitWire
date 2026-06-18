@@ -12,6 +12,7 @@ export {
   triageQueue,
   ciHealQueue,
   ciEvidenceQueue,
+  diagnosisQueue,
   syncQueue,
   maintainerQueue,
   issueFixQueue,

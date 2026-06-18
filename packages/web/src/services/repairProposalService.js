@@ -358,7 +358,50 @@ export function validateDiagnosis(diagnosis) {
     }
   }
 
+  // evidence_ids must be an array of strings if present
+  if (diagnosis.evidence_ids !== undefined) {
+    if (!Array.isArray(diagnosis.evidence_ids)) {
+      errors.push("Diagnosis evidence_ids must be an array");
+    } else if (diagnosis.evidence_ids.length === 0) {
+      errors.push("Diagnosis evidence_ids must not be empty");
+    } else {
+      for (const eid of diagnosis.evidence_ids) {
+        if (typeof eid !== "string") {
+          errors.push("Diagnosis evidence_ids must contain only strings");
+          break;
+        }
+      }
+    }
+  }
+
   return errors.length > 0 ? { valid: false, errors } : { valid: true };
+}
+
+/**
+ * Validate that a diagnosis references only collected evidence.
+ * Every entry in diagnosis.evidence_ids must match a `source` value
+ * from the proposal's evidence_refs.
+ */
+export function validateDiagnosisEvidenceBinding(diagnosis, evidenceRefs) {
+  if (!diagnosis || !Array.isArray(diagnosis.evidence_ids) || diagnosis.evidence_ids.length === 0) {
+    return { valid: false, errors: ["Diagnosis must reference at least one evidence item"] };
+  }
+
+  if (!Array.isArray(evidenceRefs) || evidenceRefs.length === 0) {
+    return { valid: false, errors: ["No evidence refs available on proposal"] };
+  }
+
+  const collectedSources = new Set(evidenceRefs.map((ref) => ref.source));
+  const unbound = diagnosis.evidence_ids.filter((eid) => !collectedSources.has(eid));
+
+  if (unbound.length > 0) {
+    return {
+      valid: false,
+      errors: [`Diagnosis references evidence not in proposal: ${unbound.join(", ")}`],
+    };
+  }
+
+  return { valid: true };
 }
 
 /**
@@ -924,14 +967,19 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
   // MANDATORY actor-kind enforcement — unconditional, before any validation
   requireActorKind(actor_kind);
 
+  // evidence_refs is write-once: reserved exclusively for recordCiEvidenceCollection()
+  // which locks, validates status (detected → evidence_collected), and records in one
+  // atomic transaction. The generic attachEvidence path must never write evidence_refs.
+  if (evidence.evidence_refs !== undefined) {
+    throw new Error(
+      "evidence_refs may only be recorded by recordCiEvidenceCollection"
+    );
+  }
+
   // Validate ALL evidence types before touching the database
   if (evidence.diagnosis) {
     const check = validateDiagnosis(evidence.diagnosis);
     if (!check.valid) throw new Error(`Invalid diagnosis: ${check.errors.join("; ")}`);
-  }
-  if (evidence.evidence_refs) {
-    const check = validateEvidenceRefs(evidence.evidence_refs);
-    if (!check.valid) throw new Error(`Invalid evidence_refs: ${check.errors.join("; ")}`);
   }
   if (evidence.patch_proposal) {
     const check = validatePatchProposal(evidence.patch_proposal);
@@ -948,7 +996,6 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
 
   const fields = [
     ["diagnosis", evidence.diagnosis],
-    ["evidence_refs", evidence.evidence_refs],
     ["patch_proposal", evidence.patch_proposal],
     ["validation_result", evidence.validation_result],
     ["critic_review", evidence.critic_review],
@@ -981,6 +1028,28 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
       );
     }
 
+    // Enforce diagnosis_worker lifecycle boundary and write-once invariant
+    // at the canonical service layer, not just in the worker wrapper.
+    // diagnosis_worker may only attach diagnosis when the proposal is in
+    // evidence_collected, and only if no diagnosis exists yet.
+    if (actor_kind === ACTOR_KINDS.DIAGNOSIS_WORKER && evidence.diagnosis) {
+      if (proposal.status !== "evidence_collected") {
+        throw new Error(
+          `diagnosis_worker requires status 'evidence_collected', got '${proposal.status}'`
+        );
+      }
+
+      // Idempotent no-op: diagnosis already exists
+      const existingDiagnosis = parseJsonb(proposal.diagnosis);
+      if (existingDiagnosis) {
+        logger.info(
+          { proposal_id: id, actor_kind },
+          "Diagnosis already exists — canonical no-op"
+        );
+        return redactProposal(proposal);
+      }
+    }
+
     // Enforce patch scope against stored envelope
     if (evidence.patch_proposal) {
       const envelope = parseJsonb(proposal.task_envelope);
@@ -989,6 +1058,21 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
         if (scopeErrors.length > 0) {
           throw new Error(`Patch exceeds envelope scope: ${scopeErrors.join("; ")}`);
         }
+      }
+    }
+
+    // Enforce diagnosis evidence binding against the locked proposal's evidence_refs
+    // Every diagnosis.evidence_ids must reference a source in the collected evidence
+    if (evidence.diagnosis) {
+      const collectedRefs = parseJsonb(proposal.evidence_refs);
+      const binding = validateDiagnosisEvidenceBinding(
+        evidence.diagnosis,
+        collectedRefs || []
+      );
+      if (!binding.valid) {
+        throw new Error(
+          `Diagnosis evidence binding failed: ${binding.errors.join("; ")}`
+        );
       }
     }
 

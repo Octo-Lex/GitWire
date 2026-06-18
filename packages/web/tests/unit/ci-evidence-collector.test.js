@@ -263,7 +263,7 @@ describe("CI Evidence Collector — atomic collection contract", () => {
 
   it("recordCiEvidenceCollection uses CAS with separate id/version placeholders", () => {
     // Should have whereClauses.push for both id and version
-    const recordSection = repairService.split("recordCiEvidenceCollection");
+    const recordSection = repairService.split("export async function recordCiEvidenceCollection");
     expect(recordSection[1]).toMatch(/whereClauses\.push\(`id = \$\$\{paramIdx\+\+\}`\)/);
     expect(recordSection[1]).toMatch(/whereClauses\.push\(`version = \$\$\{paramIdx\+\+\}`\)/);
   });
@@ -282,7 +282,7 @@ describe("CI Evidence Collector — correlation identity in events", () => {
   });
 
   it("recordCiEvidenceCollection persists correlation_id in event", () => {
-    const recordSection = repairService.split("recordCiEvidenceCollection");
+    const recordSection = repairService.split("export async function recordCiEvidenceCollection");
     // The INSERT should include correlation_id
     expect(recordSection[1]).toMatch(/correlation_id/);
   });
@@ -320,52 +320,54 @@ describe("CI Evidence Collector — service-layer authority enforcement", () => 
   });
 
   it("createProposal calls requireActorKind unconditionally", () => {
-    const section = repairService.split("createProposal");
-    expect(section[1]).toMatch(/requireActorKind\(actor_kind\)/);
-    expect(section[1]).not.toMatch(/if \(actor_kind.*requireActorKind/s);
+    // Extract only the createProposal function body, not the rest of the file
+    const section = repairService.split("export async function createProposal");
+    const fnBody = section[1].split("export async function")[0]; // stop at next export
+    expect(fnBody).toMatch(/requireActorKind\(actor_kind\)/);
+    expect(fnBody).not.toMatch(/if \(actor_kind.*requireActorKind/s);
   });
 
   it("createProposal checks canCreateProposal unconditionally", () => {
-    const section = repairService.split("createProposal");
+    const section = repairService.split("export async function createProposal");
     expect(section[1]).toMatch(/canCreateProposal\(actor_kind\)/);
     expect(section[1]).not.toMatch(/if \(actor_kind && !canCreateProposal/);
   });
 
   it("attachEvidence calls requireActorKind unconditionally", () => {
-    const section = repairService.split("attachEvidence");
+    const section = repairService.split("export async function attachEvidence");
     expect(section[1]).toMatch(/requireActorKind\(actor_kind\)/);
   });
 
   it("attachEvidence checks canAttachField per field unconditionally", () => {
-    const section = repairService.split("attachEvidence");
+    const section = repairService.split("export async function attachEvidence");
     expect(section[1]).toMatch(/canAttachField\(actor_kind, field\)/);
     // Must NOT be wrapped in an optional if(actor_kind) guard
     expect(section[1]).not.toMatch(/if \(actor_kind\)/);
   });
 
   it("transitionProposal calls requireActorKind unconditionally", () => {
-    const section = repairService.split("transitionProposal");
+    const section = repairService.split("export async function transitionProposal");
     expect(section[1]).toMatch(/requireActorKind\(actor_kind\)/);
   });
 
   it("transitionProposal checks canTransitionTo unconditionally", () => {
-    const section = repairService.split("transitionProposal");
+    const section = repairService.split("export async function transitionProposal");
     expect(section[1]).toMatch(/canTransitionTo\(actor_kind, targetStatus\)/);
     expect(section[1]).not.toMatch(/if \(actor_kind && !canTransitionTo/);
   });
 
   it("recordCiEvidenceCollection calls requireActorKind unconditionally", () => {
-    const section = repairService.split("recordCiEvidenceCollection");
+    const section = repairService.split("export async function recordCiEvidenceCollection");
     expect(section[1]).toMatch(/requireActorKind\(actor_kind\)/);
   });
 
   it("recordCiEvidenceCollection checks canAttachField for evidence_refs", () => {
-    const section = repairService.split("recordCiEvidenceCollection");
+    const section = repairService.split("export async function recordCiEvidenceCollection");
     expect(section[1]).toMatch(/canAttachField\(actor_kind, "evidence_refs"\)/);
   });
 
   it("recordCiEvidenceCollection checks canTransitionTo for evidence_collected", () => {
-    const section = repairService.split("recordCiEvidenceCollection");
+    const section = repairService.split("export async function recordCiEvidenceCollection");
     expect(section[1]).toMatch(/canTransitionTo\(actor_kind, "evidence_collected"\)/);
   });
 
@@ -394,12 +396,12 @@ describe("CI Evidence Collector — source delivery identity", () => {
   });
 
   it("recordCiEvidenceCollection accepts source_delivery_id", () => {
-    const section = repairService.split("recordCiEvidenceCollection");
+    const section = repairService.split("export async function recordCiEvidenceCollection");
     expect(section[1]).toMatch(/source_delivery_id/);
   });
 
   it("collection event INSERT includes source_delivery_id", () => {
-    const section = repairService.split("recordCiEvidenceCollection");
+    const section = repairService.split("export async function recordCiEvidenceCollection");
     expect(section[1]).toMatch(/source_delivery_id\)/);
   });
 
