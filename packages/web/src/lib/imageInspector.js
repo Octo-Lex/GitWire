@@ -12,6 +12,7 @@
 // This is the "do not trust only the configured string" principle.
 
 import { spawn } from "child_process";
+import crypto from "crypto";
 import { logger } from "./logger.js";
 import { digestsMatch } from "./imageReference.js";
 
@@ -208,4 +209,32 @@ function runCommand(cmd, args, timeoutMs) {
       }
     });
   });
+}
+
+/**
+ * Compute a canonical content-addressed hash over a normalized inspection
+ * object. This is used to persist a durable audit-grade proof that the
+ * runtime resolved the exact pinned image.
+ *
+ * The canonical form normalizes the inspection to its binding fields only:
+ *   { runtime, image_id, image_digest, repo_digests }
+ *
+ * @param {object} inspection - result from inspectContainerImage or inspectImage
+ * @returns {string} sha256:<hex64>
+ */
+export function computeInspectionHash(inspection) {
+  if (!inspection) {
+    throw new Error("computeInspectionHash: inspection is required");
+  }
+
+  const canonical = JSON.stringify({
+    runtime: inspection.runtime || null,
+    image_id: inspection.image_id || null,
+    image_digest: inspection.image_digest || null,
+    repo_digests: Array.isArray(inspection.repo_digests)
+      ? [...inspection.repo_digests].sort()
+      : [],
+  });
+
+  return "sha256:" + crypto.createHash("sha256").update(canonical).digest("hex");
 }

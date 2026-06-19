@@ -24,6 +24,7 @@ import {
   computeProbeSuiteHash,
 } from "./isolationProbes.js";
 import { validateDigestPinned, extractDigest } from "./imageReference.js";
+import { computeInspectionHash } from "./imageInspector.js";
 
 /**
  * Store backend isolation evidence durably.
@@ -79,6 +80,9 @@ export async function storeBackendEvidence(params) {
   const { verifyImageIdentity } = await import("./imageInspector.js");
   verifyImageIdentity(inspection_result, image_digest);
 
+  // Compute canonical inspection hash for durable audit proof
+  const inspectionHash = computeInspectionHash(inspection_result);
+
   // Validate probe completeness — all required probes present
   const completeness = validateProbeCompleteness(probe_results);
   if (!completeness.valid) {
@@ -107,8 +111,10 @@ export async function storeBackendEvidence(params) {
     `INSERT INTO backend_isolation_evidence
        (evidence_id, execution_backend_id, executor_version, image_ref,
         image_digest, container_runtime, runtime_version,
-        probe_suite_hash, probe_results, all_probes_passed)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        probe_suite_hash, probe_results, all_probes_passed,
+        inspection_hash, inspected_image_digest, inspected_image_id,
+        repo_digests, inspection_result)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      ON CONFLICT (evidence_id) DO NOTHING`,
     [
       evidenceId,
@@ -121,6 +127,11 @@ export async function storeBackendEvidence(params) {
       probeSuiteHash,
       JSON.stringify(probe_results),
       true,
+      inspectionHash,
+      inspection_result.image_digest || null,
+      inspection_result.image_id || null,
+      JSON.stringify(inspection_result.repo_digests || []),
+      JSON.stringify(inspection_result),
     ]
   );
 
@@ -143,7 +154,9 @@ export async function resolveBackendEvidence(execution_backend_id, image_digest)
   const { rows } = await db.query(
     `SELECT evidence_id, execution_backend_id, executor_version, image_ref,
             image_digest, container_runtime, runtime_version,
-            probe_suite_hash, probe_results, all_probes_passed, created_at
+            probe_suite_hash, probe_results, all_probes_passed,
+            inspection_hash, inspected_image_digest, inspected_image_id,
+            repo_digests, inspection_result, created_at
      FROM backend_isolation_evidence
      WHERE execution_backend_id = $1 AND image_digest = $2
      ORDER BY created_at DESC
@@ -159,6 +172,12 @@ export async function resolveBackendEvidence(execution_backend_id, image_digest)
     probe_results: typeof row.probe_results === "string"
       ? JSON.parse(row.probe_results)
       : row.probe_results,
+    repo_digests: typeof row.repo_digests === "string"
+      ? JSON.parse(row.repo_digests)
+      : row.repo_digests,
+    inspection_result: typeof row.inspection_result === "string"
+      ? JSON.parse(row.inspection_result)
+      : row.inspection_result,
   };
 }
 
@@ -209,6 +228,65 @@ export async function verifyBackendEvidence(execution_backend_id, image_digest) 
   if (refDigest !== evidence.image_digest) {
     throw new Error(
       `Stored isolation evidence image_ref digest '${refDigest}' does not match stored image_digest '${evidence.image_digest}'`
+    );
+  }
+
+  // PR #56: Re-compute probe_suite_hash and verify it matches stored
+  const recomputedProbeHash = computeProbeSuiteHash(evidence.probe_results);
+  if (recomputedProbeHash !== evidence.probe_suite_hash) {
+    throw new Error(
+      `Stored probe_suite_hash '${evidence.probe_suite_hash}' does not match recomputed '${recomputedProbeHash}'`
+    );
+  }
+
+  // PR #56: Verify inspection evidence is present
+  if (!evidence.inspection_hash) {
+    throw new Error(
+      `Stored isolation evidence missing inspection_hash — cannot audit image identity`
+    );
+  }
+  if (!evidence.inspected_image_digest) {
+    throw new Error(
+      `Stored isolation evidence missing inspected_image_digest — cannot verify runtime image identity`
+    );
+  }
+
+  // PR #56: Inspected digest must match stored image_digest
+  if (evidence.inspected_image_digest !== evidence.image_digest) {
+    throw new Error(
+      `Stored inspected_image_digest '${evidence.inspected_image_digest}' does not match image_digest '${evidence.image_digest}'`
+    );
+  }
+
+  // PR #56: inspection_result is MANDATORY — without the raw inspection
+  // object, the inspection_hash cannot be recomputed and audit completeness
+  // is broken. Reject if missing or unparsable.
+  if (!evidence.inspection_result) {
+    throw new Error(
+      `Stored isolation evidence missing inspection_result — cannot recompute inspection_hash for audit`
+    );
+  }
+  const recomputedInspectionHash = computeInspectionHash(evidence.inspection_result);
+  if (recomputedInspectionHash !== evidence.inspection_hash) {
+    throw new Error(
+      `Stored inspection_hash '${evidence.inspection_hash}' does not match recomputed '${recomputedInspectionHash}'`
+    );
+  }
+
+  // PR #56: repo_digests are MANDATORY for pass-capable evidence.
+  // Image ID/config digest and manifest repo digest are not the same proof.
+  // An empty or missing set bypasses the binding check and is rejected.
+  if (!Array.isArray(evidence.repo_digests) || evidence.repo_digests.length === 0) {
+    throw new Error(
+      `Stored isolation evidence has empty or missing repo_digests — cannot verify manifest digest binding`
+    );
+  }
+  const hasMatchingDigest = evidence.repo_digests.some(
+    (rd) => rd.includes(evidence.image_digest)
+  );
+  if (!hasMatchingDigest) {
+    throw new Error(
+      `Stored repo_digests do not contain a reference with digest '${evidence.image_digest}'`
     );
   }
 

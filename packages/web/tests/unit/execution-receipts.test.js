@@ -336,12 +336,11 @@ describe("Execution Receipts — recordCriticReview receipt-backed approval", ()
 // ════════════════════════════════════════════════════════════════════════════
 
 describe("Execution Receipts — shared verifier hardening", () => {
-  it("ALLOWED_PASS_EXECUTION_BACKENDS is empty", () => {
+  it("ALLOWED_PASS_EXECUTION_BACKENDS includes docker-executor", () => {
     const repairService = readSource("packages/web/src/services/repairProposalService.js");
     expect(repairService).toMatch(/ALLOWED_PASS_EXECUTION_BACKENDS/);
-    // Must be empty — node-executor cannot authorize pass
     const section = repairService.split("ALLOWED_PASS_EXECUTION_BACKENDS");
-    expect(section[1]).toMatch(/empty until.*backend lands/i);
+    expect(section[1]).toMatch(/docker-executor/);
   });
 
   it("rejects node-executor pass receipts", () => {

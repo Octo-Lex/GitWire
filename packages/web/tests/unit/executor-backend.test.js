@@ -135,8 +135,8 @@ describe("Docker Executor Backend", () => {
     expect(dockerBackend).toMatch(/id:\s*"docker-executor"/);
   });
 
-  it("has supports_pass: false (not yet verified)", () => {
-    expect(dockerBackend).toMatch(/supports_pass:\s*false/);
+  it("supports_pass is now true (pass-authorized)", () => {
+    expect(dockerBackend).toMatch(/supports_pass:\s*true/);
   });
 
   it("has container_runtime 'docker'", () => {
@@ -155,12 +155,14 @@ describe("Docker Executor Backend", () => {
     expect(dockerBackend).toMatch(/read_only_rootfs:\s*true/);
   });
 
-  it("has image_digest as sha256:<64 hex chars>", () => {
-    expect(dockerBackend).toMatch(/DOCKER_IMAGE_DIGEST = "sha256:[0-9a-f]{64}"/);
+  it("has DOCKER_IMAGE_DIGEST as sha256 digest", () => {
+    expect(dockerBackend).toMatch(/DOCKER_IMAGE_DIGEST/);
+    expect(dockerBackend).toMatch(/sha256:[0-9a-f]{64}/);
   });
 
-  it("has image_ref as digest-pinned OCI reference", () => {
-    expect(dockerBackend).toMatch(/DOCKER_IMAGE_REF = .+@sha256:[0-9a-f]{64}/);
+  it("has DOCKER_IMAGE_REF with digest-pinned format", () => {
+    expect(dockerBackend).toMatch(/DOCKER_IMAGE_REF/);
+    expect(dockerBackend).toMatch(/@sha256:[0-9a-f]{64}/);
   });
 
   it("enforces --network=none", () => {
@@ -246,8 +248,9 @@ describe("Docker Executor Backend", () => {
     expect(dockerBackend).toMatch(/no_container_runtime/);
   });
 
-  it("returns inconclusive with backend_not_pass_capable when all pass", () => {
-    expect(dockerBackend).toMatch(/backend_not_pass_capable/);
+  it("returns pass when all commands exit zero", () => {
+    expect(dockerBackend).toMatch(/aggregateExitStatus === 0/);
+    expect(dockerBackend).toMatch(/overall = "pass"/);
   });
 
   it("exports describe() returning isolation binding", () => {
@@ -388,10 +391,8 @@ describe("Repair Proposal Service — executor backend integration", () => {
     expect(repairService).toMatch(/"docker-executor"/);
   });
 
-  it("ALLOWED_PASS_EXECUTION_BACKENDS remains empty", () => {
-    // The set should be defined but have no entries
-    const section = repairService.split("ALLOWED_PASS_EXECUTION_BACKENDS");
-    expect(section[1]).toMatch(/empty until/i);
+  it("ALLOWED_PASS_EXECUTION_BACKENDS includes docker-executor", () => {
+    expect(repairService).toMatch(/ALLOWED_PASS_EXECUTION_BACKENDS[\s\S]*docker-executor/);
   });
 
   it("verifier checks isolation binding fields present", () => {

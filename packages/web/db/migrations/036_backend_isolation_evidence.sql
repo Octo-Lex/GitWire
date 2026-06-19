@@ -5,20 +5,30 @@
 -- AND all required probes passed. This table stores the durable,
 -- content-addressed evidence record.
 --
+-- Inspection columns (inspection_hash, inspected_image_digest,
+-- inspected_image_id, repo_digests, inspection_result) persist the
+-- runtime image identity proof so future audits can verify why the
+-- evidence was accepted.
+--
 -- Write-once: INSERT ON CONFLICT DO NOTHING. Never deleted.
 
 CREATE TABLE IF NOT EXISTS backend_isolation_evidence (
-  evidence_id            TEXT PRIMARY KEY,
-  execution_backend_id   TEXT NOT NULL,
-  executor_version       TEXT NOT NULL,
-  image_ref              TEXT NOT NULL,
-  image_digest           TEXT NOT NULL,
-  container_runtime      TEXT NOT NULL,
-  runtime_version        TEXT,
-  probe_suite_hash       TEXT NOT NULL,
-  probe_results          TEXT NOT NULL,
-  all_probes_passed      BOOLEAN NOT NULL,
-  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  evidence_id              TEXT PRIMARY KEY,
+  execution_backend_id     TEXT NOT NULL,
+  executor_version         TEXT NOT NULL,
+  image_ref                TEXT NOT NULL,
+  image_digest             TEXT NOT NULL,
+  container_runtime        TEXT NOT NULL,
+  runtime_version          TEXT,
+  probe_suite_hash         TEXT NOT NULL,
+  probe_results            TEXT NOT NULL,
+  all_probes_passed        BOOLEAN NOT NULL,
+  inspection_hash          TEXT,
+  inspected_image_digest   TEXT,
+  inspected_image_id       TEXT,
+  repo_digests             TEXT,
+  inspection_result        TEXT,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Index for looking up evidence by backend + image digest

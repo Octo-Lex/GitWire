@@ -2355,7 +2355,7 @@ const ALLOWED_EXECUTOR_VERSIONS = new Set([
  * - read-only source input + disposable workdir
  */
 const ALLOWED_PASS_EXECUTION_BACKENDS = new Set([
-  // empty until Docker/Podman/nsjail/firejail backend lands
+  "docker-executor",
 ]);
 
 /**
@@ -2373,6 +2373,7 @@ const ALLOWED_PASS_EXECUTION_BACKENDS = new Set([
  * 3b. Isolation bindings present on receipt
  * 3c. network_disabled, non_root, read_only_rootfs all true
  * 3d. image_ref present and digest-pinned (immutable OCI identity)
+ * 3e. durable backend isolation evidence exists and is audit-complete
  * 4. executor_version is allowlisted
  * 5. patch_artifact_hash matches locked patch_proposal
  * 6. base_sha matches proposal head_sha
@@ -2496,6 +2497,56 @@ async function verifyExecutionReceiptAgainstLockedProposal(
   } catch (imgErr) {
     throw new Error(
       `Execution receipt image_ref '${receipt.image_ref}' is invalid: ${imgErr.message}`
+    );
+  }
+
+  // 3e. Durable backend isolation evidence must exist and be audit-complete.
+  // This is the core unlock check: a pass receipt is accepted ONLY when
+  // valid evidence exists for the backend + image digest, proving that:
+  // - all isolation probes passed
+  // - the probe suite hash recomputes
+  // - runtime image inspection was performed and matches
+  // - the image_ref digest matches the stored image_digest
+  // - repo_digests contain the matching digest
+  // Additionally, the receipt's image_ref must match the stored evidence's
+  // image_ref exactly — not merely be digest-pinned.
+  try {
+    const { verifyBackendEvidence } = await import("../lib/backendEvidenceStore.js");
+    const evidence = await verifyBackendEvidence(
+      receipt.execution_backend_id,
+      receipt.sandbox_image_digest
+    );
+
+    // Receipt image_ref must match stored evidence image_ref exactly
+    if (receipt.image_ref !== evidence.image_ref) {
+      throw new Error(
+        `Receipt image_ref '${receipt.image_ref}' does not match evidence image_ref '${evidence.image_ref}'`
+      );
+    }
+
+    // P1 fix: bind executor/runtime identity between receipt and evidence.
+    // Evidence for one executor/runtime version must not authorize a
+    // receipt from another allowed version.
+    if (receipt.executor_version !== evidence.executor_version) {
+      throw new Error(
+        `Receipt executor_version '${receipt.executor_version}' does not match evidence executor_version '${evidence.executor_version}'`
+      );
+    }
+    if (receipt.container_runtime !== evidence.container_runtime) {
+      throw new Error(
+        `Receipt container_runtime '${receipt.container_runtime}' does not match evidence container_runtime '${evidence.container_runtime}'`
+      );
+    }
+    // runtime_version binding — checked if the receipt includes it
+    if (receipt.runtime_version && evidence.runtime_version &&
+        receipt.runtime_version !== evidence.runtime_version) {
+      throw new Error(
+        `Receipt runtime_version '${receipt.runtime_version}' does not match evidence runtime_version '${evidence.runtime_version}'`
+      );
+    }
+  } catch (evidenceErr) {
+    throw new Error(
+      `Backend evidence verification failed: ${evidenceErr.message}`
     );
   }
 

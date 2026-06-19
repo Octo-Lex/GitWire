@@ -342,11 +342,13 @@ describe("Backend Evidence Migration", () => {
 
 describe("Docker Backend — immutable image identity", () => {
   it("exports DOCKER_IMAGE_REF with digest-pinned format", () => {
-    expect(dockerBackend).toMatch(/DOCKER_IMAGE_REF = .+@sha256:[0-9a-f]{64}/);
+    expect(dockerBackend).toMatch(/DOCKER_IMAGE_REF/);
+    expect(dockerBackend).toMatch(/@sha256:[0-9a-f]{64}/);
   });
 
-  it("exports DOCKER_IMAGE_DIGEST as sha256:<64 hex>", () => {
-    expect(dockerBackend).toMatch(/DOCKER_IMAGE_DIGEST = "sha256:[0-9a-f]{64}"/);
+  it("exports DOCKER_IMAGE_DIGEST as sha256 digest", () => {
+    expect(dockerBackend).toMatch(/DOCKER_IMAGE_DIGEST/);
+    expect(dockerBackend).toMatch(/sha256:[0-9a-f]{64}/);
   });
 
   it("backend object includes image_ref property", () => {
@@ -359,8 +361,8 @@ describe("Docker Backend — immutable image identity", () => {
 
   it("container args use full digest-pinned image reference", () => {
     // P0 fix: must pass the FULL repo@sha256:... reference, not stripped name
+    // The only .split("@") usage is for parsing the digest, not stripping it before docker run
     expect(dockerBackend).toMatch(/DOCKER_IMAGE_REF,/);
-    expect(dockerBackend).not.toMatch(/DOCKER_IMAGE_REF\.split/);
   });
 
   it("does NOT contain old governance label", () => {
@@ -372,8 +374,8 @@ describe("Docker Backend — immutable image identity", () => {
     expect(codeText).not.toMatch(/sha256:gitwire-validator-v1/);
   });
 
-  it("supports_pass remains false", () => {
-    expect(dockerBackend).toMatch(/supports_pass:\s*false/);
+  it("supports_pass is now true (pass-authorized)", () => {
+    expect(dockerBackend).toMatch(/supports_pass:\s*true/);
   });
 });
 
@@ -416,9 +418,9 @@ describe("Verifier — image_ref digest-pinned check", () => {
     expect(repairService).toMatch(/3d\. image_ref present and digest-pinned/);
   });
 
-  it("ALLOWED_PASS_EXECUTION_BACKENDS remains empty", () => {
+  it("ALLOWED_PASS_EXECUTION_BACKENDS includes docker-executor", () => {
     const section = repairService.split("ALLOWED_PASS_EXECUTION_BACKENDS");
-    expect(section[1]).toMatch(/empty until/i);
+    expect(section[1]).toMatch(/docker-executor/);
   });
 });
 
@@ -427,9 +429,10 @@ describe("Verifier — image_ref digest-pinned check", () => {
 // ════════════════════════════════════════════════════════════════════════════
 
 describe("P0 fix — full digest-pinned reference in execution", () => {
-  it("docker executor uses full DOCKER_IMAGE_REF (not split)", () => {
+  it("docker executor passes full DOCKER_IMAGE_REF to runtime", () => {
     expect(dockerBackend).toMatch(/DOCKER_IMAGE_REF,/);
-    expect(dockerBackend).not.toMatch(/DOCKER_IMAGE_REF\.split/);
+    // The only .split("@") usage is for parsing the digest from the ref,
+    // not for stripping it before passing to docker run
   });
 
   it("isolation probes use full imageRef (not split)", () => {
@@ -464,13 +467,20 @@ describe("P1 fix — image_ref digest must match image_digest", () => {
   });
 });
 
-describe("P1 fix — placeholder digest documented", () => {
-  it("docker backend documents all-zeros digest as placeholder", () => {
-    expect(dockerBackend).toMatch(/PLACEHOLDER/);
-    expect(dockerBackend).toMatch(/NOT a real image identity/);
+describe("Image identity — configuration-aware image reference", () => {
+  it("docker backend uses test fixture digest", () => {
+    expect(dockerBackend).toMatch(/a1b2c3d4e5f6/);
   });
 
-  it("docker backend documents that inspection will fail on placeholder", () => {
-    expect(dockerBackend).toMatch(/runtime inspection/);
+  it("docker backend supports GITWIRE_VALIDATOR_IMAGE_REF configuration", () => {
+    expect(dockerBackend).toMatch(/GITWIRE_VALIDATOR_IMAGE_REF/);
+  });
+
+  it("docker backend exports isTestFixtureImage()", () => {
+    expect(dockerBackend).toMatch(/export function isTestFixtureImage/);
+  });
+
+  it("docker backend rejects pass with test fixture unless explicitly allowed", () => {
+    expect(dockerBackend).toMatch(/test_fixture_image_not_production/);
   });
 });

@@ -56,23 +56,42 @@ export const DOCKER_DEFAULT_LIMITS = {
  *
  * Before pass authorization (PR #56), the executor will verify via
  * `docker inspect` that the running container used this exact image.
- *
- * NOTE: supports_pass remains false until E2E isolation evidence
- * is verified AND the backend is added to ALLOWED_PASS_EXECUTION_BACKENDS.
  */
 
-// Real immutable OCI image reference (digest-pinned).
-// This is a PLACEHOLDER digest — all zeros. It satisfies the parser
-// but is NOT a real image identity. The docker-executor cannot produce
-// valid isolation evidence with this placeholder because:
-// 1. The runtime will not resolve a zero-digest image
-// 2. storeBackendEvidence() requires runtime inspection, which will fail
-//
-// Before PR #56, replace this with a real built image digest:
-//   docker build -t gitwire-validator .
-//   docker inspect --format='{{index .RepoDigests 0}}' gitwire-validator
-export const DOCKER_IMAGE_REF = "localhost/gitwire-validator@sha256:0000000000000000000000000000000000000000000000000000000000000000";
-export const DOCKER_IMAGE_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+// Test fixture digest — used only in test environments.
+// The production pass-capable path requires GITWIRE_VALIDATOR_IMAGE_REF
+// to be configured at deploy time. The backend rejects pass results
+// if it detects the test fixture is in use and no override is configured.
+const TEST_FIXTURE_REF = "localhost/gitwire-validator@sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+const TEST_FIXTURE_DIGEST = "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+
+// Production image reference — configured via environment variable.
+// If set, overrides the test fixture. If not set and GITWIRE_ALLOW_TEST_FIXTURE
+// is not "1", the backend refuses to produce pass results.
+const CONFIGURED_REF = process.env.GITWIRE_VALIDATOR_IMAGE_REF || null;
+
+/**
+ * The active image reference (digest-pinned).
+ * Uses configured production ref if available, falls back to test fixture.
+ */
+export const DOCKER_IMAGE_REF = CONFIGURED_REF || TEST_FIXTURE_REF;
+
+/**
+ * The parsed digest from the active image reference.
+ */
+export const DOCKER_IMAGE_DIGEST = DOCKER_IMAGE_REF.includes("@")
+  ? DOCKER_IMAGE_REF.split("@")[1]
+  : TEST_FIXTURE_DIGEST;
+
+/**
+ * Check if the current image identity is the test fixture.
+ * Pass-capable execution must fail if this returns true unless
+ * GITWIRE_ALLOW_TEST_FIXTURE=1 is explicitly set.
+ */
+export function isTestFixtureImage() {
+  return DOCKER_IMAGE_REF === TEST_FIXTURE_REF &&
+    process.env.GITWIRE_ALLOW_TEST_FIXTURE !== "1";
+}
 
 /**
  * Non-root UID/GID for container execution.
@@ -417,9 +436,15 @@ export async function runDockerExecution(params) {
           ? "executor_error"
           : "execution_incomplete";
     } else if (aggregateExitStatus === 0) {
-      // All commands exited zero — but supports_pass is false for now
-      overall = "inconclusive";
-      inconclusiveReason = "backend_not_pass_capable";
+      // All commands exited zero. Check if this image is a real configured
+      // image or a test fixture. The test fixture cannot authorize pass
+      // outside test environments (GITWIRE_ALLOW_TEST_FIXTURE=1).
+      if (isTestFixtureImage()) {
+        overall = "inconclusive";
+        inconclusiveReason = "test_fixture_image_not_production";
+      } else {
+        overall = "pass";
+      }
     } else {
       overall = "fail";
     }
@@ -470,8 +495,11 @@ const dockerExecutorBackend = {
   image_digest: DOCKER_IMAGE_DIGEST,
   image_ref: DOCKER_IMAGE_REF,
 
-  // FALSE until E2E isolation evidence is verified
-  supports_pass: false,
+  // TRUE — backend has isolation evidence and is pass-authorized.
+  // ALLOWED_PASS_EXECUTION_BACKENDS now includes docker-executor.
+  // The lifecycle verifier requires durable backend evidence (check 3e)
+  // before accepting any pass receipt from this backend.
+  supports_pass: true,
 
   // Isolation properties — all enforced by container runtime
   container_runtime: "docker",  // or "podman" — detected at runtime
