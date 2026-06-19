@@ -67,6 +67,7 @@ const QUEUE_NAMES = {
   diagnosisQueue:  QUEUES.DIAGNOSIS,
   patchQueue:      QUEUES.PATCH,
   verificationQueue: QUEUES.VERIFICATION,
+  criticQueue:       QUEUES.CRITIC,
   syncQueue:       QUEUES.SYNC,
   maintainerQueue: QUEUES.MAINTAINER,
   issueFixQueue:   QUEUES.ISSUE_FIX,
@@ -112,6 +113,7 @@ export const ciEvidenceQueue = queueProxy("ciEvidenceQueue");
 export const diagnosisQueue  = queueProxy("diagnosisQueue");
 export const patchQueue      = queueProxy("patchQueue");
 export const verificationQueue = queueProxy("verificationQueue");
+export const criticQueue        = queueProxy("criticQueue");
 export const syncQueue       = queueProxy("syncQueue");
 export const maintainerQueue = queueProxy("maintainerQueue");
 export const issueFixQueue   = queueProxy("issueFixQueue");

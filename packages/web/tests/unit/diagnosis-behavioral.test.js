@@ -362,7 +362,7 @@ describe("Diagnosis behavioral — actor authority", () => {
         null,
         ACTOR_KINDS.DIAGNOSIS_WORKER
       )
-    ).rejects.toThrow(/not authorized to attach evidence field: critic_review/);
+    ).rejects.toThrow(/critic_review may only be recorded by recordCriticReview/);
   });
 
   it("missing actor_kind is rejected", async () => {

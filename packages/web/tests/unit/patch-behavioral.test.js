@@ -761,7 +761,7 @@ describe("Patch behavioral — authority enforcement", () => {
         null,
         ACTOR_KINDS.PATCH_WORKER
       )
-    ).rejects.toThrow(/not authorized to attach evidence field: critic_review/);
+    ).rejects.toThrow(/critic_review may only be recorded by recordCriticReview/);
   });
 
   it("attachEvidence rejects patch_proposal regardless of actor", async () => {

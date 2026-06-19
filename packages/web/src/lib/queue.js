@@ -15,6 +15,7 @@ export {
   diagnosisQueue,
   patchQueue,
   verificationQueue,
+  criticQueue,
   syncQueue,
   maintainerQueue,
   issueFixQueue,

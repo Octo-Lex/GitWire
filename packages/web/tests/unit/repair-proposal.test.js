@@ -137,9 +137,12 @@ describe("Repair Proposal — authority states", () => {
     expect(AUTHORITY_STATES.has("applied")).toBe(true);
     expect(AUTHORITY_STATES.has("verified_after_apply")).toBe(true);
   });
-  it("detected/review_ready are NOT authority states", () => {
+  it("detected is NOT an authority state", () => {
     expect(AUTHORITY_STATES.has("detected")).toBe(false);
-    expect(AUTHORITY_STATES.has("review_ready")).toBe(false);
+  });
+
+  it("review_ready IS an authority state", () => {
+    expect(AUTHORITY_STATES.has("review_ready")).toBe(true);
   });
 });
 

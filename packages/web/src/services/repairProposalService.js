@@ -71,6 +71,7 @@ export const TERMINAL_STATES = new Set([
 export const AUTHORITY_STATES = new Set([
   "proposed",
   "verified",
+  "review_ready",
   "approved",
   "applied",
   "verified_after_apply",
@@ -127,6 +128,18 @@ export const VALID_VALIDATION_OVERALL = new Set(["pass", "fail", "inconclusive"]
 // ── Valid critic verdicts ────────────────────────────────────────────────────
 export const VALID_CRITIC_VERDICTS = new Set(["approve", "reject"]);
 
+// ── Valid critic finding codes ───────────────────────────────────────────────
+export const VALID_FINDING_CODES = new Set([
+  "PATCH_SCOPE_WITHIN_ENVELOPE",
+  "VALIDATION_RECEIPT_BOUND",
+  "BLOCKED_PATH_VIOLATION",
+  "UNRESOLVED_EVIDENCE_GAP",
+  "UNSUPPORTED_REMEDIATION",
+]);
+
+// ── Valid critic finding severities ──────────────────────────────────────────
+export const VALID_FINDING_SEVERITIES = new Set(["blocking", "warning", "info"]);
+
 // ── Valid evidence_ref types ─────────────────────────────────────────────────
 export const VALID_EVIDENCE_REF_TYPES = new Set([
   // Original types
@@ -154,7 +167,7 @@ const MAX_FILE_PATH_LENGTH = 512;
 /**
  * Parse a value that might be a JSON string (from JSONB) or already an object.
  */
-function parseJsonb(value) {
+export function parseJsonb(value) {
   if (value === null || value === undefined) return value;
   if (typeof value === "object") return value;
   if (typeof value === "string") {
@@ -1002,6 +1015,15 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
     );
   }
 
+  // critic_review is reserved exclusively for recordCriticReview()
+  // which enforces verified status, execution receipt binding, and
+  // the verified → review_ready/failed transition in one atomic transaction.
+  if (evidence.critic_review !== undefined) {
+    throw new Error(
+      "critic_review may only be recorded by recordCriticReview"
+    );
+  }
+
   // Validate ALL evidence types before touching the database
   if (evidence.diagnosis) {
     const check = validateDiagnosis(evidence.diagnosis);
@@ -1022,7 +1044,6 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
 
   const fields = [
     ["diagnosis", evidence.diagnosis],
-    ["critic_review", evidence.critic_review],
   ];
 
   const providedFields = fields.filter(([, v]) => v !== undefined);
@@ -2274,4 +2295,429 @@ function computeVerificationFingerprintInternal(params) {
     validation_plan_hash,
   });
   return "sha256:" + crypto.createHash("sha256").update(content).digest("hex");
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CANONICAL CRITIC REVIEW RECORDING — sole authorized writer of critic_review
+// and sole authorized entry into review_ready/failed from verified.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a bounded critic review input bundle from a locked proposal.
+ *
+ * The critic receives only immutable references — never raw content,
+ * diagnosis text, or open-ended repo access.
+ *
+ * This is the SHARED canonical bundle builder used by BOTH the worker
+ * (before locking) and the recorder (after locking) so that the
+ * critic_input_hash is reproducible from locked state.
+ *
+ * @param {object} proposal - the locked proposal row
+ * @returns {object} critic input bundle
+ */
+export function buildCriticInputBundle(proposal) {
+  const patchProposal = parseJsonb(proposal.patch_proposal);
+  const validationResult = parseJsonb(proposal.validation_result);
+  const diagnosis = parseJsonb(proposal.diagnosis);
+  const evidenceRefs = parseJsonb(proposal.evidence_refs) || [];
+
+  return {
+    proposal_id: proposal.id,
+    repository: proposal.repo_full_name || null,
+    head_sha: proposal.head_sha,
+    patch_artifact_hash: patchProposal?.artifact_hash || null,
+    patch_artifact_ref: patchProposal?.artifact_ref || null,
+    input_bundle_hash: patchProposal?.input_bundle_hash || null,
+    verification_fingerprint: validationResult?.verification_fingerprint || null,
+    execution_receipt_hash: validationResult?.execution_receipt_hash || null,
+    validation_plan_hash: validationResult?.validation_plan_hash || null,
+    sandbox_image_digest: validationResult?.sandbox_image_digest || null,
+    diagnosis_hash: diagnosis ? contentHash(diagnosis) : null,
+    evidence_hash: contentHash(evidenceRefs),
+  };
+}
+
+/**
+ * Compute the canonical review fingerprint from locked-state values.
+ *
+ * The fingerprint binds the critic input hash to the canonicalized review
+ * outcome: verdict, normalized findings (sorted by code), normalized
+ * blocking_findings (sorted), and policy_version.
+ *
+ * @param {string} inputHash - canonical critic input hash from locked state
+ * @param {string} verdict - critic verdict
+ * @param {array} findings - structured findings
+ * @param {array} blockingFindings - blocking finding codes
+ * @param {string|null} policyVersion - policy version
+ * @returns {string} review fingerprint (sha256 hex)
+ */
+export function computeReviewFingerprint(inputHash, verdict, findings, blockingFindings, policyVersion) {
+  const normalizedFindings = findings
+    .map((f) => ({ code: f.code, severity: f.severity }))
+    .sort((a, b) => a.code.localeCompare(b.code));
+  const normalizedBlocking = [...blockingFindings].sort();
+  return contentHash({
+    input_hash: inputHash,
+    verdict,
+    findings: normalizedFindings,
+    blocking_findings: normalizedBlocking,
+    policy_version: policyVersion || null,
+  });
+}
+
+/**
+ * Validate finding schema, blocking semantics, and evidence binding.
+ *
+ * Ensures:
+ * - approve → zero blocking findings
+ * - reject → at least one blocking finding
+ * - every finding has: code (allowlisted), severity (allowlisted), detail
+ * - every blocking finding → matching finding with severity: "blocking"
+ * - every evidence_ref → bound to locked proposal bundle values
+ *
+ * @param {string} verdict
+ * @param {array} findings
+ * @param {array} blockingFindings
+ * @param {object} bundleValues - bound reference values from locked bundle
+ * @throws {Error} on any validation failure
+ */
+function validateCriticFindings(verdict, findings, blockingFindings, bundleValues) {
+  const boundRefs = new Set(Object.values(bundleValues).filter(Boolean));
+
+  for (const f of findings) {
+    if (!f.code || !VALID_FINDING_CODES.has(f.code)) {
+      throw new Error(
+        `Critic finding has invalid or missing code (allowed: ${[...VALID_FINDING_CODES].join(", ")})`
+      );
+    }
+    if (!f.severity || !VALID_FINDING_SEVERITIES.has(f.severity)) {
+      throw new Error(
+        `Critic finding '${f.code}' has invalid or missing severity (allowed: ${[...VALID_FINDING_SEVERITIES].join(", ")})`
+      );
+    }
+    if (!f.detail || typeof f.detail !== "string" || f.detail.trim().length === 0) {
+      throw new Error(
+        `Critic finding '${f.code}' has missing or empty detail`
+      );
+    }
+    if (f.evidence_ref !== undefined && f.evidence_ref !== null && !boundRefs.has(f.evidence_ref)) {
+      throw new Error(
+        `Critic finding '${f.code}' evidence_ref is not bound to locked proposal bundle`
+      );
+    }
+  }
+
+  // Every blocking finding must correspond to a finding with severity: blocking
+  const blockingFindingCodes = new Set(
+    findings.filter((f) => f.severity === "blocking").map((f) => f.code)
+  );
+  for (const bf of blockingFindings) {
+    if (!blockingFindingCodes.has(bf)) {
+      throw new Error(
+        `Blocking finding '${bf}' has no matching finding with severity: blocking`
+      );
+    }
+  }
+
+  // approve → zero blocking findings
+  if (verdict === "approve" && blockingFindings.length > 0) {
+    throw new Error(
+      `Critic approve verdict with blocking findings is internally contradictory — approve requires zero blocking findings`
+    );
+  }
+
+  // reject → at least one blocking finding
+  if (verdict === "reject" && blockingFindings.length === 0) {
+    throw new Error(
+      `Critic reject verdict requires at least one blocking finding`
+    );
+  }
+}
+
+/**
+ * Record a critic review and transition the proposal.
+ *
+ * This is the SOLE authorized path for writing critic_review and
+ * transitioning from verified to review_ready or failed.
+ *
+ * Guarantees:
+ * - actor_kind must be critic_worker
+ * - Proposal must be in verified status with existing patch_proposal
+ * - validation_result.overall must be "pass"
+ * - P0 INTERIM: approve is unconditionally rejected — no receipt backend exists
+ * - Critic input hash is recomputed from locked proposal state (not caller assertion)
+ * - Review fingerprint is recomputed from canonical input hash + review outcome
+ * - Finding schema, blocking semantics, and evidence binding validated
+ * - Replay-safe: same fingerprint → no-op, different → reject
+ * - Atomic: lock + validate + update + event in one transaction
+ *
+ * State transitions:
+ * - reject with blocking findings → verified → failed
+ * - approve is UNREACHABLE until a real execution receipt backend exists
+ *
+ * @param {number} id - repair proposal ID
+ * @param {object} reviewInput - structured critic review
+ * @param {object} options
+ * @returns {Promise<object>} updated proposal
+ */
+export async function recordCriticReview(id, reviewInput = {}, options = {}) {
+  const {
+    actor = "critic_worker",
+    expected_version,
+    correlation_id,
+    source_delivery_id,
+    actor_kind = actor,
+  } = options;
+
+  if (!id) throw new Error("id is required");
+
+  // MANDATORY actor-kind enforcement — unconditional
+  requireActorKind(actor_kind);
+
+  if (!Number.isInteger(expected_version) || expected_version < 1) {
+    throw new Error("expected_version is required and must be a positive integer");
+  }
+
+  // Enforce actor-kind authority
+  if (!canAttachField(actor_kind, "critic_review")) {
+    throw new Error(`Actor '${actor_kind}' is not authorized to attach critic_review`);
+  }
+
+  // Validate verdict
+  const verdict = reviewInput.verdict;
+  if (!VALID_CRITIC_VERDICTS.has(verdict)) {
+    throw new Error(
+      `Critic review verdict must be one of: ${[...VALID_CRITIC_VERDICTS].join(", ")}`
+    );
+  }
+
+  // P0 INTERIM: approve is unconditionally rejected.
+  // Until a real execution-receipt backend exists with durable receipt
+  // resolution, hash verification, and binding checks, no caller — internal
+  // or external — can reach review_ready through critic approval.
+  // When the real backend lands, replace this gate with actual receipt
+  // resolution and binding verification.
+  if (verdict === "approve") {
+    throw new Error(
+      "Critic approval requires a verified sandbox execution receipt — no receipt backend available"
+    );
+  }
+
+  // Require binding fields
+  const requiredFields = [
+    "review_fingerprint",
+    "critic_input_hash",
+    "patch_artifact_hash",
+    "verification_fingerprint",
+    "findings",
+    "blocking_findings",
+  ];
+  for (const field of requiredFields) {
+    if (reviewInput[field] === undefined || reviewInput[field] === null) {
+      throw new Error(`Critic review field '${field}' is required`);
+    }
+  }
+  if (!Array.isArray(reviewInput.findings) || reviewInput.findings.length === 0) {
+    throw new Error("Critic review findings must be a non-empty array");
+  }
+  if (!Array.isArray(reviewInput.blocking_findings)) {
+    throw new Error("Critic review blocking_findings must be an array");
+  }
+
+  // Only reject is reachable; target status is always failed
+  const targetStatus = "failed";
+
+  if (!canTransitionTo(actor_kind, targetStatus)) {
+    throw new Error(
+      `Actor '${actor_kind}' is not authorized to transition to ${targetStatus}`
+    );
+  }
+
+  return db.transaction(async (client) => {
+    // Lock the row
+    const { rows: [proposal] } = await client.query(
+      "SELECT * FROM repair_proposals WHERE id = $1 FOR UPDATE",
+      [id]
+    );
+    if (!proposal) throw new Error(`Repair proposal not found: ${id}`);
+
+    // REPLAY SAFETY: already has critic review with same fingerprint → no-op
+    if (proposal.status === "failed" || proposal.status === "review_ready") {
+      const existingReview = parseJsonb(proposal.critic_review);
+      if (existingReview && existingReview.review_fingerprint === reviewInput.review_fingerprint) {
+        logger.info(
+          { proposal_id: id, correlation_id },
+          "Proposal already has critic review with same fingerprint — replay no-op"
+        );
+        return redactProposal(proposal);
+      }
+      throw new Error(
+        `Proposal already has a critic review with different fingerprint — ` +
+        `retries require an explicit revision contract`
+      );
+    }
+
+    // Only allow from verified
+    if (proposal.status !== "verified") {
+      throw new Error(
+        `Critic review requires status 'verified', got '${proposal.status}'`
+      );
+    }
+
+    // patch_proposal must exist
+    const patchProposal = parseJsonb(proposal.patch_proposal);
+    if (!patchProposal) {
+      throw new Error(
+        "Cannot record critic review: patch_proposal must exist"
+      );
+    }
+
+    // validation_result must exist and be "pass"
+    const validationResult = parseJsonb(proposal.validation_result);
+    if (!validationResult) {
+      throw new Error(
+        "Cannot record critic review: validation_result must exist"
+      );
+    }
+    if (validationResult.overall !== "pass") {
+      throw new Error(
+        `Cannot record critic review: validation_result.overall must be 'pass' (got '${validationResult.overall}')`
+      );
+    }
+
+    // ── P1a: Recompute critic_input_hash from LOCKED proposal state ──────────
+    // The critic input bundle is rebuilt from the locked row so that
+    // critic_input_hash is a canonical value, not a caller assertion.
+    const lockedBundle = buildCriticInputBundle(proposal);
+    const canonicalInputHash = contentHash(lockedBundle);
+
+    if (reviewInput.critic_input_hash !== canonicalInputHash) {
+      throw new Error(
+        `Critic review critic_input_hash does not match canonical hash from locked proposal state`
+      );
+    }
+
+    // ── P1b: Validate finding schema, blocking semantics, evidence binding ───
+    const bundleValues = {
+      patch_artifact_hash: lockedBundle.patch_artifact_hash,
+      input_bundle_hash: lockedBundle.input_bundle_hash,
+      verification_fingerprint: lockedBundle.verification_fingerprint,
+      diagnosis_hash: lockedBundle.diagnosis_hash,
+      evidence_hash: lockedBundle.evidence_hash,
+    };
+    validateCriticFindings(
+      verdict,
+      reviewInput.findings,
+      reviewInput.blocking_findings,
+      bundleValues
+    );
+
+    // ── P1a: Recompute review_fingerprint from canonical values ──────────────
+    // The fingerprint binds input hash + verdict + normalized findings +
+    // normalized blocking findings + policy version, all derived from
+    // locked state and the structured review input.
+    const canonicalReviewFingerprint = computeReviewFingerprint(
+      canonicalInputHash,
+      verdict,
+      reviewInput.findings,
+      reviewInput.blocking_findings,
+      reviewInput.policy_version || null
+    );
+
+    if (reviewInput.review_fingerprint !== canonicalReviewFingerprint) {
+      throw new Error(
+        `Critic review review_fingerprint does not match canonical fingerprint from locked proposal state`
+      );
+    }
+
+    // Verify patch_artifact_hash matches locked patch_proposal
+    if (reviewInput.patch_artifact_hash !== patchProposal.artifact_hash) {
+      throw new Error(
+        `Critic review patch_artifact_hash does not match locked patch_proposal artifact_hash`
+      );
+    }
+
+    // Verify verification_fingerprint matches locked validation_result
+    if (reviewInput.verification_fingerprint !== validationResult.verification_fingerprint) {
+      throw new Error(
+        `Critic review verification_fingerprint does not match locked validation_result`
+      );
+    }
+
+    // ── Persist the canonical (recomputed) values ───────────────────────────
+    const persistedReview = {
+      verdict,
+      review_fingerprint: canonicalReviewFingerprint,
+      critic_input_hash: canonicalInputHash,
+      patch_artifact_hash: patchProposal.artifact_hash,
+      verification_fingerprint: validationResult.verification_fingerprint,
+      findings: reviewInput.findings,
+      blocking_findings: reviewInput.blocking_findings,
+      risk_summary: reviewInput.risk_summary || "",
+      limitations: reviewInput.limitations || "",
+      policy_version: reviewInput.policy_version || null,
+    };
+
+    // CAS: version check + atomic write + transition
+    const setClauses = [
+      "critic_review = $1",
+      "status = $2",
+      "version = version + 1",
+    ];
+    const values = [
+      JSON.stringify(persistedReview),
+      targetStatus,
+    ];
+    let paramIdx = 3;
+
+    const whereClauses = [];
+    whereClauses.push(`id = $${paramIdx++}`);
+    values.push(id);
+    whereClauses.push(`version = $${paramIdx++}`);
+    values.push(expected_version);
+
+    const { rows } = await client.query(
+      `UPDATE repair_proposals
+       SET ${setClauses.join(", ")}
+       WHERE ${whereClauses.join(" AND ")}
+       RETURNING *`,
+      values
+    );
+
+    if (rows.length === 0) {
+      throw new Error(
+        `Version mismatch: expected version ${expected_version}. `
+      );
+    }
+
+    const updated = rows[0];
+
+    // Record one critic_review_recorded event
+    const snapshot = buildEvidenceSnapshot({
+      critic_review: persistedReview,
+      review_fingerprint: canonicalReviewFingerprint,
+    });
+    await client.query(
+      `INSERT INTO repair_proposal_events
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id,
+        "critic_review_recorded",
+        "verified",
+        targetStatus,
+        actor,
+        JSON.stringify(snapshot),
+        correlation_id || null,
+        source_delivery_id || null,
+      ]
+    );
+
+    logger.info(
+      { proposal_id: id, target_status: targetStatus, verdict, correlation_id },
+      "Critic review recorded"
+    );
+
+    return redactProposal(updated);
+  });
 }
