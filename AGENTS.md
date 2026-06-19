@@ -2,9 +2,30 @@
 
 This file provides context for AI coding agents interacting with the GitWire codebase and API.
 
+## ⚠️ READ FIRST: Production Deployment Context
+
+GitWire is not just a repository — it is a **running production system**. Before
+starting any work, read these two files:
+
+1. **`docs/installation/infrastructure.md`** — Proxmox VE host, CT 115 config,
+   Docker containers, database, Redis, Cloudflare tunnel, GitHub App, LLM provider.
+2. **`docs/installation/deployment-runbook.md`** — Step-by-step post-release
+   checklist: pull, apply migrations, rebuild, verify, smoke test.
+
+**Before tagging any release**, you MUST follow the deployment runbook and
+verify the running system matches the release. Do not assume `git push` +
+`git tag` means the release is deployed.
+
+### SSH Access
+
+```bash
+ssh gitwire    # Direct to CT 115 (192.168.3.151)
+ssh pve        # Proxmox host (192.168.3.5)
+```
+
 ## About GitWire
 
-GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard. Current version: **0.12.0**.
+GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard. Current version: **0.20.0**.
 
 ## Repository Structure
 
@@ -20,7 +41,7 @@ GitWire/
 │   │   │   ├── workers/         # 10 BullMQ background workers (incl. reconciliation)
 │   │   │   ├── lib/             # GitHub client, queue helpers, DB
 │   │   │   └── middleware/      # Auth, pagination, rate limiting
-│   │   ├── db/migrations/       # 19 SQL migrations (45 tables + 1 view)
+│   │   ├── db/migrations/       # 36 SQL migrations (001-036)
 │   │   ├── tests/               # Unit + integration tests (Jest)
 │   │   └── docker-compose.prod.yml
 │   ├── web-dashboard/       # Next.js 16 + Tailwind + SWR
@@ -113,12 +134,12 @@ cd packages/runtime && npm test # 16 runtime tests
 
 ## Testing
 
-- **251 tests total** across 4 suites:
-  - `@gitwire/rules`: 184 tests (expression engine, gates, parsing, plugins, helpers)
-  - `@gitwire/runtime`: 16 tests (factory patterns, compat layer)
-  - `@gitwire/web`: 44 service unit tests (+ integration tests requiring live API)
-  - `@gitwire/web-dashboard`: 66 tests (API client, components)
-- Run all: `npm test` (root, uses `--workspaces --if-present`)
+- **2,196 tests** across 60 suites:
+  - `@gitwire/rules`: expression engine, gates, parsing, plugins, helpers
+  - `@gitwire/runtime`: factory patterns, compat layer
+  - `@gitwire/web`: 60 suites — services, repair proposals, execution receipts, isolation evidence, pass-capable unlock
+  - `@gitwire/web-dashboard`: API client, components
+- Run all: `cd packages/web && NODE_OPTIONS="--experimental-vm-modules" npx jest --config jest.config.js --no-coverage`
 - Rules/engine tests require `--experimental-vm-modules`
 
 ## Common Tasks
@@ -155,3 +176,28 @@ cd packages/runtime && npm test # 16 runtime tests
 ## No Co-Authored-By
 
 Do NOT add `Co-Authored-By: Craft Agent` or any AI co-authorship to commits.
+
+## DCO Sign-Off
+
+All commits MUST be signed off:
+```bash
+git commit -s -m "your message"
+```
+
+## Pre-Release Checklist
+
+Before tagging ANY release:
+
+1. Run the full test suite — all suites must pass
+2. Update version in ALL package.json files (root + every package)
+3. Run `git commit -s` with the release message
+4. Tag: `git tag -a v0.XX.0 -m "release notes"`
+5. Push: `git push origin master && git push origin v0.XX.0`
+6. Create GitHub release
+7. **Follow `docs/installation/deployment-runbook.md`** to deploy to CT 115
+8. Verify the running container version matches the tag
+9. Verify all migrations are applied in the production database
+10. Smoke test the API at `https://gitwire.erlab.uk/health`
+
+Steps 7-10 are MANDATORY. A release is not complete until the running system
+reflects it.
