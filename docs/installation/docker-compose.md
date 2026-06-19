@@ -4,15 +4,19 @@ Deploy GitWire with a single `docker compose up -d`.
 
 ## Architecture
 
-GitWire runs 5 containers:
+GitWire runs 9 containers:
 
 | Container | Image | Port | Purpose |
 |-----------|-------|------|---------|
 | `gitwire-app` | Built from source | 3000 | Express API + 9 background workers |
 | `gitwire-dashboard` | Built from source | 3001 | Next.js 16 dashboard |
+| `gitwire-bot` | Built from source | 3002 | Telegram bot |
+| `gitwire-landing` | Built from source | 80 | Landing page |
+| `gitwire-demo` | Built from source | 80 | Demo dashboard |
+| `gitwire-docs` | Built from source | 80 | VitePress documentation |
+| `cloudflared` | `cloudflare/cloudflared` | — | Cloudflare Tunnel |
 | `postgres` | `postgres:16-alpine` | 5432 | PostgreSQL database |
 | `redis` | `redis:7-alpine` | 6379 | BullMQ job queues |
-| `cloudflared` | `cloudflare/cloudflared` | — | Cloudflare Tunnel |
 
 ## Step 1: Clone the Repository
 
@@ -59,7 +63,14 @@ cd packages/web
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-PostgreSQL automatically runs all migrations from `db/migrations/` on first start (36 tables across 11 migrations).
+PostgreSQL automatically runs all migrations from `db/migrations/` on **first
+start only** via `docker-entrypoint-initdb.d`.
+
+> **⚠️ IMPORTANT:** Migrations are only applied when the database is created
+> for the first time. On subsequent restarts and rebuilds, new migration files
+> are **NOT** applied automatically. See the
+> [Deployment Runbook](/installation/deployment-runbook) for the manual
+> migration procedure.
 
 ## Step 5: Verify
 

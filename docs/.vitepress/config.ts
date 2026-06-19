@@ -34,6 +34,8 @@ export default defineConfig({
         items: [
           { text: "Prerequisites", link: "/installation/prerequisites" },
           { text: "Docker Compose", link: "/installation/docker-compose" },
+          { text: "Infrastructure Reference", link: "/installation/infrastructure" },
+          { text: "Deployment Runbook", link: "/installation/deployment-runbook" },
           { text: "Cloudflare Tunnel", link: "/installation/cloudflare-tunnel" },
           { text: "GitHub App Setup", link: "/installation/github-app-setup" },
           { text: "Backup & Restore", link: "/installation/backup-restore" },
