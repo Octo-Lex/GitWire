@@ -157,7 +157,7 @@ export default function RolloutsPage() {
       {listData && plans.length === 0 && (
         <EmptyState
           title="No rollout plans"
-          subtitle="Create a rollout plan from the API to start a controlled policy lifecycle."
+          body="Create a rollout plan from the API to start a controlled policy lifecycle."
         />
       )}
 

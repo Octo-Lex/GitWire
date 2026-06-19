@@ -692,12 +692,6 @@ function hashConfig(config) {
 }
 
 
-  if (!recSummary || !recSummary.recommendations) return [];
-  return recSummary.recommendations
-    .filter(r => r.severity === "critical")
-    .map(r => r.id);
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /**

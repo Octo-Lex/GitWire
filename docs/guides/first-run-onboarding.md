@@ -269,12 +269,12 @@ That's it. You've completed the adoption threshold.
 | Setup checklist shows red for Redis | Check `docker compose logs redis`. Verify `REDIS_URL` in `.env` |
 | No webhook events received | Verify Cloudflare Tunnel is running. Check webhook URL in GitHub App settings |
 | Dashboard shows "not configured" | Ensure all GitHub App env vars are set in `.env` |
-| Validation fails | Check YAML syntax — see [Config Reference](/configuration/gitwire-yml) |
+| Validation fails | Check YAML syntax — see [Config Reference](/configuration/policy-as-code) |
 
 ## Further Reading
 
 - [Full Walkthrough](/guides/full-walkthrough) — watch GitWire manage a repo end-to-end
 - [Policy Preview & Simulation](/api/policy-preview) — API reference for validation and simulation
 - [Policy Rollout Controls](/api/rollouts) — API reference for the rollout workflow
-- [.gitwire.yml Reference](/configuration/gitwire-yml) — full configuration schema
+- [.gitwire.yml Reference](/configuration/policy-as-code) — full configuration schema
 - [Architecture Overview](/architecture/system-architecture) — how it all fits together

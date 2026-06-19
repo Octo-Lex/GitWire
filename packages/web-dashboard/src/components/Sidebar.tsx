@@ -27,7 +27,6 @@ import {
   IntelligenceIcon,
   ConfigIcon,
   PlaygroundIcon,
-  DryRunProofIcon,
 } from "./Icons";
 
 interface NavItem {

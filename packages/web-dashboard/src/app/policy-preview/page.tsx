@@ -726,7 +726,7 @@ export default function PolicyPreviewPage() {
                           <span className="text-xs font-mono text-text-secondary">{r.source}</span>
                           <span className="text-xs text-text-tertiary">{r.target_type}#{r.target_number}</span>
                           <span className="text-[10px] font-mono text-text-tertiary">
-                            {r.current_decision} -> {r.proposed_decision}
+                            {r.current_decision} {"->"} {r.proposed_decision}
                           </span>
                           <span className="text-xs text-text-primary truncate flex-1">{r.reason}</span>
                         </div>

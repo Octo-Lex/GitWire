@@ -1,7 +1,7 @@
 "use client";
 
-import useSWR, { useApi } from "swr";
-import { fetcher, API } from "@/lib/api";
+import useSWR from "swr";
+import { useApi, fetcher, API } from "@/lib/api";
 import { Skeleton } from "@/components/ui";
 import Link from "next/link";
 import { useState } from "react";
