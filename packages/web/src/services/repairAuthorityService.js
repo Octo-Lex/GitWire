@@ -49,7 +49,7 @@ export const TRANSITION_PERMISSIONS = Object.freeze({
   [ACTOR_KINDS.CI_EVIDENCE_COLLECTOR]: new Set(["evidence_collected", "failed"]),
   [ACTOR_KINDS.API_USER]:              new Set(),
   [ACTOR_KINDS.DIAGNOSIS_WORKER]:      new Set(),
-  [ACTOR_KINDS.PATCH_WORKER]:          new Set(),
+  [ACTOR_KINDS.PATCH_WORKER]:          new Set(["proposed", "failed"]),
   [ACTOR_KINDS.VERIFICATION_WORKER]:   new Set(),
   [ACTOR_KINDS.CRITIC_WORKER]:         new Set(),
   [ACTOR_KINDS.OPERATOR]:              new Set(),

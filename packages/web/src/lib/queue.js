@@ -13,6 +13,7 @@ export {
   ciHealQueue,
   ciEvidenceQueue,
   diagnosisQueue,
+  patchQueue,
   syncQueue,
   maintainerQueue,
   issueFixQueue,

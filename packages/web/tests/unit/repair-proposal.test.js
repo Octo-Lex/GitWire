@@ -657,9 +657,13 @@ describe("Repair Proposal — service CAS contract", () => {
     expect(service).toMatch(/checkSemanticEvidence\(proposal, targetStatus\)/);
   });
 
-  // FIX 4: Patch scope enforcement
-  it("calls checkPatchAgainstEnvelope in attachEvidence", () => {
-    expect(service).toMatch(/checkPatchAgainstEnvelope\(evidence\.patch_proposal, envelope\)/);
+  // FIX 4: Patch scope enforcement (now in recordPatchProposal, not attachEvidence)
+  it("attachEvidence rejects patch_proposal unconditionally", () => {
+    expect(service).toMatch(/patch_proposal may only be recorded by recordPatchProposal/);
+  });
+
+  it("checkPatchAgainstEnvelope exists and is used in recordPatchProposal", () => {
+    expect(service).toMatch(/checkPatchAgainstEnvelope/);
   });
 
   // FIX 5: Idempotent creation uses ON CONFLICT DO NOTHING

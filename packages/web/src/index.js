@@ -8,6 +8,7 @@ import { startTriageWorker }  from "./workers/triageWorker.js";
 import { startCIHealWorker }  from "./workers/ciHealWorker.js";
 import { startCIEvidenceWorker } from "./workers/ciEvidenceWorker.js";
 import { startDiagnosisWorker } from "./workers/diagnosisWorker.js";
+import { startPatchWorker } from "./workers/patchWorker.js";
 import { startSyncWorker, scheduleSyncJobs } from "./workers/syncWorker.js";
 import { startMaintainerWorker, scheduleMaintainerJobs } from "./workers/maintainerWorker.js";
 import { startIssueFixWorker } from "./workers/issueFixWorker.js";
@@ -41,6 +42,7 @@ async function main() {
     startCIHealWorker(),
     startCIEvidenceWorker(),
     startDiagnosisWorker(),
+    startPatchWorker(),
     startSyncWorker(),
     startMaintainerWorker(),
     startIssueFixWorker(),

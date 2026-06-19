@@ -326,6 +326,7 @@ describe("Diagnosis behavioral — diagnosis evidence binding", () => {
 
 describe("Diagnosis behavioral — actor authority", () => {
   it("diagnosis_worker cannot write patch_proposal", async () => {
+    // patch_proposal is now reserved for recordPatchProposal — rejected before authority check
     await expect(
       attachEvidence(
         1,
@@ -335,7 +336,7 @@ describe("Diagnosis behavioral — actor authority", () => {
         null,
         ACTOR_KINDS.DIAGNOSIS_WORKER
       )
-    ).rejects.toThrow(/not authorized to attach evidence field: patch_proposal/);
+    ).rejects.toThrow(/patch_proposal may only be recorded by recordPatchProposal/);
   });
 
   it("diagnosis_worker cannot write validation_result", async () => {

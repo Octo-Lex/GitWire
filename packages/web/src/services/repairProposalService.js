@@ -23,6 +23,12 @@ import {
   canAttachField,
   canTransitionTo,
 } from "./repairAuthorityService.js";
+import {
+  verifyArtifact,
+  parseArtifact,
+  computeArtifactHash,
+} from "../lib/patchArtifactStore.js";
+import { getConfigForRepo } from "./configService.js";
 
 // ── Actor-kind enforcement ────────────────────────────────────────────────────
 // Every canonical mutation method must receive a recognized actor_kind.
@@ -63,6 +69,7 @@ export const TERMINAL_STATES = new Set([
 
 // ── States blocked from generic transition endpoint ─────────────────────────
 export const AUTHORITY_STATES = new Set([
+  "proposed",
   "approved",
   "applied",
   "verified_after_apply",
@@ -976,6 +983,15 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
     );
   }
 
+  // patch_proposal is reserved exclusively for recordPatchProposal()
+  // which enforces diagnosis prerequisite, base SHA pinning, scope compliance,
+  // and the evidence_collected → proposed transition in one atomic transaction.
+  if (evidence.patch_proposal !== undefined) {
+    throw new Error(
+      "patch_proposal may only be recorded by recordPatchProposal"
+    );
+  }
+
   // Validate ALL evidence types before touching the database
   if (evidence.diagnosis) {
     const check = validateDiagnosis(evidence.diagnosis);
@@ -996,7 +1012,6 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
 
   const fields = [
     ["diagnosis", evidence.diagnosis],
-    ["patch_proposal", evidence.patch_proposal],
     ["validation_result", evidence.validation_result],
     ["critic_review", evidence.critic_review],
   ];
@@ -1047,17 +1062,6 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
           "Diagnosis already exists — canonical no-op"
         );
         return redactProposal(proposal);
-      }
-    }
-
-    // Enforce patch scope against stored envelope
-    if (evidence.patch_proposal) {
-      const envelope = parseJsonb(proposal.task_envelope);
-      if (envelope) {
-        const scopeErrors = checkPatchAgainstEnvelope(evidence.patch_proposal, envelope);
-        if (scopeErrors.length > 0) {
-          throw new Error(`Patch exceeds envelope scope: ${scopeErrors.join("; ")}`);
-        }
       }
     }
 
@@ -1458,4 +1462,391 @@ export async function getProposalEvents(id) {
   );
 
   return rows;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PATCH PROPOSAL RECORDING — canonical transactional method
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a PatchInputBundle from a proposal's diagnosis and evidence.
+ *
+ * This is the bounded, pinned input that the patch engine receives.
+ * It contains only the immutable snapshot — no open-ended repo access.
+ *
+ * @param {object} proposal - the locked proposal row
+ * @param {object} diagnosis - parsed diagnosis from the proposal
+ * @param {object[]} evidenceRefs - parsed evidence_refs from the proposal
+ * @returns {object} PatchInputBundle
+ */
+export function buildPatchInputBundle(proposal, diagnosis, evidenceRefs) {
+  const evidenceHash = contentHash(evidenceRefs);
+  const diagnosisHash = contentHash(diagnosis);
+
+  return {
+    proposal_id: proposal.id,
+    repository: proposal.repo_full_name || null,
+    head_sha: proposal.head_sha,
+    diagnosis_hash: diagnosisHash,
+    evidence_hash: evidenceHash,
+    source_files: (evidenceRefs || [])
+      .filter((r) => r.type === "workflow_file" || r.type === "repository_file")
+      .map((r) => ({
+        path: r.source.split("@")[0],
+        content_ref: r.source,
+        content_hash: r.excerpt_hash || null,
+      })),
+  };
+}
+
+/**
+ * Check patch policy against a resolved ci_healing config.
+ * Throws with a message containing "rejected" if the policy forbids patch generation.
+ *
+ * @param {object} healingConfig - the ci_healing section from getConfigForRepo
+ * @param {object} diagnosis - parsed diagnosis (must have .confidence)
+ * @throws {Error} if policy forbids patch generation
+ */
+export function checkPatchPolicy(healingConfig, diagnosis) {
+  if (!healingConfig || healingConfig.enabled === false) {
+    throw new Error(
+      "CI healing is disabled for this repository — patch generation rejected"
+    );
+  }
+  if (healingConfig.auto_patch !== true) {
+    throw new Error(
+      "auto_patch policy is disabled for this repository — patch generation rejected"
+    );
+  }
+  const minConfidence = healingConfig.min_confidence_to_patch || "medium";
+  const confidenceLevels = { low: 0, medium: 1, high: 2 };
+  const diagConfidence = confidenceLevels[diagnosis.confidence] ?? 0;
+  const requiredConfidence = confidenceLevels[minConfidence] ?? 1;
+  if (diagConfidence < requiredConfidence) {
+    throw new Error(
+      `Diagnosis confidence ('${diagnosis.confidence}') below min_confidence_to_patch ('${minConfidence}') — patch generation rejected`
+    );
+  }
+}
+
+/**
+ * Validate that a patch proposal's rationale references collected evidence.
+ *
+ * Every evidence_id in the patch must exist in the proposal's evidence_refs
+ * or diagnosis evidence_ids.
+ */
+export function validatePatchEvidenceBinding(patch, evidenceRefs, diagnosis) {
+  const errors = [];
+
+  if (!Array.isArray(patch.evidence_ids) || patch.evidence_ids.length === 0) {
+    errors.push("Patch proposal must reference at least one evidence item");
+    return { valid: false, errors };
+  }
+
+  const collectedSources = new Set(
+    (evidenceRefs || []).map((r) => r.source)
+  );
+
+  // Also allow diagnosis evidence_ids
+  if (diagnosis && Array.isArray(diagnosis.evidence_ids)) {
+    for (const eid of diagnosis.evidence_ids) {
+      collectedSources.add(eid);
+    }
+  }
+
+  const unbound = patch.evidence_ids.filter((eid) => !collectedSources.has(eid));
+  if (unbound.length > 0) {
+    errors.push(`Patch references evidence not in proposal: ${unbound.join(", ")}`);
+  }
+
+  return errors.length > 0 ? { valid: false, errors } : { valid: true };
+}
+
+/**
+ * Record a patch proposal atomically.
+ *
+ * This is the SOLE authorized path for patch_proposal writes and the
+ * evidence_collected → proposed transition.
+ *
+ * Guarantees:
+ * - actor_kind must be patch_worker
+ * - Proposal must be in evidence_collected
+ * - Diagnosis must already exist
+ * - Patch must be pinned to the proposal's head_sha / base snapshot
+ * - All paths must comply with blocked_paths, max_files, max_changed_lines
+ * - Patch rationale must reference collected evidence and diagnosis evidence IDs
+ * - Patch write + transition + event occur in ONE transaction
+ *
+ * Replay safety:
+ * - Same proposal + same artifact_hash → return unchanged (no-op)
+ * - Same proposal + different artifact_hash → reject
+ *
+ * @param {number} id - proposal ID
+ * @param {object} patchInput - the bounded patch input (artifact metadata + files)
+ * @param {object} options
+ * @param {string} [options.actor='patch_worker']
+ * @param {number} options.expected_version - MANDATORY CAS version
+ * @param {string} [options.correlation_id] - for audit trail
+ * @param {string} [options.source_delivery_id] - for provenance
+ * @returns {Promise<object>} updated proposal
+ */
+export async function recordPatchProposal(id, patchInput = {}, options = {}) {
+  const {
+    actor = "patch_worker",
+    expected_version,
+    correlation_id,
+    source_delivery_id,
+    actor_kind = actor,
+  } = options;
+
+  if (!id) throw new Error("id is required");
+
+  // MANDATORY actor-kind enforcement — unconditional
+  requireActorKind(actor_kind);
+
+  if (!Number.isInteger(expected_version) || expected_version < 1) {
+    throw new Error("expected_version is required and must be a positive integer");
+  }
+
+  // Enforce actor-kind authority
+  if (!canAttachField(actor_kind, "patch_proposal")) {
+    throw new Error(`Actor '${actor_kind}' is not authorized to attach patch_proposal`);
+  }
+  if (!canTransitionTo(actor_kind, "proposed")) {
+    throw new Error(`Actor '${actor_kind}' is not authorized to transition to proposed`);
+  }
+
+  // Validate patch structure
+  const patchCheck = validatePatchProposal(patchInput);
+  if (!patchCheck.valid) {
+    throw new Error(`Invalid patch proposal: ${patchCheck.errors.join("; ")}`);
+  }
+
+  // Require artifact_ref and artifact_hash at top level
+  if (!patchInput.artifact_ref || typeof patchInput.artifact_ref !== "string") {
+    throw new Error("Patch proposal artifact_ref is required and must be a string");
+  }
+  if (!patchInput.artifact_hash || typeof patchInput.artifact_hash !== "string") {
+    throw new Error("Patch proposal artifact_hash is required and must be a string");
+  }
+  if (!patchInput.base_sha || typeof patchInput.base_sha !== "string") {
+    throw new Error("Patch proposal base_sha is required and must be a string");
+  }
+  if (!Array.isArray(patchInput.evidence_ids)) {
+    throw new Error("Patch proposal evidence_ids is required");
+  }
+  if (!patchInput.diagnosis_hash || typeof patchInput.diagnosis_hash !== "string") {
+    throw new Error("Patch proposal diagnosis_hash is required");
+  }
+  if (!patchInput.input_bundle_hash || typeof patchInput.input_bundle_hash !== "string") {
+    throw new Error("Patch proposal input_bundle_hash is required");
+  }
+  if (!patchInput.rationale_summary || typeof patchInput.rationale_summary !== "string") {
+    throw new Error("Patch proposal rationale_summary is required");
+  }
+
+  return db.transaction(async (client) => {
+    // Lock the row
+    const { rows: [proposal] } = await client.query(
+      "SELECT * FROM repair_proposals WHERE id = $1 FOR UPDATE",
+      [id]
+    );
+    if (!proposal) throw new Error(`Repair proposal not found: ${id}`);
+
+    // REPLAY SAFETY: already proposed
+    if (proposal.status === "proposed") {
+      const existingPatch = parseJsonb(proposal.patch_proposal);
+      if (existingPatch && existingPatch.artifact_hash === patchInput.artifact_hash) {
+        logger.info(
+          { proposal_id: id, correlation_id },
+          "Proposal already proposed with same artifact hash — replay no-op"
+        );
+        return redactProposal(proposal);
+      }
+      // Different artifact hash → reject (no revisions in this item)
+      throw new Error(
+        `Proposal already has a patch proposal with different artifact hash — ` +
+        `revisions require an explicit supersession contract`
+      );
+    }
+
+    // Only allow from evidence_collected
+    if (proposal.status !== "evidence_collected") {
+      throw new Error(
+        `Patch proposal requires status 'evidence_collected', got '${proposal.status}'`
+      );
+    }
+
+    // Diagnosis must already exist
+    const diagnosis = parseJsonb(proposal.diagnosis);
+    if (!diagnosis) {
+      throw new Error(
+        "Cannot record patch proposal: diagnosis must exist before patch generation"
+      );
+    }
+
+    // P1 FIX: Verify diagnosis_hash against the locked diagnosis
+    const lockedDiagnosisHash = contentHash(diagnosis);
+    if (patchInput.diagnosis_hash !== lockedDiagnosisHash) {
+      throw new Error(
+        `Patch diagnosis_hash (${patchInput.diagnosis_hash}) does not match ` +
+        `the proposal's locked diagnosis (${lockedDiagnosisHash})`
+      );
+    }
+
+    // Pin patch to the proposal's head_sha
+    if (patchInput.base_sha !== proposal.head_sha) {
+      throw new Error(
+        `Patch base_sha (${patchInput.base_sha}) does not match proposal head_sha (${proposal.head_sha}) — ` +
+        `patch must be pinned to the proposal's base snapshot`
+      );
+    }
+
+    // P0 FIX: Resolve and verify the artifact from durable content-addressed store
+    // The artifact is verified by hash, then parsed to DERIVE scope values
+    // from actual artifact content — not caller-supplied metadata.
+    let verifiedDerived;
+    let artifactContent;
+    try {
+      artifactContent = await verifyArtifact(patchInput.artifact_ref, patchInput.artifact_hash);
+      verifiedDerived = parseArtifact(artifactContent);
+    } catch (artifactErr) {
+      throw new Error(`Patch artifact verification failed: ${artifactErr.message}`);
+    }
+
+    // Verify base_sha inside the artifact matches the proposal
+    const parsedArtifact = JSON.parse(artifactContent);
+    if (parsedArtifact.base_sha !== proposal.head_sha) {
+      throw new Error(
+        `Artifact base_sha (${parsedArtifact.base_sha}) does not match proposal head_sha (${proposal.head_sha})`
+      );
+    }
+
+    // Envelope is the authoritative budget — enforce from VERIFIED derived values
+    const envelope = parseJsonb(proposal.task_envelope);
+    if (envelope) {
+      const verifiedPatchForScope = {
+        total_files: verifiedDerived.total_files,
+        total_lines_changed: verifiedDerived.total_lines_changed,
+        files: verifiedDerived.changed_files,
+      };
+      const scopeErrors = checkPatchAgainstEnvelope(verifiedPatchForScope, envelope);
+      if (scopeErrors.length > 0) {
+        throw new Error(`Patch exceeds envelope scope (verified): ${scopeErrors.join("; ")}`);
+      }
+    }
+
+    // Validate patch evidence binding
+    const evidenceRefs = parseJsonb(proposal.evidence_refs) || [];
+    const bindingCheck = validatePatchEvidenceBinding(patchInput, evidenceRefs, diagnosis);
+    if (!bindingCheck.valid) {
+      throw new Error(`Patch evidence binding failed: ${bindingCheck.errors.join("; ")}`);
+    }
+
+    // P1 FIX: Enforce auto_patch policy at execution time (not just enqueue time)
+    // Fail closed: missing repo_full_name or policy resolution failure rejects.
+    if (!proposal.repo_full_name) {
+      throw new Error(
+        "Cannot record patch: proposal has no repo_full_name — policy cannot be verified"
+      );
+    }
+    try {
+      const config = await getConfigForRepo(proposal.repo_full_name);
+      checkPatchPolicy(config?.ci_healing, diagnosis);
+    } catch (policyErr) {
+      if (policyErr.message.includes("rejected")) throw policyErr;
+      throw new Error(
+        `Patch recording rejected: unable to verify patch policy (${policyErr.message})`
+      );
+    }
+
+    // P1 FIX: input_bundle_hash binds to the full canonical generation bundle
+    const canonicalBundle = buildPatchInputBundle(proposal, diagnosis, evidenceRefs);
+    const recomputedBundleHash = contentHash(canonicalBundle);
+    if (patchInput.input_bundle_hash !== recomputedBundleHash) {
+      throw new Error(
+        `Patch input_bundle_hash (${patchInput.input_bundle_hash}) does not match ` +
+        `recomputed canonical bundle hash (${recomputedBundleHash})`
+      );
+    }
+
+    // Build the persisted patch proposal object — uses VERIFIED derived values
+    const persistedPatch = {
+      artifact_ref: patchInput.artifact_ref,
+      artifact_hash: patchInput.artifact_hash,
+      base_sha: patchInput.base_sha,
+      changed_files: verifiedDerived.changed_files,
+      total_files: verifiedDerived.total_files,
+      total_changed_lines: verifiedDerived.total_lines_changed,
+      evidence_ids: patchInput.evidence_ids,
+      diagnosis_hash: lockedDiagnosisHash,
+      input_bundle_hash: recomputedBundleHash,
+      rationale_summary: patchInput.rationale_summary,
+      limitations: patchInput.limitations,
+    };
+
+    // CAS: version check + atomic write + transition
+    const setClauses = [
+      "patch_proposal = $1",
+      "status = $2",
+      "version = version + 1",
+    ];
+    const values = [
+      JSON.stringify(persistedPatch),
+      "proposed",
+    ];
+    let paramIdx = 3;
+
+    const whereClauses = [];
+    whereClauses.push(`id = $${paramIdx++}`);
+    values.push(id);
+    whereClauses.push(`version = $${paramIdx++}`);
+    values.push(expected_version);
+
+    const { rows } = await client.query(
+      `UPDATE repair_proposals
+       SET ${setClauses.join(", ")}
+       WHERE ${whereClauses.join(" AND ")}
+       RETURNING *`,
+      values
+    );
+
+    if (rows.length === 0) {
+      throw new Error(
+        `Version mismatch: expected version ${expected_version}. ` +
+        `Another process may have modified this proposal.`
+      );
+    }
+
+    const updated = rows[0];
+
+    // Record ONE patch_proposal_recorded event
+    const snapshot = buildEvidenceSnapshot({
+      patch_proposal: persistedPatch,
+      diagnosis_hash: lockedDiagnosisHash,
+      input_bundle_hash: persistedPatch.input_bundle_hash,
+    });
+    await client.query(
+      `INSERT INTO repair_proposal_events
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id,
+        "patch_proposal_recorded",
+        "evidence_collected",
+        "proposed",
+        actor,
+        JSON.stringify(snapshot),
+        correlation_id || null,
+        source_delivery_id || null,
+      ]
+    );
+
+    logger.info(
+      { proposal_id: id, artifact_hash: patchInput.artifact_hash, correlation_id },
+      "Patch proposal recorded — transitioned to proposed"
+    );
+
+    return redactProposal(updated);
+  });
 }
