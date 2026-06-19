@@ -8,10 +8,13 @@
 // a candidate patch through the deterministic engine, and records it through
 // the canonical recordPatchProposal path with actor_kind: patch_worker.
 //
+// After a patch is proposed, the worker enqueues a verification job.
+//
 // No GitHub API calls for mutation — operates solely on stored evidence.
 // No branch creation, PR creation, or repository writes.
 
 import { createWorker } from "../lib/queue.js";
+import { verificationQueue } from "../lib/queue.js";
 import { generatePatchForProposal } from "../services/patchWorkerService.js";
 import { logger } from "../lib/logger.js";
 
@@ -31,6 +34,26 @@ export function startPatchWorker() {
         { jobId: job.id, proposalId, status: proposal.status },
         "Patch generation completed"
       );
+
+      // ── Enqueue verification after patch is proposed ─────────────────────
+      if (proposal.status === "proposed") {
+        const verificationCorrelationId = `verify-${proposalId}-${Date.now()}`;
+        await verificationQueue.add(
+          "verify-proposal",
+          {
+            proposalId,
+            correlationId: verificationCorrelationId,
+          },
+          {
+            priority: 5,
+            jobId: `verify:${proposalId}`,
+          }
+        );
+        logger.info(
+          { jobId: job.id, proposalId },
+          "Verification enqueued after patch proposed"
+        );
+      }
 
       return { proposalId, patchRecorded: proposal.status === "proposed" };
     },

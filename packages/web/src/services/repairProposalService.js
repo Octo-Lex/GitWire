@@ -70,6 +70,7 @@ export const TERMINAL_STATES = new Set([
 // ── States blocked from generic transition endpoint ─────────────────────────
 export const AUTHORITY_STATES = new Set([
   "proposed",
+  "verified",
   "approved",
   "applied",
   "verified_after_apply",
@@ -121,7 +122,7 @@ export const VALID_CHANGE_TYPES = new Set([
 ]);
 
 // ── Valid validation check results ───────────────────────────────────────────
-export const VALID_VALIDATION_OVERALL = new Set(["pass", "fail"]);
+export const VALID_VALIDATION_OVERALL = new Set(["pass", "fail", "inconclusive"]);
 
 // ── Valid critic verdicts ────────────────────────────────────────────────────
 export const VALID_CRITIC_VERDICTS = new Set(["approve", "reject"]);
@@ -992,6 +993,15 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
     );
   }
 
+  // validation_result is reserved exclusively for recordVerificationResult()
+  // which enforces patch artifact verification, sandbox validation plan,
+  // and the proposed → verified/failed transition in one atomic transaction.
+  if (evidence.validation_result !== undefined) {
+    throw new Error(
+      "validation_result may only be recorded by recordVerificationResult"
+    );
+  }
+
   // Validate ALL evidence types before touching the database
   if (evidence.diagnosis) {
     const check = validateDiagnosis(evidence.diagnosis);
@@ -1012,7 +1022,6 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
 
   const fields = [
     ["diagnosis", evidence.diagnosis],
-    ["validation_result", evidence.validation_result],
     ["critic_review", evidence.critic_review],
   ];
 
@@ -1849,4 +1858,420 @@ export async function recordPatchProposal(id, patchInput = {}, options = {}) {
 
     return redactProposal(updated);
   });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CANONICAL VERIFICATION RECORDING — sole authorized writer of validation_result
+// and sole authorized entry into verified/failed from proposed.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Record a verification result and transition the proposal.
+ *
+ * This is the SOLE authorized path for writing validation_result and
+ * transitioning from proposed to verified or failed. Generic attachEvidence()
+ * rejects validation_result unconditionally.
+ *
+ * Guarantees:
+ * - actor_kind must be verification_worker
+ * - Proposal must be in proposed status with an existing patch_proposal
+ * - Durable patch artifact must resolve and re-hash correctly
+ * - Artifact base_sha must equal proposal head_sha
+ * - patch_artifact_hash must match the locked patch_proposal
+ * - input_bundle_hash must match the locked patch_proposal
+ * - Validation plan must be derived only from task_envelope.required_validation
+ * - Executed commands must match the validation plan exactly
+ * - Verification fingerprint must match the locked inputs
+ * - Replay-safe: same fingerprint → no-op, different → reject
+ * - Atomic: lock + validate + update + event in one transaction
+ *
+ * State transitions:
+ * - overall: "pass" → proposed → verified
+ * - overall: "fail" → proposed → failed
+ * - overall: "inconclusive" → proposed → failed
+ *
+ * @param {number} id - repair proposal ID
+ * @param {object} verificationInput - structured verification result
+ * @param {object} options
+ * @returns {Promise<object>} updated proposal
+ */
+export async function recordVerificationResult(id, verificationInput = {}, options = {}) {
+  const {
+    actor = "verification_worker",
+    expected_version,
+    correlation_id,
+    source_delivery_id,
+    actor_kind = actor,
+  } = options;
+
+  if (!id) throw new Error("id is required");
+
+  // MANDATORY actor-kind enforcement — unconditional
+  requireActorKind(actor_kind);
+
+  if (!Number.isInteger(expected_version) || expected_version < 1) {
+    throw new Error("expected_version is required and must be a positive integer");
+  }
+
+  // Enforce actor-kind authority
+  if (!canAttachField(actor_kind, "validation_result")) {
+    throw new Error(`Actor '${actor_kind}' is not authorized to attach validation_result`);
+  }
+
+  // Validate verification input structure
+  const result = verificationInput.overall;
+  if (!VALID_VALIDATION_OVERALL.has(result)) {
+    throw new Error(
+      `verification result must be one of: ${[...VALID_VALIDATION_OVERALL].join(", ")}`
+    );
+  }
+
+  // Determine target status from result
+  const targetStatus = result === "pass" ? "verified" : "failed";
+
+  // P0 FIX: No execution backend exists in this milestone.
+  // A passing result requires a verified sandbox execution receipt proving
+  // the exact artifact was applied, the exact validation plan ran, and all
+  // commands exited zero. Without a durable receipt backend, any internal
+  // caller could fabricate a passing result.
+  //
+  // Until a real executor lands, reject all pass results.
+  // The stub sandbox returns inconclusive (→ failed), so proposals
+  // cannot reach verified through the current pipeline.
+  if (result === "pass") {
+    throw new Error(
+      "Passing verification requires a verified sandbox execution receipt — no execution backend available"
+    );
+  }
+
+  if (!canTransitionTo(actor_kind, targetStatus)) {
+    throw new Error(
+      `Actor '${actor_kind}' is not authorized to transition to ${targetStatus}`
+    );
+  }
+
+  // Require verification fingerprint and binding fields
+  const requiredFields = [
+    "verification_fingerprint",
+    "patch_artifact_hash",
+    "base_sha",
+    "input_bundle_hash",
+    "sandbox_image_digest",
+    "validation_plan_hash",
+    "commands",
+    "exit_status",
+  ];
+  for (const field of requiredFields) {
+    if (verificationInput[field] === undefined) {
+      throw new Error(`Verification input field '${field}' is required`);
+    }
+    // exit_status may be null for inconclusive (not executed)
+    if (field !== "exit_status" && verificationInput[field] === null) {
+      throw new Error(`Verification input field '${field}' is required`);
+    }
+  }
+  if (!Array.isArray(verificationInput.commands) || verificationInput.commands.length === 0) {
+    throw new Error("Verification input commands must be a non-empty array");
+  }
+
+  return db.transaction(async (client) => {
+    // Lock the row
+    const { rows: [proposal] } = await client.query(
+      "SELECT * FROM repair_proposals WHERE id = $1 FOR UPDATE",
+      [id]
+    );
+    if (!proposal) throw new Error(`Repair proposal not found: ${id}`);
+
+    // REPLAY SAFETY: already verified or failed with same fingerprint → no-op
+    if (proposal.status === "verified" || proposal.status === "failed") {
+      const existingResult = parseJsonb(proposal.validation_result);
+      if (existingResult && existingResult.verification_fingerprint === verificationInput.verification_fingerprint) {
+        logger.info(
+          { proposal_id: id, correlation_id },
+          "Proposal already has verification result with same fingerprint — replay no-op"
+        );
+        return redactProposal(proposal);
+      }
+      // Different fingerprint → reject
+      throw new Error(
+        `Proposal already has a verification result with different fingerprint — ` +
+        `retries require an explicit revision contract`
+      );
+    }
+
+    // Only allow from proposed
+    if (proposal.status !== "proposed") {
+      throw new Error(
+        `Verification requires status 'proposed', got '${proposal.status}'`
+      );
+    }
+
+    // patch_proposal must exist
+    const patchProposal = parseJsonb(proposal.patch_proposal);
+    if (!patchProposal) {
+      throw new Error(
+        "Cannot record verification: patch_proposal must exist before verification"
+      );
+    }
+
+    // Verify patch_artifact_hash matches the locked patch_proposal
+    if (verificationInput.patch_artifact_hash !== patchProposal.artifact_hash) {
+      throw new Error(
+        `Verification patch_artifact_hash does not match locked patch_proposal artifact_hash`
+      );
+    }
+
+    // Verify base_sha matches proposal head_sha
+    if (verificationInput.base_sha !== proposal.head_sha) {
+      throw new Error(
+        `Verification base_sha (${verificationInput.base_sha}) does not match proposal head_sha (${proposal.head_sha})`
+      );
+    }
+
+    // Verify input_bundle_hash matches locked patch_proposal
+    if (verificationInput.input_bundle_hash !== patchProposal.input_bundle_hash) {
+      throw new Error(
+        `Verification input_bundle_hash does not match locked patch_proposal input_bundle_hash`
+      );
+    }
+
+    // Resolve and verify the durable artifact
+    let artifactContent;
+    try {
+      artifactContent = await verifyArtifact(
+        patchProposal.artifact_ref,
+        patchProposal.artifact_hash
+      );
+    } catch (artifactErr) {
+      throw new Error(`Patch artifact verification failed: ${artifactErr.message}`);
+    }
+
+    // Verify artifact base_sha matches proposal head_sha
+    const parsedArtifact = JSON.parse(artifactContent);
+    if (parsedArtifact.base_sha !== proposal.head_sha) {
+      throw new Error(
+        `Artifact base_sha (${parsedArtifact.base_sha}) does not match proposal head_sha (${proposal.head_sha})`
+      );
+    }
+
+    // Verify validation plan from task_envelope
+    const envelope = parseJsonb(proposal.task_envelope);
+    if (!envelope || !Array.isArray(envelope.required_validation)) {
+      throw new Error(
+        "Cannot record verification: task_envelope.required_validation must exist"
+      );
+    }
+
+    // P1 FIX: Recompute the validation plan hash from the locked envelope.
+    // The caller-supplied validation_plan_hash must match the canonical plan
+    // derived from the locked task_envelope — not an arbitrary caller value.
+    const canonicalPlan = buildValidationPlanForRecorder(envelope);
+    if (verificationInput.validation_plan_hash !== canonicalPlan.validation_plan_hash) {
+      throw new Error(
+        `Verification validation_plan_hash does not match canonical plan derived from locked task_envelope`
+      );
+    }
+
+    // P1 FIX: Verify sandbox_image_digest against the approved pinned digest.
+    // The caller cannot use an arbitrary image identity.
+    const { SANDBOX_IMAGE_DIGEST } = await import("../lib/sandboxRunner.js");
+    if (verificationInput.sandbox_image_digest !== SANDBOX_IMAGE_DIGEST) {
+      throw new Error(
+        `Verification sandbox_image_digest does not match approved pinned image digest`
+      );
+    }
+
+    // Validate executed commands against the required plan
+    const requiredCommands = [...envelope.required_validation].sort();
+    const executedCommands = verificationInput.commands.map((c) => c.command).sort();
+    const commandCheck = validateCommandSetInternal(executedCommands, requiredCommands);
+    if (!commandCheck.valid) {
+      throw new Error(`Verification command validation failed: ${commandCheck.errors.join("; ")}`);
+    }
+
+    // P0 FIX: Derive and validate aggregate result from command outcomes.
+    // The caller-supplied 'overall' must be consistent with actual exit statuses.
+    const allCommandsPassed = verificationInput.commands.every(
+      (c) => Number.isInteger(c.exit_status) && c.exit_status === 0
+    );
+    const aggregateExitOk = Number.isInteger(verificationInput.exit_status) && verificationInput.exit_status === 0;
+
+    if (
+      verificationInput.overall === "pass" &&
+      (!allCommandsPassed || !aggregateExitOk)
+    ) {
+      throw new Error(
+        "Passing verification requires zero aggregate and per-command exit statuses"
+      );
+    }
+
+    if (
+      verificationInput.overall === "fail" &&
+      allCommandsPassed &&
+      aggregateExitOk
+    ) {
+      throw new Error(
+        "Failed verification requires at least one failing command or non-zero aggregate exit status"
+      );
+    }
+
+    // For inconclusive, require a structured execution-failure category
+    if (verificationInput.overall === "inconclusive") {
+      if (!verificationInput.inconclusive_reason || typeof verificationInput.inconclusive_reason !== "string") {
+        throw new Error(
+          "Inconclusive verification requires a structured inconclusive_reason"
+        );
+      }
+    }
+
+    // Verify the verification fingerprint against CANONICAL values
+    // (not caller-controlled equivalents)
+    const expectedFingerprint = computeVerificationFingerprintInternal({
+      patch_artifact_hash: patchProposal.artifact_hash,
+      base_sha: proposal.head_sha,
+      input_bundle_hash: patchProposal.input_bundle_hash,
+      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      validation_plan_hash: canonicalPlan.validation_plan_hash,
+    });
+    if (verificationInput.verification_fingerprint !== expectedFingerprint) {
+      throw new Error(
+        `Verification fingerprint mismatch — fingerprint must bind to locked artifact, base SHA, input bundle, approved sandbox image, and canonical validation plan`
+      );
+    }
+
+    // Build the persisted validation result
+    const persistedResult = {
+      overall: result,
+      verification_fingerprint: verificationInput.verification_fingerprint,
+      patch_artifact_hash: patchProposal.artifact_hash,
+      base_sha: proposal.head_sha,
+      input_bundle_hash: patchProposal.input_bundle_hash,
+      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      validation_plan_hash: canonicalPlan.validation_plan_hash,
+      commands: verificationInput.commands,
+      exit_status: verificationInput.exit_status,
+      output_refs: verificationInput.output_refs || [],
+      output_hashes: verificationInput.output_hashes || [],
+      redacted_summary: verificationInput.redacted_summary || "",
+      limits_applied: verificationInput.limits_applied || {},
+      ...(verificationInput.inconclusive_reason ? { inconclusive_reason: verificationInput.inconclusive_reason } : {}),
+      // Backward-compat: checks array for existing validateValidationResult consumers
+      checks: verificationInput.commands.map((c) => ({
+        name: c.command,
+        passed: c.exit_status === 0,
+        output_hash: c.output_hash,
+      })),
+    };
+
+    // CAS: version check + atomic write + transition
+    const setClauses = [
+      "validation_result = $1",
+      "status = $2",
+      "version = version + 1",
+    ];
+    const values = [
+      JSON.stringify(persistedResult),
+      targetStatus,
+    ];
+    let paramIdx = 3;
+
+    const whereClauses = [];
+    whereClauses.push(`id = $${paramIdx++}`);
+    values.push(id);
+    whereClauses.push(`version = $${paramIdx++}`);
+    values.push(expected_version);
+
+    const { rows } = await client.query(
+      `UPDATE repair_proposals
+       SET ${setClauses.join(", ")}
+       WHERE ${whereClauses.join(" AND ")}
+       RETURNING *`,
+      values
+    );
+
+    if (rows.length === 0) {
+      throw new Error(
+        `Version mismatch: expected version ${expected_version}. ` +
+        `Another process may have modified this proposal.`
+      );
+    }
+
+    const updated = rows[0];
+
+    // Record one verification_result_recorded event
+    const snapshot = buildEvidenceSnapshot({
+      validation_result: persistedResult,
+      verification_fingerprint: verificationInput.verification_fingerprint,
+    });
+    await client.query(
+      `INSERT INTO repair_proposal_events
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id,
+        "verification_result_recorded",
+        "proposed",
+        targetStatus,
+        actor,
+        JSON.stringify(snapshot),
+        correlation_id || null,
+        source_delivery_id || null,
+      ]
+    );
+
+    logger.info(
+      { proposal_id: id, target_status: targetStatus, fingerprint: verificationInput.verification_fingerprint, correlation_id },
+      "Verification result recorded"
+    );
+
+    return redactProposal(updated);
+  });
+}
+
+// ── Internal helpers for recordVerificationResult ─────────────────────────────
+
+function validateCommandSetInternal(executedCommands, requiredCommands) {
+  const errors = [];
+  const executed = new Set(executedCommands);
+  const required = new Set(requiredCommands);
+
+  for (const cmd of required) {
+    if (!executed.has(cmd)) {
+      errors.push(`Missing required validation command: ${cmd}`);
+    }
+  }
+  for (const cmd of executed) {
+    if (!required.has(cmd)) {
+      errors.push(`Disallowed validation command not in plan: ${cmd}`);
+    }
+  }
+
+  return errors.length > 0 ? { valid: false, errors } : { valid: true, errors: [] };
+}
+
+/**
+ * Build the canonical validation plan from a locked task envelope.
+ * Used by recordVerificationResult() to recompute the plan hash
+ * server-side from locked state — not from caller-supplied values.
+ */
+function buildValidationPlanForRecorder(envelope) {
+  const commands = [...envelope.required_validation].sort();
+  const planContent = JSON.stringify({
+    commands,
+    image_digest: "sha256:deterministic-stub-v1",
+  });
+  const validation_plan_hash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
+  return { commands, validation_plan_hash };
+}
+
+function computeVerificationFingerprintInternal(params) {
+  const { patch_artifact_hash, base_sha, input_bundle_hash, sandbox_image_digest, validation_plan_hash } = params;
+  const content = JSON.stringify({
+    patch_artifact_hash,
+    base_sha,
+    input_bundle_hash,
+    sandbox_image_digest,
+    validation_plan_hash,
+  });
+  return "sha256:" + crypto.createHash("sha256").update(content).digest("hex");
 }

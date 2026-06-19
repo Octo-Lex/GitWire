@@ -14,6 +14,7 @@ export {
   ciEvidenceQueue,
   diagnosisQueue,
   patchQueue,
+  verificationQueue,
   syncQueue,
   maintainerQueue,
   issueFixQueue,

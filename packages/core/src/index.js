@@ -14,6 +14,7 @@ export const QUEUES = Object.freeze({
   CI_EVIDENCE:    "ci-evidence",
   DIAGNOSIS:      "diagnosis",
   PATCH:          "patch",
+  VERIFICATION:   "verification",
   SYNC:           "sync",
   MAINTAINER:     "maintainer",
   ISSUE_FIX:      "issue-fix",
