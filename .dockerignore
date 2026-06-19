@@ -57,5 +57,9 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Secrets — never bake private keys into the image
+*.pem
+secrets/
+
 # Already installed via npm ci
 node_modules/

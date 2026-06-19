@@ -195,3 +195,70 @@ GitWire is installed on **4 GitHub App installations** covering **32 repositorie
 GitWire uses the Anthropic SDK pointed at Z.AI's compatibility endpoint. No
 direct Anthropic API key is required — the Z.AI key works with the SDK's
 `baseURL` override.
+
+## GitHub App
+
+| Property | Value |
+|----------|-------|
+| **App Name** | GitWire-HQ |
+| **App ID** | `3727207` |
+| **Client ID** | `Iv23liznUpaw9BDzmYBp` |
+| **Webhook Secret** | Set in `/opt/gitwire/packages/web/.env` |
+| **Client Secret** | Set in `/opt/gitwire/packages/web/.env` |
+| **Private Key File** | `Gitwire-hq.2026-05-15.private-key.pem` (original download name) |
+| **Deployed Key Path** | `/opt/gitwire/secrets/gitwire-hq.pem` |
+| **Container Key Path** | Volume-mounted to `gitwire-hq.private-key.pem` |
+| **Env Var** | `GITHUB_PRIVATE_KEY_PATH=./gitwire-hq.2026-05-15.private-key.pem` |
+
+### ⚠️ PEM Key Security Note
+
+The `.dockerignore` was missing `*.pem`, so the private key was baked into
+the Docker image via `COPY . .`. This has been fixed — `.dockerignore` now
+excludes `*.pem` and `secrets/`. The key should ONLY be available via the
+volume mount in `docker-compose.yml`.
+
+After the next rebuild, verify the key is NOT in the image:
+```bash
+docker exec gitwire-gitwire-app-1 ls -la /app/packages/web/gitwire-hq.2026-05-15.private-key.pem
+# Should return: No such file or directory
+```
+
+## Cloudflare Tunnel
+
+| Property | Value |
+|----------|-------|
+| **Domain** | `gitwire.erlab.uk` |
+| **Zone** | `erlab.uk` |
+| **Tunnel Type** | Token-based (remotely managed via Cloudflare dashboard) |
+| **Protocol** | QUIC |
+| **Connections** | 4 active (connIndex 0–3) |
+| **Edge Locations** | `jed02` (Jeddah), `mrs06` (Marseille) |
+| **Token** | Set as `TUNNEL_TOKEN` in `/opt/gitwire/.env` |
+| **Container** | `cloudflare/cloudflared:latest` |
+
+### Public Hostname Routing
+
+All routing is configured remotely in the Cloudflare Zero Trust dashboard.
+No local config file exists.
+
+| URL Path | Service | Port |
+|----------|---------|------|
+| `/health` | gitwire-app | 3000 |
+| `/webhooks/*` | gitwire-app | 3000 |
+| `/dashboard` | gitwire-dashboard | 3001 |
+| `/docs` | gitwire-docs | 80 |
+| `/` (landing) | gitwire-landing | 80 |
+
+### Verifying Tunnel Health
+
+```bash
+# From inside CT 115
+curl -s https://gitwire.erlab.uk/health
+# Expected: {"status":"ok"}
+
+# Tunnel container logs
+docker logs gitwire-tunnel-1 --tail 20
+# Look for "Registered tunnel connection" — 4 connections = healthy
+
+# Intermittent QUIC timeouts are normal (edge rebalancing)
+```
