@@ -53,6 +53,10 @@ const { db } = await import("../../src/lib/db.js");
 const {
   assessCriticInput,
 } = await import("../../src/services/criticWorkerService.js");
+const { buildExecutionReceipt, buildValidationPlan, SANDBOX_IMAGE_DIGEST } = await import("../../src/lib/sandboxRunner.js");
+
+// Receipt table for testing receipt-backed approval
+const receiptTable = new Map();
 
 // ════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -156,37 +160,51 @@ function createValidRejectInput(proposalOverrides = {}) {
 
 beforeEach(() => {
   mockClient = createMockClient();
+  receiptTable.clear();
   db.query.mockClear();
+  // Set up db.query to serve receipts from the mock table
+  db.query.mockImplementation(async (sql, params = []) => {
+    if (sql.includes("SELECT") && sql.includes("execution_receipts")) {
+      const ref = params[0];
+      for (const [, entry] of receiptTable) {
+        if (entry.ref === ref) {
+          return { rows: [{ content: entry.content }] };
+        }
+      }
+      return { rows: [] };
+    }
+    return { rows: [] };
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════
 // P0: APPROVE UNCONDITIONALLY REJECTED (no receipt backend exists)
 // ════════════════════════════════════════════════════════════════════════════
 
-describe("Critic behavioral — P0: approve unconditionally rejected", () => {
-  it("rejects approve with no receipt backend available", async () => {
+describe("Critic behavioral — approve requires receipt on validation_result", () => {
+  const approveInput = {
+    verdict: "approve",
+    review_fingerprint: "sha256:placeholder",  // receipt check happens before hash check
+    critic_input_hash: "sha256:placeholder",
+    patch_artifact_hash: "sha256:placeholder",
+    verification_fingerprint: "sha256:placeholder",
+    findings: [{ code: "PATCH_SCOPE_WITHIN_ENVELOPE", severity: "info", detail: "within scope" }],
+    blocking_findings: [],
+  };
+
+  it("rejects approve when validation_result has no receipt", async () => {
+    // validation_result has no execution_receipt_ref/hash
     await expect(
-      recordCriticReview(1, { verdict: "approve" }, {
+      recordCriticReview(1, approveInput, {
         actor_kind: ACTOR_KINDS.CRITIC_WORKER,
         expected_version: 1,
       })
-    ).rejects.toThrow(/Critic approval requires a verified sandbox execution receipt — no receipt backend available/);
+    ).rejects.toThrow(/validation_result has no execution_receipt_ref\/hash/);
   });
 
-  it("rejects approve before any DB transaction is entered", async () => {
-    db.transaction.mockClear();
-    try {
-      await recordCriticReview(1, { verdict: "approve" }, {
-        actor_kind: ACTOR_KINDS.CRITIC_WORKER,
-        expected_version: 1,
-      });
-    } catch (_e) {}
-
-    expect(db.transaction).not.toHaveBeenCalled();
-  });
-
-  it("rejects approve even with fabricated receipt fields on validation_result", async () => {
+  it("rejects approve with fabricated receipt fields (unresolvable receipt)", async () => {
     // Fabricated receipt reference+hash on validation_result
+    // The receipt cannot be resolved from durable storage
     mockClient = createMockClient({
       validation_result: JSON.stringify({
         ...VALIDATION_RESULT_PASS,
@@ -196,11 +214,11 @@ describe("Critic behavioral — P0: approve unconditionally rejected", () => {
     });
 
     await expect(
-      recordCriticReview(1, { verdict: "approve" }, {
+      recordCriticReview(1, approveInput, {
         actor_kind: ACTOR_KINDS.CRITIC_WORKER,
         expected_version: 1,
       })
-    ).rejects.toThrow(/no receipt backend available/);
+    ).rejects.toThrow(/receipt verification failed|receipt not found/i);
 
     // No UPDATE or INSERT should have run
     const updateCalls = mockClient.query.mock.calls.filter(([sql]) => sql && sql.includes("UPDATE repair_proposals"));
@@ -628,5 +646,123 @@ describe("Critic behavioral — canonical pure functions", () => {
     expect(result.blocking_findings).toContain("VALIDATION_RECEIPT_BOUND");
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0].severity).toBe("blocking");
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// RECEIPT-BACKED APPROVE → REVIEW_READY
+// ════════════════════════════════════════════════════════════════════════════
+
+describe("Critic behavioral — node-executor pass receipts rejected (not isolated)", () => {
+  function storeValidPassReceipt() {
+    const plan = buildValidationPlan(TASK_ENVELOPE);
+    const params = {
+      execution_backend_id: "node-executor",
+      executor_version: "1.0.0",
+      source_snapshot_hash: "sha256:snap123",
+      patch_artifact_hash: ARTIFACT_HASH,
+      base_sha: HEAD_SHA,
+      input_bundle_hash: INPUT_BUNDLE_HASH,
+      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      validation_plan_hash: plan.validation_plan_hash,
+      commands_executed: ["lint", "test"],
+      per_command_exit_statuses: [0, 0],
+      aggregate_exit_status: 0,
+      output_refs: ["output:sha256:out1", "output:sha256:out2"],
+      output_hashes: ["sha256:out1", "sha256:out2"],
+      limits_applied: { cpu_shares: 512 },
+      result: "pass",
+    };
+    const receipt = buildExecutionReceipt(params);
+    receiptTable.set(receipt.receipt_hash, {
+      ref: receipt.receipt_ref,
+      content: receipt.receipt_content,
+    });
+    return receipt;
+  }
+
+  function createMockVerifiedProposalWithReceipt(receipt) {
+    return createMockProposal({
+      validation_result: JSON.stringify({
+        ...VALIDATION_RESULT_PASS,
+        execution_receipt_ref: receipt.receipt_ref,
+        execution_receipt_hash: receipt.receipt_hash,
+      }),
+    });
+  }
+
+  function createValidApproveInput(proposal) {
+    const bundle = buildCriticInputBundle(proposal);
+    const criticInputHash = contentHash(bundle);
+    const findings = [
+      { code: "PATCH_SCOPE_WITHIN_ENVELOPE", severity: "info", detail: "within scope" },
+    ];
+    const blockingFindings = [];
+    const reviewFingerprint = computeReviewFingerprint(
+      criticInputHash, "approve", findings, blockingFindings, null
+    );
+    return {
+      verdict: "approve",
+      review_fingerprint: reviewFingerprint,
+      critic_input_hash: criticInputHash,
+      patch_artifact_hash: ARTIFACT_HASH,
+      verification_fingerprint: VERIFICATION_FINGERPRINT,
+      findings,
+      blocking_findings: blockingFindings,
+      risk_summary: "All clear",
+      limitations: "Stub",
+      policy_version: null,
+    };
+  }
+
+  it("rejects node-executor approve receipt (not pass-capable)", async () => {
+    const receipt = storeValidPassReceipt();
+    const proposal = createMockVerifiedProposalWithReceipt(receipt);
+    mockClient = createMockClient({
+      validation_result: proposal.validation_result,
+    });
+
+    await expect(
+      recordCriticReview(1, createValidApproveInput(proposal), {
+        actor_kind: ACTOR_KINDS.CRITIC_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/node-executor.*not authorized to produce passing results/);
+
+    const updateCalls = mockClient.query.mock.calls.filter(
+      ([sql]) => sql && sql.includes("UPDATE repair_proposals")
+    );
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("rejects approve with failing receipt (result=fail)", async () => {
+    const plan = buildValidationPlan(TASK_ENVELOPE);
+    const params = {
+      execution_backend_id: "node-executor",
+      executor_version: "1.0.0",
+      source_snapshot_hash: "sha256:fake",
+      patch_artifact_hash: ARTIFACT_HASH,
+      base_sha: HEAD_SHA,
+      input_bundle_hash: INPUT_BUNDLE_HASH,
+      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      validation_plan_hash: plan.validation_plan_hash,
+      commands_executed: ["lint", "test"],
+      per_command_exit_statuses: [1, 0],
+      aggregate_exit_status: 1,
+      output_refs: ["output:sha256:o1", "output:sha256:o2"], output_hashes: ["sha256:o1", "sha256:o2"], limits_applied: {},
+      result: "fail",
+    };
+    const receipt = buildExecutionReceipt(params);
+    receiptTable.set(receipt.receipt_hash, { ref: receipt.receipt_ref, content: receipt.receipt_content });
+
+    const proposal = createMockVerifiedProposalWithReceipt(receipt);
+    mockClient = createMockClient({ validation_result: proposal.validation_result });
+
+    await expect(
+      recordCriticReview(1, createValidApproveInput(proposal), {
+        actor_kind: ACTOR_KINDS.CRITIC_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/Execution receipt result is 'fail', must be 'pass'/);
   });
 });

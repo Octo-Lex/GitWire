@@ -37,18 +37,9 @@ describe("Critic Worker — recordCriticReview canonical method", () => {
     expect(section[1]).toMatch(/canAttachField\(actor_kind, "critic_review"\)/);
   });
 
-  it("unconditionally rejects approve (P0 interim)", () => {
+  it("approve requires receipt verification under lock", () => {
     const section = repairService.split("export async function recordCriticReview");
-    expect(section[1]).toMatch(/no receipt backend available/);
-  });
-
-  it("approve rejection comes before any transaction", () => {
-    const section = repairService.split("export async function recordCriticReview");
-    const approveIdx = section[1].indexOf("no receipt backend available");
-    const txIdx = section[1].indexOf("db.transaction");
-    expect(approveIdx).toBeGreaterThan(-1);
-    expect(txIdx).toBeGreaterThan(-1);
-    expect(approveIdx).toBeLessThan(txIdx);
+    expect(section[1]).toMatch(/RECEIPT-BOUND APPROVAL GATE/);
   });
 
   it("enforces verified status after row lock", () => {
@@ -101,27 +92,11 @@ describe("Critic Worker — recordCriticReview canonical method", () => {
 // P0: UNCONDITIONAL APPROVE REJECTION
 // ════════════════════════════════════════════════════════════════════════════
 
-describe("Critic Worker — P0: unconditional approve gate", () => {
-  it("approve is rejected before transaction body", () => {
+describe("Critic Worker — receipt-backed approval", () => {
+  it("approve uses shared verifyExecutionReceiptAgainstLockedProposal", () => {
+    const repairService = readSource("packages/web/src/services/repairProposalService.js");
     const section = repairService.split("export async function recordCriticReview");
-    const approveIdx = section[1].indexOf("no receipt backend available");
-    const txIdx = section[1].indexOf("db.transaction");
-    expect(approveIdx).toBeLessThan(txIdx);
-  });
-
-  it("does not check for receipt presence (no hasVerifiedReceipt variable)", () => {
-    const section = repairService.split("export async function recordCriticReview");
-    expect(section[1]).not.toMatch(/hasVerifiedReceipt/);
-  });
-
-  it("does not resolve artifacts in the approve path", () => {
-    const section = repairService.split("export async function recordCriticReview");
-    expect(section[1]).not.toMatch(/verifyArtifact/);
-  });
-
-  it("target status is always 'failed'", () => {
-    const section = repairService.split("export async function recordCriticReview");
-    expect(section[1]).toMatch(/targetStatus = "failed"/);
+    expect(section[1]).toMatch(/verifyExecutionReceiptAgainstLockedProposal/);
   });
 });
 

@@ -124,10 +124,9 @@ describe("Verification Worker — recordVerificationResult canonical method", ()
   });
 
   // P0: pass requires execution receipt
-  it("rejects pass results without execution receipt", () => {
+  it("requires execution receipt for pass results", () => {
     const section = repairService.split("export async function recordVerificationResult");
-    expect(section[1]).toMatch(/Passing verification requires a verified sandbox execution receipt/);
-    expect(section[1]).toMatch(/no execution backend available/);
+    expect(section[1]).toMatch(/execution_receipt_ref and execution_receipt_hash are required/);
   });
 
   it("transitions to failed when overall is fail or inconclusive", () => {
@@ -281,14 +280,12 @@ describe("Verification Worker — sandbox runner contracts", () => {
   });
 
   // P0: Stub returns inconclusive, cannot produce pass
-  it("stub returns inconclusive with execution_backend_unavailable", () => {
-    expect(sandboxRunner).toMatch(/execution_backend_unavailable/);
-    expect(sandboxRunner).toMatch(/inconclusive_reason/);
+  it("sandbox runner produces execution receipts", () => {
+    expect(sandboxRunner).toMatch(/buildExecutionReceipt/);
   });
 
-  it("stub does NOT synthesize pass or OK output", () => {
+  it("does NOT synthesize pass without real execution", () => {
     expect(sandboxRunner).not.toMatch(/allPassed \? "pass"/);
-    expect(sandboxRunner).not.toMatch(/OK: .*completed/);
   });
 });
 
@@ -326,8 +323,8 @@ describe("Verification Worker — service contract", () => {
     expect(service).toMatch(/computeVerificationFingerprint/);
   });
 
-  it("does NOT import GitHub client", () => {
-    expect(service).not.toMatch(/getInstallationClient|wrapOctokit/);
+  it("imports GitHub client for source acquisition", () => {
+    expect(service).toMatch(/acquireSourceSnapshot/);
   });
 
   it("does NOT create branches or PRs", () => {
@@ -360,8 +357,8 @@ describe("Verification Worker — worker contract", () => {
     expect(worker).toMatch(/import.*verifyProposal.*verificationWorkerService/);
   });
 
-  it("does NOT import GitHub client", () => {
-    expect(worker).not.toMatch(/getInstallationClient|wrapOctokit/);
+  it("imports GitHub client for source snapshot", () => {
+    expect(worker).toMatch(/getInstallationClient|wrapOctokit/);
   });
 
   it("passes correlationId to verifyProposal", () => {
@@ -451,8 +448,8 @@ describe("Verification Worker — boundary enforcement", () => {
     expect(sandboxRunner).not.toMatch(/child_process|execSync|execFileSync/);
   });
 
-  it("service header documents boundaries", () => {
-    expect(service).toMatch(/No GitHub API calls/);
-    expect(service).toMatch(/No branch creation/);
+  it("service header documents source acquisition boundaries", () => {
+    expect(service).toMatch(/READ-ONLY GitHub client OUTSIDE the sandbox/);
+    expect(service).toMatch(/sandbox executor receives NO GitHub credentials/);
   });
 });

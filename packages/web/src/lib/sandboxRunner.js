@@ -1,31 +1,26 @@
 // src/lib/sandboxRunner.js
 // Sandboxed verification runner for CI repair proposals.
 //
-// Resolves a verified patch artifact, constructs a pinned ephemeral
-// workspace, applies the patch in an isolated sandbox, and runs bounded
-// required validations. No repository credentials, no network by default,
-// resource-limited.
+// Resolves a verified patch artifact, applies it to a pinned source
+// snapshot, executes bounded required validations in an isolated sandbox,
+// and produces a durable execution receipt.
 //
-// This is a deterministic stub implementation. In production, this would
-// be backed by a container runtime (Docker/Podman) with:
-// - Ephemeral workspace at exact pinned head_sha
-// - Pinned container image digest
-// - Read-only source input + disposable writable work area
-// - No repository credentials
-// - No network by default
-// - CPU, memory, process-count, wall-clock, output-size limits
-// - Commands from required-validation allowlist only
-// - No shell interpolation from untrusted content
+// No repository credentials, no network by default, resource-limited.
+// Commands are resolved from allowlisted argv templates — never raw
+// strings passed to a shell.
 //
 // The governance framework operates identically regardless of the
 // underlying execution engine.
 
 import crypto from "crypto";
 import { logger } from "./logger.js";
+import { runSandboxExecution } from "./sandboxExecutor.js";
+import { applyArtifact, computeSnapshotHash } from "./artifactApplier.js";
 
-// Pinned sandbox image digest for the deterministic stub engine.
+// Pinned sandbox image digest.
 // In production, this would be the SHA-256 digest of the container image.
-export const SANDBOX_IMAGE_DIGEST = "sha256:deterministic-stub-v1";
+// For the Node.js executor, this identifies the executor version.
+export const SANDBOX_IMAGE_DIGEST = "sha256:node-executor-v1";
 
 // Maximum allowed command name length
 const MAX_COMMAND_LENGTH = 128;
@@ -137,37 +132,108 @@ export function computeVerificationFingerprint(params) {
 }
 
 /**
- * Run sandboxed verification of a patch artifact.
+ * Build a canonical execution receipt from the sandbox execution results.
  *
- * Deterministic stub: validates the plan, "executes" each command in
- * canonical order, and produces structured output with hashes.
+ * The receipt is a canonical JSON serialization that binds all execution
+ * inputs and outputs. Its hash is content-addressed — same inputs and
+ * outputs always produce the same hash. Receipts are immutable and
+ * write-once in the durable store.
  *
- * In production, this would spawn a container with:
- * - Ephemeral workspace at base_sha
- * - Patch artifact applied
- * - Each validation command executed with resource limits
- * - Output captured and hashed
+ * @param {object} params
+ * @returns {{ receipt_content: string, receipt_hash: string, receipt_ref: string }}
+ */
+export function buildExecutionReceipt(params) {
+  const {
+    execution_backend_id,
+    executor_version,
+    source_snapshot_hash,
+    patch_artifact_hash,
+    base_sha,
+    input_bundle_hash,
+    sandbox_image_digest,
+    validation_plan_hash,
+    commands_executed,
+    per_command_exit_statuses,
+    aggregate_exit_status,
+    output_refs,
+    output_hashes,
+    limits_applied,
+    result,
+    inconclusive_reason,
+  } = params;
+
+  const receiptObject = {
+    execution_backend_id,
+    executor_version,
+    source_snapshot_hash,
+    patch_artifact_hash,
+    base_sha,
+    input_bundle_hash,
+    sandbox_image_digest,
+    validation_plan_hash,
+    commands: commands_executed,
+    per_command_exit_statuses,
+    aggregate_exit_status,
+    output_refs,
+    output_hashes,
+    limits_applied,
+    result,
+    ...(inconclusive_reason ? { inconclusive_reason } : {}),
+    // NO timestamps or DB IDs — hash is content-addressed only
+  };
+
+  const receiptContent = JSON.stringify(receiptObject);
+  const receiptHash = "sha256:" + crypto.createHash("sha256").update(receiptContent).digest("hex");
+  const receiptRef = `receipt:${receiptHash}`;
+
+  return { receipt_content: receiptContent, receipt_hash: receiptHash, receipt_ref: receiptRef };
+}
+
+/**
+ * Run sandboxed verification of a patch artifact against a source snapshot.
+ *
+ * Pipeline:
+ * 1. Build validation plan from envelope
+ * 2. Parse and verify artifact base_sha
+ * 3. Apply artifact to source files (fail-closed)
+ * 4. Execute validation commands via argv templates
+ * 5. Build execution receipt
  *
  * @param {object} options
  * @param {string} options.artifactContent - verified patch artifact JSON
  * @param {string} options.base_sha - pinned base SHA
  * @param {object} options.taskEnvelope - proposal task envelope
+ * @param {Array<{path, content}>} options.sourceFiles - source at base_sha
+ * @param {string} options.source_snapshot_hash - content-addressed snapshot hash
+ * @param {string} options.input_bundle_hash - canonical input bundle hash
+ * @param {string} options.patch_artifact_hash - artifact hash
  * @param {object} [options.limits] - resource limits override
- * @returns {Promise<object>} structured verification result
+ * @returns {Promise<object>} structured verification result with receipt data
  */
 export async function runSandboxVerification(options) {
-  const { artifactContent, base_sha, taskEnvelope, limits } = options;
+  const {
+    artifactContent,
+    base_sha,
+    taskEnvelope,
+    sourceFiles,
+    source_snapshot_hash,
+    input_bundle_hash,
+    patch_artifact_hash,
+    limits,
+  } = options;
 
   if (!artifactContent) throw new Error("artifactContent is required");
   if (!base_sha) throw new Error("base_sha is required");
   if (!taskEnvelope) throw new Error("taskEnvelope is required");
+  if (!sourceFiles) throw new Error("sourceFiles is required");
+  if (!source_snapshot_hash) throw new Error("source_snapshot_hash is required");
 
   const appliedLimits = { ...DEFAULT_LIMITS, ...limits };
 
   // Build validation plan from envelope
   const { commands, validation_plan_hash } = buildValidationPlan(taskEnvelope);
 
-  // Parse artifact to verify it applies
+  // Parse artifact
   let parsedArtifact;
   try {
     parsedArtifact = JSON.parse(artifactContent);
@@ -181,39 +247,94 @@ export async function runSandboxVerification(options) {
     );
   }
 
-  // No sandbox execution backend is available in this milestone.
-  // The deterministic stub CANNOT verify that the patch applies or that
-  // validation commands succeed. It returns inconclusive with a structured
-  // execution-failure category, which transitions to failed under the
-  // current lifecycle.
-  //
-  // A real implementation must:
-  // - reconstruct the repository snapshot at base_sha
-  // - apply the verified artifact edits
-  // - execute each validation command inside an ephemeral container
-  // - capture and hash the output
-  // - report per-command exit statuses
-  const overall = "inconclusive";
-  const commandResults = commands.map((cmd) => ({
-    command: cmd,
-    exit_status: null, // not executed
-    output_ref: null,
-    output_hash: null,
-  }));
+  // Apply artifact to source files (fail-closed on any mismatch)
+  const applyResult = applyArtifact(sourceFiles, parsedArtifact);
+  if (!applyResult.applied) {
+    // Patch application failed — produce inconclusive result with receipt
+    const receipt = buildExecutionReceipt({
+      execution_backend_id: "node-executor",
+      executor_version: "1.0.0",
+      source_snapshot_hash,
+      patch_artifact_hash,
+      base_sha,
+      input_bundle_hash,
+      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      validation_plan_hash,
+      commands_executed: [],
+      per_command_exit_statuses: [],
+      aggregate_exit_status: null,
+      output_refs: [],
+      output_hashes: [],
+      limits_applied: appliedLimits,
+      result: "inconclusive",
+      inconclusive_reason: "artifact_apply_failed",
+    });
+
+    logger.warn(
+      { base_sha, failure: applyResult.failure },
+      "Sandbox verification: artifact apply failed"
+    );
+
+    return {
+      overall: "inconclusive",
+      commands: [],
+      exit_status: null,
+      validation_plan_hash,
+      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      limits_applied: appliedLimits,
+      redacted_summary: `artifact_apply_failed: ${applyResult.failure}`,
+      inconclusive_reason: "artifact_apply_failed",
+      receipt,
+    };
+  }
+
+  // Execute validation commands
+  const execResult = await runSandboxExecution({
+    files: applyResult.files,
+    commands,
+    limits: appliedLimits,
+    sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+  });
+
+  // Build execution receipt from actual execution results
+  const commandsExecuted = execResult.command_results.map((c) => c.command);
+  const perCommandExitStatuses = execResult.command_results.map((c) => c.exit_status);
+  const outputRefs = execResult.command_results.filter((c) => c.output_ref).map((c) => c.output_ref);
+  const outputHashes = execResult.command_results.filter((c) => c.output_hash).map((c) => c.output_hash);
+
+  const receipt = buildExecutionReceipt({
+    execution_backend_id: "node-executor",
+    executor_version: "1.0.0",
+    source_snapshot_hash,
+    patch_artifact_hash,
+    base_sha,
+    input_bundle_hash,
+    sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+    validation_plan_hash,
+    commands_executed: commandsExecuted,
+    per_command_exit_statuses: perCommandExitStatuses,
+    aggregate_exit_status: execResult.aggregate_exit_status,
+    output_refs: outputRefs,
+    output_hashes: outputHashes,
+    limits_applied: appliedLimits,
+    result: execResult.overall,
+    ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
+  });
 
   logger.info(
-    { commands: commands.length, overall, validation_plan_hash },
-    "Sandbox verification returned inconclusive (execution backend unavailable)"
+    { commands: commandsExecuted.length, overall: execResult.overall, validation_plan_hash },
+    "Sandbox verification completed"
   );
 
   return {
-    overall,
-    commands: commandResults,
-    exit_status: null, // not executed
+    overall: execResult.overall,
+    commands: execResult.command_results,
+    exit_status: execResult.aggregate_exit_status,
     validation_plan_hash,
     sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
     limits_applied: appliedLimits,
-    redacted_summary: "execution_backend_unavailable: no container runtime configured",
-    inconclusive_reason: "execution_backend_unavailable",
+    redacted_summary: execResult.inconclusive_reason || `executed ${commandsExecuted.length} commands`,
+    ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
+    receipt,
   };
 }

@@ -54,6 +54,7 @@ const {
   computeVerificationFingerprint,
   validateCommandSet,
   runSandboxVerification,
+  buildExecutionReceipt,
   SANDBOX_IMAGE_DIGEST,
 } = await import("../../src/lib/sandboxRunner.js");
 
@@ -92,6 +93,7 @@ const TASK_ENVELOPE = {
 // ════════════════════════════════════════════════════════════════════════════
 
 const artifactTable = new Map();
+const receiptTable = new Map();
 
 let realArtifactHash = null;
 let realArtifactRef = null;
@@ -156,6 +158,16 @@ function setupDbQueryMock(baseProposal) {
     if (sql.includes("SELECT") && sql.includes("patch_artifacts")) {
       const ref = params[0];
       for (const [, entry] of artifactTable) {
+        if (entry.ref === ref) {
+          return { rows: [{ content: entry.content }] };
+        }
+      }
+      return { rows: [] };
+    }
+    // Execution receipts table: SELECT
+    if (sql.includes("SELECT") && sql.includes("execution_receipts")) {
+      const ref = params[0];
+      for (const [, entry] of receiptTable) {
         if (entry.ref === ref) {
           return { rows: [{ content: entry.content }] };
         }
@@ -238,8 +250,8 @@ async function createInconclusiveVerificationInput(overrides = {}) {
     exit_status: null,
     output_refs: [],
     output_hashes: [],
-    redacted_summary: "execution_backend_unavailable: no container runtime configured",
-    inconclusive_reason: "execution_backend_unavailable",
+    redacted_summary: "executor returned inconclusive",
+    inconclusive_reason: "executor_error",
     limits_applied: { cpu_shares: 512, memory_mb: 512 },
     ...overrides,
   };
@@ -282,6 +294,7 @@ async function createValidFailInput(overrides = {}) {
 
 beforeEach(async () => {
   artifactTable.clear();
+  receiptTable.clear();
   realArtifactHash = null;
   realArtifactRef = null;
   await setupArtifact();
@@ -294,15 +307,15 @@ beforeEach(async () => {
 // PASS RESULTS REJECTED (P0 — no execution backend)
 // ════════════════════════════════════════════════════════════════════════════
 
-describe("Verification behavioral — pass results rejected without execution receipt (P0)", () => {
-  it("rejects overall:pass regardless of valid structure", async () => {
+describe("Verification behavioral — pass results require execution receipt", () => {
+  it("rejects overall:pass without execution_receipt_ref/hash", async () => {
     await expect(
       recordVerificationResult(1, await createValidVerificationInput(), {
         actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
         expected_version: 1,
         correlation_id: "corr-1",
       })
-    ).rejects.toThrow(/Passing verification requires a verified sandbox execution receipt/);
+    ).rejects.toThrow(/execution_receipt_ref and execution_receipt_hash are required/);
   });
 
   it("rejects pass before any UPDATE or event INSERT", async () => {
@@ -323,15 +336,6 @@ describe("Verification behavioral — pass results rejected without execution re
     );
     expect(updateCalls).toHaveLength(0);
     expect(insertCalls).toHaveLength(0);
-  });
-
-  it("cannot enter verified through the current pipeline", async () => {
-    await expect(
-      recordVerificationResult(1, await createValidVerificationInput(), {
-        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
-        expected_version: 1,
-      })
-    ).rejects.toThrow(/execution receipt.*no execution backend available/);
   });
 });
 
@@ -509,9 +513,8 @@ describe("Verification behavioral — rejection cases", () => {
 // ════════════════════════════════════════════════════════════════════════════
 
 describe("Verification behavioral — contradictory result payloads (P0)", () => {
-  // pass results are rejected by the receipt gate before consistency checks.
-  // These tests verify the receipt gate catches all pass payloads.
-  it("rejects overall:pass with failing command exit_status (receipt gate)", async () => {
+  // pass results without a receipt are rejected before consistency checks.
+  it("rejects overall:pass with failing command exit_status (missing receipt)", async () => {
     const input = await createValidVerificationInput();
     input.commands[0] = { ...input.commands[0], exit_status: 1 };
 
@@ -520,10 +523,10 @@ describe("Verification behavioral — contradictory result payloads (P0)", () =>
         actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
         expected_version: 1,
       })
-    ).rejects.toThrow(/Passing verification requires a verified sandbox execution receipt/);
+    ).rejects.toThrow(/execution_receipt_ref and execution_receipt_hash are required/);
   });
 
-  it("rejects overall:pass with non-zero aggregate exit_status (receipt gate)", async () => {
+  it("rejects overall:pass with non-zero aggregate exit_status (missing receipt)", async () => {
     const input = await createValidVerificationInput({ exit_status: 1 });
 
     await expect(
@@ -531,7 +534,7 @@ describe("Verification behavioral — contradictory result payloads (P0)", () =>
         actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
         expected_version: 1,
       })
-    ).rejects.toThrow(/Passing verification requires a verified sandbox execution receipt/);
+    ).rejects.toThrow(/execution_receipt_ref and execution_receipt_hash are required/);
   });
 
   it("rejects overall:fail with all commands passing", async () => {
@@ -791,21 +794,19 @@ describe("Verification behavioral — sandbox runner", () => {
     expect(fp1).toMatch(/^sha256:/);
   });
 
-  it("runSandboxVerification returns inconclusive (no execution backend)", async () => {
+  it("runSandboxVerification requires sourceFiles", async () => {
     const content = JSON.stringify({
       base_sha: HEAD_SHA,
       files: [{ path: "src/x.js", change_type: "fix", edits: [{ line_start: 1, line_end: 1, new_content: "// fix" }] }],
     });
-    const result = await runSandboxVerification({
-      artifactContent: content,
-      base_sha: HEAD_SHA,
-      taskEnvelope: TASK_ENVELOPE,
-    });
 
-    expect(result.overall).toBe("inconclusive");
-    expect(result.inconclusive_reason).toBe("execution_backend_unavailable");
-    expect(result.commands).toHaveLength(2);
-    expect(result.exit_status).toBeNull();
+    await expect(
+      runSandboxVerification({
+        artifactContent: content,
+        base_sha: HEAD_SHA,
+        taskEnvelope: TASK_ENVELOPE,
+      })
+    ).rejects.toThrow(/sourceFiles is required/);
   });
 
   it("runSandboxVerification rejects artifact with mismatched base_sha", async () => {
@@ -819,7 +820,132 @@ describe("Verification behavioral — sandbox runner", () => {
         artifactContent: content,
         base_sha: HEAD_SHA,
         taskEnvelope: TASK_ENVELOPE,
+        sourceFiles: [{ path: "src/x.js", content: "original" }],
+        source_snapshot_hash: "sha256:snapshot",
       })
     ).rejects.toThrow(/artifact base_sha.*does not match pinned base/);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// RECEIPT-BACKED PASS → VERIFIED
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Store a pass receipt from node-executor in the mock receipt table.
+ * These receipts are structurally valid but node-executor is NOT
+ * pass-capable (ALLOWED_PASS_EXECUTION_BACKENDS is empty), so they
+ * will be rejected at the pass-backend check.
+ */
+async function storeNodeExecutorPassReceipt(artifactHash, planHash, overrides = {}) {
+  const params = {
+    execution_backend_id: "node-executor",
+    executor_version: "1.0.0",
+    source_snapshot_hash: "sha256:snapshot123",
+    patch_artifact_hash: artifactHash,
+    base_sha: HEAD_SHA,
+    input_bundle_hash: INPUT_BUNDLE_HASH,
+    sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+    validation_plan_hash: planHash,
+    commands_executed: ["lint", "test"],
+    per_command_exit_statuses: [0, 0],
+    aggregate_exit_status: 0,
+    output_refs: ["output:sha256:out1", "output:sha256:out2"],
+    output_hashes: ["sha256:out1", "sha256:out2"],
+    limits_applied: { cpu_shares: 512, memory_mb: 512 },
+    result: "pass",
+    ...overrides,
+  };
+
+  const receipt = buildExecutionReceipt(params);
+  receiptTable.set(receipt.receipt_hash, {
+    ref: receipt.receipt_ref,
+    content: receipt.receipt_content,
+  });
+
+  return receipt;
+}
+
+// Keep backward-compatible alias
+async function storeValidPassReceipt(artifactHash, planHash) {
+  return storeNodeExecutorPassReceipt(artifactHash, planHash);
+}
+
+describe("Verification behavioral — node-executor pass receipts rejected (not isolated)", () => {
+  it("rejects node-executor pass receipt (not pass-capable backend)", async () => {
+    const { hash } = await setupArtifact();
+    const plan = buildValidationPlan(TASK_ENVELOPE);
+    const receipt = await storeNodeExecutorPassReceipt(hash, plan.validation_plan_hash);
+
+    const input = await createValidVerificationInput({
+      execution_receipt_ref: receipt.receipt_ref,
+      execution_receipt_hash: receipt.receipt_hash,
+    });
+
+    await expect(
+      recordVerificationResult(1, input, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/node-executor.*not authorized to produce passing results/);
+  });
+
+  it("rejects node-executor pass before any UPDATE", async () => {
+    const { hash } = await setupArtifact();
+    const plan = buildValidationPlan(TASK_ENVELOPE);
+    const receipt = await storeNodeExecutorPassReceipt(hash, plan.validation_plan_hash);
+
+    const input = await createValidVerificationInput({
+      execution_receipt_ref: receipt.receipt_ref,
+      execution_receipt_hash: receipt.receipt_hash,
+    });
+
+    try {
+      await recordVerificationResult(1, input, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      });
+    } catch (_e) {}
+
+    const updateCalls = mockClient.query.mock.calls.filter(
+      ([sql]) => sql && sql.includes("UPDATE repair_proposals")
+    );
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("rejects pass with unresolvable receipt", async () => {
+    const input = await createValidVerificationInput({
+      execution_receipt_ref: "receipt:sha256:nonexistent",
+      execution_receipt_hash: "sha256:nonexistent",
+    });
+
+    await expect(
+      recordVerificationResult(1, input, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/receipt.*not found|receipt resolution failed/i);
+  });
+
+  it("rejects pass receipt with result=fail", async () => {
+    const { hash } = await setupArtifact();
+    const plan = buildValidationPlan(TASK_ENVELOPE);
+    const receipt = await storeNodeExecutorPassReceipt(hash, plan.validation_plan_hash, {
+      per_command_exit_statuses: [1, 0],
+      aggregate_exit_status: 1,
+      result: "fail",
+    });
+
+    const input = await createValidVerificationInput({
+      execution_receipt_ref: receipt.receipt_ref,
+      execution_receipt_hash: receipt.receipt_hash,
+    });
+
+    await expect(
+      recordVerificationResult(1, input, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/receipt result is 'fail', must be 'pass'/);
   });
 });

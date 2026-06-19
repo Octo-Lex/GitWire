@@ -1950,19 +1950,16 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
   // Determine target status from result
   const targetStatus = result === "pass" ? "verified" : "failed";
 
-  // P0 FIX: No execution backend exists in this milestone.
-  // A passing result requires a verified sandbox execution receipt proving
-  // the exact artifact was applied, the exact validation plan ran, and all
-  // commands exited zero. Without a durable receipt backend, any internal
-  // caller could fabricate a passing result.
-  //
-  // Until a real executor lands, reject all pass results.
-  // The stub sandbox returns inconclusive (→ failed), so proposals
-  // cannot reach verified through the current pipeline.
+  // A passing result requires a durable execution receipt.
+  // The receipt is resolved and hash-verified under the transaction lock
+  // below. Here we just require the reference and hash to be present —
+  // the binding verification happens after locking.
   if (result === "pass") {
-    throw new Error(
-      "Passing verification requires a verified sandbox execution receipt — no execution backend available"
-    );
+    if (!verificationInput.execution_receipt_ref || !verificationInput.execution_receipt_hash) {
+      throw new Error(
+        "Passing verification requires an execution receipt — execution_receipt_ref and execution_receipt_hash are required"
+      );
+    }
   }
 
   if (!canTransitionTo(actor_kind, targetStatus)) {
@@ -2160,6 +2157,27 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
       );
     }
 
+    // ── EXECUTION RECEIPT VERIFICATION (under lock) ─────────────────────────
+    // For passing results: use the shared receipt verification helper to
+    // ensure complete binding checks identical to the critic gate.
+    if (result === "pass") {
+      if (!verificationInput.execution_receipt_ref || !verificationInput.execution_receipt_hash) {
+        throw new Error(
+          "Passing verification requires execution_receipt_ref and execution_receipt_hash"
+        );
+      }
+
+      await verifyExecutionReceiptAgainstLockedProposal(
+        verificationInput.execution_receipt_ref,
+        verificationInput.execution_receipt_hash,
+        patchProposal,
+        proposal.head_sha,
+        canonicalPlan,
+        SANDBOX_IMAGE_DIGEST,
+        proposal.repo_full_name
+      );
+    }
+
     // Build the persisted validation result
     const persistedResult = {
       overall: result,
@@ -2175,6 +2193,8 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
       output_hashes: verificationInput.output_hashes || [],
       redacted_summary: verificationInput.redacted_summary || "",
       limits_applied: verificationInput.limits_applied || {},
+      ...(verificationInput.execution_receipt_ref ? { execution_receipt_ref: verificationInput.execution_receipt_ref } : {}),
+      ...(verificationInput.execution_receipt_hash ? { execution_receipt_hash: verificationInput.execution_receipt_hash } : {}),
       ...(verificationInput.inconclusive_reason ? { inconclusive_reason: verificationInput.inconclusive_reason } : {}),
       // Backward-compat: checks array for existing validateValidationResult consumers
       checks: verificationInput.commands.map((c) => ({
@@ -2279,7 +2299,7 @@ function buildValidationPlanForRecorder(envelope) {
   const commands = [...envelope.required_validation].sort();
   const planContent = JSON.stringify({
     commands,
-    image_digest: "sha256:deterministic-stub-v1",
+    image_digest: "sha256:node-executor-v1",
   });
   const validation_plan_hash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
   return { commands, validation_plan_hash };
@@ -2295,6 +2315,255 @@ function computeVerificationFingerprintInternal(params) {
     validation_plan_hash,
   });
   return "sha256:" + crypto.createHash("sha256").update(content).digest("hex");
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SHARED RECEIPT VERIFICATION — used by BOTH recordVerificationResult()
+// and recordCriticReview() to ensure identical binding checks.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Allowlisted execution backend identifiers.
+ * Only these backends are trusted to produce execution receipts.
+ */
+const ALLOWED_EXECUTION_BACKENDS = new Set([
+  "node-executor",
+]);
+
+/**
+ * Allowlisted executor versions.
+ */
+const ALLOWED_EXECUTOR_VERSIONS = new Set([
+  "1.0.0",
+]);
+
+/**
+ * Backends that may produce result: "pass" receipts.
+ *
+ * EMPTY until a real isolated executor (Docker/Podman/nsjail/firejail)
+ * is implemented. The host spawn executor is NOT isolated — it lacks
+ * network isolation, CPU/memory/process limits, non-root enforcement,
+ * and container-level isolation. It may only produce fail/inconclusive
+ * receipts.
+ *
+ * A backend is added here ONLY after it has been verified to provide:
+ * - network disabled
+ * - no credentials or host socket mounts
+ * - non-root user
+ * - CPU/memory/pid/wall-clock/output limits enforced by the kernel
+ * - read-only source input + disposable workdir
+ */
+const ALLOWED_PASS_EXECUTION_BACKENDS = new Set([
+  // empty until Docker/Podman/nsjail/firejail backend lands
+]);
+
+/**
+ * Verify a durable execution receipt against locked proposal state.
+ *
+ * This is the SINGLE shared verification helper used by both
+ * recordVerificationResult() and recordCriticReview() to ensure
+ * identical binding checks at both gates.
+ *
+ * Checks:
+ * 1. Receipt resolves and re-hashes correctly
+ * 2. Receipt result is "pass"
+ * 3. execution_backend_id is allowlisted
+ * 4. executor_version is allowlisted
+ * 5. patch_artifact_hash matches locked patch_proposal
+ * 6. base_sha matches proposal head_sha
+ * 7. input_bundle_hash matches locked patch_proposal
+ * 8. sandbox_image_digest matches approved pinned constant
+ * 9. validation_plan_hash matches canonical plan from locked envelope
+ * 10. commands array is non-empty and matches canonical plan
+ * 11. per_command_exit_statuses length === commands length
+ * 12. every per-command exit status is zero
+ * 13. aggregate_exit_status is zero
+ * 14. output_refs length === commands length
+ * 15. output_hashes length === commands length
+ *
+ * @param {string} receiptRef - durable receipt reference
+ * @param {string} receiptHash - expected receipt hash
+ * @param {object} patchProposal - locked patch_proposal
+ * @param {string} headSha - locked proposal head_sha
+ * @param {object} canonicalPlan - canonical validation plan { commands, validation_plan_hash }
+ * @param {string} sandboxImageDigest - approved pinned image digest
+ * @returns {Promise<object>} verified receipt object
+ * @throws {Error} on any verification failure
+ */
+async function verifyExecutionReceiptAgainstLockedProposal(
+  receiptRef,
+  receiptHash,
+  patchProposal,
+  headSha,
+  canonicalPlan,
+  sandboxImageDigest,
+  repoFullName
+) {
+  // 1. Resolve and re-hash the durable receipt
+  let receiptContent;
+  try {
+    const { verifyReceipt } = await import("../lib/executionReceiptStore.js");
+    receiptContent = await verifyReceipt(receiptRef, receiptHash);
+  } catch (receiptErr) {
+    throw new Error(`Execution receipt resolution failed: ${receiptErr.message}`);
+  }
+
+  let receipt;
+  try {
+    receipt = JSON.parse(receiptContent);
+  } catch (_e) {
+    throw new Error("Execution receipt is not valid JSON");
+  }
+
+  // 2. Receipt result must be pass
+  if (receipt.result !== "pass") {
+    throw new Error(
+      `Execution receipt result is '${receipt.result}', must be 'pass'`
+    );
+  }
+
+  // 3. execution_backend_id must be allowlisted
+  if (!ALLOWED_EXECUTION_BACKENDS.has(receipt.execution_backend_id)) {
+    throw new Error(
+      `Execution receipt execution_backend_id '${receipt.execution_backend_id}' is not allowlisted`
+    );
+  }
+
+  // 3a. If result is pass, the backend must be in ALLOWED_PASS_EXECUTION_BACKENDS.
+  // The host spawn executor is NOT isolated and cannot authorize pass.
+  if (!ALLOWED_PASS_EXECUTION_BACKENDS.has(receipt.execution_backend_id)) {
+    throw new Error(
+      `Execution receipt execution_backend_id '${receipt.execution_backend_id}' is not authorized to produce passing results — backend is not isolated`
+    );
+  }
+
+  // 4. executor_version must be allowlisted
+  if (!ALLOWED_EXECUTOR_VERSIONS.has(receipt.executor_version)) {
+    throw new Error(
+      `Execution receipt executor_version '${receipt.executor_version}' is not allowlisted`
+    );
+  }
+
+  // 5. patch_artifact_hash matches locked patch_proposal
+  if (receipt.patch_artifact_hash !== patchProposal.artifact_hash) {
+    throw new Error(
+      `Execution receipt patch_artifact_hash does not match locked patch_proposal`
+    );
+  }
+
+  // 6. base_sha matches proposal head_sha
+  if (receipt.base_sha !== headSha) {
+    throw new Error(
+      `Execution receipt base_sha does not match proposal head_sha`
+    );
+  }
+
+  // 6a. source_snapshot_hash must be present and resolve to a durable
+  // source-snapshot binding for the locked repo and base_sha.
+  // This verifies the receipt was produced from the exact pinned commit
+  // snapshot, not an arbitrary or incomplete file set.
+  if (!receipt.source_snapshot_hash) {
+    throw new Error(
+      "Execution receipt must contain source_snapshot_hash"
+    );
+  }
+
+  try {
+    const { verifySourceSnapshot } = await import("../lib/sourceSnapshotStore.js");
+    await verifySourceSnapshot(receipt.source_snapshot_hash, repoFullName, headSha);
+  } catch (snapshotErr) {
+    throw new Error(
+      `Execution receipt source_snapshot_hash verification failed: ${snapshotErr.message}`
+    );
+  }
+
+  // 7. input_bundle_hash matches locked patch_proposal
+  if (receipt.input_bundle_hash !== patchProposal.input_bundle_hash) {
+    throw new Error(
+      `Execution receipt input_bundle_hash does not match locked patch_proposal`
+    );
+  }
+
+  // 8. sandbox_image_digest matches approved pinned constant
+  if (receipt.sandbox_image_digest !== sandboxImageDigest) {
+    throw new Error(
+      `Execution receipt sandbox_image_digest does not match approved pinned image digest`
+    );
+  }
+
+  // 9. validation_plan_hash matches canonical plan from locked envelope
+  if (receipt.validation_plan_hash !== canonicalPlan.validation_plan_hash) {
+    throw new Error(
+      `Execution receipt validation_plan_hash does not match canonical plan from locked envelope`
+    );
+  }
+
+  // 10. commands array must be non-empty
+  if (!Array.isArray(receipt.commands) || receipt.commands.length === 0) {
+    throw new Error(
+      "Execution receipt commands must be a non-empty array"
+    );
+  }
+
+  // Verify commands match canonical plan (sorted)
+  const receiptCommands = [...receipt.commands].sort();
+  const planCommands = [...canonicalPlan.commands].sort();
+  if (JSON.stringify(receiptCommands) !== JSON.stringify(planCommands)) {
+    throw new Error(
+      "Execution receipt commands do not match canonical validation plan"
+    );
+  }
+
+  // 11. per_command_exit_statuses length MUST equal commands length
+  if (!Array.isArray(receipt.per_command_exit_statuses) ||
+      receipt.per_command_exit_statuses.length !== receipt.commands.length) {
+    throw new Error(
+      `Execution receipt per_command_exit_statuses length (${Array.isArray(receipt.per_command_exit_statuses) ? receipt.per_command_exit_statuses.length : 'not array'}) does not match commands length (${receipt.commands.length})`
+    );
+  }
+
+  // 12. Every per-command exit status must be zero
+  const allZero = receipt.per_command_exit_statuses.every(
+    (s) => Number.isInteger(s) && s === 0
+  );
+  if (!allZero) {
+    throw new Error(
+      "Execution receipt per_command_exit_statuses do not all exit zero"
+    );
+  }
+
+  // 13. aggregate_exit_status must be zero
+  if (!Number.isInteger(receipt.aggregate_exit_status) || receipt.aggregate_exit_status !== 0) {
+    throw new Error(
+      "Execution receipt aggregate_exit_status is not zero"
+    );
+  }
+
+  // 14. output_refs must have length === commands length.
+  // NOTE: output_refs and output_hashes are NON-AUTHORITATIVE receipt metadata.
+  // They are length-checked for structural integrity but are NOT resolved
+  // or hash-verified at this gate. They are not part of the proof chain that
+  // authorizes pass → verified. The proof chain is: durable receipt +
+  // source snapshot + exit statuses + binding to locked proposal state.
+  // Before enabling pass-capable backends, output objects should be made
+  // durable and verifiable, or this caveat should be documented in the
+  // security model.
+  if (!Array.isArray(receipt.output_refs) ||
+      receipt.output_refs.length !== receipt.commands.length) {
+    throw new Error(
+      "Execution receipt output_refs length does not match commands length"
+    );
+  }
+
+  // 15. output_hashes must have length === commands length (non-authoritative)
+  if (!Array.isArray(receipt.output_hashes) ||
+      receipt.output_hashes.length !== receipt.commands.length) {
+    throw new Error(
+      "Execution receipt output_hashes length does not match commands length"
+    );
+  }
+
+  return receipt;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2491,17 +2760,10 @@ export async function recordCriticReview(id, reviewInput = {}, options = {}) {
     );
   }
 
-  // P0 INTERIM: approve is unconditionally rejected.
-  // Until a real execution-receipt backend exists with durable receipt
-  // resolution, hash verification, and binding checks, no caller — internal
-  // or external — can reach review_ready through critic approval.
-  // When the real backend lands, replace this gate with actual receipt
-  // resolution and binding verification.
-  if (verdict === "approve") {
-    throw new Error(
-      "Critic approval requires a verified sandbox execution receipt — no receipt backend available"
-    );
-  }
+  // A passing approval requires a durable execution receipt on the
+  // validation_result. The receipt is resolved and verified under the
+  // transaction lock below. Here we only skip the pre-transaction gate
+  // — the actual binding verification happens after locking.
 
   // Require binding fields
   const requiredFields = [
@@ -2524,8 +2786,10 @@ export async function recordCriticReview(id, reviewInput = {}, options = {}) {
     throw new Error("Critic review blocking_findings must be an array");
   }
 
-  // Only reject is reachable; target status is always failed
-  const targetStatus = "failed";
+  // Determine target status from verdict and blocking findings
+  const targetStatus = verdict === "approve" && reviewInput.blocking_findings.length === 0
+    ? "review_ready"
+    : "failed";
 
   if (!canTransitionTo(actor_kind, targetStatus)) {
     throw new Error(
@@ -2582,6 +2846,36 @@ export async function recordCriticReview(id, reviewInput = {}, options = {}) {
     if (validationResult.overall !== "pass") {
       throw new Error(
         `Cannot record critic review: validation_result.overall must be 'pass' (got '${validationResult.overall}')`
+      );
+    }
+
+    // ── RECEIPT-BOUND APPROVAL GATE ──────────────────────────────────────────
+    // For approve verdict: use the SAME shared receipt verification helper
+    // as recordVerificationResult() to ensure identical binding checks.
+    // The critic gate must verify the complete receipt contract, not a subset.
+    if (verdict === "approve") {
+      const receiptRef = validationResult.execution_receipt_ref;
+      const receiptHash = validationResult.execution_receipt_hash;
+
+      if (!receiptRef || !receiptHash) {
+        throw new Error(
+          "Critic approval requires a verified execution receipt — validation_result has no execution_receipt_ref/hash"
+        );
+      }
+
+      // Build canonical plan from locked envelope for receipt verification
+      const criticEnvelope = parseJsonb(proposal.task_envelope);
+      const criticCanonicalPlan = buildValidationPlanForRecorder(criticEnvelope);
+      const { SANDBOX_IMAGE_DIGEST: criticSandboxDigest } = await import("../lib/sandboxRunner.js");
+
+      await verifyExecutionReceiptAgainstLockedProposal(
+        receiptRef,
+        receiptHash,
+        patchProposal,
+        proposal.head_sha,
+        criticCanonicalPlan,
+        criticSandboxDigest,
+        proposal.repo_full_name
       );
     }
 
