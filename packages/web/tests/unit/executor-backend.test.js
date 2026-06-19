@@ -155,8 +155,12 @@ describe("Docker Executor Backend", () => {
     expect(dockerBackend).toMatch(/read_only_rootfs:\s*true/);
   });
 
-  it("has image_digest sha256:gitwire-validator-v1", () => {
-    expect(dockerBackend).toMatch(/sha256:gitwire-validator-v1/);
+  it("has image_digest as sha256:<64 hex chars>", () => {
+    expect(dockerBackend).toMatch(/DOCKER_IMAGE_DIGEST = "sha256:[0-9a-f]{64}"/);
+  });
+
+  it("has image_ref as digest-pinned OCI reference", () => {
+    expect(dockerBackend).toMatch(/DOCKER_IMAGE_REF = .+@sha256:[0-9a-f]{64}/);
   });
 
   it("enforces --network=none", () => {

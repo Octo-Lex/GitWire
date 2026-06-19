@@ -168,6 +168,7 @@ export function buildExecutionReceipt(params) {
     non_root,
     read_only_rootfs,
     resource_limits,
+    image_ref,
   } = params;
 
   const receiptObject = {
@@ -193,6 +194,7 @@ export function buildExecutionReceipt(params) {
     non_root: Boolean(non_root),
     read_only_rootfs: Boolean(read_only_rootfs),
     resource_limits: resource_limits || {},
+    image_ref: image_ref || null,
     ...(inconclusive_reason ? { inconclusive_reason } : {}),
     // NO timestamps or DB IDs — hash is content-addressed only
   };
@@ -294,6 +296,7 @@ export async function runSandboxVerification(options) {
       network_disabled: isolation.network_disabled,
       non_root: isolation.non_root,
       read_only_rootfs: isolation.read_only_rootfs,
+      image_ref: isolation.image_ref,
       resource_limits: isolation.resource_limits,
     });
 
@@ -355,6 +358,7 @@ export async function runSandboxVerification(options) {
     network_disabled: isolation.network_disabled,
     non_root: isolation.non_root,
     read_only_rootfs: isolation.read_only_rootfs,
+      image_ref: isolation.image_ref,
     resource_limits: isolation.resource_limits,
   });
 

@@ -48,14 +48,31 @@ export const DOCKER_DEFAULT_LIMITS = {
 
 /**
  * The pinned image for container execution.
- * In production this would be a pre-built image with the target
- * project's toolchain. For now it is a version-tagged identifier.
+ *
+ * PR #55: Replaced the governance label 'sha256:gitwire-validator-v1'
+ * with a real immutable OCI digest-pinned reference. The image_ref is
+ * a full registry path + digest, and the image_digest is the parsed
+ * sha256:<hex64> digest.
+ *
+ * Before pass authorization (PR #56), the executor will verify via
+ * `docker inspect` that the running container used this exact image.
  *
  * NOTE: supports_pass remains false until E2E isolation evidence
- * is verified. Do NOT add this backend to ALLOWED_PASS_EXECUTION_BACKENDS
- * until supports_pass is true.
+ * is verified AND the backend is added to ALLOWED_PASS_EXECUTION_BACKENDS.
  */
-export const DOCKER_IMAGE_DIGEST = "sha256:gitwire-validator-v1";
+
+// Real immutable OCI image reference (digest-pinned).
+// This is a PLACEHOLDER digest — all zeros. It satisfies the parser
+// but is NOT a real image identity. The docker-executor cannot produce
+// valid isolation evidence with this placeholder because:
+// 1. The runtime will not resolve a zero-digest image
+// 2. storeBackendEvidence() requires runtime inspection, which will fail
+//
+// Before PR #56, replace this with a real built image digest:
+//   docker build -t gitwire-validator .
+//   docker inspect --format='{{index .RepoDigests 0}}' gitwire-validator
+export const DOCKER_IMAGE_REF = "localhost/gitwire-validator@sha256:0000000000000000000000000000000000000000000000000000000000000000";
+export const DOCKER_IMAGE_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 /**
  * Non-root UID/GID for container execution.
@@ -197,7 +214,9 @@ function executeInContainer(runtime, argv, workspace, limits) {
       "--workdir=/workspace",                      // workspace as CWD
       `--volume=${workspace}:/workspace:rw`,        // mount workspace only
       // No --privileged, no host Docker socket, no --mount of anything else
-      DOCKER_IMAGE_DIGEST.replace("sha256:", ""),   // image name (without digest prefix)
+      // Pass the FULL digest-pinned reference so the runtime resolves
+      // the exact immutable image, not a mutable tag or name.
+      DOCKER_IMAGE_REF,
       ...argv,                                      // command + args (no shell)
     ];
 
@@ -449,6 +468,7 @@ const dockerExecutorBackend = {
   id: "docker-executor",
   version: "1.0.0",
   image_digest: DOCKER_IMAGE_DIGEST,
+  image_ref: DOCKER_IMAGE_REF,
 
   // FALSE until E2E isolation evidence is verified
   supports_pass: false,
@@ -476,6 +496,7 @@ const dockerExecutorBackend = {
       execution_backend_id: this.id,
       executor_version: this.version,
       sandbox_image_digest: this.image_digest,
+      image_ref: this.image_ref,
       container_runtime: this.container_runtime,
       runtime_version: this.runtime_version,
       network_disabled: this.network_disabled,

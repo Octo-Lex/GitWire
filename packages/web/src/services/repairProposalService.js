@@ -2372,6 +2372,7 @@ const ALLOWED_PASS_EXECUTION_BACKENDS = new Set([
  * 3a. Backend must be in ALLOWED_PASS_EXECUTION_BACKENDS (isolation)
  * 3b. Isolation bindings present on receipt
  * 3c. network_disabled, non_root, read_only_rootfs all true
+ * 3d. image_ref present and digest-pinned (immutable OCI identity)
  * 4. executor_version is allowlisted
  * 5. patch_artifact_hash matches locked patch_proposal
  * 6. base_sha matches proposal head_sha
@@ -2475,6 +2476,26 @@ async function verifyExecutionReceiptAgainstLockedProposal(
   if (!receipt.read_only_rootfs) {
     throw new Error(
       "Execution receipt read_only_rootfs is false — pass requires read-only rootfs"
+    );
+  }
+
+  // 3d. image_ref must be present and digest-pinned.
+  // This is the immutable OCI image identity — a governance label
+  // like 'sha256:gitwire-validator-v1' is NOT a real image digest.
+  // Pass receipts must bind to a real digest-pinned reference.
+  if (!receipt.image_ref) {
+    throw new Error(
+      "Execution receipt missing image_ref — pass requires immutable OCI image identity"
+    );
+  }
+  try {
+    const { isDigestPinned } = await import("../lib/imageReference.js");
+    if (!isDigestPinned(receipt.image_ref)) {
+      throw new Error("not digest-pinned");
+    }
+  } catch (imgErr) {
+    throw new Error(
+      `Execution receipt image_ref '${receipt.image_ref}' is invalid: ${imgErr.message}`
     );
   }
 
