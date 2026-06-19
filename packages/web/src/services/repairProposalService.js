@@ -2328,6 +2328,7 @@ function computeVerificationFingerprintInternal(params) {
  */
 const ALLOWED_EXECUTION_BACKENDS = new Set([
   "node-executor",
+  "docker-executor",
 ]);
 
 /**
@@ -2368,9 +2369,13 @@ const ALLOWED_PASS_EXECUTION_BACKENDS = new Set([
  * 1. Receipt resolves and re-hashes correctly
  * 2. Receipt result is "pass"
  * 3. execution_backend_id is allowlisted
+ * 3a. Backend must be in ALLOWED_PASS_EXECUTION_BACKENDS (isolation)
+ * 3b. Isolation bindings present on receipt
+ * 3c. network_disabled, non_root, read_only_rootfs all true
  * 4. executor_version is allowlisted
  * 5. patch_artifact_hash matches locked patch_proposal
  * 6. base_sha matches proposal head_sha
+ * 6a. source_snapshot_hash resolves to durable snapshot
  * 7. input_bundle_hash matches locked patch_proposal
  * 8. sandbox_image_digest matches approved pinned constant
  * 9. validation_plan_hash matches canonical plan from locked envelope
@@ -2434,6 +2439,42 @@ async function verifyExecutionReceiptAgainstLockedProposal(
   if (!ALLOWED_PASS_EXECUTION_BACKENDS.has(receipt.execution_backend_id)) {
     throw new Error(
       `Execution receipt execution_backend_id '${receipt.execution_backend_id}' is not authorized to produce passing results — backend is not isolated`
+    );
+  }
+
+  // 3b. Isolation bindings must be present on the receipt.
+  // These fields are bound into the receipt by the executor backend
+  // and verified here to confirm the execution environment met the
+  // isolation contract.
+  const isolationFields = [
+    "container_runtime", "network_disabled", "non_root",
+    "read_only_rootfs", "resource_limits",
+  ];
+  for (const field of isolationFields) {
+    if (receipt[field] === undefined) {
+      throw new Error(
+        `Execution receipt missing isolation binding: ${field}`
+      );
+    }
+  }
+
+  // 3c. Isolation properties must be enforced for pass receipts.
+  // A pass receipt MUST come from a backend with network disabled,
+  // non-root user, and read-only rootfs. These are the minimum
+  // isolation guarantees required to trust a pass result.
+  if (!receipt.network_disabled) {
+    throw new Error(
+      "Execution receipt network_disabled is false — pass requires network isolation"
+    );
+  }
+  if (!receipt.non_root) {
+    throw new Error(
+      "Execution receipt non_root is false — pass requires non-root execution"
+    );
+  }
+  if (!receipt.read_only_rootfs) {
+    throw new Error(
+      "Execution receipt read_only_rootfs is false — pass requires read-only rootfs"
     );
   }
 

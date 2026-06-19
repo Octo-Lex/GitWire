@@ -192,8 +192,8 @@ describe("Execution Receipts — sandbox runner receipt", () => {
     expect(sandboxRunner).toMatch(/applyArtifact/);
   });
 
-  it("runSandboxVerification uses sandboxExecutor", () => {
-    expect(sandboxRunner).toMatch(/runSandboxExecution/);
+  it("runSandboxVerification uses executor registry", () => {
+    expect(sandboxRunner).toMatch(/getDefaultBackend|getBackend|executorRegistry/);
   });
 
   it("runSandboxVerification returns inconclusive on apply failure", () => {

@@ -14,8 +14,8 @@
 
 import crypto from "crypto";
 import { logger } from "./logger.js";
-import { runSandboxExecution } from "./sandboxExecutor.js";
 import { applyArtifact, computeSnapshotHash } from "./artifactApplier.js";
+import { getDefaultBackend, getBackend } from "./executorRegistry.js";
 
 // Pinned sandbox image digest.
 // In production, this would be the SHA-256 digest of the container image.
@@ -160,6 +160,14 @@ export function buildExecutionReceipt(params) {
     limits_applied,
     result,
     inconclusive_reason,
+    // Isolation bindings — bound into the receipt so the verifier can
+    // confirm that the execution environment met the isolation contract.
+    container_runtime,
+    runtime_version,
+    network_disabled,
+    non_root,
+    read_only_rootfs,
+    resource_limits,
   } = params;
 
   const receiptObject = {
@@ -178,6 +186,13 @@ export function buildExecutionReceipt(params) {
     output_hashes,
     limits_applied,
     result,
+    // Isolation bindings — part of the content-addressed hash
+    container_runtime: container_runtime || "none",
+    runtime_version: runtime_version || null,
+    network_disabled: Boolean(network_disabled),
+    non_root: Boolean(non_root),
+    read_only_rootfs: Boolean(read_only_rootfs),
+    resource_limits: resource_limits || {},
     ...(inconclusive_reason ? { inconclusive_reason } : {}),
     // NO timestamps or DB IDs — hash is content-addressed only
   };
@@ -220,6 +235,7 @@ export async function runSandboxVerification(options) {
     input_bundle_hash,
     patch_artifact_hash,
     limits,
+    backend_id,
   } = options;
 
   if (!artifactContent) throw new Error("artifactContent is required");
@@ -228,7 +244,12 @@ export async function runSandboxVerification(options) {
   if (!sourceFiles) throw new Error("sourceFiles is required");
   if (!source_snapshot_hash) throw new Error("source_snapshot_hash is required");
 
+  // Select executor backend
+  const backend = backend_id ? getBackend(backend_id) : getDefaultBackend();
+  const isolation = backend.describe();
   const appliedLimits = { ...DEFAULT_LIMITS, ...limits };
+
+  logger.info({ backend: backend.id, supports_pass: backend.supports_pass }, "Executor backend selected");
 
   // Build validation plan from envelope
   const { commands, validation_plan_hash } = buildValidationPlan(taskEnvelope);
@@ -252,13 +273,13 @@ export async function runSandboxVerification(options) {
   if (!applyResult.applied) {
     // Patch application failed — produce inconclusive result with receipt
     const receipt = buildExecutionReceipt({
-      execution_backend_id: "node-executor",
-      executor_version: "1.0.0",
+      execution_backend_id: isolation.execution_backend_id,
+      executor_version: isolation.executor_version,
       source_snapshot_hash,
       patch_artifact_hash,
       base_sha,
       input_bundle_hash,
-      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      sandbox_image_digest: isolation.sandbox_image_digest,
       validation_plan_hash,
       commands_executed: [],
       per_command_exit_statuses: [],
@@ -268,6 +289,12 @@ export async function runSandboxVerification(options) {
       limits_applied: appliedLimits,
       result: "inconclusive",
       inconclusive_reason: "artifact_apply_failed",
+      container_runtime: isolation.container_runtime,
+      runtime_version: isolation.runtime_version,
+      network_disabled: isolation.network_disabled,
+      non_root: isolation.non_root,
+      read_only_rootfs: isolation.read_only_rootfs,
+      resource_limits: isolation.resource_limits,
     });
 
     logger.warn(
@@ -280,7 +307,7 @@ export async function runSandboxVerification(options) {
       commands: [],
       exit_status: null,
       validation_plan_hash,
-      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      sandbox_image_digest: isolation.sandbox_image_digest,
       limits_applied: appliedLimits,
       redacted_summary: `artifact_apply_failed: ${applyResult.failure}`,
       inconclusive_reason: "artifact_apply_failed",
@@ -288,12 +315,12 @@ export async function runSandboxVerification(options) {
     };
   }
 
-  // Execute validation commands
-  const execResult = await runSandboxExecution({
+  // Execute validation commands via selected backend
+  const execResult = await backend.run({
     files: applyResult.files,
     commands,
     limits: appliedLimits,
-    sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+    sandbox_image_digest: isolation.sandbox_image_digest,
   });
 
   // Build execution receipt from actual execution results
@@ -302,14 +329,18 @@ export async function runSandboxVerification(options) {
   const outputRefs = execResult.command_results.filter((c) => c.output_ref).map((c) => c.output_ref);
   const outputHashes = execResult.command_results.filter((c) => c.output_hash).map((c) => c.output_hash);
 
+  // Use runtime-detected isolation properties if the backend overrides them
+  const receiptContainerRuntime = execResult.container_runtime || isolation.container_runtime;
+  const receiptRuntimeVersion = execResult.runtime_version || isolation.runtime_version;
+
   const receipt = buildExecutionReceipt({
-    execution_backend_id: "node-executor",
-    executor_version: "1.0.0",
+    execution_backend_id: isolation.execution_backend_id,
+    executor_version: isolation.executor_version,
     source_snapshot_hash,
     patch_artifact_hash,
     base_sha,
     input_bundle_hash,
-    sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+    sandbox_image_digest: isolation.sandbox_image_digest,
     validation_plan_hash,
     commands_executed: commandsExecuted,
     per_command_exit_statuses: perCommandExitStatuses,
@@ -319,10 +350,16 @@ export async function runSandboxVerification(options) {
     limits_applied: appliedLimits,
     result: execResult.overall,
     ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
+    container_runtime: receiptContainerRuntime,
+    runtime_version: receiptRuntimeVersion,
+    network_disabled: isolation.network_disabled,
+    non_root: isolation.non_root,
+    read_only_rootfs: isolation.read_only_rootfs,
+    resource_limits: isolation.resource_limits,
   });
 
   logger.info(
-    { commands: commandsExecuted.length, overall: execResult.overall, validation_plan_hash },
+    { backend: backend.id, commands: commandsExecuted.length, overall: execResult.overall, validation_plan_hash },
     "Sandbox verification completed"
   );
 
@@ -331,10 +368,11 @@ export async function runSandboxVerification(options) {
     commands: execResult.command_results,
     exit_status: execResult.aggregate_exit_status,
     validation_plan_hash,
-    sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+    sandbox_image_digest: isolation.sandbox_image_digest,
     limits_applied: appliedLimits,
     redacted_summary: execResult.inconclusive_reason || `executed ${commandsExecuted.length} commands`,
     ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
     receipt,
+    execution_backend_id: backend.id,
   };
 }
