@@ -6,7 +6,9 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-// Routes that don't require authentication
+// Routes that don't require authentication.
+// With basePath: '/dashboard', the incoming pathname is already stripped
+// of the prefix by Next.js, so these are relative to the basePath root.
 const PUBLIC_PATHS = new Set([
   "/login",
 ]);
@@ -31,8 +33,12 @@ export function middleware(request: NextRequest) {
   const session = request.cookies.get("gitwire-session");
 
   if (!session?.value) {
-    // Redirect to login
-    const loginUrl = new URL("/login", request.url);
+    // Redirect to login — use nextUrl so the basePath ('/dashboard') is preserved.
+    // Building a raw `new URL("/login", request.url)` would drop the basePath
+    // and send users to /login (which nginx 404s) instead of /dashboard/login.
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
+    loginUrl.search = "";
     loginUrl.searchParams.set("from", pathname);
     return NextResponse.redirect(loginUrl);
   }

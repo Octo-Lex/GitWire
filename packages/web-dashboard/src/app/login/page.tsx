@@ -7,6 +7,16 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // After auth, send the user back where they came from (or the dashboard root).
+  // The `from` param is basePath-relative (e.g. "/pull-requests"), set by middleware.
+  const redirectTo = () => {
+    const params = new URLSearchParams(window.location.search);
+    const from = params.get("from");
+    // Only honor same-origin relative paths; fall back to the dashboard root.
+    const safe = from && from.startsWith("/") && !from.startsWith("//") ? from : "/";
+    window.location.href = "/dashboard" + safe;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -27,8 +37,8 @@ export default function LoginPage() {
         return;
       }
 
-      // Redirect to dashboard
-      window.location.href = "/";
+      // Redirect to dashboard (or back to the page the user was trying to reach)
+      redirectTo();
     } catch (_e) {
       setError("Network error");
       setLoading(false);
