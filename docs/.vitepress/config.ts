@@ -19,6 +19,7 @@ export default defineConfig({
         text: "Getting Started",
         items: [
           { text: "Welcome", link: "/" },
+          { text: "Roadmap", link: "/roadmap" },
         ],
       },
       {
