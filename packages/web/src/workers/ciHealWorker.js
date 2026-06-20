@@ -479,11 +479,67 @@ async function healByRerun(octokit, owner, repo, run, diagnosis, repoConfig) {
 async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation) {
   const repoFullName = repository.full_name;
 
+  // ── Duplicate patch-PR guard (loop prevention) ─────────────────────────
+  // Build a stable key that intentionally excludes run.id (which changes
+  // every loop iteration) so repeated attempts on the same failure are
+  // recognized as duplicates.
+  const patchTarget = diagnosis.source_file || diagnosis.failing_file || "unknown";
+  const patchActionKey = [
+    "patch-pr",
+    run.head_branch || "unknown-branch",
+    diagnosis.failure_type || "unknown-failure",
+    patchTarget,
+  ].join(":");
+
+  // Explicit pre-proposal check: if a patch action for this same failure
+  // signature is still active OR was attempted within the last 7 days, skip.
+  // This is required because propose()'s actionKey dedup only deactivates the
+  // previous row — it still inserts a new one and returns it, which would let
+  // the worker proceed to open a fresh PR. This guard actually stops the loop.
+  const existingPatch = await db.query(
+    `SELECT id, status, proposed_at, resolved_at, evidence
+     FROM managed_actions
+     WHERE repo_id = $1
+       AND action_type = 'create-patch-pr'
+       AND action_key = $2
+       AND (
+         active = TRUE
+         OR proposed_at > NOW() - INTERVAL '7 days'
+         OR resolved_at > NOW() - INTERVAL '7 days'
+       )
+     ORDER BY proposed_at DESC
+     LIMIT 1`,
+    [repository.id, patchActionKey]
+  );
+
+  if (existingPatch.rows.length > 0) {
+    logger.info(
+      {
+        runId: run.id,
+        actionKey: patchActionKey,
+        existingActionId: existingPatch.rows[0].id,
+        existingStatus: existingPatch.rows[0].status,
+      },
+      "Skipping duplicate CI patch PR action"
+    );
+
+    await ciService.saveHealResult(run.id, {
+      status: "attempted",
+      failureType: diagnosis.failure_type,
+      rootCause: diagnosis.root_cause,
+      fixApplied: "Skipped duplicate patch PR action",
+      confidence: diagnosis.confidence,
+    });
+
+    return;
+  }
+
   // Propose the action
   const action = await propose({
     repoFullName,
     pillar: "ci_healing",
     actionType: "create-patch-pr",
+    actionKey: patchActionKey,
     source: "ai_heal",
     evidence: {
       run_id: run.id,
@@ -492,6 +548,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       source_file: diagnosis.source_file || null,
       confidence: diagnosis.confidence,
       head_branch: run.head_branch,
+      patch_action_key: patchActionKey,
     },
     repoId: repository.id,
     targetType: "pr",
