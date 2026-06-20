@@ -36,6 +36,7 @@ export default defineConfig({
           { text: "Docker Compose", link: "/installation/docker-compose" },
           { text: "Infrastructure Reference", link: "/installation/infrastructure" },
           { text: "Deployment Runbook", link: "/installation/deployment-runbook" },
+          { text: "v0.20.1 Plan", link: "/installation/v0.20.1-plan" },
           { text: "Cloudflare Tunnel", link: "/installation/cloudflare-tunnel" },
           { text: "GitHub App Setup", link: "/installation/github-app-setup" },
           { text: "Backup & Restore", link: "/installation/backup-restore" },
