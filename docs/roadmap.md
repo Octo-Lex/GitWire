@@ -39,6 +39,119 @@ Decide. Execute. Prove.
 The roadmap should therefore prioritize the gaps that strengthen that proof chain
 first, then address usability, portability, and breadth.
 
+## Design principles from cross-tool study
+
+A June 2026 cross-tool study of three open-source governance/execution tools (a
+remote execution control plane, an LLM-driven maintenance bot, and a batch
+cluster-resolution harness) surfaced architectural patterns that all three
+converged on independently. These are now standing design principles for GitWire:
+
+1. **AI can decide or repair, but deterministic systems must authorize,
+   execute, and prove.** The LLM is a classifier/decider; it never receives
+   the GitHub write token. It emits typed JSON; a separate deterministic
+   applicator performs mutations with live-state re-checks.
+
+2. **Proposal/apply separation with drift re-check.** Decide first (cheap,
+   parallel, no mutation). Apply second (serial, re-validated, throttled).
+   Never trust old state at mutation time — re-fetch the target immediately
+   before any GitHub mutation.
+
+3. **Evidence-bound decisions over heuristics.** When automation judges
+   something actionable, it must cite a commit SHA / file / line / command.
+   Auditable evidence is the trust story.
+
+4. **The executor is a provider, not a single runtime implementation.** A
+   `ssh-lease` / `delegated-run` / `service-control` taxonomy is cleaner than
+   GitWire's binary `node/docker` split. Executor reachability should be a
+   decision matrix, not a single implementation path.
+
+5. **Autonomous fixing is not the headline; governed proof is.** Even a
+   sophisticated internal tool executed only ~2 fixes out of ~316 attempts —
+   classify/close dominates. GitWire's positioning leads with policy-bound
+   automation + audit + reconciliation, not "AI that fixes everything."
+
+6. **Affordability to operate is a moat.** A per-item 10-minute high-reasoning
+   LLM model is viable for one org's backlog but does not scale to
+   multi-repo/self-hosted. GitWire stays cheaper-first (embedding/heuristic
+   prefilter → cheap classifier → expensive model only for ambiguous/high-risk)
+   and borrows the *safety architecture*, not the *cost model*.
+
+7. **An execution orchestrator's trust boundary is NOT a security proof
+   boundary.** The studied execution tool is an orchestrator for trusted teams.
+   GitWire's value is the *stricter policy layer on top* of execution: scoped
+   tools, least-powerful action, validator image identity, backend evidence,
+   post-apply proof. Do not import a cooperative-trust model into GitWire.
+
+### Applicability note: single-org patterns vs multi-repo control plane
+
+This is not a minor distinction — it changes what transfers. The studied tools
+are optimized for a single-org / mostly single-repo operating model:
+
+```
+one maintainer ecosystem
+one policy worldview
+one backlog shape
+one cost envelope
+one state/control surface
+```
+
+GitWire's operating model is different:
+
+```
+many repositories
+many maintainers
+many policy profiles
+many trust levels
+many languages/runtimes
+many failure modes
+bounded shared infrastructure
+```
+
+**Architectural invariants transfer cleanly** (they are not single-repo
+assumptions):
+
+```
+AI as classifier, deterministic code as actor
+proposal/apply separation
+execute-time drift re-check
+marker-backed comments
+typed blocked reasons
+evidence-bound decisions
+execution receipts with replay contracts
+provider/delegated-run executor abstraction
+```
+
+**Single-repo operating assumptions do NOT transfer directly** and must be
+adapted for per-repository policy, trust, execution profile, and audit
+segmentation:
+
+| Single-org assumption | GitWire translation |
+|---|---|
+| One policy worldview | Per-repo `.gitwire.yml` + org defaults |
+| One queue/backlog | Per-repo queues + global concurrency caps |
+| One state surface | DB-first state partitioned by repo/org |
+| One dashboard | Cross-repo dashboard with repo/org filters |
+| One close taxonomy | Policy-selected close taxonomy per repo |
+| One execution environment | Per-repo executor profile |
+| One high-cost LLM budget | Tiered classifier budget by repo/action risk |
+| One command router | Maintainer authorization per repo |
+
+**Strategic implication:** the studied tools show what high-end automation
+looks like when optimized for one ecosystem. GitWire's differentiator is turning
+the same safety primitives into a multi-repo, self-hosted, policy-governed
+control plane.
+
+```
+Borrow the safety primitives.
+Do not borrow the single-repo operating assumptions.
+```
+
+This is a standing principle: any borrowed pattern must carry a tenant/repo
+dimension, not a global singleton.
+
+These principles inform the gaps below: Gap 0.3 (drift re-check), Gap 1.0
+reframe (executor as provider), Gap 6.1 (LLM classifier boundary).
+
 ---
 
 # Executive summary
@@ -296,9 +409,111 @@ feature release can again ship unbuildable code. This belongs in **v0.20.1-A**.
 
 ---
 
+## Gap 0.3: Managed actions lack execute-time live-state drift revalidation
+
+### Problem
+
+GitWire's `actionStateMachine` has the propose → approve → execute shape, but
+**execution does not re-validate that the GitHub target is still in the state it
+was when the action was proposed.** Between proposal and execution (which may be
+minutes, hours, or days apart, especially across a reconciliation cycle), the
+target issue/PR/branch may have been commented on, re-labeled, closed, force-
+pushed, or had its head SHA move.
+
+This is the exact failure mode that produced the patch-PR reopen loop fixed in
+`9ec87bc`: a stale proposal executed against a target whose state had moved. The
+fix there was a per-action-key dedup guard, but the underlying principle is
+broader — **never trust old state at mutation time.**
+
+The cross-tool study confirmed this is a converged pattern: every GitHub
+mutation is preceded by a live-state re-fetch, and any drift blocks the
+mutation with a typed reason rather than executing against stale state.
+
+### Fix
+
+Add mandatory execute-time drift revalidation to managed actions.
+
+1. Every GitHub-mutating managed action stores a **live-state snapshot** at
+   proposal time (`target_updated_at`, `head_sha`, `state`, relevant labels,
+   author, policy context).
+2. Execute re-fetches the target immediately before mutation.
+3. Execute refuses if any of `updated_at`, `head_sha`, `state`, labels, author,
+   or policy context changed since proposal.
+4. Refusal records a **typed blocked reason** (see Gap 0.4), not a generic
+   `failed`.
+5. The user-facing comment explains the drift condition and offers a re-propose
+   path.
+
+Applies to: label issue/PR, close issue, comment, request reviewer, create
+patch PR, merge/apply repair, delete branch.
+
+### Acceptance criteria
+
+* Every GitHub-mutating managed action carries a proposal-time live-state snapshot.
+* Execute re-fetches the target immediately before mutation.
+* Execute refuses (with typed blocked reason) if `updated_at`/`head_sha`/`state`/
+  labels/author/policy context changed.
+* Drift refusal is recorded in the decision log and surfaced to the operator.
+* Tests cover: stale proposal refused, fresh proposal proceeds, concurrent
+  maintainer comment blocks execution.
+
+### Why near term
+
+This is lower effort and higher safety than later roadmap items. It directly
+reinforces the v0.20.1 lesson (the patch-PR loop) and closes a governance gap
+that affects every managed action, not just CI repair. Belongs in a near-term
+governance-hardening release after v0.20.2.
+
+---
+
+## Gap 0.4: Terminal states are too blunt — add typed blocked reasons
+
+### Problem
+
+The `actionStateMachine` terminal non-success state is `failed`. That is
+insufficient for governance software: "automation did not act" is not a useful
+answer to "why didn't it act?" The cross-tool study treats blocked reasons as
+**product UX** — the key outcome is not "automation did not act" but "automation
+did not act *because X was not proven*."
+
+### Fix
+
+Replace the generic `failed` terminal with a typed `blocked_*` taxonomy. A
+blocked state means automation deliberately abstained for a specific, auditable
+reason — distinct from a genuine execution error.
+
+```
+blocked_snapshot_changed       (Gap 0.3 drift detected)
+blocked_head_moved             (head_sha differs from proposal)
+blocked_missing_required_checks
+blocked_policy_denied          (policy rule forbids this action here/now)
+blocked_missing_proof          (evidence/receipt requirement not met)
+blocked_needs_maintainer_decision
+blocked_security_sensitive     (routed to security, not auto-handled)
+blocked_untrusted_author
+```
+
+This also enables **abstention metrics** on the audit dashboard: a trust feature
+that surfaces *why* automation refused, not just what it did. (See Tier 3 audit
+surfaces.)
+
+### Acceptance criteria
+
+* `failed` is reserved for genuine execution errors (crash, exception, timeout).
+* Deliberate abstentions use typed `blocked_*` reasons.
+* The decision log and audit dashboard can filter/group by blocked reason.
+* Abstention counts are visible per repo / per pillar / per time window.
+
+### Why now
+
+Pairs with Gap 0.3. Drift revalidation produces blocked states; this gap makes
+them typed and visible. Both ship together.
+
+---
+
 # Tier 1 — Operationalize the flagship capability
 
-## Gap 1.0: Docker/Podman execution is not yet proven reachable from the app container
+## Gap 1.0: Choose and prove a production executor reachability model
 
 ### Problem
 
@@ -307,40 +522,69 @@ inside the app runtime via `spawn("docker", ...)`. In the current CT 115
 deployment, the app container does **not** have Docker socket access, and the LXC
 host's nesting model has not been validated for this use case.
 
-Without resolving this, the validator image work cannot be called operational —
-the executor will fail at the first `docker run --network=none --read-only ...`
-with "docker: not found" or a socket-permission error.
+The earlier framing assumed "solve Docker-in-LXC" was the only path. The
+cross-tool study reframes this: GitWire should not collapse all future executors
+into "Docker-like." It should choose a reachability model from a decision
+matrix, and **delegated-run should be evaluated as the primary path** before
+spending effort on Docker-in-LXC socket access.
 
 ### Fix
 
-Prove and document Docker/Podman reachability from the deployed topology before
-investing in the validator image itself.
+Evaluate and prove one (or more) of three executor reachability models:
 
-Required work:
+| Model | Description | Pros | Risks |
+|---|---|---|---|
+| **In-container runtime** | App container invokes Docker/Podman directly | Simple mental model | LXC/socket/security complexity; nesting unproven |
+| **Sidecar executor** | App delegates to a local executor service with controlled socket access | Keeps app container cleaner | More moving parts |
+| **Delegated-run provider** | A hosted sandbox/execution service owns execution | Avoids CT 115 Docker socket problem entirely | Provider lock-in; receipt/evidence normalization needed |
 
-1. The app/executor runtime must be able to invoke `docker` or `podman`.
-2. The socket/permission model must be documented (host socket mount with
-   restricted permissions, sidecar executor, or a separate worker runtime).
-3. The model must work under the LXC constraints on CT 115 (nesting=on is set,
-   but the inner-container execution path is unproven).
-4. Isolation probes must run in the **same topology** used by production
-   receipts, not just in a dev environment.
-5. The failure mode must be explicit if the executor runtime is unavailable
-   (fail-closed, not silent inconclusive).
+Introduce an executor abstraction that is a **provider taxonomy**, not a single
+implementation, modeled on the `ssh-lease` / `delegated-run` / `service-control`
+kinds observed in the studied execution tool, adapted for GitWire's stricter
+security posture:
+
+```ts
+type ExecutorKind =
+  | "local-process"      // nodeExecutorBackend (dev/CI only, supports_pass: false)
+  | "container-runtime"  // dockerExecutorBackend (current)
+  | "ssh-lease"          // future: leased host
+  | "delegated-run";     // future: hosted sandbox/execution service
+
+interface ExecutorBackend {
+  kind: ExecutorKind;
+  supportsPass: boolean;
+  capabilities: {
+    networkIsolation?: boolean;
+    readOnlyRootfs?: boolean;
+    imageDigest?: boolean;
+    artifactExport?: boolean;
+    actionHydration?: boolean;
+  };
+  verify(input: VerificationRequest): Promise<ExecutionReceipt>;
+}
+```
+
+The key lesson from the studied tool: keep **policy, orchestration, receipt
+normalization, and result interpretation core-owned**, while the executor
+backend owns only transport/runtime-specific acquisition and execution.
 
 ### Acceptance criteria
 
-* The app/executor runtime can invoke `docker` or `podman`.
-* Socket/permission model is documented.
-* The model works under LXC constraints.
-* Isolation probes run in the same topology used by production receipts.
-* Failure mode is explicit if executor runtime is unavailable.
+* At least one production-compatible executor path is proven on CT 115.
+* The executor path produces normalized receipts.
+* The executor path declares capabilities and limitations.
+* Security boundary is documented separately from orchestration boundary.
+* If delegated-run is chosen, the provider's isolation properties are verified
+  by GitWire's own probe suite, not trusted from a configured string.
+* The failure mode is explicit (fail-closed, not silent inconclusive) if the
+  executor runtime is unavailable.
 
 ### Why before Gap 1
 
 Validator image work depends on this. Building and publishing an image is
 useless if the runtime that is supposed to execute it cannot reach the container
-daemon. This is the gating infrastructure prerequisite.
+daemon — or if a delegated provider is the better choice and the Docker image
+work is re-scoped.
 
 ---
 
@@ -605,9 +849,78 @@ Required work:
 UI polish without post-apply proof would make an incomplete trust chain easier
 to use. Post-apply proof makes the trust chain correct.
 
+### Sub-item: capsule / replay-contract receipts
+
+*Borrowed from the studied execution tool's capsule model (June 2026 cross-study).*
+
+GitWire's execution receipts currently bind execution *inputs/outputs* (source
+snapshot hash, patch artifact hash, validation plan, command results). They do
+not yet carry the **replay contract** — what command to re-run and what outcome
+counts as reproduction. The principle observed in the studied tool: *don't
+preserve a machine, preserve a reproducible failure contract.*
+
+A verification receipt should include:
+
+```text
+proposal id
+base sha
+patch artifact hash
+validator image digest
+replay command            (the exact command to re-run)
+reproduction criteria     (what exit code / output = reproduced)
+environment policy        (network/rootfs/pid limits used)
+failure signature         (if verification failed)
+bounded logs              (not raw datasets)
+artifact references
+```
+
+This turns a receipt from "proof that this ran" into "proof that this ran, and
+here is how to reproduce the outcome." Belongs alongside Gap 3 but can be phased:
+ship post-apply proof first, then extend the receipt schema with replay fields.
+
 ---
 
 # Tier 3 — Make the workflow usable and auditable
+
+## Gap 4.0: Durable GitHub comments use hidden markers (loop prevention)
+
+### Problem
+
+GitWire posts review comments, verification comments, and repair-proposal
+comments as fresh comments each time. There is no stable identity tying "the
+GitWire comment for proposal X" to a specific comment, so updates create new
+comments — the comment-layer analog of the patch-PR reopen loop (`9ec87bc`).
+
+### Fix
+
+Give every durable user-facing GitWire comment a stable hidden marker and update
+it in place rather than re-posting:
+
+```html
+<!-- gitwire:repair-proposal:<proposal-id> -->
+<!-- gitwire:verification:<receipt-id> -->
+<!-- gitwire:post-apply-proof:<receipt-id> -->
+```
+
+*Borrowed from the studied maintenance bot's marker-backed comment pattern
+(June 2026 cross-study).*
+
+### Acceptance criteria
+
+* Durable GitWire comments carry a hidden marker keyed by entity id.
+* Re-posting the same comment updates the marker's comment in place.
+* The comment router (existing `commentRouter.js`) finds the marker before
+  creating a new comment.
+* Tests cover: first post creates, second post updates, marker survives GitHub
+  comment edits by non-GitWire actors (re-create if marker stripped).
+
+### Why near term
+
+Small, high-ROI, directly prevents the comment-spam/loop class. Pairs naturally
+with Gap 0.3 (drift re-check) since both address "stale proposal executed twice."
+Belongs in the same near-term governance-hardening release.
+
+---
 
 ## Gap 4: Operator experience is mostly backend-governance primitives
 
@@ -842,6 +1155,54 @@ GITWIRE_LLM_EMBED_MODEL=
 * Embedding path has a provider abstraction or clean fallback.
 * Default behavior remains unchanged when no provider env vars are set.
 * No raw provider SDK objects cross service boundaries.
+
+---
+
+## Gap 6.1: LLM services act as freeform actors, not constrained classifiers
+
+### Problem
+
+GitWire's AI services (triage, ciHeal, issueFix analyze/generate, aiReview)
+instantiate the LLM SDK client directly and call it with prompts, then parse
+freeform responses into managed actions. There is no enforced boundary between
+"what the LLM decides" and "what the system does."
+
+The cross-tool study converged on a stricter pattern across two independent
+tools: the LLM is a **classifier** that emits typed JSON constrained to a
+schema; a deterministic applicator validates the schema before creating any
+managed action; the LLM runtime never receives GitHub write credentials. This
+is the architectural expression of the through-line: **AI may decide or repair,
+but deterministic systems must authorize, execute, and prove.**
+
+### Fix
+
+Introduce a constrained classifier boundary for AI decisions.
+
+1. LLM services return **typed JSON decisions** (reason, confidence, evidence
+   array, allowed action type), not freeform operational instructions.
+2. Each decision is validated against a JSON schema before a managed action is
+   created — invalid/underspecified output is rejected, not best-effort-parsed.
+3. The LLM runtime does **not** receive GitHub write credentials. Write tokens
+   are created only after the LLM has exited and the deterministic applicator
+   has taken over.
+4. Evidence-bound decisions: close/repair proposals must cite `{file, line, sha,
+   command}` evidence, not just assert a verdict.
+
+### Acceptance criteria
+
+* LLM services return schema-constrained typed decisions, not freeform text.
+* Deterministic code validates the schema before creating managed actions.
+* The LLM runtime has no GitHub write token during classification.
+* Close/repair proposals include a typed evidence array.
+* Default behavior is unchanged (the LLM calls still happen; they're just
+  bounded by the schema and credential boundary).
+
+### Why after Gap 6 (provider abstraction)
+
+The classifier boundary is provider-agnostic — it applies regardless of which
+LLM backs the decision. It's cleaner to land after the provider abstraction
+(Gap 6) so the boundary is defined once against the abstract `LLMProvider`,
+not retrofitted across each concrete SDK.
 
 ---
 
@@ -1139,6 +1500,27 @@ This helps adoption because teams can evaluate GitWire without risk.
 | #85 | Migrate review services                 | First production migration        |
 | #86 | Migrate issue/triage/embedding services | Provider abstraction complete     |
 
+## v0.20.3 — Governance hardening (drift re-check + blocked reasons + markers)
+
+*Near-term governance release derived from the June 2026 cross-tool study.
+Ships after v0.20.2 version centralization; lower effort, higher safety than
+later product work.*
+
+| PR  | Title                                   | Outcome                                                |
+| --- | --------------------------------------- | ------------------------------------------------------ |
+| #87 | Execute-time drift revalidation         | Managed actions refuse mutation on stale state (Gap 0.3) |
+| #88 | Typed blocked-reason taxonomy           | `failed` reserved for errors; abstentions typed (Gap 0.4) |
+| #89 | Marker-backed durable GitHub comments   | Loop prevention via `<!-- gitwire:* -->` markers (Gap 4.0) |
+| #90 | Abstention metrics in audit dashboard   | Surfaces *why* automation refused (Gap 0.4)            |
+
+## v0.24.1 — Constrained LLM classifier boundary
+
+| PR  | Title                                   | Outcome                                                |
+| --- | --------------------------------------- | ------------------------------------------------------ |
+| #91 | Typed JSON decision schemas for AI svcs | LLM output schema-validated before action (Gap 6.1)    |
+| #92 | Credential boundary: no write token to LLM | LLM runtime loses GitHub write creds during classify |
+| #93 | Evidence-array requirement on close/repair | Decisions cite `{file,line,sha,command}`            |
+
 ---
 
 # Priority rules
@@ -1147,13 +1529,14 @@ When choosing what to do next, use this order:
 
 1. Does it prevent production drift or unsafe startup?
 2. Does it prevent unbuildable or unbootable code from merging?
-3. Does it close a proof-chain gap?
-4. Does it make the flagship repair path operational?
-5. Does it improve auditability?
-6. Does it reduce enterprise adoption friction?
-7. Does it improve evaluator trust?
-8. Does it improve competitor parity?
-9. Does it reduce maintenance cost?
+3. Does it prevent executing against stale GitHub state (drift)?
+4. Does it close a proof-chain gap?
+5. Does it make the flagship repair path operational?
+6. Does it improve auditability (including abstention/blocked reasons)?
+7. Does it reduce enterprise adoption friction?
+8. Does it improve evaluator trust?
+9. Does it improve competitor parity?
+10. Does it reduce maintenance cost?
 
 ---
 
