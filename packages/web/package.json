@@ -1,6 +1,6 @@
 {
   "name": "@gitwire/web",
-  "version": "0.14.0",
+  "version": "0.20.1",
   "type": "module",
   "description": "GitHub account management platform",
   "main": "src/index.js",

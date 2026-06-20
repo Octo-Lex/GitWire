@@ -74,4 +74,4 @@ export const HEALABLE_TYPES = new Set([
 ]);
 
 // ── Package version ────────────────────────────────────────────────────────
-export const VERSION = "0.20.0";
+export const VERSION = "0.20.1";
