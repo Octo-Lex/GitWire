@@ -46,7 +46,19 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    # Durable memory ceiling + eviction policy via command-line args so they
+    # survive container recreation (CONFIG SET is process-memory only when
+    # Redis runs without a config file). noeviction is correct for BullMQ:
+    # evicting queue keys with allkeys-lru would silently drop active/delayed
+    # jobs. Write failures under noeviction are loud and recoverable.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
     volumes:
       - redis_data:/data
     networks:

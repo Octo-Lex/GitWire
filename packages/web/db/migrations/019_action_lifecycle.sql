@@ -1,9 +1,14 @@
 -- 019_action_lifecycle.sql
 -- Action lifecycle state machine: track every GitWire action from proposal to reconciliation.
 
--- Add lifecycle columns to managed_actions
+-- Add lifecycle columns to managed_actions.
+-- repo_full_name is added here (not in 015's CREATE TABLE) because the index
+-- below needs it and 015 only defined repo_id. IF NOT EXISTS keeps this
+-- idempotent for databases where the column was added ad-hoc (e.g. CT 115's
+-- first-boot path). Without this, a fresh-DB migration fails at the index.
 ALTER TABLE managed_actions
   ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'succeeded',
+  ADD COLUMN IF NOT EXISTS repo_full_name TEXT,
   ADD COLUMN IF NOT EXISTS proposed_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ,

@@ -205,13 +205,23 @@ describe("v0.17.0 — VitePress sidebar", () => {
 });
 
 describe("v0.17.0 — version bump", () => {
-  it("package.json version is in 0.17+ range", () => {
-    const pkg = readSource("package.json");
-    expect(pkg).toMatch(/"version": "0\.1[789]\.0"/);
+  // Compare semver numerically so the test does not rot on each new minor.
+  // Accepts 0.17.0 and anything newer (0.18, 0.19, 0.20, 1.x, ...).
+  function atLeast(actual, min) {
+    const [a1, a2] = actual.split(".").map(Number);
+    const [m1, m2] = min.split(".").map(Number);
+    return a1 > m1 || (a1 === m1 && a2 >= m2);
+  }
+
+  it("package.json version is at least 0.17.0", () => {
+    const pkg = JSON.parse(readSource("package.json"));
+    expect(atLeast(pkg.version, "0.17.0")).toBe(true);
   });
 
-  it("core.src.index.js VERSION is in 0.17+ range", () => {
+  it("core.src.index.js VERSION is at least 0.17.0", () => {
     const core = readSource("packages/core/src/index.js");
-    expect(core).toMatch(/VERSION = "0\.1[789]\.0"/);
+    const m = core.match(/VERSION\s*=\s*"([^"]+)"/);
+    expect(m).not.toBeNull();
+    expect(atLeast(m[1], "0.17.0")).toBe(true);
   });
 });

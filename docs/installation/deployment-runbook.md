@@ -35,7 +35,28 @@ git log --oneline -1
 
 > **⚠️ CRITICAL:** PostgreSQL's `docker-entrypoint-initdb.d` only runs on
 > *first database creation*. New migration files are NOT applied
-> automatically on container restart. You must run them manually.
+> automatically on container restart by Postgres itself.
+
+> **v0.20.1+:** The app container's entrypoint (`docker-entrypoint.sh`)
+> runs `node scripts/migrate.js` automatically on every start, before the
+> app boots. So after v0.20.1, migrations apply as part of the rebuild
+> (Step 3) and this manual step is only needed for one-off reconciliation
+> or if the entrypoint is bypassed.
+
+**Canonical path — the migration runner (idempotent, transactional):**
+
+```bash
+docker exec -w /app gitwire-gitwire-app-1 node scripts/migrate.js
+```
+
+This reads `DATABASE_URL` from the app container's environment (already
+correct — it resolves to the `postgres` service hostname on the Docker
+network, not `localhost`). It skips already-applied migrations and wraps
+each new one in its own transaction, recording it in `schema_migrations`
+only after the SQL succeeds.
+
+**Fallback: manual migration recovery** (only if the runner is unavailable
+or you need to reconcile a partial-apply state — see Troubleshooting below):
 
 ```bash
 # Check current migration status
@@ -44,21 +65,12 @@ docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub \
 
 # List all migration files available
 ls /opt/gitwire/packages/web/db/migrations/*.sql | sort
-
-# Find the gap — migrations in files but NOT in the database
-# Run each missing migration in order
-for mig in /opt/gitwire/packages/web/db/migrations/0NN_*.sql; do
-  basename=$(basename "$mig")
-  exists=$(docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub -tAc \
-    "SELECT 1 FROM schema_migrations WHERE version='$basename'")
-  if [ "$exists" != "1" ]; then
-    echo "APPLYING: $basename"
-    docker exec -i gitwire-postgres-1 psql -U gitwire -d gitops_hub < "$mig"
-    docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub -c \
-      "INSERT INTO schema_migrations (version) VALUES ('$basename');"
-  fi
-done
 ```
+
+The manual per-file `psql < "$mig"` + separate `INSERT INTO schema_migrations`
+loop is **less safe** than the runner because the insert runs as a separate
+statement — if it fails after the SQL applied, you get a silently-applied-
+but-unrecorded migration. Prefer the runner.
 
 **Verify:**
 ```bash
@@ -67,6 +79,7 @@ echo "Files: $(ls /opt/gitwire/packages/web/db/migrations/*.sql | wc -l)"
 docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub \
   -c "SELECT COUNT(*) FROM schema_migrations;"
 ```
+
 
 ### Step 3: Rebuild and Restart Containers
 
@@ -206,18 +219,44 @@ docker exec gitwire-redis-1 redis-cli DBSIZE
 
 ### Set Redis Memory Limit
 
+> **Eviction policy must be `noeviction`, NOT `allkeys-lru`.**
+> BullMQ stores active/delayed/waiting job state as Redis keys. Evicting
+> them with `allkeys-lru` silently drops jobs — no error, no retry, no
+> record. `noeviction` makes Redis refuse writes when full, which BullMQ
+> surfaces as loud, retryable failures.
+
+**v0.20.1+:** Redis memory limits are durable via the compose `command:`
+(see `docker-compose.yml`). They survive container recreation and do not
+need to be re-applied manually.
+
+**Ephemeral fallback (pre-v0.20.1, or if the compose command is bypassed):**
+
 ```bash
-# Set 256 MB limit with LRU eviction
+# These are process-memory only — Redis runs without a config file in this
+# image (CONFIG REWRITE returns "running without a config file"), so they
+# are LOST on any container recreation. Use only as a stopgap.
 docker exec gitwire-redis-1 redis-cli CONFIG SET maxmemory 256mb
-docker exec gitwire-redis-1 redis-cli CONFIG SET maxmemory-policy allkeys-lru
+docker exec gitwire-redis-1 redis-cli CONFIG SET maxmemory-policy noeviction
 
 # Verify
-docker exec gitwire-redis-1 redis-cli CONFIG GET maxmemory
-docker exec gitwire-redis-1 redis-cli CONFIG GET maxmemory-policy
-
-# To persist across restarts, update docker-compose.yml Redis command:
-# command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+docker exec gitwire-redis-1 redis-cli CONFIG GET maxmemory        # 268435456
+docker exec gitwire-redis-1 redis-cli CONFIG GET maxmemory-policy # noeviction
 ```
+
+The durable fix is the compose `command:` block (already in place post-v0.20.1):
+
+```yaml
+redis:
+  command:
+    - redis-server
+    - --appendonly
+    - "yes"
+    - --maxmemory
+    - 256mb
+    - --maxmemory-policy
+    - noeviction
+```
+
 
 ### Adjust CT 115 Resources
 
@@ -259,6 +298,60 @@ for q in webhook-events triage issue-fix ci-healing sync maintainer phase2 phase
   count=$(docker exec gitwire-redis-1 redis-cli KEYS "bull:$q:*" 2>/dev/null | wc -l)
   echo "$q: $count keys"
 done
+```
+
+---
+
+## Operational Gotchas
+
+### CRLF normalization during emergency `scp` hotfixes
+
+CT 115 is Linux. Some emergency edits originate from Windows working copies.
+Files transferred via `scp` arrive with CRLF line endings, while the repo
+uses LF. Git then sees the *entire file* as changed (every line's ending
+flipped), producing noisy full-file diffs that obscure the real change and
+create review risk during incident response.
+
+**Always normalize after `scp`-ing from a Windows host:**
+
+```bash
+# On CT 115, after copying the file:
+sed -i 's/\r$//' path/to/file
+```
+
+Then verify the diff is surgical (only the intended lines), not a full-file
+rewrite:
+
+```bash
+git diff --stat -- path/to/file   # should show a small line count
+```
+
+### Fail-closed entrypoint behavior (v0.20.1+)
+
+The app container's entrypoint runs migrations before starting the app. If a
+migration fails, the container **exits non-zero** and the app never starts.
+This is intentional: running newer workers against an uncertain schema is
+the drift class this entrypoint exists to prevent.
+
+Symptom: container shows `Exited (1)` shortly after start, and logs show:
+
+```
+[entrypoint] running database migrations
+❌ Migration failed: ...
+```
+
+Resolution: inspect the failed migration, fix the underlying issue, and
+restart. Do not bypass the entrypoint to force-start the app.
+
+### Deployment drift is now externally detectable
+
+`/health` reports `db_migrations_applied`, `db_migrations_available`, and
+`db_migration_status` (derived from the comparison). After any deploy, a
+single curl confirms disk/container/database alignment without SSH:
+
+```bash
+curl -s https://gitwire.erlab.uk/health | python3 -m json.tool
+# db_migration_status should be "current"
 ```
 
 ---
@@ -323,9 +416,11 @@ After a deployment, confirm all of the following:
 |-------|---------|----------|
 | Git HEAD matches release | `cd /opt/gitwire && git log --oneline -1` | Release tag |
 | All migrations applied | `SELECT COUNT(*) FROM schema_migrations` | Matches file count |
+| Migration status current | `curl localhost:3000/health` | `db_migration_status: "current"` |
 | New tables exist | `\dt` in psql | Includes release-specific tables |
 | Container version matches | `docker exec gitwire-gitwire-app-1 cat /app/package.json \| grep version` | Release version |
 | All containers healthy | `docker ps` | 9 containers, all `(healthy)` |
 | API responds | `curl localhost:3000/health` | `{"status":"ok"}` |
 | External URL works | `curl https://gitwire.erlab.uk/health` | `{"status":"ok"}` |
 | No errors in logs | `docker logs gitwire-gitwire-app-1 --tail 50` | No exceptions |
+| Redis memory durable | `redis-cli CONFIG GET maxmemory` | `268435456` (after recreate) |

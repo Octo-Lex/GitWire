@@ -25,6 +25,13 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD wget -qO- http://localhost:3000/health || exit 1
 
+# Entrypoint: runs database migrations before the app starts, fail-closed.
+# The app command itself stays in CMD below; the entrypoint only prepends
+# the migration step and then execs the supplied command.
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["docker-entrypoint.sh"]
+
 # Run the web package server
 WORKDIR /app/packages/web
 CMD ["node", "src/index.js"]

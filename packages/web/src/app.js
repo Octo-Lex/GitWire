@@ -38,6 +38,8 @@ import repairsRouter              from "./routes/repairs.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
+import { getDeploymentInfo } from "./lib/deploymentInfo.js";
+import { db } from "./lib/db.js";
 import { config } from "../config/index.js";
 
 export function createApp() {
@@ -83,8 +85,28 @@ export function createApp() {
   app.use(apiKeyAuth);
 
   // ── Routes ────────────────────────────────────────────────────────────────
-  app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "gitwire", ts: new Date().toISOString() });
+  app.get("/health", async (_req, res) => {
+    // Health is anonymous (before apiKeyAuth) and must never crash the server.
+    // HTTP stays 200 (liveness-safe: a process that can answer at all is alive),
+    // but the body `status` reflects deployment health:
+    //   - "ok"       when db_migration_status === "current"
+    //   - "degraded" when migrations are behind/unknown (drift or DB unreadable)
+    // This lets load balancers treat 200 as "up" while operators and CI can
+    // detect drift from the body without a separate endpoint.
+    let deployment = {};
+    try {
+      deployment = await getDeploymentInfo(db);
+    } catch (err) {
+      logger.warn({ err: err.message }, "/health: deployment info unavailable");
+    }
+    const deploymentStatus =
+      deployment.db_migration_status === "current" ? "ok" : "degraded";
+    res.json({
+      status: deploymentStatus,
+      service: "gitwire",
+      ts: new Date().toISOString(),
+      ...deployment,
+    });
   });
 
   app.use("/webhooks", webhookRouter);
