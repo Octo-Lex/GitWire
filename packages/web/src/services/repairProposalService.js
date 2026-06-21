@@ -2550,6 +2550,19 @@ async function verifyExecutionReceiptAgainstLockedProposal(
     );
   }
 
+  // ── Gap 1 checks 3f-3j — executor_kind, pass-capability, validator identity.
+  // Logic lives in the pure helper (validatorReceiptGate.js) so it is unit-
+  // testable without a DB. This verifier is only reached for pass receipts
+  // (guarded by `if (result === "pass")` at the call sites), so the helper's
+  // pass-only semantics are safe here — non-pass receipts take a different
+  // path and never reach this check.
+  try {
+    const { validateGap1ValidatorBindings } = await import("../lib/validatorReceiptGate.js");
+    validateGap1ValidatorBindings(receipt);
+  } catch (gap1Err) {
+    throw new Error(`Gap 1 validator binding check failed: ${gap1Err.message}`);
+  }
+
   // 4. executor_version must be allowlisted
   if (!ALLOWED_EXECUTOR_VERSIONS.has(receipt.executor_version)) {
     throw new Error(
