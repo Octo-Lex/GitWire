@@ -184,9 +184,9 @@ describe("v0.16.0 — version bump", () => {
     expect(atLeast(pkg.version, "0.16.0")).toBe(true);
   });
 
-  it("core/src/index.js VERSION is at least 0.16.0", () => {
-    const core = readSource("packages/core/src/index.js");
-    const m = core.match(/VERSION\s*=\s*"([^"]+)"/);
+  it("core/src/buildInfo.js version is at least 0.16.0", () => {
+    const buildInfo = readSource("packages/core/src/buildInfo.js");
+    const m = buildInfo.match(/version:\s*"([^"]+)"/);
     expect(m).not.toBeNull();
     expect(atLeast(m[1], "0.16.0")).toBe(true);
   });
