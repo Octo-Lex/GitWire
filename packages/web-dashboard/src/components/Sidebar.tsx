@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
+import { BUILD_INFO } from "@/lib/buildInfo";
 import {
   DashboardIcon,
   ReposIcon,
@@ -142,8 +143,8 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="px-5 py-3 border-t border-border">
-        <div className="text-[10px] font-mono text-text-tertiary">
-          GitWire v0.12.0
+        <div className="text-[10px] font-mono text-text-tertiary" title={BUILD_INFO.gitSha ? `GitWire ${BUILD_INFO.version} (${BUILD_INFO.gitSha})` : `GitWire ${BUILD_INFO.version}`}>
+          GitWire v{BUILD_INFO.version}
         </div>
       </div>
     </aside>

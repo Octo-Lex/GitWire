@@ -86,8 +86,8 @@ describe("Cookie: environment-aware Secure flag (regression)", () => {
 describe("Version consistency (regression)", () => {
   it("core VERSION matches root package.json", () => {
     const pkg = JSON.parse(readSource("package.json"));
-    const core = readSource("packages/core/src/index.js");
-    const match = core.match(/VERSION\s*=\s*"([^"]+)"/);
+    const buildInfo = readSource("packages/core/src/buildInfo.js");
+    const match = buildInfo.match(/version:\s*"([^"]+)"/);
     expect(match).toBeTruthy();
     expect(match[1]).toBe(pkg.version);
   });

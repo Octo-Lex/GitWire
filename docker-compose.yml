@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-unknown}
     restart: unless-stopped
     env_file: packages/web/.env
     environment:
@@ -121,6 +123,9 @@ services:
     build:
       context: packages/web-dashboard
       dockerfile: Dockerfile
+      args:
+        GITWIRE_VERSION: ${GITWIRE_VERSION:-0.20.1}
+        GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-unknown}
     restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://gitwire-app:3000}
