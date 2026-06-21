@@ -8,6 +8,8 @@ import {
   probeDelegatedRun,
   probeAllBackends,
   getReachabilitySummary,
+  isBackendPassCapable,
+  executorKindForBackendId,
 } from "../../src/lib/executorReachability.js";
 
 describe("EXECUTOR_KINDS enum", () => {
@@ -121,5 +123,40 @@ describe("getReachabilitySummary", () => {
     if (containerEntry && !containerEntry.reachable) {
       expect(selected_kind).toBe(EXECUTOR_KINDS.LOCAL_PROCESS);
     }
+  });
+});
+
+describe("Backend pass-capability derivation", () => {
+  it("local-process is never pass-capable", () => {
+    expect(isBackendPassCapable(EXECUTOR_KINDS.LOCAL_PROCESS, true)).toBe(false);
+    expect(isBackendPassCapable(EXECUTOR_KINDS.LOCAL_PROCESS, false)).toBe(false);
+  });
+
+  it("container-runtime is pass-capable only when reachable", () => {
+    expect(isBackendPassCapable(EXECUTOR_KINDS.CONTAINER_RUNTIME, true)).toBe(true);
+    expect(isBackendPassCapable(EXECUTOR_KINDS.CONTAINER_RUNTIME, false)).toBe(false);
+  });
+
+  it("delegated-run is pass-capable only when reachable", () => {
+    expect(isBackendPassCapable(EXECUTOR_KINDS.DELEGATED_RUN, true)).toBe(true);
+    expect(isBackendPassCapable(EXECUTOR_KINDS.DELEGATED_RUN, false)).toBe(false);
+  });
+
+  it("unknown kind throws (no silent default to pass)", () => {
+    expect(() => isBackendPassCapable("gpu-cluster", true)).toThrow(/unknown executor kind/);
+  });
+});
+
+describe("executorKindForBackendId", () => {
+  it("maps node-executor → local-process", () => {
+    expect(executorKindForBackendId("node-executor")).toBe(EXECUTOR_KINDS.LOCAL_PROCESS);
+  });
+
+  it("maps docker-executor → container-runtime", () => {
+    expect(executorKindForBackendId("docker-executor")).toBe(EXECUTOR_KINDS.CONTAINER_RUNTIME);
+  });
+
+  it("throws on unknown backend id (fail-closed)", () => {
+    expect(() => executorKindForBackendId("made-up")).toThrow(/unknown backend id/);
   });
 });

@@ -40,6 +40,58 @@ export const EXECUTOR_KINDS = Object.freeze({
   DELEGATED_RUN:     "delegated-run",      // future: E2B/Modal/Anthropic Sandbox
 });
 
+// ── Backend ID → executor kind mapping ──────────────────────────────────────
+// Single source of truth. Adding a new backend = adding one line here.
+const BACKEND_ID_TO_KIND = Object.freeze({
+  "node-executor":   EXECUTOR_KINDS.LOCAL_PROCESS,
+  "docker-executor": EXECUTOR_KINDS.CONTAINER_RUNTIME,
+});
+
+/**
+ * Map a registered executor backend id to its executor kind.
+ * Throws on unknown ids — never silently default (fail-closed).
+ *
+ * @param {string} backendId - e.g. "node-executor", "docker-executor"
+ * @returns {string} one of EXECUTOR_KINDS
+ * @throws {Error} if the backend id is not known
+ */
+export function executorKindForBackendId(backendId) {
+  const kind = BACKEND_ID_TO_KIND[backendId];
+  if (!kind) {
+    throw new Error(`executorKindForBackendId: unknown backend id '${backendId}'`);
+  }
+  return kind;
+}
+
+// ── Pass-capability derivation ───────────────────────────────────────────────
+// Per-kind static capability crossed with observed reachability.
+// local-process is NEVER pass-capable — it has no isolation boundary.
+// container-runtime / delegated-run are pass-capable only when reachable.
+const PASS_CAPABLE_KINDS = Object.freeze(new Set([
+  EXECUTOR_KINDS.CONTAINER_RUNTIME,
+  EXECUTOR_KINDS.DELEGATED_RUN,
+]));
+
+/**
+ * Derive whether a backend kind is pass-capable given observed reachability.
+ *
+ * local-process → always false (no isolation boundary, per Gap 1 decision).
+ * container-runtime → true only if reachable.
+ * delegated-run → true only if reachable.
+ *
+ * @param {string} kind - one of EXECUTOR_KINDS
+ * @param {boolean} reachable - observed reachability from the probe
+ * @returns {boolean}
+ * @throws {Error} on unknown kind (fail-closed — never silently pass-capable)
+ */
+export function isBackendPassCapable(kind, reachable) {
+  if (!Object.values(EXECUTOR_KINDS).includes(kind)) {
+    throw new Error(`isBackendPassCapable: unknown executor kind '${kind}'`);
+  }
+  if (kind === EXECUTOR_KINDS.LOCAL_PROCESS) return false;
+  return Boolean(reachable);
+}
+
 // ── Reachability result shape ───────────────────────────────────────────────
 // Each probe returns:
 //   { reachable: boolean, kind: string, detail: string, probed_at: string }
