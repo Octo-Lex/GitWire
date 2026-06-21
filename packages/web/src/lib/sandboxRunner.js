@@ -16,6 +16,12 @@ import crypto from "crypto";
 import { logger } from "./logger.js";
 import { applyArtifact, computeSnapshotHash } from "./artifactApplier.js";
 import { getDefaultBackend, getBackend } from "./executorRegistry.js";
+import {
+  executorKindForBackendId,
+  isBackendPassCapable,
+  probeAllBackends,
+} from "./executorReachability.js";
+import { resolveValidatorImage } from "./validatorImage.js";
 
 // Pinned sandbox image digest.
 // In production, this would be the SHA-256 digest of the container image.
@@ -277,6 +283,34 @@ export async function runSandboxVerification(options) {
   const isolation = backend.describe();
   const appliedLimits = { ...DEFAULT_LIMITS, ...limits };
 
+  // Gap 1 — derive validator bindings for the receipt from PROVEN reachability.
+  //
+  // executor_kind comes from the backend id. But executor_pass_capable is NOT
+  // just backend.supports_pass — it requires a live probe to confirm the
+  // backend's kind is actually reachable right now. getDefaultBackend() may
+  // return docker-executor even when Docker is unreachable (its selection is
+  // not probe-driven until Task 7.5); the receipt must not inherit that
+  // false confidence.
+  const validatorImage = resolveValidatorImage();
+  const executorKind = executorKindForBackendId(backend.id);
+
+  // Live probe: which kinds are actually reachable at this moment?
+  const probe = probeAllBackends();
+  const reachableKinds = new Set(
+    probe.backends.filter((b) => b.reachable).map((b) => b.kind)
+  );
+  const kindActuallyReachable = reachableKinds.has(executorKind);
+
+  // Pass-capability requires ALL FOUR conditions (fix #3):
+  //   1. backend advertises supports_pass
+  //   2. kind is structurally pass-capable (not local-process)
+  //   3. a live probe confirms this kind is reachable
+  //   4. validator image identity is complete (ref + digest + match)
+  const executorPassCapable =
+    backend.supports_pass === true &&
+    isBackendPassCapable(executorKind, kindActuallyReachable) &&
+    validatorImage.identity_complete;
+
   logger.info({ backend: backend.id, supports_pass: backend.supports_pass }, "Executor backend selected");
 
   // Build validation plan from envelope
@@ -324,6 +358,14 @@ export async function runSandboxVerification(options) {
       read_only_rootfs: isolation.read_only_rootfs,
       image_ref: isolation.image_ref,
       resource_limits: isolation.resource_limits,
+      // Gap 1 validator bindings. The artifact-apply-failed path is always
+      // inconclusive regardless of backend capability — the patch never ran.
+      executor_kind: executorKind,
+      executor_pass_capable: executorPassCapable,
+      validator_image_ref: validatorImage.ref,
+      validator_image_digest: validatorImage.digest,
+      validator_result: "inconclusive",
+      validator_result_status: "inconclusive",
     });
 
     logger.warn(
@@ -386,6 +428,16 @@ export async function runSandboxVerification(options) {
     read_only_rootfs: isolation.read_only_rootfs,
       image_ref: isolation.image_ref,
     resource_limits: isolation.resource_limits,
+    // Gap 1 validator bindings. The validator result mirrors the execution
+    // overall, but is downgraded to inconclusive when the backend isn't
+    // pass-capable. This guarantees a local-process (or unreachable-Docker)
+    // receipt's validator_result_status is always inconclusive, never pass.
+    executor_kind: executorKind,
+    executor_pass_capable: executorPassCapable,
+    validator_image_ref: validatorImage.ref,
+    validator_image_digest: validatorImage.digest,
+    validator_result: executorPassCapable ? execResult.overall : "inconclusive",
+    validator_result_status: executorPassCapable ? execResult.overall : "inconclusive",
   });
 
   logger.info(
