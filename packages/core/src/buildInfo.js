@@ -12,7 +12,7 @@
 // release version.
 
 export const BUILD_INFO = Object.freeze({
-  version: "0.20.1",
+  version: "0.22.0",
   git_sha: null,
   built_at: null,
   source: "fallback",
