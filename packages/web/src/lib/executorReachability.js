@@ -15,6 +15,7 @@
 // fails closed.
 
 import { execSync } from "node:child_process";
+import { resolveValidatorImage } from "./validatorImage.js";
 
 // Lazy logger — avoids runtime init requirement in tests
 let _logger = null;
@@ -39,6 +40,58 @@ export const EXECUTOR_KINDS = Object.freeze({
   CONTAINER_RUNTIME: "container-runtime",  // dockerExecutorBackend — Docker/Podman isolation
   DELEGATED_RUN:     "delegated-run",      // future: E2B/Modal/Anthropic Sandbox
 });
+
+// ── Backend ID → executor kind mapping ──────────────────────────────────────
+// Single source of truth. Adding a new backend = adding one line here.
+const BACKEND_ID_TO_KIND = Object.freeze({
+  "node-executor":   EXECUTOR_KINDS.LOCAL_PROCESS,
+  "docker-executor": EXECUTOR_KINDS.CONTAINER_RUNTIME,
+});
+
+/**
+ * Map a registered executor backend id to its executor kind.
+ * Throws on unknown ids — never silently default (fail-closed).
+ *
+ * @param {string} backendId - e.g. "node-executor", "docker-executor"
+ * @returns {string} one of EXECUTOR_KINDS
+ * @throws {Error} if the backend id is not known
+ */
+export function executorKindForBackendId(backendId) {
+  const kind = BACKEND_ID_TO_KIND[backendId];
+  if (!kind) {
+    throw new Error(`executorKindForBackendId: unknown backend id '${backendId}'`);
+  }
+  return kind;
+}
+
+// ── Pass-capability derivation ───────────────────────────────────────────────
+// Per-kind static capability crossed with observed reachability.
+// local-process is NEVER pass-capable — it has no isolation boundary.
+// container-runtime / delegated-run are pass-capable only when reachable.
+const PASS_CAPABLE_KINDS = Object.freeze(new Set([
+  EXECUTOR_KINDS.CONTAINER_RUNTIME,
+  EXECUTOR_KINDS.DELEGATED_RUN,
+]));
+
+/**
+ * Derive whether a backend kind is pass-capable given observed reachability.
+ *
+ * local-process → always false (no isolation boundary, per Gap 1 decision).
+ * container-runtime → true only if reachable.
+ * delegated-run → true only if reachable.
+ *
+ * @param {string} kind - one of EXECUTOR_KINDS
+ * @param {boolean} reachable - observed reachability from the probe
+ * @returns {boolean}
+ * @throws {Error} on unknown kind (fail-closed — never silently pass-capable)
+ */
+export function isBackendPassCapable(kind, reachable) {
+  if (!Object.values(EXECUTOR_KINDS).includes(kind)) {
+    throw new Error(`isBackendPassCapable: unknown executor kind '${kind}'`);
+  }
+  if (kind === EXECUTOR_KINDS.LOCAL_PROCESS) return false;
+  return Boolean(reachable);
+}
 
 // ── Reachability result shape ───────────────────────────────────────────────
 // Each probe returns:
@@ -158,21 +211,113 @@ export function probeAllBackends(priorityOrder) {
 
 /**
  * Get a compact reachability summary for /health or /readiness.
- * Does not include sensitive details — just kind, reachable, runtime.
+ * Includes per-backend pass-capability and the selected backend's
+ * pass-capability so operators can tell whether the current deployment
+ * can produce production-grade validator proof.
  *
  * @param {string[]} [priorityOrder]
- * @returns {{ summary: Array, selected_kind: string|null, selected_reason: string }}
+ * @returns {{
+ *   summary: Array<{kind: string, reachable: boolean, runtime: string|null, pass_capable: boolean}>,
+ *   selected_kind: string|null,
+ *   selected_reason: string,
+ *   selected_pass_capable: boolean,
+ * }}
  */
 export function getReachabilitySummary(priorityOrder) {
   const { backends, selected, selected_reason } = probeAllBackends(priorityOrder);
 
+  const summary = backends.map((b) => ({
+    kind: b.kind,
+    reachable: b.reachable,
+    runtime: b.runtime,
+    pass_capable: isBackendPassCapable(b.kind, b.reachable),
+  }));
+
+  const selected_pass_capable = selected
+    ? isBackendPassCapable(selected.kind, selected.reachable)
+    : false;
+
   return {
-    summary: backends.map((b) => ({
-      kind: b.kind,
-      reachable: b.reachable,
-      runtime: b.runtime,
-    })),
+    summary,
     selected_kind: selected?.kind || null,
     selected_reason,
+    selected_pass_capable,
+  };
+}
+
+// ── Validator readiness ─────────────────────────────────────────────────────
+// Typed reasons (never ambiguous empty strings). These are the externally
+// observable answers to "can this deployment produce pass-capable validator
+// evidence right now?"
+export const VALIDATOR_READINESS_REASONS = Object.freeze({
+  CONFIGURED_AND_PASS_CAPABLE:       "configured_and_pass_capable",
+  SELECTED_BACKEND_NOT_PASS_CAPABLE: "selected_backend_not_pass_capable",
+  VALIDATOR_IMAGE_NOT_CONFIGURED:    "validator_image_not_configured",
+  NO_REACHABLE_BACKEND:              "no_reachable_backend",
+});
+
+/**
+ * Produce the validator readiness block for /health.
+ *
+ * Composes the executor pass-capability view with validator image
+ * configuration. The result answers: "Can this deployment produce
+ * production-grade validator proof?"
+ *
+ * IMPORTANT — `configured` and `pass_capable` are INDEPENDENT signals:
+ *   configured   = "is the validator image identity set in config?"
+ *   pass_capable = "can the currently-selected backend actually produce pass proof?"
+ * A deployment can be configured=true but pass_capable=false (image set, but
+ * local-process selected). Operators need both signals; collapsing them hides
+ * the "you configured it, but the runtime can't honor it" case.
+ *
+ * @returns {{ configured: boolean, pass_capable: boolean, reason: string }}
+ */
+export function getValidatorReadiness() {
+  // FIX: getReachabilitySummary returns `selected_kind` (string|null), NOT
+  // `selected` (object). Destructure the actual field name.
+  const { selected_kind, selected_pass_capable } = getReachabilitySummary();
+
+  // Read validator image config via the dedicated resolver (Task 4) so the
+  // "is it configured?" signal is the SAME definition used by the receipt
+  // path. Top-of-file static import.
+  const validatorImage = resolveValidatorImage();
+  const configured = Boolean(validatorImage.configured);
+
+  // No reachable backend at all → not pass-capable. configured is still
+  // reported independently (operator may have set the image even though
+  // nothing is reachable).
+  if (!selected_kind) {
+    return {
+      configured,
+      pass_capable: false,
+      reason: VALIDATOR_READINESS_REASONS.NO_REACHABLE_BACKEND,
+    };
+  }
+
+  // Backend reachable but not pass-capable (e.g. local-process on CT 115).
+  // Report configured independently — this is the key operator signal.
+  if (!selected_pass_capable) {
+    return {
+      configured,
+      pass_capable: false,
+      reason: VALIDATOR_READINESS_REASONS.SELECTED_BACKEND_NOT_PASS_CAPABLE,
+    };
+  }
+
+  // Backend IS pass-capable. Now the deciding factor is validator image
+  // identity. If it's not configured, we're reachable-and-isolated but
+  // have nothing pinned to run.
+  if (!configured) {
+    return {
+      configured: false,
+      pass_capable: false,
+      reason: VALIDATOR_READINESS_REASONS.VALIDATOR_IMAGE_NOT_CONFIGURED,
+    };
+  }
+
+  return {
+    configured: true,
+    pass_capable: true,
+    reason: VALIDATOR_READINESS_REASONS.CONFIGURED_AND_PASS_CAPABLE,
   };
 }

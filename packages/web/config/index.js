@@ -114,6 +114,15 @@ const schema = z.object({
 
   // App
   APP_BASE_URL: z.string().url("APP_BASE_URL must be a valid URL").default("http://localhost:3000"),
+
+  // Validator (Gap 1.2) — production validator image identity + executor selection.
+  // All optional: local dev and CI run without them. Production pass-capable
+  // validation requires ref + digest to be set; getValidatorReadiness() reports
+  // the gap explicitly rather than failing boot.
+  GITWIRE_VALIDATOR_IMAGE_REF: z.string().optional(),
+  GITWIRE_VALIDATOR_IMAGE_DIGEST: z.string().optional(),
+  GITWIRE_ALLOW_TEST_FIXTURE: z.string().optional(),
+  GITWIRE_EXECUTOR_BACKEND: z.string().optional(),
 });
 
 const rawEnv = {
@@ -168,6 +177,12 @@ export const config = {
   anthropic: {
     apiKey: parsed.data.ANTHROPIC_API_KEY || "",
     baseURL: parsed.data.ANTHROPIC_BASE_URL || undefined,
+  },
+  validator: {
+    ref:              parsed.data.GITWIRE_VALIDATOR_IMAGE_REF || null,
+    digest:           parsed.data.GITWIRE_VALIDATOR_IMAGE_DIGEST || null,
+    allowTestFixture: parsed.data.GITWIRE_ALLOW_TEST_FIXTURE === "1",
+    executorBackend:  parsed.data.GITWIRE_EXECUTOR_BACKEND || null,
   },
 };
 

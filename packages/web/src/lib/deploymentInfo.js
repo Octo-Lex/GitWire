@@ -72,13 +72,22 @@ export async function getDeploymentInfo(db) {
     dbMigrationStatus = applied === available ? "current" : "behind";
   }
 
-  // Probe executor reachability (v0.21.0 — externally observable without SSH)
+  // Probe executor reachability + validator readiness (Gap 1).
+  // executor.selected_pass_capable + the validator block make CT 115's
+  // "healthy but not pass-capable" state externally unambiguous.
   let executor = {};
+  let validator = {};
   try {
-    const { getReachabilitySummary } = await import("./executorReachability.js");
+    const {
+      getReachabilitySummary,
+      getValidatorReadiness,
+    } = await import("./executorReachability.js");
     executor = getReachabilitySummary();
+    validator = getValidatorReadiness();
   } catch {
-    // Reachability module unavailable — health still works
+    // Reachability module unavailable — health still works, but report
+    // validator as explicitly not ready (fail-safe, not silent).
+    validator = { configured: false, pass_capable: false, reason: "module_unavailable" };
   }
 
   return {
@@ -88,5 +97,6 @@ export async function getDeploymentInfo(db) {
     db_migrations_available: available,
     db_migration_status: dbMigrationStatus,
     executor,
+    validator,
   };
 }
