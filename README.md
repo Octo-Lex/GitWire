@@ -1,4 +1,4 @@
-![GitWire — Self-hosted AI governance for GitHub individuals and teams](https://github.com/Octo-Lex/GitWire/blob/0503dd5807bfcdeb7dce65c9fa637362acb16bb4/banner.png)
+![GitWire — Self-hosted AI governance for GitHub individuals and teams](https://github.com/Octo-Lex/GitWire/blob/master/banner.png)
 
 <div align="center">
 

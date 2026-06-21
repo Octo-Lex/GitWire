@@ -1,7 +1,7 @@
 # Secret Scan Incident Report
 
-> **Status:** IMPLEMENTED — PENDING REMEDIATION CLOSURE  
-> **Acceptance:** BLOCKED until rotation + history purge are complete  
+> **Status:** IMPLEMENTED — HISTORY PURGE COMPLETE; ROTATION PENDING  
+> **Acceptance:** BLOCKED on Gate 1 (secret rotation) only. Gate 2 (history purge) is complete — verified by `gitleaks git --log-opts="--all"` returning 0 findings across all commits.  
 > **After closure:** APPROVED FOR PUBLIC RELEASE  
 >  
 > **Generated:** 2026-05-21 | **Scanner:** gitleaks v8.21.2 | **Scope:** Full git history (55 commits) | **Stress test:** 48 scenarios (46 pass, 0 fail, 2 skip)
@@ -78,10 +78,12 @@
 - [ ] Restart `gitwire-app` container after rotation
 - [ ] Verify webhook delivery still works post-rotation
 
-### Gate 2: Clean Git History
-- [ ] Purge commit `205e609` from git history (`git filter-repo`)
-- [ ] Run `gitleaks git --log-opts="--all"` — must return 0 findings
-- [ ] Verify `.env.production` no longer exists in any commit
+### Gate 2: Clean Git History — ✅ COMPLETE
+- [x] Purge commit `205e609` from git history (`git filter-repo`) — committed and confirmed absent from all refs (local + origin)
+- [x] Run `gitleaks git --log-opts="--all"` — returns 0 findings across 284 commits (with `.gitleaks.toml` config)
+- [x] Verify `.env.production` no longer exists in any commit — confirmed absent from every commit tree
+
+> **Note:** Gate 1 (rotation) remains the sole outstanding remediation. A history purge does not invalidate a leaked secret value — if the secrets were ever exposed (even transiently in a now-purged commit), rotation at https://github.com/settings/apps/gitwire-hq is the only real remediation.
 
 ### Gate 3: GitHub-Side Protection Enabled
 - [ ] Enable GitHub Secret Scanning on the repository
