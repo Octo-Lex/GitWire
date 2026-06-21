@@ -72,11 +72,21 @@ export async function getDeploymentInfo(db) {
     dbMigrationStatus = applied === available ? "current" : "behind";
   }
 
+  // Probe executor reachability (v0.21.0 — externally observable without SSH)
+  let executor = {};
+  try {
+    const { getReachabilitySummary } = await import("./executorReachability.js");
+    executor = getReachabilitySummary();
+  } catch {
+    // Reachability module unavailable — health still works
+  }
+
   return {
     version: VERSION,
     git_sha: GIT_SHA,
     db_migrations_applied: applied,
     db_migrations_available: available,
     db_migration_status: dbMigrationStatus,
+    executor,
   };
 }
