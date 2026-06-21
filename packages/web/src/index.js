@@ -20,6 +20,7 @@ import { startPhase4Worker, schedulePhase4Jobs } from "./workers/phase4Worker.js
 import { runReconciliation } from "./workers/reconciliationWorker.js";
 import { initRuntime, getRuntime } from "@gitwire/runtime";
 import { config } from "../config/index.js";
+import { createGracefulShutdown } from "./lib/gracefulShutdown.js";
 
 async function main() {
   // ── Initialize runtime infrastructure (db, redis, logger, github) ────────
@@ -77,22 +78,13 @@ async function main() {
   logger.info(workers.length + " background workers started");
 
   // ── Graceful shutdown ────────────────────────────────────────────────────
-  async function shutdown(signal) {
-    logger.info({ signal }, "Shutdown signal received");
-
-    // Stop accepting new HTTP connections
-    server.close();
-
-    // Drain workers (finish current jobs, don't accept new ones)
-    await Promise.all(workers.map((w) => w.close()));
-
-    // Close DB and Redis
-    await db.end();
-    await redis.quit();
-
-    logger.info("Graceful shutdown complete");
-    process.exit(0);
-  }
+  // Idempotent + bounded orchestrator. Fixes the CT 115 crash-loop where an
+  // uncaughtException triggered shutdown(), which threw on db.end() ("Called
+  // end on pool more than once"), which became a new uncaughtException, which
+  // re-entered shutdown() — looping forever with the process never exiting
+  // and never serving. Invariant: uncaughtException → ONE shutdown attempt →
+  // process exits (code 1), so Docker's restart policy brings it back clean.
+  const shutdown = createGracefulShutdown({ server, workers, db, redis, logger });
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT",  () => shutdown("SIGINT"));
@@ -100,6 +92,11 @@ async function main() {
   process.on("uncaughtException", (err) => {
     logger.fatal({ err }, "Uncaught exception — shutting down");
     shutdown("uncaughtException");
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    logger.fatal({ reason }, "Unhandled rejection — shutting down");
+    shutdown("unhandledRejection");
   });
 }
 
