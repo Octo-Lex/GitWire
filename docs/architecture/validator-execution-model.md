@@ -2,9 +2,40 @@
 
 ## Status
 
-Accepted for the next implementation slice after v0.21.0.
+Implemented for the next release after v0.21.0 (Gap 1 Phases 1-4).
 
 This document records the execution-topology decision for Gap 1: production validator image.
+
+Implementation status (post-plan execution):
+
+- **Phase 1 — Validator pass-capability model:** ✅ `executorReachability.js`
+  derives `pass_capable` per backend and `selected_pass_capable`; `getValidatorReadiness()`
+  surfaces a typed `validator` block on `/health` (`configured` and `pass_capable`
+  reported as independent signals).
+- **Phase 2 — Validator image identity:** ✅ `validatorImage.js` resolves
+  immutable identity from `config.validator` (`GITWIRE_VALIDATOR_IMAGE_REF` /
+  `GITWIRE_VALIDATOR_IMAGE_DIGEST`), with cross-check that the ref's embedded
+  digest matches the standalone digest.
+- **Phase 3 — Receipt binding:** ✅ `buildExecutionReceipt()` carries
+  `executor_kind`, `executor_pass_capable`, `validator_image_ref`,
+  `validator_image_digest`, `validator_result`, `validator_result_status`.
+  `proof_collected_at` is a non-hash sibling (preserves write-once dedup).
+  `runSandboxVerification()` derives `executor_pass_capable` from the
+  four-condition conjunction (supports_pass AND structural capability AND
+  live probe reachability AND validator identity complete), never from
+  `supports_pass` alone. Verifier checks 3f-3j (pure helper
+  `validateGap1ValidatorBindings`) enforce the new fields on pass receipts;
+  non-pass receipts take a separate path and are unaffected.
+- **Phase 4 — Delegated-run provider contract:** ✅ `delegatedRunProvider.js`
+  defines the vendor-neutral contract + `NullDelegatedRunProvider` placeholder
+  (always inconclusive, never pass).
+
+Additional fix beyond the original phases: `getDefaultBackend()` is now
+reachability-honest for AUTO-selection (no longer silently returns
+docker-executor when container-runtime is unreachable). EXPLICIT configured
+selection is still honored as-is; pass-capability is handled downstream.
+
+Post-apply proof (Gap 3) remains future work and will build on this execution model.
 
 ## Context
 
