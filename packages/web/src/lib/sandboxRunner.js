@@ -169,6 +169,15 @@ export function buildExecutionReceipt(params) {
     read_only_rootfs,
     resource_limits,
     image_ref,
+    // Gap 1 validator bindings — bound into the receipt so the verifier
+    // can confirm the validator result came from a pass-capable backend
+    // with proven image identity.
+    executor_kind,
+    executor_pass_capable,
+    validator_image_ref,
+    validator_image_digest,
+    validator_result,
+    validator_result_status,
   } = params;
 
   const receiptObject = {
@@ -195,6 +204,13 @@ export function buildExecutionReceipt(params) {
     read_only_rootfs: Boolean(read_only_rootfs),
     resource_limits: resource_limits || {},
     image_ref: image_ref || null,
+    // Gap 1 validator bindings — part of the content-addressed hash.
+    executor_kind: executor_kind || null,
+    executor_pass_capable: Boolean(executor_pass_capable),
+    validator_image_ref: validator_image_ref || null,
+    validator_image_digest: validator_image_digest || null,
+    validator_result: validator_result || result,
+    validator_result_status: validator_result_status || result,
     ...(inconclusive_reason ? { inconclusive_reason } : {}),
     // NO timestamps or DB IDs — hash is content-addressed only
   };
@@ -203,7 +219,17 @@ export function buildExecutionReceipt(params) {
   const receiptHash = "sha256:" + crypto.createHash("sha256").update(receiptContent).digest("hex");
   const receiptRef = `receipt:${receiptHash}`;
 
-  return { receipt_content: receiptContent, receipt_hash: receiptHash, receipt_ref: receiptRef };
+  // proof_collected_at is a sibling, NOT inside receipt_content. Keeping it
+  // out of the hash preserves the content-addressed write-once dedup
+  // property (two identical executions stay the same receipt even if run
+  // at different times). The durable store's created_at is the canonical
+  // persisted timestamp; this sibling is the in-memory observed time.
+  return {
+    receipt_content: receiptContent,
+    receipt_hash: receiptHash,
+    receipt_ref: receiptRef,
+    proof_collected_at: new Date().toISOString(),
+  };
 }
 
 /**
