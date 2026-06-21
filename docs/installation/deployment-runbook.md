@@ -83,9 +83,34 @@ docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub \
 
 ### Step 3: Rebuild and Restart Containers
 
+> **⚠️ Two operational blind spots this step guards against** (learned from
+> the v0.22.0 deploy on 2026-06-21):
+>
+> 1. **Stale git_sha in `/health`.** If `GITWIRE_COMMIT_SHA` is not exported
+>    in the shell before `docker compose build`, the image's
+>    `generate-build-info.js` writes `git_sha: "unknown"` into `buildInfo.js`.
+>    `/health.git_sha` then reports `"unknown"` forever, breaking the
+>    "git_sha matches deployed commit" acceptance check.
+> 2. **Container not recreated.** `docker compose up -d --build` rebuilds the
+>    image but does NOT always recreate the container — compose may leave an
+>    existing healthy container running on the OLD image. The v0.22.0 deploy
+>    shipped v0.22.0 in the image while the container kept serving v0.21.0
+>    code until `--force-recreate` was used.
+
 ```bash
 cd /opt/gitwire
-docker compose up -d --build
+
+# Export the commit SHA so the build bakes it into /health.git_sha.
+# Must be set BEFORE `docker compose build`, not just before `up`.
+export GITWIRE_COMMIT_SHA="$(git rev-parse --short=12 HEAD)"
+
+# Rebuild with --no-cache to guarantee the new code lands in the image layer
+# (cache hits on an identical-looking context can otherwise ship stale code).
+docker compose build --no-cache
+
+# Force-recreate so the running container actually adopts the new image.
+# `up -d --build` alone is NOT sufficient — see the warning above.
+docker compose up -d --force-recreate
 ```
 
 **Verify all containers are healthy:**
@@ -94,14 +119,49 @@ docker ps --format 'table {{.Names}}\t{{.Status}}' | grep gitwire
 # All 9 containers must show "(healthy)" — no "restarting" or "unhealthy"
 ```
 
-### Step 4: Verify Version String
+### Step 4: Verify Version String AND git_sha
+
+> The running container must match the tag on **both** axes: version label
+> AND git_sha. A version match alone is insufficient — a stale image could
+> report the right version string with the wrong code if build-info wasn't
+> regenerated.
 
 ```bash
-# Container version must match the git tag
+# 4a. Container package.json version must match the git tag.
 docker exec gitwire-gitwire-app-1 cat /app/package.json | grep '"version"'
-# Expected: the version you just released
+# Expected: the version you just released (e.g. "0.22.0")
 
-# If mismatched, the package.json files need bumping — see Version Hygiene below
+# If mismatched, the package.json files need bumping — see Version Hygiene below.
+
+# 4b. /health.version + /health.git_sha must both match the deployed tag.
+curl -s http://localhost:3000/health | python3 -c "
+import sys, json
+h = json.load(sys.stdin)
+assert h['version'] == 'EXPECTED_VERSION', f\"version: {h['version']}\"
+assert h['git_sha'] != 'unknown', 'git_sha is unknown — GITWIRE_COMMIT_SHA was not exported at build time (see Step 3)'
+assert h['git_sha'] == 'EXPECTED_SHA_PREFIX', f\"git_sha: {h['git_sha']}\"
+print('OK: version={} git_sha={}'.format(h['version'], h['git_sha']))
+"
+# Replace EXPECTED_VERSION and EXPECTED_SHA_PREFIX with the tag's values.
+
+# git_sha="unknown" is a RELEASE VERIFICATION FAILURE. It means the deploy
+# cannot prove which commit is running. Rebuild with GITWIRE_COMMIT_SHA
+# exported (Step 3) and redeploy.
+```
+
+### Step 4.5: Verify the Container is Using the New Image
+
+> Belt-and-suspenders check for the "container not recreated" blind spot.
+> Even with `--force-recreate`, confirm the container's image ID is the one
+> you just built.
+
+```bash
+# Image ID the container is running:
+docker inspect -f '{{.Image}}' gitwire-gitwire-app-1
+# Image ID of the freshly built image:
+docker images --format '{{.ID}}' gitwire-gitwire-app:latest
+# These must match. If they differ, the container is on a stale image —
+# re-run `docker compose up -d --force-recreate`.
 ```
 
 ### Step 5: Verify Database Schema
@@ -418,12 +478,19 @@ After a deployment, confirm all of the following:
 | All migrations applied | `SELECT COUNT(*) FROM schema_migrations` | Matches file count |
 | Migration status current | `curl localhost:3000/health` | `db_migration_status: "current"` |
 | New tables exist | `\dt` in psql | Includes release-specific tables |
-| Container version matches | `docker exec gitwire-gitwire-app-1 cat /app/package.json \| grep version` | Release version |
+| Container version matches | `curl localhost:3000/health` (`.version`) | Release version |
+| Container git_sha matches | `curl localhost:3000/health` (`.git_sha`) | Release commit SHA — **NOT `"unknown"`** |
+| Container on fresh image | `docker inspect -f '{{.Image}}' gitwire-gitwire-app-1` | Matches `docker images gitwire-gitwire-app:latest -q` |
 | All containers healthy | `docker ps` | 9 containers, all `(healthy)` |
 | API responds | `curl localhost:3000/health` | `{"status":"ok"}` |
 | External URL works | `curl https://gitwire.erlab.uk/health` | `{"status":"ok"}` |
 | No errors in logs | `docker logs gitwire-gitwire-app-1 --tail 50` | No exceptions |
 | Redis memory durable | `redis-cli CONFIG GET maxmemory` | `268435456` (after recreate) |
+
+> `git_sha: "unknown"` in `/health` is a **release verification failure**.
+> It means `GITWIRE_COMMIT_SHA` was not exported at build time (Step 3).
+> The deploy cannot prove which commit is running — rebuild with the env var
+> set and redeploy before considering the release complete.
 
 ---
 

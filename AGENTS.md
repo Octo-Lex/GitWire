@@ -195,9 +195,12 @@ Before tagging ANY release:
 5. Push: `git push origin master && git push origin v0.XX.0`
 6. Create GitHub release
 7. **Follow `docs/installation/deployment-runbook.md`** to deploy to CT 115
+   (export `GITWIRE_COMMIT_SHA` before `docker compose build`, use `--force-recreate`)
 8. Verify the running container version matches the tag
-9. Verify all migrations are applied in the production database
-10. Smoke test the API at `https://gitwire.erlab.uk/health`
+9. Verify `/health.git_sha` is NOT `"unknown"` and matches the deployed commit
+   (if `"unknown"`, GITWIRE_COMMIT_SHA was not exported at build time — rebuild)
+10. Verify all migrations are applied in the production database
+11. Smoke test the API at `https://gitwire.erlab.uk/health`
 
-Steps 7-10 are MANDATORY. A release is not complete until the running system
-reflects it.
+Steps 7-11 are MANDATORY. A release is not complete until the running system
+reflects it — and `git_sha="unknown"` does NOT count as reflecting it.
