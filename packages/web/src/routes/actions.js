@@ -18,6 +18,7 @@ import {
   cancel,
   reconcile,
 } from "../services/actionStateMachine.js";
+import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
@@ -30,6 +31,44 @@ router.get("/summary", async (_req, res) => {
   } catch (err) {
     logger.error({ err }, "Failed to get action summary");
     res.status(500).json({ error: "Failed to get summary" });
+  }
+});
+
+// ── GET /api/actions/abstentions ───────────────────────────────────────────
+// Abstention/block metrics — surfaces WHY automation refused to act.
+router.get("/abstentions", async (_req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        blocked_reason,
+        repo_full_name,
+        action_type,
+        COUNT(*) AS count
+      FROM managed_actions
+      WHERE status = 'blocked' AND blocked_reason IS NOT NULL
+      GROUP BY blocked_reason, repo_full_name, action_type
+      ORDER BY count DESC
+      LIMIT 100
+    `);
+    const totals = await db.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'blocked')                          AS blocked_total,
+        COUNT(*) FILTER (WHERE status = 'failed')                            AS failed_total,
+        COUNT(*) FILTER (WHERE status = 'succeeded')                         AS mutation_success_total,
+        COUNT(*) FILTER (WHERE status IN ('succeeded','failed','blocked'))   AS mutation_attempts_total,
+        COUNT(*) FILTER (WHERE status = 'blocked' AND blocked_reason = 'target_drifted')      AS blocked_target_drifted,
+        COUNT(*) FILTER (WHERE status = 'blocked' AND blocked_reason = 'duplicate_action')   AS blocked_duplicate,
+        COUNT(*) FILTER (WHERE status = 'blocked' AND blocked_reason = 'policy_denied')      AS blocked_policy,
+        COUNT(*) FILTER (WHERE status = 'blocked' AND blocked_reason = 'marker_ambiguous')   AS blocked_marker
+      FROM managed_actions
+    `);
+    res.json({
+      totals: totals.rows[0],
+      breakdown: result.rows,
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to get abstention metrics");
+    res.status(500).json({ error: "Failed to get abstentions" });
   }
 });
 

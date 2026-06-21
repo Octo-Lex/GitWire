@@ -1,8 +1,9 @@
 // src/services/actionStateMachine.js
 // Action lifecycle state machine — tracks every GitWire action from proposal to reconciliation.
 //
-// States: proposed → approved → executing → succeeded/failed/cancelled
+// States: proposed → approved → executing → succeeded/failed/cancelled/blocked
 //         failed → retrying → executing (with backoff)
+//         blocked → (re-propose required; deterministic guard prevented execution)
 //         succeeded → reconciled (confirmed still in effect)
 //
 // Every state transition is logged with timestamps and evidence.
@@ -11,20 +12,39 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
+// ── Typed blocked reasons ───────────────────────────────────────────────────
+// "blocked" means a deterministic guard deliberately prevented execution.
+// "failed" means execution was attempted and crashed/errored.
+// This distinction makes abstention a first-class, queryable outcome.
+export const BLOCKED_REASONS = Object.freeze({
+  TARGET_DRIFTED:        "target_drifted",
+  MARKER_AMBIGUOUS:      "marker_ambiguous",
+  PERMISSION_DENIED:     "permission_denied",
+  POLICY_DENIED:         "policy_denied",
+  EVIDENCE_INCOMPLETE:   "evidence_incomplete",
+  VERIFICATION_FAILED:   "verification_failed",
+  BACKEND_UNAVAILABLE:   "backend_unavailable",
+  RATE_LIMITED:          "rate_limited",
+  DUPLICATE_ACTION:      "duplicate_action",
+  UNSAFE_SCOPE:          "unsafe_scope",
+  UNKNOWN:               "unknown",
+});
+
 // ── Valid states and transitions ─────────────────────────────────────────────
 const STATES = {
-  proposed:   { next: ["approved", "cancelled"], label: "Proposed" },
-  approved:   { next: ["executing", "cancelled"], label: "Approved" },
+  proposed:   { next: ["approved", "cancelled", "blocked"], label: "Proposed" },
+  approved:   { next: ["executing", "cancelled", "blocked"], label: "Approved" },
   executing:  { next: ["succeeded", "failed", "cancelled"], label: "Executing" },
   succeeded:  { next: ["reconciled"], label: "Succeeded" },
   failed:     { next: ["retrying", "cancelled"], label: "Failed" },
-  retrying:   { next: ["executing", "cancelled"], label: "Retrying" },
+  retrying:   { next: ["executing", "cancelled", "blocked"], label: "Retrying" },
+  blocked:    { next: ["cancelled"], label: "Blocked" },
   cancelled:  { next: [], label: "Cancelled" },
   reconciled: { next: [], label: "Reconciled" },
 };
 
 // Terminal states — no further transitions possible
-const TERMINAL_STATES = new Set(["succeeded", "cancelled", "reconciled"]);
+const TERMINAL_STATES = new Set(["succeeded", "cancelled", "reconciled", "blocked"]);
 
 /**
  * Propose a new action. Creates a record in 'proposed' state.
@@ -123,6 +143,83 @@ export async function fail(actionId, errorMessage) {
   return transition(actionId, "failed", {
     error_message: errorMessage,
   });
+}
+
+/**
+ * Mark an action as blocked. A deterministic guard prevented execution.
+ * This is distinct from "failed" — the action was never attempted.
+ *
+ * @param {number} actionId
+ * @param {string} blockedReason — one of BLOCKED_REASONS
+ * @param {object} [detail] — expected vs actual state, marker info, etc.
+ */
+export async function block(actionId, blockedReason, detail = {}) {
+  const action = await getAction(actionId);
+  if (!action) throw new Error(`Action ${actionId} not found`);
+  if (TERMINAL_STATES.has(action.status)) {
+    throw new Error(`Cannot block action in terminal state: ${action.status}`);
+  }
+
+  // Move to blocked state with the typed reason
+  await transition(actionId, "blocked", {
+    resolved_at: new Date().toISOString(),
+    error_message: `Blocked: ${blockedReason}`,
+    evidence: { blocked_reason: blockedReason, ...detail },
+  });
+
+  // Store blocked_reason as a separate column for queryability
+  await db.query(
+    "UPDATE managed_actions SET blocked_reason = $1 WHERE id = $2",
+    [blockedReason, actionId]
+  );
+
+  logger.info(
+    { actionId, blockedReason, detail },
+    "Action blocked by deterministic guard"
+  );
+
+  return { id: actionId, status: "blocked", blocked_reason: blockedReason };
+}
+
+/**
+ * Check whether the live GitHub target still matches the proposal snapshot.
+ * If drift is detected, blocks the action and returns true.
+ *
+ * Callers should call this BEFORE invoking execute() + performing the mutation.
+ *
+ * @param {number} actionId
+ * @param {object} liveState — the freshly-fetched target state from GitHub
+ * @param {string} liveState.updated_at — ISO timestamp of the target's current state
+ * @param {string} [liveState.head_sha] — for PRs, the current head SHA
+ * @param {string} [liveState.state] — for issues/PRs, open/closed
+ * @returns {object} { drifted: boolean, reason: string|null, detail: object }
+ */
+export async function checkDrift(actionId, liveState = {}) {
+  const action = await getAction(actionId);
+  if (!action) throw new Error(`Action ${actionId} not found`);
+
+  const expected = action.evidence?.target_snapshot || {};
+  const detail = { expected, actual: liveState };
+
+  // Check updated_at drift (the primary signal — covers comments, labels, state changes)
+  if (expected.updated_at && liveState.updated_at &&
+      expected.updated_at !== liveState.updated_at) {
+    return { drifted: true, reason: BLOCKED_REASONS.TARGET_DRIFTED, detail };
+  }
+
+  // Check head_sha drift (for PRs — covers force-pushes, new commits)
+  if (expected.head_sha && liveState.head_sha &&
+      expected.head_sha !== liveState.head_sha) {
+    return { drifted: true, reason: BLOCKED_REASONS.TARGET_DRIFTED, detail };
+  }
+
+  // Check state drift (issue/PR was closed/reopened since proposal)
+  if (expected.state && liveState.state &&
+      expected.state !== liveState.state) {
+    return { drifted: true, reason: BLOCKED_REASONS.TARGET_DRIFTED, detail };
+  }
+
+  return { drifted: false, reason: null, detail };
 }
 
 /**
