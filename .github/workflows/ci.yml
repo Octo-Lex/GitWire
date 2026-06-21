@@ -25,15 +25,8 @@ jobs:
             echo "::error::package.json and package-lock.json versions do not match"
             exit 1
           fi
-      - name: Verify core VERSION constant
-        run: |
-          CORE_VER=$(node -e "const fs=require('fs');const s=fs.readFileSync('packages/core/src/index.js','utf-8');const m=s.match(/VERSION\s*=\s*\"([^\"]+)\"/);console.log(m?m[1]:'')")
-          PKG_VER=$(node -p "require('./package.json').version")
-          echo "core: $CORE_VER, package: $PKG_VER"
-          if [ "$CORE_VER" != "$PKG_VER" ]; then
-            echo "::error::core VERSION ($CORE_VER) != package.json ($PKG_VER)"
-            exit 1
-          fi
+      - name: Version drift check
+        run: node scripts/check-version-drift.js
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Syntax check all source files

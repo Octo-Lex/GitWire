@@ -18,6 +18,11 @@ RUN npm ci --omit=dev --ignore-scripts
 # Copy source (this layer only rebuilds when source actually changes)
 COPY . .
 
+# Generate build-info from root package.json + git SHA (v0.20.2)
+ARG GITWIRE_COMMIT_SHA=unknown
+ENV GITWIRE_COMMIT_SHA=$GITWIRE_COMMIT_SHA
+RUN node scripts/generate-build-info.js
+
 # Expose the Express port
 EXPOSE 3000
 

@@ -74,4 +74,7 @@ export const HEALABLE_TYPES = new Set([
 ]);
 
 // ── Package version ────────────────────────────────────────────────────────
-export const VERSION = "0.20.1";
+// Re-exported from buildInfo so there is a single source of truth.
+// The committed fallback carries the current release version; the generator
+// script overwrites it during Docker/CI builds with the real values.
+export { VERSION } from "./buildInfo.js";

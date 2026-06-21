@@ -21,7 +21,9 @@
     "prepare": "husky 2>/dev/null || true",
     "benchmark": "node scripts/benchmark.js",
     "benchmark:api": "node scripts/benchmark.js --api",
-    "benchmark:webhook": "node scripts/benchmark.js --webhook"
+    "benchmark:webhook": "node scripts/benchmark.js --webhook",
+    "build-info:generate": "node scripts/generate-build-info.js",
+    "build-info:check": "node scripts/check-version-drift.js"
   },
   "workspaces": [
     "packages/*"
