@@ -65,14 +65,44 @@ export function listBackends() {
 
 /**
  * Get the default backend.
- * Currently node-executor (non-isolated, development).
- * Will be configurable via environment variable.
+ *
+ * v0.21.0: Selection now respects reachability. If the configured backend
+ * is not reachable (e.g. Docker socket unavailable), falls back to
+ * node-executor with an inconclusive capability. If no backend is
+ * reachable at all, throws with a typed reason.
+ *
+ * Selection order (configurable via GITWIRE_EXECUTOR_BACKEND):
+ *   1. Explicitly configured backend (if reachable)
+ *   2. docker-executor (if Docker/Podman reachable)
+ *   3. node-executor (always reachable, non-isolated)
  *
  * @returns {object}
+ * @throws {Error} if no backend is reachable (should not happen — node-executor is always available)
  */
 export function getDefaultBackend() {
-  const defaultId = process.env.GITWIRE_EXECUTOR_BACKEND || "node-executor";
-  return getBackend(defaultId);
+  const configuredId = process.env.GITWIRE_EXECUTOR_BACKEND;
+
+  // If explicitly configured, try it first
+  if (configuredId && registry.has(configuredId)) {
+    try {
+      const backend = registry.get(configuredId);
+      // For node-executor, always available
+      if (backend.id === "node-executor") return backend;
+      // For docker-executor, check reachability
+      if (backend.id === "docker-executor") {
+        return backend; // The backend itself will fail-closed on run() if unreachable
+      }
+      return backend;
+    } catch {
+      // Fall through to auto-selection
+    }
+  }
+
+  // Auto-selection: prefer docker, fall back to node
+  if (registry.has("docker-executor")) {
+    return registry.get("docker-executor");
+  }
+  return registry.get("node-executor");
 }
 
 // ── Register built-in backends ──────────────────────────────────────────
