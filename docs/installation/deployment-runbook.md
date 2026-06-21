@@ -424,3 +424,62 @@ After a deployment, confirm all of the following:
 | External URL works | `curl https://gitwire.erlab.uk/health` | `{"status":"ok"}` |
 | No errors in logs | `docker logs gitwire-gitwire-app-1 --tail 50` | No exceptions |
 | Redis memory durable | `redis-cli CONFIG GET maxmemory` | `268435456` (after recreate) |
+
+---
+
+## Repository ID Reconciliation (after repo deletion/recreation)
+
+When deleting and recreating a monitored GitHub repository under the same
+owner/name, GitHub assigns a new `repository.id`. GitWire tables may reference
+that GitHub repository id directly as `repo_id` (not the internal
+`repositories.id` primary key). Before deleting any repository row, inspect all
+FK/reference usage and update child `repo_id` values from the old GitHub id to
+the new GitHub id.
+
+### Steps
+
+```bash
+# 1. Capture the NEW repo identity
+NEW_REPO_ID=$(gh api repos/<owner>/<repo> --jq .id)
+
+# 2. Inspect existing repository rows (look for duplicates after sync)
+docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub -c "
+  SELECT id, github_id, full_name, last_synced_at
+  FROM repositories WHERE full_name = '<owner>/<repo>' ORDER BY id;"
+
+# 3. Find ALL FK references to repositories(github_id)
+docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub -c "
+  SELECT tc.table_name, kcu.column_name
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+  JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name
+  WHERE tc.constraint_type = 'FOREIGN KEY' AND ccu.table_name = 'repositories'
+  ORDER BY tc.table_name;"
+
+# 4. Take a DB backup
+docker exec gitwire-postgres-1 pg_dump -U gitwire -d gitops_hub > /opt/gitwire/backups/pre-recon.sql
+
+# 5. Update all child tables, then remove the old repository row
+#    (run in a single transaction so partial failures roll back)
+docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub <<SQL
+BEGIN;
+-- Replace OLD_ID and NEW_ID with the actual values from step 1-2
+UPDATE managed_actions SET repo_id = NEW_ID WHERE repo_id = OLD_ID;
+-- ... repeat for every table found in step 3 ...
+DELETE FROM repositories WHERE github_id = OLD_ID;
+UPDATE repositories SET last_synced_at = NOW() WHERE github_id = NEW_ID;
+COMMIT;
+SQL
+
+# 6. Verify exactly one row remains with the new github_id
+docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub -c "
+  SELECT id, github_id, full_name FROM repositories WHERE full_name = '<owner>/<repo>';"
+```
+
+### Acceptance
+
+- Exactly one repository row for the repo
+- Its `github_id` equals the new GitHub repository id
+- No orphaned `repo_id` references to the old GitHub id in any child table
+- Production `/health` reports `db_migration_status: current`
+- Webhook deliveries resume normally
