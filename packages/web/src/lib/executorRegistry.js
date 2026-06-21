@@ -16,6 +16,7 @@
 import { nodeExecutorBackend } from "./nodeExecutorBackend.js";
 import { dockerExecutorBackend } from "./dockerExecutorBackend.js";
 import { validateBackendContract } from "./executorBackend.js";
+import { probeContainerRuntime } from "./executorReachability.js";
 
 /**
  * Map of registered backends by ID.
@@ -63,43 +64,71 @@ export function listBackends() {
   return [...registry.keys()];
 }
 
+// ── Test-injectable reachability probe ──────────────────────────────────────
+// getDefaultBackend() needs to know whether container-runtime is reachable to
+// make auto-selection honest. The real probe shells out to `docker --version`,
+// which is non-deterministic in tests (Docker may or may not be installed).
+// This seam lets tests override the probe for deterministic coverage of both
+// branches. Production code leaves it null → uses the real probeContainerRuntime.
+let _containerRuntimeProbeOverride = null;
+
 /**
- * Get the default backend.
+ * Test-only seam: override the container-runtime reachability probe.
+ * Pass `null` to restore the real probe.
  *
- * v0.21.0: Selection now respects reachability. If the configured backend
- * is not reachable (e.g. Docker socket unavailable), falls back to
- * node-executor with an inconclusive capability. If no backend is
- * reachable at all, throws with a typed reason.
+ * @param {(() => { reachable: boolean, runtime: string|null }) | null} probe
+ */
+export function _setContainerRuntimeProbeForTests(probe) {
+  _containerRuntimeProbeOverride = probe;
+}
+
+function containerRuntimeReachable() {
+  const probe = _containerRuntimeProbeOverride || probeContainerRuntime;
+  return Boolean(probe().reachable);
+}
+
+/**
+ * Get the default backend, reachability-honest for AUTO-selection (Gap 1 fix #4).
  *
- * Selection order (configurable via GITWIRE_EXECUTOR_BACKEND):
- *   1. Explicitly configured backend (if reachable)
- *   2. docker-executor (if Docker/Podman reachable)
- *   3. node-executor (always reachable, non-isolated)
+ * v0.21.0 claimed reachability-aware selection but the body just returned
+ * the configured/registered backend without probing. On CT 115 that meant
+ * docker-executor was silently selected even though the app container has
+ * no Docker socket — the failure only surfaced later as an ambiguous
+ * executor error.
  *
- * @returns {object}
- * @throws {Error} if no backend is reachable (should not happen — node-executor is always available)
+ * Selection contract (per Task 7.5 spec):
+ *
+ *   EXPLICIT selection (GITWIRE_EXECUTOR_BACKEND set to a registered id):
+ *     The operator named a backend. Return it as-is. Explicit selection is
+ *     NOT reachability-aware — the runner's pass-capability logic (Task 7)
+ *     safely downgrades the receipt when the runtime is unreachable, so
+ *     selection itself stays simple and predictable.
+ *
+ *   AUTO selection (no GITWIRE_EXECUTOR_BACKEND, or set to an unknown id):
+ *     Reachability-aware. Prefer docker-executor when container-runtime is
+ *     reachable; otherwise fall back to node-executor (always available).
+ *
+ *   Unknown configured backend: NOT a hard error. Falls through to
+ *     reachability-aware auto-selection (fail-safe fallback, never throws).
+ *
+ * Explicit getBackend(id) is unchanged; callers who know they want a
+ * specific backend can still request it directly.
+ *
+ * @returns {object} — never throws (node-executor is always available)
  */
 export function getDefaultBackend() {
   const configuredId = process.env.GITWIRE_EXECUTOR_BACKEND;
 
-  // If explicitly configured, try it first
+  // EXPLICIT selection: if the operator named a registered backend, honor it.
+  // Reachability is handled downstream (runner + receipt + gate), not here.
   if (configuredId && registry.has(configuredId)) {
-    try {
-      const backend = registry.get(configuredId);
-      // For node-executor, always available
-      if (backend.id === "node-executor") return backend;
-      // For docker-executor, check reachability
-      if (backend.id === "docker-executor") {
-        return backend; // The backend itself will fail-closed on run() if unreachable
-      }
-      return backend;
-    } catch {
-      // Fall through to auto-selection
-    }
+    return registry.get(configuredId);
   }
 
-  // Auto-selection: prefer docker, fall back to node
-  if (registry.has("docker-executor")) {
+  // AUTO selection (no configured id, or configured id not registered):
+  // reachability-aware. Prefer docker-executor when a runtime is reachable,
+  // otherwise the always-available node-executor fallback.
+  if (containerRuntimeReachable() && registry.has("docker-executor")) {
     return registry.get("docker-executor");
   }
   return registry.get("node-executor");
