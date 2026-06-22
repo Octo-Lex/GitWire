@@ -72,17 +72,21 @@ export async function getDeploymentInfo(db) {
     dbMigrationStatus = applied === available ? "current" : "behind";
   }
 
-  // Probe executor reachability + validator readiness (Gap 1).
-  // executor.selected_pass_capable + the validator block make CT 115's
-  // "healthy but not pass-capable" state externally unambiguous.
+  // Probe executor reachability + validator readiness.
+  // Gap 1 (v0.22.0): executor.selected_pass_capable + the validator block make
+  // CT 115's "healthy but not pass-capable" state externally unambiguous.
+  // v0.23.0 Task 4: switched to the ASYNC getBackendLevelSummary() so /health
+  // also surfaces selected_backend_id + selected_backend_reachable (rev 3
+  // amendment — backend_id-level reachability, load-bearing for proof once
+  // two backends share the container-runtime kind).
   let executor = {};
   let validator = {};
   try {
     const {
-      getReachabilitySummary,
+      getBackendLevelSummary,
       getValidatorReadiness,
     } = await import("./executorReachability.js");
-    executor = getReachabilitySummary();
+    executor = await getBackendLevelSummary();
     validator = getValidatorReadiness();
   } catch {
     // Reachability module unavailable — health still works, but report
