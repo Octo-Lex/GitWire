@@ -146,6 +146,10 @@ describe("executorServiceBackend — run() (Task 5: real POST /v1/validate)", ()
       });
       expect(r.overall).toBe("inconclusive");
       expect(r.inconclusive_reason).toBe("image_inspection_failed");
+      // P1 #3: even on inconclusive, command_results + aggregate_exit_status
+      // MUST be present so sandboxRunner's .map()/.filter() don't crash.
+      expect(r.command_results).toEqual([]);
+      expect(r.aggregate_exit_status).toBeNull();
     } finally {
       _setFetchForTests(null);
     }
@@ -168,6 +172,37 @@ describe("executorServiceBackend — run() (Task 5: real POST /v1/validate)", ()
       });
       expect(r.overall).toBe("inconclusive");
       expect(r.inconclusive_reason).toBe("executor_error");
+      // P1 #3: normalized to complete ExecResult shape.
+      expect(r.command_results).toEqual([]);
+      expect(r.aggregate_exit_status).toBeNull();
+    } finally {
+      _setFetchForTests(null);
+    }
+  });
+
+  // P1 #3 lock-in: a non-200 response from postValidate synthesizes
+  // { overall: "inconclusive", inconclusive_reason: "executor_error" } WITHOUT
+  // command_results or aggregate_exit_status. The backend MUST normalize it
+  // so sandboxRunner doesn't crash.
+  it("normalizes non-200 responses to complete ExecResult shape", async () => {
+    process.env.GITWIRE_EXECUTOR_SERVICE_URL = "http://executor:3003";
+    process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN = "t";
+    process.env.GITWIRE_VALIDATOR_IMAGE_REF = "reg/v@sha256:" + "a".repeat(64);
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = "sha256:" + "a".repeat(64);
+
+    const { _setFetchForTests } = await import("../../src/lib/executorServiceClient.js");
+    _setFetchForTests(async () => ({ ok: false, status: 401 }));
+    try {
+      const r = await executorServiceBackend.run({
+        files: [{ path: "x", content: "y" }],
+        commands: ["lint"],
+        limits: {},
+        sandbox_image_digest: "sha256:" + "a".repeat(64),
+      });
+      expect(r.overall).toBe("inconclusive");
+      expect(r.inconclusive_reason).toBe("executor_error");
+      expect(r.command_results).toEqual([]);
+      expect(r.aggregate_exit_status).toBeNull();
     } finally {
       _setFetchForTests(null);
     }

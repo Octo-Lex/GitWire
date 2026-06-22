@@ -26,6 +26,29 @@
 
 import { validateBackendContract } from "./executorBackend.js";
 
+/**
+ * Normalize an executor-service response to the complete ExecResult shape that
+ * sandboxRunner.js expects. The service returns a rich report on success, but
+ * postValidate() synthesizes failure responses with only overall/reason/detail
+ * — missing command_results and aggregate_exit_status. sandboxRunner does
+ * execResult.command_results.map(...) unconditionally, so a missing array
+ * crashes. This helper ensures every return has both fields.
+ *
+ * @param {object} response - raw response from postValidate or the service
+ * @returns {object} normalized with command_results + aggregate_exit_status always present
+ */
+function normalizeExecResult(response) {
+  return {
+    ...response,
+    // Ensure command_results is always an array (empty on failure/inconclusive).
+    command_results: Array.isArray(response.command_results) ? response.command_results : [],
+    // Ensure aggregate_exit_status is always present (null on failure/inconclusive).
+    aggregate_exit_status: response.aggregate_exit_status ?? null,
+    // Ensure overall is one of the three valid values.
+    overall: ["pass", "fail", "inconclusive"].includes(response.overall) ? response.overall : "inconclusive",
+  };
+}
+
 // Static module-level digest. Real validator identity comes from config and
 // is bound into receipts at run time; this satisfies the contract at module
 // load (validateBackendContract requires a sha256: value). The runner's
@@ -144,10 +167,16 @@ export const executorServiceBackend = {
     };
 
     const response = await postValidate({ url, token, body: requestBody });
-    // postValidate returns a shaped object on every path (never throws).
-    // On failure it returns { overall: "inconclusive", ... } which we pass
-    // through. On success it returns the full executor report.
-    return response;
+    // P1 #3 fix: normalize EVERY return to the complete ExecResult shape that
+    // sandboxRunner expects. postValidate synthesizes failure responses with
+    // only { overall, inconclusive_reason, inconclusive_detail } — missing
+    // command_results and aggregate_exit_status. sandboxRunner immediately
+    // does execResult.command_results.map(...) and .filter(...), so a missing
+    // array crashes the runner instead of producing an inconclusive receipt.
+    //
+    // On success, the response already has command_results + aggregate_exit_status;
+    // this normalization is a no-op for well-formed responses.
+    return normalizeExecResult(response);
   },
 };
 

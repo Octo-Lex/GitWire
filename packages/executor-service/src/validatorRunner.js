@@ -90,23 +90,41 @@ function runCmd(cmd, opts = {}) {
 function inspectImage(imageRef) {
   if (_imageInspector) return _imageInspector();
   try {
-    // `docker inspect --format '{{.Image}}' <ref>` returns the image's digest
-    // (sha256:... form prefixed by sha256:). We also compute a hash over the
-    // raw inspect JSON for inspection_hash.
-    const idResult = spawnSync("docker", ["inspect", "--format", "{{.Image}}", imageRef], {
+    // P1 #1 fix: use RepoDigests, not .Image. The .Image field returns the
+    // image's local layer ID (e.g. sha256:<config-digest>), which is NOT the
+    // same as the registry-pushed content digest (sha256:<manifest-digest>).
+    // RepoDigests contains entries like "registry/repo@sha256:<manifest-digest>"
+    // which IS what GITWIRE_VALIDATOR_IMAGE_DIGEST pins. Parse the digest from
+    // RepoDigests and compare.
+    const jsonResult = spawnSync("docker", ["inspect", "--format", "{{json .RepoDigests}}", imageRef], {
       encoding: "utf-8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
     });
-    if (idResult.error || idResult.status !== 0) return { ok: false };
-    const rawDigest = (idResult.stdout || "").trim();
-    // docker inspect .Image returns "sha256:<hex>"; normalize.
-    const digest = rawDigest.startsWith("sha256:") ? rawDigest : `sha256:${rawDigest}`;
+    if (jsonResult.error || jsonResult.status !== 0) return { ok: false };
 
-    const jsonResult = spawnSync("docker", ["inspect", imageRef], {
+    let repoDigests = [];
+    try {
+      repoDigests = JSON.parse((jsonResult.stdout || "").trim());
+    } catch {
+      return { ok: false };
+    }
+
+    // Extract sha256:<hex> from RepoDigests entries (format: "repo@sha256:...").
+    const digests = repoDigests
+      .map(d => { const m = d.match(/@(sha256:[0-9a-f]{64})$/); return m ? m[1] : null; })
+      .filter(Boolean);
+
+    if (digests.length === 0) return { ok: false };
+
+    // Also get the full inspect JSON for inspection_hash (audit trail).
+    const fullInspect = spawnSync("docker", ["inspect", imageRef], {
       encoding: "utf-8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"],
     });
-    const inspectJson = jsonResult.stdout || "";
+    const inspectJson = (fullInspect.stdout || "").trim();
     const hash = "sha256:" + createHash("sha256").update(inspectJson).digest("hex");
-    return { ok: true, digest, hash };
+
+    // Return the first matching digest. The caller compares against
+    // config.validator_image_digest; if none match, it's image_inspection_failed.
+    return { ok: true, digest: digests[0], hash, all_digests: digests };
   } catch {
     return { ok: false };
   }
@@ -132,7 +150,12 @@ async function materializeWorkspace(files) {
 }
 
 // ── Build the docker run argv with all isolation flags ──────────────────────
-function buildRunArgv(runtime, imageRef, argv, limits) {
+// P1 #2 fix: workspace is a parameter, not a placeholder string. The old code
+// embedded WORKSPACE_PLACEHOLDER inside a --volume arg and then tried to
+// replace it via .map(arg => arg === "WORKSPACE_PLACEHOLDER"), which never
+// matched because the arg was "--volume=WORKSPACE_PLACEHOLDER:/workspace:rw".
+// Real Docker would mount a named volume called WORKSPACE_PLACEHOLDER.
+function buildRunArgv(runtime, imageRef, argv, limits, workspace) {
   return [
     runtime, "run", "--rm",
     "--network=none",
@@ -142,7 +165,7 @@ function buildRunArgv(runtime, imageRef, argv, limits) {
     `--pids-limit=${limits.pids_limit}`,
     `--tmpfs=/tmp:rw,size=${Math.floor(limits.output_bytes / 1024)}k`,
     "--workdir=/workspace",
-    `--volume=WORKSPACE_PLACEHOLDER:/workspace:rw`,
+    `--volume=${workspace}:/workspace:rw`,
     imageRef,
     ...argv,
   ];
@@ -198,84 +221,93 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
       return inconclusive("executor_error", wsErr.message, config);
     }
 
-    // ── Step 3: run each allowlisted command ───────────────────────────────
-    const commandResults = [];
-    let aggregateExitStatus = 0;
+    // P2 fix: wrap all post-materialization execution in try/finally so the
+    // workspace tempdir is always cleaned up, regardless of pass/fail/error.
+    try {
+      // ── Step 3: run each allowlisted command ─────────────────────────────
+      const commandResults = [];
+      let aggregateExitStatus = 0;
 
-    for (const cmdId of request.commands) {
-      let argv;
-      try {
-        argv = resolveCommandTemplate(cmdId);
-      } catch {
-        // Non-allowlisted → null exit_status → inconclusive aggregate.
-        commandResults.push({ command: cmdId, exit_status: null, output_ref: null, output_hash: null, duration_ms: 0 });
-        aggregateExitStatus = null;
-        continue;
+      for (const cmdId of request.commands) {
+        let argv;
+        try {
+          argv = resolveCommandTemplate(cmdId);
+        } catch {
+          // Non-allowlisted → null exit_status → inconclusive aggregate.
+          commandResults.push({ command: cmdId, exit_status: null, output_ref: null, output_hash: null, duration_ms: 0 });
+          aggregateExitStatus = null;
+          continue;
+        }
+
+        // P1 #2 fix: pass the real workspace path, not a placeholder.
+        const argvFull = buildRunArgv(runtime, config.validator_image_ref, argv, limits, workspace);
+
+        const start = Date.now();
+        const r = runCmd(argvFull, { cwd: workspace, timeoutMs: limits.wall_clock_ms });
+        const duration_ms = Date.now() - start;
+
+        const combined = (r.stdout || "") + "\n" + (r.stderr || "");
+        const outputHash = hashOutput(combined);
+
+        commandResults.push({
+          command: cmdId,
+          exit_status: r.code,
+          output_ref: `output:${outputHash}`,
+          output_hash: outputHash,
+          duration_ms,
+        });
+        if (r.code === null) aggregateExitStatus = null;
+        else if (aggregateExitStatus === 0 && r.code !== 0) aggregateExitStatus = r.code;
       }
 
-      const argvFull = buildRunArgv(runtime, config.validator_image_ref, argv, limits)
-        .map(arg => arg === "WORKSPACE_PLACEHOLDER" ? workspace : arg);
+      // ── Step 4: derive overall + build report ────────────────────────────
+      let overall, inconclusiveReason;
+      if (commandResults.some(cr => cr.exit_status === null)) {
+        overall = "inconclusive";
+        inconclusiveReason = "execution_incomplete";
+      } else if (aggregateExitStatus === 0) {
+        overall = "pass";
+      } else {
+        overall = "fail";
+      }
 
-      const start = Date.now();
-      const r = runCmd(argvFull, { cwd: workspace, timeoutMs: limits.wall_clock_ms });
-      const duration_ms = Date.now() - start;
+      if (overall === "inconclusive") {
+        return inconclusive(inconclusiveReason, "one or more commands did not complete", config, { command_results: commandResults });
+      }
 
-      const combined = (r.stdout || "") + "\n" + (r.stderr || "");
-      const outputHash = hashOutput(combined);
+      const report = {
+        report_schema_version: 1,
+        executor_service_id: config.executor_service_id,
+        executor_service_version: config.executor_service_version,
+        executor_service_instance_id: config.executor_service_instance_id || "unknown",
+        deployment_mode: config.deployment_mode,
+        container_runtime: runtime,
+        runtime_version: null, // populated by the route from probeRuntime() in step 5-6
+        validator_image_ref: config.validator_image_ref,
+        validator_image_digest: config.validator_image_digest,
+        inspected_image_digest: inspection.digest,
+        inspection_hash: inspection.hash,
+        network_disabled: true,
+        non_root: true,
+        read_only_rootfs: true,
+        resource_limits: { memory_mb: limits.memory_mb, pids_limit: limits.pids_limit },
+        command_results: commandResults,
+        aggregate_exit_status: aggregateExitStatus,
+        overall,
+      };
 
-      commandResults.push({
-        command: cmdId,
-        exit_status: r.code,
-        output_ref: `output:${outputHash}`,
-        output_hash: outputHash,
-        duration_ms,
-      });
-      if (r.code === null) aggregateExitStatus = null;
-      else if (aggregateExitStatus === 0 && r.code !== 0) aggregateExitStatus = r.code;
+      // Compute the content-addressed hash + ref.
+      report.executor_report_hash = computeExecutorReportHash(report);
+      report.executor_report_ref = buildExecutorReportRef(report.executor_report_hash);
+
+      return report;
+    } finally {
+      // P2 fix: always clean up the materialized workspace tempdir, regardless
+      // of pass/fail/inconclusive/error. Never leak patched source files.
+      if (workspace) {
+        try { await rm(workspace, { recursive: true, force: true }); } catch { /* best-effort */ }
+      }
     }
-
-    // ── Step 4: derive overall + build report ──────────────────────────────
-    let overall, inconclusiveReason;
-    if (commandResults.some(cr => cr.exit_status === null)) {
-      overall = "inconclusive";
-      inconclusiveReason = "execution_incomplete";
-    } else if (aggregateExitStatus === 0) {
-      overall = "pass";
-    } else {
-      overall = "fail";
-    }
-
-    if (overall === "inconclusive") {
-      return inconclusive(inconclusiveReason, "one or more commands did not complete", config, { command_results: commandResults });
-    }
-
-    const report = {
-      report_schema_version: 1,
-      executor_service_id: config.executor_service_id,
-      executor_service_version: config.executor_service_version,
-      executor_service_instance_id: config.executor_service_instance_id || "unknown",
-      deployment_mode: config.deployment_mode,
-      container_runtime: runtime,
-      runtime_version: null, // populated by the route from probeRuntime() in step 5-6
-      validator_image_ref: config.validator_image_ref,
-      validator_image_digest: config.validator_image_digest,
-      inspected_image_digest: inspection.digest,
-      inspection_hash: inspection.hash,
-      network_disabled: true,
-      non_root: true,
-      read_only_rootfs: true,
-      resource_limits: { memory_mb: limits.memory_mb, pids_limit: limits.pids_limit },
-      command_results: commandResults,
-      aggregate_exit_status: aggregateExitStatus,
-      overall,
-    };
-
-    // Compute the content-addressed hash + ref. The hash excludes itself
-    // (computeExecutorReportHash strips executor_report_hash/_ref fields).
-    report.executor_report_hash = computeExecutorReportHash(report);
-    report.executor_report_ref = buildExecutorReportRef(report.executor_report_hash);
-
-    return report;
   } finally {
     // Always tear down test seams so module state doesn't leak between calls.
     if (cmdRunner) _setCmdRunnerForTests(null);
