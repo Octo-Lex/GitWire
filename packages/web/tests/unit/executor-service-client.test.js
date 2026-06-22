@@ -1,11 +1,12 @@
 // Tests for the executor-service HTTP client (v0.23.0 Task 3).
 //
-// The client wraps GET /health (POST /v1/validate is Task 5, not here).
+// The client wraps GET /health and POST /v1/validate.
 // Tests inject a fake fetch via _setFetchForTests so no real network is hit.
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import {
   fetchExecutorServiceHealth,
+  postValidate,
   _setFetchForTests,
 } from "../../src/lib/executorServiceClient.js";
 
@@ -170,5 +171,85 @@ describe("fetchExecutorServiceHealth — seam safety", () => {
     return expect(
       fetchExecutorServiceHealth({ url: "http://127.0.0.1:1" })
     ).resolves.toMatchObject({ reachable: false });
+  });
+});
+
+// ── postValidate (Task 5) ───────────────────────────────────────────────────
+
+describe("postValidate — success path", () => {
+  const validateResponse = {
+    report_schema_version: 1,
+    executor_service_id: "executor-service",
+    overall: "pass",
+    executor_report_hash: "sha256:" + "a".repeat(64),
+    aggregate_exit_status: 0,
+    command_results: [{ command: "lint", exit_status: 0 }],
+  };
+
+  beforeEach(() => _setFetchForTests(fakeFetch(validateResponse, 200)));
+  afterEach(() => _setFetchForTests(null));
+
+  it("returns the parsed validate response", async () => {
+    const r = await postValidate({ url: "http://x:3003", token: "t", body: { commands: ["lint"] } });
+    expect(r.overall).toBe("pass");
+    expect(r.executor_report_hash).toMatch(/^sha256:/);
+  });
+});
+
+describe("postValidate — URL + auth + method wiring", () => {
+  let capturedUrl, capturedInit;
+  beforeEach(() => {
+    capturedUrl = null; capturedInit = null;
+    _setFetchForTests(async (url, init) => {
+      capturedUrl = url; capturedInit = init;
+      return { ok: true, status: 200, json: async () => ({ overall: "pass" }) };
+    });
+  });
+  afterEach(() => _setFetchForTests(null));
+
+  it("calls POST <url>/v1/validate", async () => {
+    await postValidate({ url: "http://executor:3003", token: "t", body: {} });
+    expect(capturedUrl).toBe("http://executor:3003/v1/validate");
+  });
+
+  it("uses method POST", async () => {
+    await postValidate({ url: "http://executor:3003", token: "t", body: {} });
+    expect(capturedInit.method).toBe("POST");
+  });
+
+  it("sends the bearer token", async () => {
+    await postValidate({ url: "http://executor:3003", token: "secret", body: {} });
+    expect(capturedInit.headers.Authorization).toBe("Bearer secret");
+  });
+
+  it("sends the body as JSON", async () => {
+    const body = { commands: ["lint"], files: [] };
+    await postValidate({ url: "http://executor:3003", token: "t", body });
+    expect(capturedInit.headers["content-type"]).toBe("application/json");
+    expect(JSON.parse(capturedInit.body)).toEqual(body);
+  });
+});
+
+describe("postValidate — failure modes", () => {
+  afterEach(() => _setFetchForTests(null));
+
+  it("returns inconclusive on non-200 (e.g. 401)", async () => {
+    _setFetchForTests(fakeFetch({}, 401));
+    const r = await postValidate({ url: "http://x:3003", token: "t", body: {} });
+    expect(r.overall).toBe("inconclusive");
+    expect(r.inconclusive_reason).toBe("executor_error");
+  });
+
+  it("returns inconclusive on network error (fetch rejects)", async () => {
+    _setFetchForTests(async () => { throw new Error("ECONNREFUSED"); });
+    const r = await postValidate({ url: "http://x:3003", token: "t", body: {} });
+    expect(r.overall).toBe("inconclusive");
+    expect(r.inconclusive_reason).toBe("executor_error");
+  });
+
+  it("never throws — always returns a shaped object", async () => {
+    _setFetchForTests(async () => { throw new Error("boom"); });
+    const r = await postValidate({ url: "http://x:3003", token: "t", body: {} });
+    expect(r.overall).toBe("inconclusive");
   });
 });
