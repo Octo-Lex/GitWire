@@ -1,0 +1,11 @@
+{
+  "name": "@gitwire/executor-service",
+  "version": "0.22.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --forceExit"
+  }
+}
