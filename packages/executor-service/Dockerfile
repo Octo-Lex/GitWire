@@ -14,6 +14,17 @@
 FROM node:20-alpine AS runtime
 WORKDIR /app
 
+# Install docker-cli so probeRuntime() can shell out to `docker --version`
+# and (load-bearing) `docker info` to verify the mounted CT-local socket is
+# actually reachable. Without the client binary in the image, the service
+# would report ready=false even with the socket mounted.
+#
+# podman-cli is intentionally NOT installed: the v0.23.0 default is the
+# CT-local Docker socket (per docs/architecture/v0.23-executor-service.md).
+# Podman stays as a fallback probe target in code for other deployments.
+USER root
+RUN apk add --no-cache docker-cli wget
+
 # Drop root. Matches the validator container's non-root contract (uid 1000)
 # and the broader "services shouldn't run as root" hygiene.
 RUN addgroup -g 1000 -S executor && \

@@ -16,21 +16,51 @@ import {
 } from "../src/runtimeProbe.js";
 
 // Helpers: fake command-runner outcomes.
+//
+// The probe now issues TWO commands per runtime:
+//   1. `docker --version`   — client identity (proves the binary exists)
+//   2. `docker info`        — daemon reachability (proves the socket works)
+// reachable=true requires BOTH. These helpers let each test fixture answer
+// each command independently so we can model client-only, daemon-denied, etc.
+
 function reachableDockerRunner() {
-  // Returns (stdout) per-command. The probe issues `docker --version` then
-  // `docker info --format ...`; we answer both.
+  // Both --version AND info succeed → daemon is reachable.
   return (cmd) => {
     if (cmd[0] === "docker" && cmd[1] === "--version") {
       return { ok: true, stdout: "Docker version 29.5.0, build 98f1464" };
     }
     if (cmd[0] === "docker" && cmd[1] === "info") {
-      return {
-        ok: true,
-        // Probe reads these via --format; we return them as a single
-        // structured object the test-only runner can hand back.
-        stdout: "docker\t29.5.0",
-      };
+      // `docker info` exits 0 when the daemon is reachable. We don't parse
+      // its output (the probe only cares that the command succeeded).
+      return { ok: true, stdout: "Server:\n Containers: 1\n Server Version: 29.5.0\n" };
     }
+    return { ok: false, stdout: "" };
+  };
+}
+
+// Client-only: `docker --version` works (binary is installed) but `docker info`
+// fails (no socket mounted, daemon down, or permission denied). This is the
+// core P1 #2 case — the old probe would falsely report reachable=true here.
+function clientOnlyRunner() {
+  return (cmd) => {
+    if (cmd[0] === "docker" && cmd[1] === "--version") {
+      return { ok: true, stdout: "Docker version 29.5.0, build 98f1464" };
+    }
+    // `docker info` fails — daemon unreachable.
+    return { ok: false, stdout: "" };
+  };
+}
+
+// Daemon-denied: client works, daemon command fails specifically with a
+// permission-denied-shaped error (modelled here as ok:false, which is what
+// spawnSync returns on non-zero exit). Same outcome as client-only from the
+// probe's perspective: reachable=false.
+function daemonDeniedRunner() {
+  return (cmd) => {
+    if (cmd[0] === "docker" && cmd[1] === "--version") {
+      return { ok: true, stdout: "Docker version 29.5.0, build 98f1464" };
+    }
+    // permission denied on the socket
     return { ok: false, stdout: "" };
   };
 }
@@ -87,14 +117,57 @@ describe("probeRuntime — unreachable", () => {
   });
 });
 
+// P1 #2 lock-in: client binary exists BUT daemon is unreachable. The probe
+// must NOT report reachable=true just because `docker --version` succeeds.
+// `docker info` (daemon-touching) must also succeed.
+describe("probeRuntime — client-only (daemon unreachable)", () => {
+  beforeEach(() => _setCommandRunnerForTests(clientOnlyRunner()));
+  afterEach(() => _setCommandRunnerForTests(null));
+
+  it("reports reachable=false when client exists but daemon is unreachable", () => {
+    // This is the core P1 #2 fix: without a daemon-touching check, this would
+    // falsely return reachable=true and /health.ready could flip to true
+    // with no actual runtime behind it.
+    expect(probeRuntime().reachable).toBe(false);
+  });
+});
+
+describe("probeRuntime — daemon permission denied", () => {
+  beforeEach(() => _setCommandRunnerForTests(daemonDeniedRunner()));
+  afterEach(() => _setCommandRunnerForTests(null));
+
+  it("reports reachable=false when daemon command fails (permission denied)", () => {
+    // Models the case where the socket is mounted but the process uid lacks
+    // permission to use it. Same outcome: reachable=false.
+    expect(probeRuntime().reachable).toBe(false);
+  });
+});
+
+describe("probeRuntime — client + daemon available", () => {
+  beforeEach(() => _setCommandRunnerForTests(reachableDockerRunner()));
+  afterEach(() => _setCommandRunnerForTests(null));
+
+  it("reports reachable=true when BOTH client AND daemon respond", () => {
+    expect(probeRuntime().reachable).toBe(true);
+  });
+});
+
 describe("probeRuntime — malformed version output", () => {
   afterEach(() => _setCommandRunnerForTests(null));
 
   it("returns reachable=true but version='unknown' if version string has no semver", () => {
-    _setCommandRunnerForTests(() => ({
-      ok: true,
-      stdout: "Docker version some-weird-build",
-    }));
+    // Stub must answer BOTH --version (client) and info (daemon) for the
+    // two-step probe to reach reachable=true. The --version output is
+    // deliberately malformed (no semver) to exercise the parser fallback.
+    _setCommandRunnerForTests((cmd) => {
+      if (cmd[0] === "docker" && cmd[1] === "--version") {
+        return { ok: true, stdout: "Docker version some-weird-build" };
+      }
+      if (cmd[0] === "docker" && cmd[1] === "info") {
+        return { ok: true, stdout: "Server Version: weird" };
+      }
+      return { ok: false, stdout: "" };
+    });
     const r = probeRuntime();
     expect(r.reachable).toBe(true);
     expect(r.container_runtime).toBe("docker");

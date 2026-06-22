@@ -55,22 +55,47 @@ function parseSemver(s) {
  * Probe whether a container runtime (Docker first, Podman fallback) is
  * reachable from this process and return its identity.
  *
- * Order: docker → podman. First one that answers `--version` wins. The
- * CT-115 v0.23.0 deployment mounts the CT-local Docker socket, so Docker is
- * expected in production; Podman is a fallback for other deployments.
+ * TWO-STEP probe per runtime (P1 #2 fix):
+ *   1. `<runtime> --version`  — proves the client binary is installed.
+ *   2. `<runtime> info`       — touches the daemon/socket. REQUIRED for
+ *                               reachable=true. A bare --version only proves
+ *                               the client exists, not that the mounted
+ *                               socket works; reporting reachable=true on
+ *                               client-only would let /health.ready lie.
+ *
+ * Order: docker → podman. First runtime where BOTH steps succeed wins.
+ * If --version succeeds for docker but `info` fails, the probe does NOT fall
+ * through to podman on the daemon check — the operator configured docker,
+ * and a silent podman fallback would mask the docker-socket problem.
  *
  * @returns {{ reachable: boolean, container_runtime: string|null, runtime_version: string|null }}
  */
 export function probeRuntime() {
   for (const runtime of ["docker", "podman"]) {
+    // Step 1: client identity.
     const v = runCmd([runtime, "--version"]);
-    if (v.ok && v.stdout) {
+    if (!v.ok || !v.stdout) continue;
+
+    // Step 2: daemon reachability. Without this, reachable=true would be
+    // based on client presence alone — false confidence when the socket is
+    // missing/unmounted/permission-denied.
+    const info = runCmd([runtime, "info"]);
+    if (!info.ok) {
+      // Client installed but daemon unreachable. Return reachable=false but
+      // surface which runtime we attempted, so operators can tell it's a
+      // socket/permission issue rather than "no runtime installed."
       return {
-        reachable: true,
+        reachable: false,
         container_runtime: runtime,
         runtime_version: parseSemver(v.stdout),
       };
     }
+
+    return {
+      reachable: true,
+      container_runtime: runtime,
+      runtime_version: parseSemver(v.stdout),
+    };
   }
   return { reachable: false, container_runtime: null, runtime_version: null };
 }

@@ -32,6 +32,7 @@ jobs:
       - name: Syntax check all source files
         run: |
           find packages/web/src packages/core/src packages/rules/src packages/runtime/src \
+            packages/executor-service/src \
             -name '*.js' -not -path '*/node_modules/*' \
             -exec node --check {} \;
 
@@ -186,4 +187,61 @@ jobs:
       - name: Dump dashboard logs on failure
         if: failure()
         run: docker logs gitwire-dashboard-ci || true
+
+  docker-build-executor-service:
+    # v0.23.0: smoke-build the executor-service image. Mirrors the dashboard
+    # job shape. The service has zero npm deps + docker-cli in the image, so
+    # the build is fast. We boot it WITHOUT a mounted Docker socket on
+    # purpose: /health must return status=ok + ready=false in that state
+    # (runtime unreachable, validator identity unset). That proves the image
+    # boots, serves, and the readiness logic doesn't crash on missing env.
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the executor-service image
+        run: docker build -t gitwire-executor-service:ci -f packages/executor-service/Dockerfile packages/executor-service
+      - name: Boot the executor service (no Docker socket — ready should be false)
+        run: |
+          docker run -d --name gitwire-executor-service-ci -p 3003:3003 \
+            -e NODE_ENV=production \
+            gitwire-executor-service:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3003/health >/tmp/health.json 2>/dev/null; then
+              echo "::notice::/health responded:"
+              cat /tmp/health.json
+              exit 0
+            fi
+            STATUS=$(docker inspect -f '{{.State.Status}}' gitwire-executor-service-ci 2>/dev/null || echo "gone")
+            if [ "$STATUS" = "exited" ]; then
+              echo "::error::Executor-service container exited. Logs:"
+              docker logs gitwire-executor-service-ci
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "::error::/health did not respond within 30s. Logs:"
+          docker logs gitwire-executor-service-ci
+          exit 1
+      - name: Verify status=ok and ready=false (no socket, no validator env)
+        run: |
+          # Without a mounted Docker socket AND without validator env, the
+          # service must still serve (status=ok) but report ready=false.
+          # A non-ok status or a crash here means the image is broken.
+          SVC_STATUS=$(node -pe "require('/tmp/health.json').status")
+          READY=$(node -pe "require('/tmp/health.json').ready")
+          echo "status: $SVC_STATUS, ready: $READY"
+          if [ "$SVC_STATUS" != "ok" ]; then
+            echo "::error::executor-service status is '$SVC_STATUS', expected 'ok'"
+            exit 1
+          fi
+          if [ "$READY" != "false" ]; then
+            echo "::error::executor-service ready is '$READY', expected 'false' (no socket, no validator env in CI)"
+            exit 1
+          fi
+          echo "::notice::executor-service serves with status=ok, ready=false (expected in CI)"
+      - name: Dump executor-service logs on failure
+        if: failure()
+        run: docker logs gitwire-executor-service-ci || true
 
