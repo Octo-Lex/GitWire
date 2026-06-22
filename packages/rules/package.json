@@ -20,6 +20,6 @@
   },
   "description": "Schema, defaults, validation, helpers, expression engine, and plugins for .gitwire.yml",
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^5.0.0"
   }
 }
