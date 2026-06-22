@@ -51,6 +51,7 @@ function checkPlaceholders(env) {
     "API_KEY",
     "TUNNEL_TOKEN",
     "DB_PASSWORD",
+    "GITWIRE_EXECUTOR_SERVICE_TOKEN", // v0.23.0 Task 3 P2 #2: shared bearer token for the executor-service private API
   ];
 
   const violations = [];

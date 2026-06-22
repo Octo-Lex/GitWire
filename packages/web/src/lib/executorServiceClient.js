@@ -54,13 +54,24 @@ export async function fetchExecutorServiceHealth({ url, token, timeoutMs = DEFAU
       return { reachable: false, status: res.status, detail: `non-200 response: ${res.status}` };
     }
     const body = await res.json();
-    // The service's body already carries `ready` (its own readiness view).
-    // For the app-side probe contract we ALSO expose `reachable` as the
-    // transport-level signal: the service answered, so the network path
-    // works. Callers layer their own readiness logic on top (e.g.Validator
-    // image identity) — `reachable` just says "the service is reachable
-    // from the app right now."
-    return { ...body, reachable: true };
+    // P2 #1: reachable is gated on body.ready === true, not just HTTP 200.
+    // The service's `ready` is the load-bearing readiness signal (runtime
+    // reachable AND validator identity complete per the design doc). Treating
+    // a live-but-unready service as reachable would let probeExecutorService
+    // report a backend as reachable when it cannot actually produce validator
+    // evidence — a false positive that could let a pass-capable derivation
+    // treat the backend as proof-ready.
+    //
+    // Transport-level "answered at all" is implicit (we got here = the network
+    // path works). What matters for proof is whether the service is ready.
+    const ready = body.ready === true;
+    return {
+      ...body,
+      reachable: ready,
+      // If the service explained why ready=false, surface it so operators
+      // can diagnose; otherwise note the unready state generically.
+      ...(ready ? {} : { detail: body.detail || "executor service ready=false (runtime unreachable or validator identity incomplete)" }),
+    };
   } catch (err) {
     // AbortError, network errors, JSON parse errors — all become reachable:false.
     // Never propagate; the probe contract requires a shaped return.

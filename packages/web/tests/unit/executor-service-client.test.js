@@ -105,6 +105,35 @@ describe("fetchExecutorServiceHealth — failure modes", () => {
     expect(r.reachable).toBe(false);
   });
 
+  // P2 #1 lock-in: HTTP 200 with ready:false MUST NOT be reachable for proof.
+  // The service's `ready` is the load-bearing readiness signal (runtime
+  // reachable AND validator identity complete). Treating a live-but-unready
+  // service as reachable would let probeExecutorService report a backend as
+  // reachable when it cannot actually produce validator evidence.
+  it("returns reachable:false on HTTP 200 + ready:false (live but unready)", async () => {
+    _setFetchForTests(fakeFetch(makeHealthResponse({ ready: false }), 200));
+    const r = await fetchExecutorServiceHealth({ url: "http://x:3003" });
+    expect(r.reachable).toBe(false);
+  });
+
+  it("returns reachable:true on HTTP 200 + ready:true", async () => {
+    _setFetchForTests(fakeFetch(makeHealthResponse({ ready: true }), 200));
+    const r = await fetchExecutorServiceHealth({ url: "http://x:3003" });
+    expect(r.reachable).toBe(true);
+  });
+
+  it("preserves why ready=false in the detail when the body explains it", async () => {
+    // The service's /health body doesn't currently carry an explicit reason
+    // field, but the client should not crash trying to surface one — and
+    // when one is present, it should propagate so operators can diagnose.
+    _setFetchForTests(fakeFetch({ ...makeHealthResponse(), ready: false, detail: "validator identity incomplete" }, 200));
+    const r = await fetchExecutorServiceHealth({ url: "http://x:3003" });
+    expect(r.reachable).toBe(false);
+    // detail is optional; if present, it tells operators why ready=false.
+    expect(typeof r.detail).toBe("string");
+    expect(r.detail.length).toBeGreaterThan(0);
+  });
+
   it("returns reachable:false shape on network error (fetch rejects)", async () => {
     _setFetchForTests(async () => { throw new Error("ECONNREFUSED"); });
     const r = await fetchExecutorServiceHealth({ url: "http://x:3003" });
