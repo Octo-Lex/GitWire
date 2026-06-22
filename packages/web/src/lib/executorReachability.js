@@ -65,6 +65,42 @@ export function executorKindForBackendId(backendId) {
   return kind;
 }
 
+// ── Backend_id-level reachability (v0.23.0 Task 3 step 7, rev 3 amendment) ──
+//
+// PURE helper. The rev 3 design amendment: pass-capability derivation MUST be
+// keyed by backend_id, not kind. The current sandboxRunner.js derives
+// reachableKinds and checks reachableKinds.has(executorKind) — safe only
+// because exactly one backend mapped to container-runtime. Now executor-service
+// is registered alongside docker-executor, so a kind-keyed check would pass
+// when EITHER backend was reachable even if the SELECTED one was down.
+//
+// This helper lets the runner derive backend_id-level reachability from a
+// backend_id→probe map, decoupled from the kind-keyed /health summary (which
+// stays stable for operator readability).
+
+/**
+ * Derive backend_id-level reachability for the SELECTED backend.
+ *
+ * @param {object} params
+ * @param {string} params.selectedBackendId - the backend the runner will use
+ * @param {Object<string, string>} params.backendKinds - { backend_id → kind }
+ * @param {Object<string, {reachable: boolean}>} params.probes - { backend_id → probe }
+ * @returns {{ backend_reachable: boolean, backend_id: string, kind: string }}
+ * @throws {Error} if selectedBackendId is not in backendKinds (fail-closed)
+ */
+export function deriveBackendReachability({ selectedBackendId, backendKinds, probes }) {
+  const kind = backendKinds[selectedBackendId];
+  if (!kind) {
+    throw new Error(
+      `deriveBackendReachability: unknown backend id '${selectedBackendId}'`
+    );
+  }
+  const probe = probes[selectedBackendId];
+  // Missing probe entry → not reachable (fail-safe).
+  const backend_reachable = Boolean(probe && probe.reachable);
+  return { backend_reachable, backend_id: selectedBackendId, kind };
+}
+
 // ── Pass-capability derivation ───────────────────────────────────────────────
 // Per-kind static capability crossed with observed reachability.
 // local-process is NEVER pass-capable — it has no isolation boundary.
