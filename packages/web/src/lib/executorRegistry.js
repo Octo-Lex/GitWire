@@ -15,6 +15,7 @@
 
 import { nodeExecutorBackend } from "./nodeExecutorBackend.js";
 import { dockerExecutorBackend } from "./dockerExecutorBackend.js";
+import { executorServiceBackend } from "./executorServiceBackend.js";
 import { validateBackendContract } from "./executorBackend.js";
 import { probeContainerRuntime } from "./executorReachability.js";
 
@@ -138,3 +139,4 @@ export function getDefaultBackend() {
 
 registerBackend(nodeExecutorBackend);
 registerBackend(dockerExecutorBackend);
+registerBackend(executorServiceBackend);

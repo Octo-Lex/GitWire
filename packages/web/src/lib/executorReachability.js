@@ -44,8 +44,9 @@ export const EXECUTOR_KINDS = Object.freeze({
 // ── Backend ID → executor kind mapping ──────────────────────────────────────
 // Single source of truth. Adding a new backend = adding one line here.
 const BACKEND_ID_TO_KIND = Object.freeze({
-  "node-executor":   EXECUTOR_KINDS.LOCAL_PROCESS,
-  "docker-executor": EXECUTOR_KINDS.CONTAINER_RUNTIME,
+  "node-executor":     EXECUTOR_KINDS.LOCAL_PROCESS,
+  "docker-executor":   EXECUTOR_KINDS.CONTAINER_RUNTIME,
+  "executor-service":  EXECUTOR_KINDS.CONTAINER_RUNTIME, // v0.23.0
 });
 
 /**
@@ -155,6 +156,84 @@ export function probeDelegatedRun() {
     version: null,
     detail: "No delegated-run provider configured (interface placeholder for future providers)",
   };
+}
+
+// ── Executor-service probe (v0.23.0 Task 3) ─────────────────────────────────
+// The executor-service probe is async (HTTP) unlike the other probes (sync
+// exec). It is invoked separately from probeAllBackends() — see the
+// "Backend-level reachability" groundwork in step 7 for how it integrates
+// with kind-keyed summary while preserving backend_id-level proof.
+
+// Test-injectable client. null → use the real fetchExecutorServiceHealth
+// reading from config. Mirrors the seam pattern from the other probes.
+let _executorServiceClient = null;
+
+/**
+ * Test-only seam: inject a fake executor-service client.
+ * Pass null to restore the real client.
+ *
+ * @param {(opts: {url, token}) => Promise<{reachable: boolean, ...}> | null} fn
+ */
+export function _setExecutorServiceClientForTests(fn) {
+  _executorServiceClient = fn;
+}
+
+/**
+ * Probe the executor service via HTTP GET /health.
+ *
+ * Reads GITWIRE_EXECUTOR_SERVICE_URL + _TOKEN from env (lazily, so the module
+ * stays import-safe before config loads). Returns unreachable when the URL
+ * is unset — the backend is registered but reports not-reachable until an
+ * operator configures it. Never throws; failures become reachable:false.
+ *
+ * @returns {Promise<{ reachable: boolean, kind: string, runtime: string|null, version: string|null, detail: string }>}
+ */
+export async function probeExecutorService() {
+  // When a test client is injected, skip the URL-config guard — the seam
+  // exists precisely so tests can exercise the probe without setting env.
+  // Production (seam = null) requires the URL to be configured.
+  const url = process.env.GITWIRE_EXECUTOR_SERVICE_URL;
+  if (!_executorServiceClient && !url) {
+    return {
+      reachable: false,
+      kind: EXECUTOR_KINDS.CONTAINER_RUNTIME,
+      runtime: null,
+      version: null,
+      detail: "GITWIRE_EXECUTOR_SERVICE_URL not configured",
+    };
+  }
+  const token = process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN;
+  try {
+    // Lazy dynamic import avoids a hard module-load cycle and keeps this
+    // function resilient if the client module is ever split out.
+    const client = _executorServiceClient ||
+      (await import("./executorServiceClient.js")).fetchExecutorServiceHealth;
+    const result = await client({ url, token });
+    if (!result.reachable) {
+      return {
+        reachable: false,
+        kind: EXECUTOR_KINDS.CONTAINER_RUNTIME,
+        runtime: null,
+        version: null,
+        detail: result.detail || "executor service unreachable",
+      };
+    }
+    return {
+      reachable: true,
+      kind: EXECUTOR_KINDS.CONTAINER_RUNTIME,
+      runtime: result.container_runtime || null,
+      version: result.runtime_version || null,
+      detail: `executor service ${result.executor_service_id || ""} v${result.executor_service_version || "?"}`.trim(),
+    };
+  } catch (err) {
+    return {
+      reachable: false,
+      kind: EXECUTOR_KINDS.CONTAINER_RUNTIME,
+      runtime: null,
+      version: null,
+      detail: `executor service probe error: ${err?.message || "unknown"}`,
+    };
+  }
 }
 
 /**
