@@ -123,6 +123,13 @@ const schema = z.object({
   GITWIRE_VALIDATOR_IMAGE_DIGEST: z.string().optional(),
   GITWIRE_ALLOW_TEST_FIXTURE: z.string().optional(),
   GITWIRE_EXECUTOR_BACKEND: z.string().optional(),
+
+  // Executor service (v0.23.0 Task 3) — connection details for the
+  // container-runtime executor service. Optional: the backend registers but
+  // reports unreachable until these are set. /health surfaces the gap via the
+  // selected_pass_capable field rather than failing boot.
+  GITWIRE_EXECUTOR_SERVICE_URL: z.string().optional(),
+  GITWIRE_EXECUTOR_SERVICE_TOKEN: z.string().optional(),
 });
 
 const rawEnv = {
@@ -183,6 +190,10 @@ export const config = {
     digest:           parsed.data.GITWIRE_VALIDATOR_IMAGE_DIGEST || null,
     allowTestFixture: parsed.data.GITWIRE_ALLOW_TEST_FIXTURE === "1",
     executorBackend:  parsed.data.GITWIRE_EXECUTOR_BACKEND || null,
+  },
+  executorService: {
+    url:   parsed.data.GITWIRE_EXECUTOR_SERVICE_URL || null,
+    token: parsed.data.GITWIRE_EXECUTOR_SERVICE_TOKEN || null,
   },
 };
 
