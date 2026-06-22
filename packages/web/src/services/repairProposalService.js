@@ -2329,6 +2329,7 @@ function computeVerificationFingerprintInternal(params) {
 const ALLOWED_EXECUTION_BACKENDS = new Set([
   "node-executor",
   "docker-executor",
+  "executor-service", // v0.23.0 Task 3: pass-capable via the executor service
 ]);
 
 /**
@@ -2356,6 +2357,7 @@ const ALLOWED_EXECUTOR_VERSIONS = new Set([
  */
 const ALLOWED_PASS_EXECUTION_BACKENDS = new Set([
   "docker-executor",
+  "executor-service", // v0.23.0 Task 3: pass-capable via the executor service
 ]);
 
 /**
