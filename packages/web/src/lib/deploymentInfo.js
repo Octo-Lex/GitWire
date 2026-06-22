@@ -87,7 +87,11 @@ export async function getDeploymentInfo(db) {
       getValidatorReadiness,
     } = await import("./executorReachability.js");
     executor = await getBackendLevelSummary();
-    validator = getValidatorReadiness();
+    // P2 review fix: pass the backend-level executor summary into
+    // getValidatorReadiness so validator readiness derives from the SAME
+    // selected backend (selectedBackendId), not a second sync kind-level
+    // call that could disagree with executor.selected_backend_id.
+    validator = getValidatorReadiness(executor);
   } catch {
     // Reachability module unavailable — health still works, but report
     // validator as explicitly not ready (fail-safe, not silent).

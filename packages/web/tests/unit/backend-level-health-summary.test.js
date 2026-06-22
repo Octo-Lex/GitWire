@@ -138,4 +138,65 @@ describe("getBackendLevelSummary — sibling same-kind false-positive (rev 3 ame
     // which is down → selected_backend_reachable must be false.
     expect(r.selected_backend_reachable).toBe(false);
   });
+
+  // P2 review fix: extend the sibling false-positive case to assert the
+  // selected fields are INTERNALLY CONSISTENT with selected_backend_id.
+  // Before the fix, selected_kind could say "local-process" while
+  // selected_backend_id said "executor-service" — contradictory.
+  it("selected_kind + selected_pass_capable are consistent with selected_backend_id (rev 3 amendment)", async () => {
+    const r = await getBackendLevelSummary();
+    expect(r.selected_backend_id).toBe("executor-service");
+    // executor-service maps to container-runtime in BACKEND_ID_TO_KIND.
+    expect(r.selected_kind).toBe("container-runtime");
+    // The SELECTED backend is unreachable → pass_capable must be false.
+    expect(r.selected_pass_capable).toBe(false);
+    // selected_reason must reflect the SELECTED backend, not a sync kind fallback.
+    expect(r.selected_reason).toMatch(/executor-service/);
+  });
+});
+
+// P2 review fix: the contradictory /health state the review flagged.
+// GITWIRE_EXECUTOR_BACKEND=executor-service + service ready + NO local Docker
+// socket. Before the fix, this could emit:
+//   selected_backend_id = executor-service
+//   selected_backend_reachable = true
+//   selected_kind = local-process         ← WRONG (contradicts backend_id)
+//   selected_pass_capable = false          ← WRONG (contradicts reachable + kind)
+// After the fix, all selected_* fields derive from selectedBackendId.
+describe("getBackendLevelSummary — executor-service ready, local docker unavailable (P2 consistency)", () => {
+  beforeEach(() => {
+    process.env.GITWIRE_EXECUTOR_SERVICE_URL = "http://executor:3003";
+    process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN = "t";
+    process.env.GITWIRE_EXECUTOR_BACKEND = "executor-service";
+    // Service ready:true → reachable:true.
+    _setExecutorServiceClientForTests(async () => ({
+      reachable: true,
+      ready: true,
+      container_runtime: "docker",
+      runtime_version: "29.5.0",
+      executor_service_id: "executor-service",
+      executor_service_version: "1.0.0",
+    }));
+  });
+  afterEach(() => {
+    delete process.env.GITWIRE_EXECUTOR_SERVICE_URL;
+    delete process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN;
+    delete process.env.GITWIRE_EXECUTOR_BACKEND;
+    _setExecutorServiceClientForTests(null);
+  });
+
+  it("all selected_* fields are internally consistent with executor-service selection", async () => {
+    const r = await getBackendLevelSummary();
+    expect(r.selected_backend_id).toBe("executor-service");
+    expect(r.selected_backend_reachable).toBe(true);
+    // selected_kind derives from BACKEND_ID_TO_KIND["executor-service"],
+    // NOT from the sync summary's kind-level selection (which might be
+    // local-process if there's no local Docker).
+    expect(r.selected_kind).toBe("container-runtime");
+    // Pass-capable derives from selected_kind + selected_backend_reachable,
+    // not from the sync summary.
+    expect(r.selected_pass_capable).toBe(true);
+    // selected_reason references the selected backend.
+    expect(r.selected_reason).toMatch(/executor-service/);
+  });
 });

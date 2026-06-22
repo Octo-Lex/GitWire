@@ -441,8 +441,31 @@ export async function getBackendLevelSummary(opts = {}) {
     probes,
   });
 
+  // P2 review fix: derive ALL selected_* fields from the SELECTED backend,
+  // not from the sync kind-level summary. Before this fix, a deployment with
+  // GITWIRE_EXECUTOR_BACKEND=executor-service + service reachable + no local
+  // Docker would emit contradictory state:
+  //   selected_backend_id        = executor-service
+  //   selected_backend_reachable = true
+  //   selected_kind              = local-process       ← WRONG (from sync)
+  //   selected_pass_capable      = false               ← WRONG (from sync)
+  // The sync summary's selected_* reflect the kind-level selection (which
+  // falls back to local-process when Docker is unreachable), NOT the
+  // backend-level selection. Overriding them here keeps /health internally
+  // consistent: every selected_* field derives from selectedBackendId.
+  const selected_kind = backendKinds[selectedBackendId];
+  const selected_pass_capable = isBackendPassCapable(selected_kind, backend_reachable);
+  const selected_reason = `selected:${selectedBackendId}`;
+
   return {
-    ...sync,
+    // Keep the kind-keyed summary array for dashboards/operators (unchanged
+    // shape — the per-backend reachable/pass_capable list is still useful).
+    summary: sync.summary,
+    // Override the selected_* fields so they reflect the backend-level
+    // selection, not the sync kind-level fallback.
+    selected_kind,
+    selected_reason,
+    selected_pass_capable,
     selected_backend_id: selectedBackendId,
     selected_backend_reachable: backend_reachable,
   };
@@ -462,14 +485,21 @@ export async function getBackendLevelSummary(opts = {}) {
  * local-process selected). Operators need both signals; collapsing them hides
  * the "you configured it, but the runtime can't honor it" case.
  *
+ * @param {object} [executorSummary] - optional executor summary to derive
+ *   selected_kind/selected_pass_capable from. v0.23.0 Task 4 P2 fix: when
+ *   /health has already computed the backend-level summary (which derives
+ *   selected_* from selectedBackendId, not from the sync kind-level fallback),
+ *   pass it here so validator readiness uses the SAME selection. When omitted,
+ *   falls back to the sync getReachabilitySummary() (backward compat).
  * @returns {{ configured: boolean, pass_capable: boolean, reason: string }}
  */
-export function getValidatorReadiness() {
-  // FIX: getReachabilitySummary returns `selected_kind` (string|null), NOT
-  // `selected` (object). Destructure the actual field name.
-  const { selected_kind, selected_pass_capable } = getReachabilitySummary();
+export function getValidatorReadiness(executorSummary) {
+  // P2 review fix: prefer the passed-in backend-level summary (which derives
+  // selected_* from selectedBackendId); fall back to the sync summary only
+  // when no summary was passed (backward compat for non-/health callers).
+  const { selected_kind, selected_pass_capable } = executorSummary || getReachabilitySummary();
 
-  // Read validator image config via the dedicated resolver (Task 4) so the
+  // Read validator image config via the dedicated resolver so the
   // "is it configured?" signal is the SAME definition used by the receipt
   // path. Top-of-file static import.
   const validatorImage = resolveValidatorImage();
