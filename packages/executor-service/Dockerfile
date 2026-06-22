@@ -25,15 +25,15 @@ WORKDIR /app
 USER root
 RUN apk add --no-cache docker-cli wget
 
-# Drop root. Matches the validator container's non-root contract (uid 1000)
-# and the broader "services shouldn't run as root" hygiene.
-RUN addgroup -g 1000 -S executor && \
-    adduser -u 1000 -S -G executor executor
-USER 1000:1000
+# Drop root. node:20-alpine already ships a non-root `node` user at uid 1000
+# (gid 1000), which matches the validator container's non-root contract.
+# Creating a fresh executor group at gid 1000 collides with the existing node
+# group, so we reuse the built-in node user instead.
+USER node
 
 # Copy service code. No npm install needed — the package has no dependencies.
-COPY --chown=executor:executor package.json ./
-COPY --chown=executor:executor src ./src
+COPY --chown=node:node package.json ./
+COPY --chown=node:node src ./src
 
 # Build-info via build args (v0.22.0+ pattern). The service doesn't currently
 # report these in /health, but they're here for parity with other packages
