@@ -372,6 +372,83 @@ export const VALIDATOR_READINESS_REASONS = Object.freeze({
 });
 
 /**
+ * Async backend-level reachability summary (v0.23.0 Task 4, rev 3 amendment).
+ *
+ * This is the ASYNC companion to the sync getReachabilitySummary(). It
+ * preserves the kind-keyed summary for dashboards/operators (same shape) but
+ * adds two fields the rev 3 amendment requires for proof:
+ *   - selected_backend_id        (which backend was selected)
+ *   - selected_backend_reachable (whether THAT backend — not just its kind —
+ *                                  is reachable; load-bearing for proof)
+ *
+ * Why async + separate from the sync summary: probeExecutorService() is HTTP
+ * (async). Forcing the entire legacy reachability API async would churn
+ * unrelated callers. Instead, deploymentInfo.js (already async) calls this
+ * function; sync callers keep using getReachabilitySummary() unchanged.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.selectedBackend] - the backend the app will use
+ *   (defaults to getDefaultBackend() via lazy dynamic import to avoid a
+ *   circular static import with executorRegistry.js)
+ * @returns {Promise<object>} summary + selected_kind + selected_reason +
+ *   selected_pass_capable + selected_backend_id + selected_backend_reachable
+ */
+export async function getBackendLevelSummary(opts = {}) {
+  // Lazy dynamic import breaks the reachability → registry cycle at
+  // module-load time. The registry statically imports reachability; if
+  // reachability statically imported back, both modules would half-init.
+  const { getDefaultBackend, listBackends } = await import("./executorRegistry.js");
+  const selectedBackend = opts.selectedBackend || getDefaultBackend();
+  const selectedBackendId = selectedBackend.id;
+
+  // Sync kind-keyed summary (unchanged shape; dashboards keep working).
+  const sync = getReachabilitySummary();
+
+  // Build the backend_id → probe map. Sync probes for node/docker run inline;
+  // the async executor-service probe is awaited here.
+  const backendKinds = {};
+  for (const id of listBackends()) {
+    try {
+      backendKinds[id] = executorKindForBackendId(id);
+    } catch {
+      // Unknown id in registry but not in BACKEND_ID_TO_KIND — skip.
+    }
+  }
+
+  const probes = {};
+  // Sync probes (the kind-level signals).
+  const allSync = probeAllBackends();
+  for (const b of allSync.backends) {
+    // Map kind → backend_id for the sync probed kinds. For LOCAL_PROCESS and
+    // CONTAINER_RUNTIME (docker), the kind-level probe IS the backend signal
+    // because there's only one sync backend per kind. (executor-service is
+    // handled separately below as the async container-runtime backend.)
+    for (const id of Object.keys(backendKinds)) {
+      if (backendKinds[id] === b.kind && id !== "executor-service") {
+        probes[id] = { reachable: b.reachable };
+      }
+    }
+  }
+  // Async probe for executor-service (if registered).
+  if (backendKinds["executor-service"]) {
+    probes["executor-service"] = await probeExecutorService();
+  }
+
+  // Backend_id-level reachability for the SELECTED backend (rev 3 amendment).
+  const { backend_reachable } = deriveBackendReachability({
+    selectedBackendId,
+    backendKinds,
+    probes,
+  });
+
+  return {
+    ...sync,
+    selected_backend_id: selectedBackendId,
+    selected_backend_reachable: backend_reachable,
+  };
+}
+
+/**
  * Produce the validator readiness block for /health.
  *
  * Composes the executor pass-capability view with validator image
