@@ -12,8 +12,16 @@ services:
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
       PORT: 3000
+      # v0.23.0 — executor-service backend (app never touches Docker authority)
+      GITWIRE_EXECUTOR_BACKEND: ${GITWIRE_EXECUTOR_BACKEND:-executor-service}
+      GITWIRE_EXECUTOR_SERVICE_URL: http://gitwire-executor-service:3003
+      GITWIRE_EXECUTOR_SERVICE_TOKEN: ${GITWIRE_EXECUTOR_SERVICE_TOKEN:-}
+      GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:-}
+      GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:-}
     volumes:
       - ./secrets/gitwire-hq.pem:/app/packages/web/gitwire-hq.private-key.pem:ro
+      # NOTE: NO /var/run/docker.sock mount here. The app container has zero
+      # Docker authority. The executor-service container owns the socket.
     depends_on:
       postgres:
         condition: service_healthy
@@ -23,6 +31,36 @@ services:
       - gitwire-net
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Executor Service (v0.23.0) ────────────────────────────────────────────
+  # Owns container-runtime authority for validator execution. The CT-local
+  # Docker socket is mounted HERE ONLY — never into gitwire-app. The service
+  # exposes a narrow private API (GET /health + POST /v1/validate) on the
+  # gitwire-net network; it is NOT published to the host.
+  gitwire-executor-service:
+    build:
+      context: .
+      dockerfile: packages/executor-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3003
+      EXECUTOR_DEPLOYMENT_MODE: compose-local
+      GITWIRE_EXECUTOR_SERVICE_TOKEN: ${GITWIRE_EXECUTOR_SERVICE_TOKEN:-}
+      GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:-}
+      GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:-}
+    volumes:
+      # CT-local Docker socket mounted into the EXECUTOR SERVICE ONLY.
+      # NOT mounted into gitwire-app. See docs/architecture/v0.23-executor-service.md
+      # "Runtime endpoint (v0.23.0 default)".
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - gitwire-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
       interval: 30s
       timeout: 5s
       retries: 3
