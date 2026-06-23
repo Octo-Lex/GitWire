@@ -26,6 +26,29 @@
 
 import { validateBackendContract } from "./executorBackend.js";
 
+/**
+ * Normalize an executor-service response to the complete ExecResult shape that
+ * sandboxRunner.js expects. The service returns a rich report on success, but
+ * postValidate() synthesizes failure responses with only overall/reason/detail
+ * — missing command_results and aggregate_exit_status. sandboxRunner does
+ * execResult.command_results.map(...) unconditionally, so a missing array
+ * crashes. This helper ensures every return has both fields.
+ *
+ * @param {object} response - raw response from postValidate or the service
+ * @returns {object} normalized with command_results + aggregate_exit_status always present
+ */
+function normalizeExecResult(response) {
+  return {
+    ...response,
+    // Ensure command_results is always an array (empty on failure/inconclusive).
+    command_results: Array.isArray(response.command_results) ? response.command_results : [],
+    // Ensure aggregate_exit_status is always present (null on failure/inconclusive).
+    aggregate_exit_status: response.aggregate_exit_status ?? null,
+    // Ensure overall is one of the three valid values.
+    overall: ["pass", "fail", "inconclusive"].includes(response.overall) ? response.overall : "inconclusive",
+  };
+}
+
 // Static module-level digest. Real validator identity comes from config and
 // is bound into receipts at run time; this satisfies the contract at module
 // load (validateBackendContract requires a sha256: value). The runner's
@@ -95,22 +118,65 @@ export const executorServiceBackend = {
   },
 
   /**
-   * Run validation commands via the executor service.
+   * Run validation commands via the executor service (POST /v1/validate).
    *
-   * v0.23.0 Task 3 PLACEHOLDER: returns inconclusive with a typed reason.
-   * Task 5 replaces this with a real POST /v1/validate call.
+   * v0.23.0 Task 5: real implementation. Reads GITWIRE_EXECUTOR_SERVICE_URL +
+   * _TOKEN + validator image identity from env, constructs the request body,
+   * calls postValidate, and returns the service's response. When the URL
+   * isn't configured, returns inconclusive with a typed reason (not a crash).
    *
-   * @param {object} _params
-   * @returns {Promise<object>} inconclusive ExecResult
+   * @param {object} params
+   * @param {Array<{path: string, content: string}>} params.files
+   * @param {string[]} params.commands - allowlisted command IDs (lint/test/build/typecheck)
+   * @param {object} params.limits - wall_clock_ms/memory_mb/pids_limit/output_bytes
+   * @param {string} params.sandbox_image_digest - ignored (the service inspects the real image)
+   * @returns {Promise<object>} the executor service's validate response
    */
-  async run(_params) {
-    return {
-      overall: "inconclusive",
-      command_results: [],
-      aggregate_exit_status: null,
-      inconclusive_reason: "executor_service_validate_not_implemented",
-      inconclusive_detail: "POST /v1/validate is implemented in Task 5 (v0.23.0)",
+  async run({ files, commands, limits, sandbox_image_digest: _ignored }) {
+    const url = process.env.GITWIRE_EXECUTOR_SERVICE_URL;
+    if (!url) {
+      return {
+        overall: "inconclusive",
+        command_results: [],
+        aggregate_exit_status: null,
+        inconclusive_reason: "executor_service_url_not_configured",
+        inconclusive_detail: "GITWIRE_EXECUTOR_SERVICE_URL not set",
+      };
+    }
+    const token = process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN;
+    const validator_image_ref = process.env.GITWIRE_VALIDATOR_IMAGE_REF;
+    const validator_image_digest = process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST;
+
+    // Lazy dynamic import avoids a static cycle and keeps the module import-safe
+    // before the client is loaded.
+    const { postValidate } = await import("./executorServiceClient.js");
+
+    const requestBody = {
+      request_id: `backend-${Date.now()}`,
+      files: files || [],
+      commands: commands || [],
+      limits: limits || {},
+      validator_image_ref,
+      validator_image_digest,
+      expected_executor_policy: {
+        network_disabled: true,
+        non_root: true,
+        read_only_rootfs: true,
+        resource_limits: true,
+      },
     };
+
+    const response = await postValidate({ url, token, body: requestBody });
+    // P1 #3 fix: normalize EVERY return to the complete ExecResult shape that
+    // sandboxRunner expects. postValidate synthesizes failure responses with
+    // only { overall, inconclusive_reason, inconclusive_detail } — missing
+    // command_results and aggregate_exit_status. sandboxRunner immediately
+    // does execResult.command_results.map(...) and .filter(...), so a missing
+    // array crashes the runner instead of producing an inconclusive receipt.
+    //
+    // On success, the response already has command_results + aggregate_exit_status;
+    // this normalization is a no-op for well-formed responses.
+    return normalizeExecResult(response);
   },
 };
 

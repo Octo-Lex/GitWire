@@ -5,7 +5,7 @@
 // PLACEHOLDER that returns inconclusive with a typed reason — POST /v1/validate
 // is Task 5. describe() returns real values for /health and receipt binding.
 
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import { executorServiceBackend } from "../../src/lib/executorServiceBackend.js";
 import { validateBackendContract } from "../../src/lib/executorBackend.js";
 
@@ -65,8 +65,20 @@ describe("executorServiceBackend — describe()", () => {
   });
 });
 
-describe("executorServiceBackend — run() placeholder (Task 3)", () => {
-  it("returns inconclusive with a typed reason (POST /v1/validate is Task 5)", async () => {
+describe("executorServiceBackend — run() (Task 5: real POST /v1/validate)", () => {
+  const ORIG_ENV = { ...process.env };
+
+  beforeEach(() => {
+    delete process.env.GITWIRE_EXECUTOR_SERVICE_URL;
+    delete process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN;
+    delete process.env.GITWIRE_VALIDATOR_IMAGE_REF;
+    delete process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST;
+  });
+  afterEach(() => {
+    for (const k of Object.keys(ORIG_ENV)) process.env[k] = ORIG_ENV[k];
+  });
+
+  it("returns inconclusive when GITWIRE_EXECUTOR_SERVICE_URL is not configured", async () => {
     const r = await executorServiceBackend.run({
       files: [{ path: "x", content: "y" }],
       commands: ["lint"],
@@ -74,18 +86,125 @@ describe("executorServiceBackend — run() placeholder (Task 3)", () => {
       sandbox_image_digest: "sha256:" + "a".repeat(64),
     });
     expect(r.overall).toBe("inconclusive");
-    expect(r.inconclusive_reason).toBe("executor_service_validate_not_implemented");
-    expect(r.aggregate_exit_status).toBeNull();
-    expect(r.command_results).toEqual([]);
+    expect(r.inconclusive_reason).toBe("executor_service_url_not_configured");
   });
 
-  it("never returns pass (Task 5 must land before pass is possible)", async () => {
-    const r = await executorServiceBackend.run({
-      files: [{ path: "x", content: "y" }],
-      commands: ["lint"],
-      limits: {},
-      sandbox_image_digest: "sha256:" + "a".repeat(64),
-    });
-    expect(r.overall).not.toBe("pass");
+  it("calls POST /v1/validate and returns the service's response when configured", async () => {
+    process.env.GITWIRE_EXECUTOR_SERVICE_URL = "http://executor:3003";
+    process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN = "t";
+    process.env.GITWIRE_VALIDATOR_IMAGE_REF = "reg/v@sha256:" + "a".repeat(64);
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = "sha256:" + "a".repeat(64);
+
+    // Inject a fake fetch that returns a pass response.
+    const { _setFetchForTests } = await import("../../src/lib/executorServiceClient.js");
+    _setFetchForTests(async () => ({
+      ok: true, status: 200,
+      json: async () => ({
+        report_schema_version: 1,
+        executor_service_id: "executor-service",
+        executor_service_version: "1.0.0",
+        overall: "pass",
+        aggregate_exit_status: 0,
+        executor_report_hash: "sha256:" + "f".repeat(64),
+        executor_report_ref: "executor-report:sha256:" + "f".repeat(64),
+        command_results: [{ command: "lint", exit_status: 0, output_hash: "sha256:x", duration_ms: 5 }],
+        network_disabled: true, non_root: true, read_only_rootfs: true,
+      }),
+    }));
+    try {
+      const r = await executorServiceBackend.run({
+        files: [{ path: "x", content: "y" }],
+        commands: ["lint"],
+        limits: {},
+        sandbox_image_digest: "sha256:" + "a".repeat(64),
+      });
+      expect(r.overall).toBe("pass");
+      expect(r.executor_report_hash).toMatch(/^sha256:/);
+      expect(r.command_results).toHaveLength(1);
+    } finally {
+      _setFetchForTests(null);
+    }
+  });
+
+  it("returns inconclusive when the service returns inconclusive", async () => {
+    process.env.GITWIRE_EXECUTOR_SERVICE_URL = "http://executor:3003";
+    process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN = "t";
+    process.env.GITWIRE_VALIDATOR_IMAGE_REF = "reg/v@sha256:" + "a".repeat(64);
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = "sha256:" + "a".repeat(64);
+
+    const { _setFetchForTests } = await import("../../src/lib/executorServiceClient.js");
+    _setFetchForTests(async () => ({
+      ok: true, status: 200,
+      json: async () => ({ overall: "inconclusive", inconclusive_reason: "image_inspection_failed" }),
+    }));
+    try {
+      const r = await executorServiceBackend.run({
+        files: [{ path: "x", content: "y" }],
+        commands: ["lint"],
+        limits: {},
+        sandbox_image_digest: "sha256:" + "a".repeat(64),
+      });
+      expect(r.overall).toBe("inconclusive");
+      expect(r.inconclusive_reason).toBe("image_inspection_failed");
+      // P1 #3: even on inconclusive, command_results + aggregate_exit_status
+      // MUST be present so sandboxRunner's .map()/.filter() don't crash.
+      expect(r.command_results).toEqual([]);
+      expect(r.aggregate_exit_status).toBeNull();
+    } finally {
+      _setFetchForTests(null);
+    }
+  });
+
+  it("returns inconclusive on network error (fetch rejects)", async () => {
+    process.env.GITWIRE_EXECUTOR_SERVICE_URL = "http://executor:3003";
+    process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN = "t";
+    process.env.GITWIRE_VALIDATOR_IMAGE_REF = "reg/v@sha256:" + "a".repeat(64);
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = "sha256:" + "a".repeat(64);
+
+    const { _setFetchForTests } = await import("../../src/lib/executorServiceClient.js");
+    _setFetchForTests(async () => { throw new Error("ECONNREFUSED"); });
+    try {
+      const r = await executorServiceBackend.run({
+        files: [{ path: "x", content: "y" }],
+        commands: ["lint"],
+        limits: {},
+        sandbox_image_digest: "sha256:" + "a".repeat(64),
+      });
+      expect(r.overall).toBe("inconclusive");
+      expect(r.inconclusive_reason).toBe("executor_error");
+      // P1 #3: normalized to complete ExecResult shape.
+      expect(r.command_results).toEqual([]);
+      expect(r.aggregate_exit_status).toBeNull();
+    } finally {
+      _setFetchForTests(null);
+    }
+  });
+
+  // P1 #3 lock-in: a non-200 response from postValidate synthesizes
+  // { overall: "inconclusive", inconclusive_reason: "executor_error" } WITHOUT
+  // command_results or aggregate_exit_status. The backend MUST normalize it
+  // so sandboxRunner doesn't crash.
+  it("normalizes non-200 responses to complete ExecResult shape", async () => {
+    process.env.GITWIRE_EXECUTOR_SERVICE_URL = "http://executor:3003";
+    process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN = "t";
+    process.env.GITWIRE_VALIDATOR_IMAGE_REF = "reg/v@sha256:" + "a".repeat(64);
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = "sha256:" + "a".repeat(64);
+
+    const { _setFetchForTests } = await import("../../src/lib/executorServiceClient.js");
+    _setFetchForTests(async () => ({ ok: false, status: 401 }));
+    try {
+      const r = await executorServiceBackend.run({
+        files: [{ path: "x", content: "y" }],
+        commands: ["lint"],
+        limits: {},
+        sandbox_image_digest: "sha256:" + "a".repeat(64),
+      });
+      expect(r.overall).toBe("inconclusive");
+      expect(r.inconclusive_reason).toBe("executor_error");
+      expect(r.command_results).toEqual([]);
+      expect(r.aggregate_exit_status).toBeNull();
+    } finally {
+      _setFetchForTests(null);
+    }
   });
 });

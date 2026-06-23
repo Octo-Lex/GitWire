@@ -81,3 +81,50 @@ export async function fetchExecutorServiceHealth({ url, token, timeoutMs = DEFAU
     };
   }
 }
+
+const DEFAULT_VALIDATE_TIMEOUT_MS = 120000; // 2 min — commands can take time
+
+/**
+ * POST /v1/validate to the executor service.
+ *
+ * NEVER throws — returns a shaped object on every path. On any failure
+ * (non-200, network error, abort), returns `{ overall: "inconclusive",
+ * inconclusive_reason: "executor_error", ... }` so the backend's run()
+ * can treat the result uniformly.
+ *
+ * @param {object} opts
+ * @param {string} opts.url — base URL (e.g. "http://executor:3003")
+ * @param {string} [opts.token] — bearer token
+ * @param {object} opts.body — the validate request body
+ * @param {number} [opts.timeoutMs=120000] — request timeout
+ * @returns {Promise<object>} the validate response on success; inconclusive on failure
+ */
+export async function postValidate({ url, token, body, timeoutMs = DEFAULT_VALIDATE_TIMEOUT_MS }) {
+  const fetchImpl = _fetch || globalThis.fetch.bind(globalThis);
+  const endpoint = `${url.replace(/\/+$/, "")}/v1/validate`;
+  const headers = { "content-type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  try {
+    const res = await fetchImpl(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      return {
+        overall: "inconclusive",
+        inconclusive_reason: "executor_error",
+        inconclusive_detail: `non-200 response: ${res.status}`,
+      };
+    }
+    return await res.json();
+  } catch (err) {
+    return {
+      overall: "inconclusive",
+      inconclusive_reason: "executor_error",
+      inconclusive_detail: err?.name === "AbortError" ? "timeout" : (err?.message || "fetch failed"),
+    };
+  }
+}
