@@ -111,3 +111,94 @@ export function parseReceipt(content) {
   }
   return parsed;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// EXECUTOR REPORT PERSISTENCE (v0.23.0 Task 6, Shape B)
+// ════════════════════════════════════════════════════════════════════════════
+// Executor reports ride inside the existing execution_receipts table (opaque
+// JSON content, write-once, content-addressed). The ref uses the
+// 'executor-report:' prefix so it's distinguishable from GitWire's own
+// receipts ('receipt:'). No new migration needed.
+
+// Fields excluded from the executor report hash (mirrors
+// packages/executor-service/src/executorReportHash.js EXCLUDED_FROM_HASH).
+const EXECUTOR_REPORT_HASH_EXCLUDED = new Set(["executor_report_hash", "executor_report_ref"]);
+
+/**
+ * Recompute the executor report hash from raw content.
+ * Strips executor_report_hash + executor_report_ref fields, then SHA-256
+ * over the canonical JSON. Mirrors computeExecutorReportHash in the
+// executor-service package — must produce identical results.
+ *
+ * @param {string} content - raw JSON report content
+ * @returns {string} "sha256:<64 hex>"
+ */
+function recomputeExecutorReportHash(content) {
+  const report = JSON.parse(content);
+  const input = {};
+  for (const key of Object.keys(report)) {
+    if (!EXECUTOR_REPORT_HASH_EXCLUDED.has(key)) {
+      input[key] = report[key];
+    }
+  }
+  return "sha256:" + crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
+}
+
+/**
+ * Store a raw executor report durably using the service-provided hash + ref.
+ * The ref uses the 'executor-report:' prefix. Write-once (ON CONFLICT DO NOTHING).
+ *
+ * @param {string} content - canonical JSON of the executor report
+ * @param {string} hash - "sha256:..." (computed by the executor service)
+ * @param {string} ref - "executor-report:sha256:..." (derived from hash)
+ * @returns {Promise<{ ref: string, hash: string }>}
+ */
+export async function storeExecutorReport(content, hash, ref) {
+  await db.query(
+    `INSERT INTO execution_receipts (receipt_hash, receipt_ref, content)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (receipt_hash) DO NOTHING`,
+    [hash, ref, content]
+  );
+
+  logger.debug({ ref, size: content.length }, "Executor report stored durably");
+  return { ref, hash };
+}
+
+/**
+ * Resolve an executor_report_ref to its raw content from durable storage.
+ * @param {string} ref - "executor-report:sha256:..."
+ * @returns {Promise<string>} the stored raw report content
+ * @throws {Error} if the report is not found
+ */
+export async function resolveExecutorReport(ref) {
+  const { rows } = await db.query(
+    `SELECT content FROM execution_receipts WHERE receipt_ref = $1`,
+    [ref]
+  );
+  if (rows.length === 0) {
+    throw new Error(`Executor report not found: ${ref}`);
+  }
+  return rows[0].content;
+}
+
+/**
+ * Verify that an executor_report_ref resolves to content whose recomputed
+ * hash matches the expected hash. This is the load-bearing check for Task 6:
+ * no pass receipt is accepted unless the raw executor report can be resolved
+ * and its hash recomputed.
+ *
+ * @param {string} ref - "executor-report:sha256:..."
+ * @param {string} expectedHash - "sha256:..." (the hash the receipt claims)
+ * @returns {Promise<boolean>} true if the hash matches
+ * @throws {Error} if the ref does not resolve (report not persisted)
+ */
+export async function verifyExecutorReportHash(ref, expectedHash) {
+  const content = await resolveExecutorReport(ref);
+  try {
+    const actualHash = recomputeExecutorReportHash(content);
+    return actualHash === expectedHash;
+  } catch {
+    return false;
+  }
+}
