@@ -122,8 +122,9 @@ function inspectImage(imageRef) {
     const inspectJson = (fullInspect.stdout || "").trim();
     const hash = "sha256:" + createHash("sha256").update(inspectJson).digest("hex");
 
-    // Return the first matching digest. The caller compares against
-    // config.validator_image_digest; if none match, it's image_inspection_failed.
+    // Return ALL parsed digests. The caller selects the one matching
+    // config.validator_image_digest — if none match, it's image_inspection_failed.
+    // This handles images pushed to multiple registries (multiple RepoDigests).
     return { ok: true, digest: digests[0], hash, all_digests: digests };
   } catch {
     return { ok: false };
@@ -202,16 +203,23 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
         config);
     }
 
-    // Inspect the image; the inspected digest must equal the configured digest.
+    // Inspect the image; the configured digest must be present in the
+    // image's RepoDigests (handles multi-registry images with multiple digests).
     const inspection = inspectImage(config.validator_image_ref);
     if (!inspection.ok) {
       return inconclusive("image_inspection_failed", "docker inspect did not succeed", config);
     }
-    if (inspection.digest !== config.validator_image_digest) {
+    // Check if the configured digest appears in ANY of the image's parsed
+    // RepoDigests entries, not just the first one.
+    const allDigests = inspection.all_digests || [inspection.digest];
+    const matchingDigest = allDigests.find(d => d === config.validator_image_digest);
+    if (!matchingDigest) {
       return inconclusive("image_inspection_failed",
-        `inspected digest '${inspection.digest}' != configured '${config.validator_image_digest}'`,
+        `configured digest '${config.validator_image_digest}' not found in RepoDigests: [${allDigests.join(", ")}]`,
         config);
     }
+    // Use the matching digest for the report's inspected_image_digest.
+    inspection.digest = matchingDigest;
 
     // ── Step 2: materialize workspace ──────────────────────────────────────
     let workspace;

@@ -502,8 +502,14 @@ export async function runSandboxVerification(options) {
   });
 
   // v0.23.0 Task 6 — persist the raw executor report durably if the backend
-  // provided one (executor-service only). This is Shape B from the design doc:
-  // rides inside execution_receipts, no new migration.
+  // provided one (executor-service only). Shape B: execution_receipts table.
+  //
+  // P1 #2 fix (review): persistence failure is FAIL-CLOSED for pass results.
+  // A pass receipt MUST NOT advance if the raw executor report is not
+  // durably stored — the verifier cannot resolve executor_report_ref to
+  // recompute the hash, making the pass evidence unverifiable. Downgrade to
+  // inconclusive rather than proceeding with an unresolvable ref.
+  let persistenceDowngraded = false;
   if (execResult.executor_report_ref && execResult.executor_report_hash) {
     try {
       const { storeExecutorReport } = await import("./executionReceiptStore.js");
@@ -513,8 +519,76 @@ export async function runSandboxVerification(options) {
         execResult.executor_report_ref
       );
     } catch (persistErr) {
-      logger.warn({ err: persistErr.message }, "Failed to persist executor report (non-fatal — verifier will reject unverifiable pass)");
+      logger.error(
+        { err: persistErr.message, backend: backend.id, overall: execResult.overall },
+        "Failed to persist executor report — FAIL-CLOSED for pass results"
+      );
+      if (execResult.overall === "pass") {
+        // Downgrade to inconclusive: the pass evidence is unverifiable without
+        // a durable raw report. Strip the report fields so the receipt doesn't
+        // carry an unresolvable ref.
+        execResult.overall = "inconclusive";
+        execResult.inconclusive_reason = "executor_report_persistence_failed";
+        execResult.executor_report_hash = null;
+        execResult.executor_report_ref = null;
+        persistenceDowngraded = true;
+      }
+      // For non-pass results (fail/inconclusive), persistence failure is
+      // non-fatal — the receipt was already inconclusive/fail, and report
+      // persistence is for the pass-verification path.
     }
+  }
+
+  // If persistence downgraded the result to inconclusive, rebuild the receipt
+  // with the downgraded values. The receipt was already built above with the
+  // original execResult; rebuild it so the content-addressed hash reflects
+  // the downgraded state.
+  if (persistenceDowngraded) {
+    return {
+      overall: execResult.overall,
+      commands: execResult.command_results,
+      exit_status: execResult.aggregate_exit_status,
+      validation_plan_hash,
+      sandbox_image_digest: isolation.sandbox_image_digest,
+      limits_applied: appliedLimits,
+      redacted_summary: `executor_report_persistence_failed: report could not be stored durably`,
+      inconclusive_reason: execResult.inconclusive_reason,
+      receipt: buildExecutionReceipt({
+        execution_backend_id: isolation.execution_backend_id,
+        executor_version: isolation.executor_version,
+        source_snapshot_hash,
+        patch_artifact_hash,
+        base_sha,
+        input_bundle_hash,
+        sandbox_image_digest: isolation.sandbox_image_digest,
+        validation_plan_hash,
+        commands_executed: commandsExecuted,
+        per_command_exit_statuses: perCommandExitStatuses,
+        aggregate_exit_status: execResult.aggregate_exit_status,
+        output_refs: outputRefs,
+        output_hashes: outputHashes,
+        limits_applied: appliedLimits,
+        result: execResult.overall,
+        inconclusive_reason: execResult.inconclusive_reason,
+        container_runtime: receiptContainerRuntime,
+        runtime_version: receiptRuntimeVersion,
+        network_disabled: isolation.network_disabled,
+        non_root: isolation.non_root,
+        read_only_rootfs: isolation.read_only_rootfs,
+        image_ref: isolation.image_ref,
+        resource_limits: isolation.resource_limits,
+        executor_kind: executorKind,
+        executor_pass_capable: false,
+        validator_image_ref: validatorImage.ref,
+        validator_image_digest: validatorImage.digest,
+        validator_result: "inconclusive",
+        validator_result_status: "inconclusive",
+        executor_report_hash: null,
+        executor_report_ref: null,
+        inspected_image_digest: execResult.inspected_image_digest,
+        inspection_hash: execResult.inspection_hash,
+      }),
+    };
   }
 
   logger.info(

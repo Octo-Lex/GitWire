@@ -150,7 +150,42 @@ describe("runValidatorJob — inconclusive paths", () => {
     expect(r.inconclusive_reason).toBe("image_inspection_failed");
   });
 
-  it("returns inconclusive + execution_incomplete when a command exits null (spawn error)", async () => {
+  // Non-blocking regression: multiple RepoDigests entries. The configured digest
+  // should be accepted when it appears anywhere in RepoDigests, not only first.
+  it("accepts configured digest when it's the SECOND entry in RepoDigests (multi-registry)", async () => {
+    const OTHER_DIGEST = "sha256:" + "1".repeat(64); // different from DIGEST
+    const r = await runValidatorJob({
+      request: makeRequest(),
+      config: makeConfig(),
+      cmdRunner: successRunner(),
+      imageInspector: () => ({
+        ok: true,
+        digest: OTHER_DIGEST,          // first parsed (not the match)
+        all_digests: [OTHER_DIGEST, DIGEST],  // configured digest is second
+        hash: "sha256:" + "b".repeat(64),
+      }),
+    });
+    // Must still pass — the configured digest IS present in all_digests.
+    expect(r.overall).toBe("pass");
+    expect(r.inspected_image_digest).toBe(DIGEST); // the matching one, not all_digests[0]
+  });
+
+  it("rejects when configured digest is NOT in any RepoDigests entry", async () => {
+    const UNRELATED = "sha256:" + "2".repeat(64);
+    const r = await runValidatorJob({
+      request: makeRequest(),
+      config: makeConfig(),
+      cmdRunner: successRunner(),
+      imageInspector: () => ({
+        ok: true,
+        digest: UNRELATED,
+        all_digests: [UNRELATED, "sha256:" + "3".repeat(64)],
+        hash: "sha256:" + "b".repeat(64),
+      }),
+    });
+    expect(r.overall).toBe("inconclusive");
+    expect(r.inconclusive_reason).toBe("image_inspection_failed");
+  });
     const r = await runValidatorJob({
       request: makeRequest(),
       config: makeConfig(),
