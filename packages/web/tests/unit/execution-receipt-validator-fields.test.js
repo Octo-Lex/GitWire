@@ -33,6 +33,11 @@ const BASE_PARAMS = {
   validator_image_digest: "sha256:" + "a".repeat(64),
   validator_result: "pass",
   validator_result_status: "pass",
+  // v0.23.0 Task 6 fields
+  executor_report_hash: "sha256:" + "b".repeat(64),
+  executor_report_ref: "executor-report:sha256:" + "b".repeat(64),
+  inspected_image_digest: "sha256:" + "a".repeat(64),
+  inspection_hash: "sha256:" + "c".repeat(64),
 };
 
 describe("buildExecutionReceipt — validator fields bound", () => {
@@ -60,6 +65,28 @@ describe("buildExecutionReceipt — validator fields bound", () => {
     const parsed = JSON.parse(receipt_content);
     expect(parsed.validator_result).toBe("pass");
     expect(parsed.validator_result_status).toBe("pass");
+  });
+
+  // v0.23.0 Task 6 — executor report bindings
+  it("receipt content contains executor_report_hash + executor_report_ref", () => {
+    const { receipt_content } = buildExecutionReceipt(BASE_PARAMS);
+    const parsed = JSON.parse(receipt_content);
+    expect(parsed.executor_report_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(parsed.executor_report_ref).toMatch(/^executor-report:sha256:/);
+  });
+
+  it("receipt content contains inspected_image_digest + inspection_hash", () => {
+    const { receipt_content } = buildExecutionReceipt(BASE_PARAMS);
+    const parsed = JSON.parse(receipt_content);
+    expect(parsed.inspected_image_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(parsed.inspection_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("executor_report fields default to null when not passed", () => {
+    const { receipt_content } = buildExecutionReceipt({ ...BASE_PARAMS, executor_report_hash: undefined, executor_report_ref: undefined });
+    const parsed = JSON.parse(receipt_content);
+    expect(parsed.executor_report_hash).toBeNull();
+    expect(parsed.executor_report_ref).toBeNull();
   });
 
   it("receipt content does NOT contain proof_collected_at (stays content-addressed)", () => {

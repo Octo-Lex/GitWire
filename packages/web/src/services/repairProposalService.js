@@ -2565,6 +2565,45 @@ async function verifyExecutionReceiptAgainstLockedProposal(
     throw new Error(`Gap 1 validator binding check failed: ${gap1Err.message}`);
   }
 
+  // ── v0.23.0 Task 6 — DB-backed executor report verification (check 3l) ───
+  // For executor-service pass receipts, resolve executor_report_ref → raw
+  // report, recompute executor_report_hash, and compare. A pass receipt is
+  // NOT accepted unless the raw report can be resolved and its hash matches.
+  // This closes the "bare hash" hole: the receipt must carry a ref that
+  // resolves to durable content whose recomputed hash equals the receipt's hash.
+  if (receipt.execution_backend_id === "executor-service") {
+    try {
+      const { verifyExecutorReportHash } = await import("../lib/executionReceiptStore.js");
+
+      // 3l-a. identifier consistency: execution_backend_id == executor_service_id.
+      // The executor report records executor_service_id; the receipt records
+      // execution_backend_id. They must match — a mismatch means the receipt
+      // was not built from this report.
+      const rawReportContent = await (await import("../lib/executionReceiptStore.js")).resolveExecutorReport(receipt.executor_report_ref);
+      const rawReport = JSON.parse(rawReportContent);
+      if (rawReport.executor_service_id !== receipt.execution_backend_id) {
+        throw new Error(
+          `identifier inconsistency: execution_backend_id '${receipt.execution_backend_id}' != executor_service_id '${rawReport.executor_service_id}'`
+        );
+      }
+
+      // 3l-b. hash recompute: resolve + recompute + compare.
+      const hashMatches = await verifyExecutorReportHash(
+        receipt.executor_report_ref,
+        receipt.executor_report_hash
+      );
+      if (!hashMatches) {
+        throw new Error(
+          `executor report hash mismatch: recomputed hash does not match receipt's executor_report_hash`
+        );
+      }
+    } catch (reportErr) {
+      throw new Error(
+        `Gap 1 executor report verification failed: ${reportErr.message}`
+      );
+    }
+  }
+
   // 4. executor_version must be allowlisted
   if (!ALLOWED_EXECUTOR_VERSIONS.has(receipt.executor_version)) {
     throw new Error(

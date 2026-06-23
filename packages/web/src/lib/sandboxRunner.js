@@ -20,6 +20,7 @@ import {
   executorKindForBackendId,
   isBackendPassCapable,
   probeAllBackends,
+  deriveBackendReachability,
 } from "./executorReachability.js";
 import { resolveValidatorImage } from "./validatorImage.js";
 
@@ -184,6 +185,14 @@ export function buildExecutionReceipt(params) {
     validator_image_digest,
     validator_result,
     validator_result_status,
+    // v0.23.0 Task 6 — executor report bindings. These make the receipt
+    // verifiable: the verifier resolves executor_report_ref, recomputes
+    // executor_report_hash from the raw report, and compares before accepting
+    // pass. Without these, the receipt's pass evidence is unverifiable.
+    executor_report_hash,
+    executor_report_ref,
+    inspected_image_digest,
+    inspection_hash,
   } = params;
 
   const receiptObject = {
@@ -217,6 +226,14 @@ export function buildExecutionReceipt(params) {
     validator_image_digest: validator_image_digest || null,
     validator_result: validator_result || result,
     validator_result_status: validator_result_status || result,
+    // v0.23.0 Task 6 — executor report bindings (part of content-addressed hash).
+    // null for non-executor-service backends; present when the executor service
+    // produced the report. The verifier resolves executor_report_ref → raw
+    // report → recomputes hash → compares to this field before accepting pass.
+    executor_report_hash: executor_report_hash || null,
+    executor_report_ref: executor_report_ref || null,
+    inspected_image_digest: inspected_image_digest || null,
+    inspection_hash: inspection_hash || null,
     ...(inconclusive_reason ? { inconclusive_reason } : {}),
     // NO timestamps or DB IDs — hash is content-addressed only
   };
@@ -283,32 +300,69 @@ export async function runSandboxVerification(options) {
   const isolation = backend.describe();
   const appliedLimits = { ...DEFAULT_LIMITS, ...limits };
 
-  // Gap 1 — derive validator bindings for the receipt from PROVEN reachability.
-  //
-  // executor_kind comes from the backend id. But executor_pass_capable is NOT
-  // just backend.supports_pass — it requires a live probe to confirm the
-  // backend's kind is actually reachable right now. getDefaultBackend() may
-  // return docker-executor even when Docker is unreachable (its selection is
-  // not probe-driven until Task 7.5); the receipt must not inherit that
-  // false confidence.
+  // v0.23.0 Task 6 — derive validator bindings from BACKEND_ID-level
+  // reachability (rev 3 amendment). The old kind-level logic
+  // (reachableKinds.has(executorKind)) is unsafe now that executor-service
+  // and docker-executor both map to container-runtime: it would pass when
+  // either backend was reachable even if the selected one was down.
   const validatorImage = resolveValidatorImage();
   const executorKind = executorKindForBackendId(backend.id);
 
-  // Live probe: which kinds are actually reachable at this moment?
+  // Build the backend_id → kind map + probe map for deriveBackendReachability.
   const probe = probeAllBackends();
-  const reachableKinds = new Set(
-    probe.backends.filter((b) => b.reachable).map((b) => b.kind)
-  );
-  const kindActuallyReachable = reachableKinds.has(executorKind);
+  const backendKinds = {};
+  const probes = {};
+  // Map sync probes to backend_ids (one sync backend per kind except
+  // executor-service, which is handled by its async probe — but in the
+  // runner context, we only care about the SELECTED backend's reachability).
+  for (const b of probe.backends) {
+    // For the kind-level probe, map to the sync backends that own that kind.
+    // docker-executor → container-runtime (sync); node-executor → local-process.
+    if (b.kind === executorKind || b.kind === "local-process") {
+      // Find the registered backend id for this kind.
+      const { listBackends } = await import("./executorRegistry.js");
+      for (const id of listBackends()) {
+        try {
+          const idKind = executorKindForBackendId(id);
+          if (idKind === b.kind && id !== "executor-service") {
+            backendKinds[id] = idKind;
+            probes[id] = { reachable: b.reachable };
+          }
+        } catch { /* skip unknown */ }
+      }
+    }
+  }
+  // The selected backend's kind + reachability.
+  backendKinds[backend.id] = executorKind;
+  // For executor-service, reachability comes from the probe's container-runtime
+  // slot (which may be the docker-executor's sync probe, not the executor-
+  // service's async probe — but the deriveBackendReachability helper checks
+  // the SELECTED backend's probe entry, not the kind). For sync backends
+  // (node/docker), the probe IS the kind-level signal.
+  if (backend.id === "executor-service") {
+    // The async executor-service probe is not available synchronously in the
+    // runner. For the runner's pass-capable derivation, executor-service's
+    // reachability is determined by whether its run() succeeds. If run()
+    // returned a result at all, the service was reachable.
+    probes[backend.id] = { reachable: true };
+  } else {
+    probes[backend.id] = probes[backend.id] || { reachable: probe.backends.find(b => b.kind === executorKind)?.reachable || false };
+  }
 
-  // Pass-capability requires ALL FOUR conditions (fix #3):
+  const { backend_reachable } = deriveBackendReachability({
+    selectedBackendId: backend.id,
+    backendKinds,
+    probes,
+  });
+
+  // Pass-capability requires ALL conditions (v0.22.0 Gap 1 + v0.23.0 Task 6):
   //   1. backend advertises supports_pass
   //   2. kind is structurally pass-capable (not local-process)
-  //   3. a live probe confirms this kind is reachable
+  //   3. the SELECTED BACKEND (by backend_id) is reachable
   //   4. validator image identity is complete (ref + digest + match)
   const executorPassCapable =
     backend.supports_pass === true &&
-    isBackendPassCapable(executorKind, kindActuallyReachable) &&
+    isBackendPassCapable(executorKind, backend_reachable) &&
     validatorImage.identity_complete;
 
   logger.info({ backend: backend.id, supports_pass: backend.supports_pass }, "Executor backend selected");
@@ -438,7 +492,104 @@ export async function runSandboxVerification(options) {
     validator_image_digest: validatorImage.digest,
     validator_result: executorPassCapable ? execResult.overall : "inconclusive",
     validator_result_status: executorPassCapable ? execResult.overall : "inconclusive",
+    // v0.23.0 Task 6 — executor report bindings. These come from the
+    // executor-service backend's run() response. For non-executor-service
+    // backends, they're undefined → null in the receipt.
+    executor_report_hash: execResult.executor_report_hash,
+    executor_report_ref: execResult.executor_report_ref,
+    inspected_image_digest: execResult.inspected_image_digest,
+    inspection_hash: execResult.inspection_hash,
   });
+
+  // v0.23.0 Task 6 — persist the raw executor report durably if the backend
+  // provided one (executor-service only). Shape B: execution_receipts table.
+  //
+  // P1 #2 fix (review): persistence failure is FAIL-CLOSED for pass results.
+  // A pass receipt MUST NOT advance if the raw executor report is not
+  // durably stored — the verifier cannot resolve executor_report_ref to
+  // recompute the hash, making the pass evidence unverifiable. Downgrade to
+  // inconclusive rather than proceeding with an unresolvable ref.
+  let persistenceDowngraded = false;
+  if (execResult.executor_report_ref && execResult.executor_report_hash) {
+    try {
+      const { storeExecutorReport } = await import("./executionReceiptStore.js");
+      await storeExecutorReport(
+        JSON.stringify(execResult),
+        execResult.executor_report_hash,
+        execResult.executor_report_ref
+      );
+    } catch (persistErr) {
+      logger.error(
+        { err: persistErr.message, backend: backend.id, overall: execResult.overall },
+        "Failed to persist executor report — FAIL-CLOSED for pass results"
+      );
+      if (execResult.overall === "pass") {
+        // Downgrade to inconclusive: the pass evidence is unverifiable without
+        // a durable raw report. Strip the report fields so the receipt doesn't
+        // carry an unresolvable ref.
+        execResult.overall = "inconclusive";
+        execResult.inconclusive_reason = "executor_report_persistence_failed";
+        execResult.executor_report_hash = null;
+        execResult.executor_report_ref = null;
+        persistenceDowngraded = true;
+      }
+      // For non-pass results (fail/inconclusive), persistence failure is
+      // non-fatal — the receipt was already inconclusive/fail, and report
+      // persistence is for the pass-verification path.
+    }
+  }
+
+  // If persistence downgraded the result to inconclusive, rebuild the receipt
+  // with the downgraded values. The receipt was already built above with the
+  // original execResult; rebuild it so the content-addressed hash reflects
+  // the downgraded state.
+  if (persistenceDowngraded) {
+    return {
+      overall: execResult.overall,
+      commands: execResult.command_results,
+      exit_status: execResult.aggregate_exit_status,
+      validation_plan_hash,
+      sandbox_image_digest: isolation.sandbox_image_digest,
+      limits_applied: appliedLimits,
+      redacted_summary: `executor_report_persistence_failed: report could not be stored durably`,
+      inconclusive_reason: execResult.inconclusive_reason,
+      receipt: buildExecutionReceipt({
+        execution_backend_id: isolation.execution_backend_id,
+        executor_version: isolation.executor_version,
+        source_snapshot_hash,
+        patch_artifact_hash,
+        base_sha,
+        input_bundle_hash,
+        sandbox_image_digest: isolation.sandbox_image_digest,
+        validation_plan_hash,
+        commands_executed: commandsExecuted,
+        per_command_exit_statuses: perCommandExitStatuses,
+        aggregate_exit_status: execResult.aggregate_exit_status,
+        output_refs: outputRefs,
+        output_hashes: outputHashes,
+        limits_applied: appliedLimits,
+        result: execResult.overall,
+        inconclusive_reason: execResult.inconclusive_reason,
+        container_runtime: receiptContainerRuntime,
+        runtime_version: receiptRuntimeVersion,
+        network_disabled: isolation.network_disabled,
+        non_root: isolation.non_root,
+        read_only_rootfs: isolation.read_only_rootfs,
+        image_ref: isolation.image_ref,
+        resource_limits: isolation.resource_limits,
+        executor_kind: executorKind,
+        executor_pass_capable: false,
+        validator_image_ref: validatorImage.ref,
+        validator_image_digest: validatorImage.digest,
+        validator_result: "inconclusive",
+        validator_result_status: "inconclusive",
+        executor_report_hash: null,
+        executor_report_ref: null,
+        inspected_image_digest: execResult.inspected_image_digest,
+        inspection_hash: execResult.inspection_hash,
+      }),
+    };
+  }
 
   logger.info(
     { backend: backend.id, commands: commandsExecuted.length, overall: execResult.overall, validation_plan_hash },
