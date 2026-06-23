@@ -184,6 +184,14 @@ export function buildExecutionReceipt(params) {
     validator_image_digest,
     validator_result,
     validator_result_status,
+    // v0.23.0 Task 6 — executor report bindings. These make the receipt
+    // verifiable: the verifier resolves executor_report_ref, recomputes
+    // executor_report_hash from the raw report, and compares before accepting
+    // pass. Without these, the receipt's pass evidence is unverifiable.
+    executor_report_hash,
+    executor_report_ref,
+    inspected_image_digest,
+    inspection_hash,
   } = params;
 
   const receiptObject = {
@@ -217,6 +225,14 @@ export function buildExecutionReceipt(params) {
     validator_image_digest: validator_image_digest || null,
     validator_result: validator_result || result,
     validator_result_status: validator_result_status || result,
+    // v0.23.0 Task 6 — executor report bindings (part of content-addressed hash).
+    // null for non-executor-service backends; present when the executor service
+    // produced the report. The verifier resolves executor_report_ref → raw
+    // report → recomputes hash → compares to this field before accepting pass.
+    executor_report_hash: executor_report_hash || null,
+    executor_report_ref: executor_report_ref || null,
+    inspected_image_digest: inspected_image_digest || null,
+    inspection_hash: inspection_hash || null,
     ...(inconclusive_reason ? { inconclusive_reason } : {}),
     // NO timestamps or DB IDs — hash is content-addressed only
   };
