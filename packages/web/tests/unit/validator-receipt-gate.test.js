@@ -80,3 +80,36 @@ describe("validateGap1ValidatorBindings — rejects non-pass validator_result_st
     expect(() => validateGap1ValidatorBindings(r)).toThrow(/validator_result_status.*must be 'pass'/);
   });
 });
+
+// v0.23.0 Task 6 — check 3k: executor-service receipts must carry report fields.
+describe("validateGap1ValidatorBindings — check 3k (executor-service report fields)", () => {
+  const REPORT_HASH = "sha256:" + "b".repeat(64);
+  const REPORT_REF = `executor-report:${REPORT_HASH}`;
+  const VALID_EXECUTOR_SERVICE_RECEIPT = Object.freeze({
+    ...VALID_PASS_RECEIPT,
+    execution_backend_id: "executor-service",
+    executor_report_hash: REPORT_HASH,
+    executor_report_ref: REPORT_REF,
+  });
+
+  it("accepts an executor-service receipt WITH report fields", () => {
+    expect(() => validateGap1ValidatorBindings({ ...VALID_EXECUTOR_SERVICE_RECEIPT })).not.toThrow();
+  });
+
+  it("rejects executor-service receipt missing executor_report_ref", () => {
+    const r = { ...VALID_EXECUTOR_SERVICE_RECEIPT, executor_report_ref: undefined };
+    expect(() => validateGap1ValidatorBindings(r)).toThrow(/missing executor_report_ref/);
+  });
+
+  it("rejects executor-service receipt missing executor_report_hash", () => {
+    const r = { ...VALID_EXECUTOR_SERVICE_RECEIPT, executor_report_hash: undefined };
+    expect(() => validateGap1ValidatorBindings(r)).toThrow(/missing executor_report_hash/);
+  });
+
+  it("does NOT require report fields for docker-executor (non-executor-service)", () => {
+    // docker-executor receipts don't have executor_report fields; check 3k
+    // must not reject them.
+    const r = { ...VALID_PASS_RECEIPT, execution_backend_id: "docker-executor" };
+    expect(() => validateGap1ValidatorBindings(r)).not.toThrow();
+  });
+});

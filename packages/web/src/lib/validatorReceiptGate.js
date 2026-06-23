@@ -80,4 +80,22 @@ export function validateGap1ValidatorBindings(receipt) {
       `Execution receipt validator_result_status is '${receipt.validator_result_status}', must be 'pass'`
     );
   }
+
+  // 3k. (v0.23.0 Task 6) executor_report bindings required for executor-service.
+  // When the backend is executor-service, the receipt MUST carry
+  // executor_report_hash + executor_report_ref so the verifier can resolve
+  // the raw report and recompute the hash. Without these, the pass evidence
+  // is unverifiable — the app could have written an arbitrary hash.
+  if (receipt.execution_backend_id === "executor-service") {
+    if (!receipt.executor_report_ref) {
+      throw new Error(
+        "Execution receipt missing executor_report_ref — executor-service pass requires verifiable report evidence"
+      );
+    }
+    if (!receipt.executor_report_hash) {
+      throw new Error(
+        "Execution receipt missing executor_report_hash — executor-service pass requires verifiable report evidence"
+      );
+    }
+  }
 }

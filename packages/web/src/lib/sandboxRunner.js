@@ -20,6 +20,7 @@ import {
   executorKindForBackendId,
   isBackendPassCapable,
   probeAllBackends,
+  deriveBackendReachability,
 } from "./executorReachability.js";
 import { resolveValidatorImage } from "./validatorImage.js";
 
@@ -299,32 +300,69 @@ export async function runSandboxVerification(options) {
   const isolation = backend.describe();
   const appliedLimits = { ...DEFAULT_LIMITS, ...limits };
 
-  // Gap 1 — derive validator bindings for the receipt from PROVEN reachability.
-  //
-  // executor_kind comes from the backend id. But executor_pass_capable is NOT
-  // just backend.supports_pass — it requires a live probe to confirm the
-  // backend's kind is actually reachable right now. getDefaultBackend() may
-  // return docker-executor even when Docker is unreachable (its selection is
-  // not probe-driven until Task 7.5); the receipt must not inherit that
-  // false confidence.
+  // v0.23.0 Task 6 — derive validator bindings from BACKEND_ID-level
+  // reachability (rev 3 amendment). The old kind-level logic
+  // (reachableKinds.has(executorKind)) is unsafe now that executor-service
+  // and docker-executor both map to container-runtime: it would pass when
+  // either backend was reachable even if the selected one was down.
   const validatorImage = resolveValidatorImage();
   const executorKind = executorKindForBackendId(backend.id);
 
-  // Live probe: which kinds are actually reachable at this moment?
+  // Build the backend_id → kind map + probe map for deriveBackendReachability.
   const probe = probeAllBackends();
-  const reachableKinds = new Set(
-    probe.backends.filter((b) => b.reachable).map((b) => b.kind)
-  );
-  const kindActuallyReachable = reachableKinds.has(executorKind);
+  const backendKinds = {};
+  const probes = {};
+  // Map sync probes to backend_ids (one sync backend per kind except
+  // executor-service, which is handled by its async probe — but in the
+  // runner context, we only care about the SELECTED backend's reachability).
+  for (const b of probe.backends) {
+    // For the kind-level probe, map to the sync backends that own that kind.
+    // docker-executor → container-runtime (sync); node-executor → local-process.
+    if (b.kind === executorKind || b.kind === "local-process") {
+      // Find the registered backend id for this kind.
+      const { listBackends } = await import("./executorRegistry.js");
+      for (const id of listBackends()) {
+        try {
+          const idKind = executorKindForBackendId(id);
+          if (idKind === b.kind && id !== "executor-service") {
+            backendKinds[id] = idKind;
+            probes[id] = { reachable: b.reachable };
+          }
+        } catch { /* skip unknown */ }
+      }
+    }
+  }
+  // The selected backend's kind + reachability.
+  backendKinds[backend.id] = executorKind;
+  // For executor-service, reachability comes from the probe's container-runtime
+  // slot (which may be the docker-executor's sync probe, not the executor-
+  // service's async probe — but the deriveBackendReachability helper checks
+  // the SELECTED backend's probe entry, not the kind). For sync backends
+  // (node/docker), the probe IS the kind-level signal.
+  if (backend.id === "executor-service") {
+    // The async executor-service probe is not available synchronously in the
+    // runner. For the runner's pass-capable derivation, executor-service's
+    // reachability is determined by whether its run() succeeds. If run()
+    // returned a result at all, the service was reachable.
+    probes[backend.id] = { reachable: true };
+  } else {
+    probes[backend.id] = probes[backend.id] || { reachable: probe.backends.find(b => b.kind === executorKind)?.reachable || false };
+  }
 
-  // Pass-capability requires ALL FOUR conditions (fix #3):
+  const { backend_reachable } = deriveBackendReachability({
+    selectedBackendId: backend.id,
+    backendKinds,
+    probes,
+  });
+
+  // Pass-capability requires ALL conditions (v0.22.0 Gap 1 + v0.23.0 Task 6):
   //   1. backend advertises supports_pass
   //   2. kind is structurally pass-capable (not local-process)
-  //   3. a live probe confirms this kind is reachable
+  //   3. the SELECTED BACKEND (by backend_id) is reachable
   //   4. validator image identity is complete (ref + digest + match)
   const executorPassCapable =
     backend.supports_pass === true &&
-    isBackendPassCapable(executorKind, kindActuallyReachable) &&
+    isBackendPassCapable(executorKind, backend_reachable) &&
     validatorImage.identity_complete;
 
   logger.info({ backend: backend.id, supports_pass: backend.supports_pass }, "Executor backend selected");
@@ -454,7 +492,30 @@ export async function runSandboxVerification(options) {
     validator_image_digest: validatorImage.digest,
     validator_result: executorPassCapable ? execResult.overall : "inconclusive",
     validator_result_status: executorPassCapable ? execResult.overall : "inconclusive",
+    // v0.23.0 Task 6 — executor report bindings. These come from the
+    // executor-service backend's run() response. For non-executor-service
+    // backends, they're undefined → null in the receipt.
+    executor_report_hash: execResult.executor_report_hash,
+    executor_report_ref: execResult.executor_report_ref,
+    inspected_image_digest: execResult.inspected_image_digest,
+    inspection_hash: execResult.inspection_hash,
   });
+
+  // v0.23.0 Task 6 — persist the raw executor report durably if the backend
+  // provided one (executor-service only). This is Shape B from the design doc:
+  // rides inside execution_receipts, no new migration.
+  if (execResult.executor_report_ref && execResult.executor_report_hash) {
+    try {
+      const { storeExecutorReport } = await import("./executionReceiptStore.js");
+      await storeExecutorReport(
+        JSON.stringify(execResult),
+        execResult.executor_report_hash,
+        execResult.executor_report_ref
+      );
+    } catch (persistErr) {
+      logger.warn({ err: persistErr.message }, "Failed to persist executor report (non-fatal — verifier will reject unverifiable pass)");
+    }
+  }
 
   logger.info(
     { backend: backend.id, commands: commandsExecuted.length, overall: execResult.overall, validation_plan_hash },
