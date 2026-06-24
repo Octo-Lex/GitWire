@@ -15,7 +15,7 @@ services:
       # v0.23.0 — executor-service backend (app never touches Docker authority)
       GITWIRE_EXECUTOR_BACKEND: ${GITWIRE_EXECUTOR_BACKEND:-executor-service}
       GITWIRE_EXECUTOR_SERVICE_URL: http://gitwire-executor-service:3003
-      GITWIRE_EXECUTOR_SERVICE_TOKEN: ${GITWIRE_EXECUTOR_SERVICE_TOKEN:-}
+      GITWIRE_EXECUTOR_SERVICE_TOKEN: ${GITWIRE_EXECUTOR_SERVICE_TOKEN:?GITWIRE_EXECUTOR_SERVICE_TOKEN must be set}
       GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:-}
       GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:-}
     volumes:
@@ -42,21 +42,28 @@ services:
   # gitwire-net network; it is NOT published to the host.
   gitwire-executor-service:
     build:
-      context: .
-      dockerfile: packages/executor-service/Dockerfile
+      context: packages/executor-service
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       NODE_ENV: production
       PORT: 3003
       EXECUTOR_DEPLOYMENT_MODE: compose-local
-      GITWIRE_EXECUTOR_SERVICE_TOKEN: ${GITWIRE_EXECUTOR_SERVICE_TOKEN:-}
+      GITWIRE_EXECUTOR_SERVICE_TOKEN: ${GITWIRE_EXECUTOR_SERVICE_TOKEN:?GITWIRE_EXECUTOR_SERVICE_TOKEN must be set}
       GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:-}
       GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:-}
     volumes:
       # CT-local Docker socket mounted into the EXECUTOR SERVICE ONLY.
       # NOT mounted into gitwire-app. See docs/architecture/v0.23-executor-service.md
       # "Runtime endpoint (v0.23.0 default)".
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    # P2 fix: the executor image runs as non-root uid 1000 (node user). The
+    # Docker socket is typically root:docker (gid ~998) with 0660 permissions.
+    # Without group_add, docker info fails with permission denied. The operator
+    # must export DOCKER_SOCKET_GID before docker compose up (runbook documents
+    # this). The default (998) matches most Debian/Ubuntu systems.
+    group_add:
+      - "${DOCKER_SOCKET_GID:-998}"
     networks:
       - gitwire-net
     healthcheck:

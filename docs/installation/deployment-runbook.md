@@ -104,6 +104,14 @@ cd /opt/gitwire
 # Must be set BEFORE `docker compose build`, not just before `up`.
 export GITWIRE_COMMIT_SHA="$(git rev-parse --short=12 HEAD)"
 
+# v0.23.0+: Export the Docker socket GID so the executor-service container
+# (running as non-root uid 1000) can access /var/run/docker.sock.
+# The socket is typically root:docker (gid ~998) with 0660 permissions.
+# Without this, docker info inside the executor service fails with
+# "permission denied". Default 998 matches most Debian/Ubuntu systems.
+export DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock)"
+echo "Docker socket GID: $DOCKER_SOCKET_GID"
+
 # Rebuild with --no-cache to guarantee the new code lands in the image layer
 # (cache hits on an identical-looking context can otherwise ship stale code).
 docker compose build --no-cache
@@ -112,6 +120,24 @@ docker compose build --no-cache
 # `up -d --build` alone is NOT sufficient — see the warning above.
 docker compose up -d --force-recreate
 ```
+
+> **⚠️ Compose env sourcing (v0.23.0+):** The executor-service token and
+> validator image env vars are **Compose-time substitutions** (`${VAR:-...}`
+> in the `environment:` block). Compose resolves these from the **shell
+> environment or a project-root `.env` file** — NOT from `packages/web/.env`
+> (which is the app container's `env_file`, read at container runtime, not
+> at Compose interpolation time). Set these in the shell or project-root
+> `.env` before `docker compose up`:
+>
+> ```bash
+> # Generate a shared token (must be identical in both containers — compose
+> # interpolates it into both services' environment blocks).
+> echo "GITWIRE_EXECUTOR_SERVICE_TOKEN=$(openssl rand -hex 32)" >> .env
+>
+> # Validator image identity (optional pre-Task-8; required for pass-capable).
+> # echo "GITWIRE_VALIDATOR_IMAGE_REF=registry.example.com/v@sha256:..." >> .env
+> # echo "GITWIRE_VALIDATOR_IMAGE_DIGEST=sha256:..." >> .env
+> ```
 
 **Verify all containers are healthy:**
 ```bash
@@ -217,12 +243,20 @@ print('validator.reason:', v.get('reason'))
 
 > **⚠️ Docker socket troubleshooting:** If `selected_backend_reachable = false`
 > and the executor service's `/health` shows `ready = false` with
-> `container_runtime = null`, the Docker socket mount may have failed. Check:
+> `container_runtime = null`, the Docker socket mount or group access may have
+> failed. Check:
 > ```bash
+> # 1. Verify the socket GID was exported before compose up.
+> echo "DOCKER_SOCKET_GID=$DOCKER_SOCKET_GID"
+> # If empty, export it and recreate the executor-service container:
+> export DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock)"
+> docker compose up -d --force-recreate gitwire-executor-service
+>
+> # 2. Verify docker info works inside the executor container.
 > docker exec gitwire-gitwire-executor-service-1 docker info
-> # If this fails with "permission denied", the socket's group doesn't match
-> # the container's uid. If it fails with "cannot connect", the host Docker
-> # daemon is not running or the socket path differs.
+> # "permission denied" → group_add didn't match the socket's gid.
+> #   Fix: ensure DOCKER_SOCKET_GID matches stat -c '%g' /var/run/docker.sock.
+> # "cannot connect" → host Docker daemon not running or socket path differs.
 > ```
 
 ### Step 5: Verify Database Schema
