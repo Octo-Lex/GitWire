@@ -263,9 +263,13 @@ jobs:
       - name: Verify npm is available
         run: |
           docker run --rm --entrypoint npm gitwire-validator:ci --version
+      - name: Verify devDependencies are installed (P1 fix — lint/test need them)
+        run: |
+          # If NODE_ENV=production was set at build time, eslint/jest would be
+          # missing. This check fails the build if devDeps were omitted.
+          docker run --rm --entrypoint node gitwire-validator:ci -e "require.resolve('eslint'); require.resolve('jest'); console.log('devDeps OK')"
       - name: Verify lint script exists in the baseline
         run: |
-          docker run --rm --entrypoint npx gitwire-validator:ci -- npm run lint -- --help 2>/dev/null || true
-          # The lint script should at least exist in package.json.
-          docker run --rm --entrypoint node gitwire-validator:ci -e "const p=require('/opt/gitwire-base/package.json');if(!p.scripts||!p.scripts.lint){process.exit(1)}"
+          # No || true — this MUST pass. The lint script must exist for proof.
+          docker run --rm --entrypoint node gitwire-validator:ci -e "const p=require('/opt/gitwire-base/package.json');if(!p.scripts||!p.scripts.lint){console.error('lint script missing');process.exit(1)}console.log('lint script OK')"
 

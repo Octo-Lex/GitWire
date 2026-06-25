@@ -21,10 +21,14 @@ FROM node:20-bookworm-slim
 
 # Redirect npm/HOME writes to /workspace (the writable bind mount).
 # Without this, npm tries to write to ~ or / which are read-only at runtime.
+#
+# P1 fix: NODE_ENV is NOT set to production here. When NODE_ENV=production,
+# npm ci omits devDependencies — but lint/test require dev tooling (eslint,
+# jest). Set NODE_ENV at runtime if needed; the image build must install all
+# dependencies including devDeps.
 ENV HOME=/workspace \
     NPM_CONFIG_CACHE=/workspace/.npm-cache \
-    npm_config_cache=/workspace/.npm-cache \
-    NODE_ENV=production
+    npm_config_cache=/workspace/.npm-cache
 
 # Bake the baseline GitWire repo into /opt/gitwire-base.
 WORKDIR /opt/gitwire-base
@@ -34,8 +38,10 @@ COPY package.json package-lock.json ./
 COPY packages ./packages
 COPY scripts ./scripts
 
-# Install all dependencies (including devDeps for lint/test/build).
-RUN npm ci --ignore-scripts
+# Install ALL dependencies including devDeps (lint/test need eslint, jest, etc).
+# Explicit --include=dev overrides any inherited NODE_ENV=production that would
+# omit devDependencies. P1 fix from review.
+RUN npm ci --include=dev --ignore-scripts
 
 # Copy the remaining repo files needed for validation.
 COPY eslint.config.* ./
