@@ -104,6 +104,14 @@ cd /opt/gitwire
 # Must be set BEFORE `docker compose build`, not just before `up`.
 export GITWIRE_COMMIT_SHA="$(git rev-parse --short=12 HEAD)"
 
+# v0.23.0+: Export the Docker socket GID so the executor-service container
+# (running as non-root uid 1000) can access /var/run/docker.sock.
+# The socket is typically root:docker (gid ~998) with 0660 permissions.
+# Without this, docker info inside the executor service fails with
+# "permission denied". Default 998 matches most Debian/Ubuntu systems.
+export DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock)"
+echo "Docker socket GID: $DOCKER_SOCKET_GID"
+
 # Rebuild with --no-cache to guarantee the new code lands in the image layer
 # (cache hits on an identical-looking context can otherwise ship stale code).
 docker compose build --no-cache
@@ -113,10 +121,29 @@ docker compose build --no-cache
 docker compose up -d --force-recreate
 ```
 
+> **⚠️ Compose env sourcing (v0.23.0+):** The executor-service token and
+> validator image env vars are **Compose-time substitutions** (`${VAR:-...}`
+> in the `environment:` block). Compose resolves these from the **shell
+> environment or a project-root `.env` file** — NOT from `packages/web/.env`
+> (which is the app container's `env_file`, read at container runtime, not
+> at Compose interpolation time). Set these in the shell or project-root
+> `.env` before `docker compose up`:
+>
+> ```bash
+> # Generate a shared token (must be identical in both containers — compose
+> # interpolates it into both services' environment blocks).
+> echo "GITWIRE_EXECUTOR_SERVICE_TOKEN=$(openssl rand -hex 32)" >> .env
+>
+> # Validator image identity (optional pre-Task-8; required for pass-capable).
+> # echo "GITWIRE_VALIDATOR_IMAGE_REF=registry.example.com/v@sha256:..." >> .env
+> # echo "GITWIRE_VALIDATOR_IMAGE_DIGEST=sha256:..." >> .env
+> ```
+
 **Verify all containers are healthy:**
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Status}}' | grep gitwire
-# All 9 containers must show "(healthy)" — no "restarting" or "unhealthy"
+# All 10 containers must show "(healthy)" — no "restarting" or "unhealthy"
+# (v0.23.0+: includes gitwire-executor-service)
 ```
 
 ### Step 4: Verify Version String AND git_sha
@@ -163,6 +190,74 @@ docker images --format '{{.ID}}' gitwire-gitwire-app:latest
 # These must match. If they differ, the container is on a stale image —
 # re-run `docker compose up -d --force-recreate`.
 ```
+
+### Step 4.7: Verify Executor Service (v0.23.0+)
+
+> The executor service runs validator containers via the CT-local Docker socket.
+> It is a compose sibling of `gitwire-app` — the app has zero Docker authority;
+> only the executor service holds the socket. This step verifies the service is
+> healthy, reachable from the app, and correctly configured.
+
+```bash
+# 4.7a. Executor service container is healthy.
+docker inspect -f '{{.State.Health.Status}}' gitwire-gitwire-executor-service-1
+# Expected: "healthy"
+
+# 4.7b. Executor service /health responds.
+docker exec gitwire-gitwire-executor-service-1 wget -qO- http://localhost:3003/health | python3 -m json.tool
+# Expected fields:
+#   status = "ok"
+#   executor_service_id = "executor-service"
+#   deployment_mode = "compose-local"
+#   container_runtime = "docker" (or "podman")
+#   runtime_version = detected
+#   ready = true ONLY when runtime reachable + validator identity configured
+#   ready = false when validator image not yet configured (expected before Task 8)
+
+# 4.7c. App sees the executor service as the selected backend.
+curl -s http://localhost:3000/health | python3 -c "
+import sys, json
+h = json.load(sys.stdin)
+ex = h.get('executor', {})
+print('selected_backend_id:', ex.get('selected_backend_id'))
+print('selected_backend_reachable:', ex.get('selected_backend_reachable'))
+print('selected_pass_capable:', ex.get('selected_pass_capable'))
+v = h.get('validator', {})
+print('validator.pass_capable:', v.get('pass_capable'))
+print('validator.reason:', v.get('reason'))
+"
+# Expected after Task 7 (no validator image configured yet):
+#   selected_backend_id = executor-service
+#   selected_backend_reachable = true (or false if socket issue)
+#   selected_pass_capable = false (validator identity not configured)
+#   validator.pass_capable = false
+#   validator.reason = "validator_image_not_configured"
+#
+# After Task 8 (validator image configured):
+#   selected_backend_id = executor-service
+#   selected_backend_reachable = true
+#   selected_pass_capable = true
+#   validator.pass_capable = true
+#   validator.reason = "configured_and_pass_capable"
+```
+
+> **⚠️ Docker socket troubleshooting:** If `selected_backend_reachable = false`
+> and the executor service's `/health` shows `ready = false` with
+> `container_runtime = null`, the Docker socket mount or group access may have
+> failed. Check:
+> ```bash
+> # 1. Verify the socket GID was exported before compose up.
+> echo "DOCKER_SOCKET_GID=$DOCKER_SOCKET_GID"
+> # If empty, export it and recreate the executor-service container:
+> export DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock)"
+> docker compose up -d --force-recreate gitwire-executor-service
+>
+> # 2. Verify docker info works inside the executor container.
+> docker exec gitwire-gitwire-executor-service-1 docker info
+> # "permission denied" → group_add didn't match the socket's gid.
+> #   Fix: ensure DOCKER_SOCKET_GID matches stat -c '%g' /var/run/docker.sock.
+> # "cannot connect" → host Docker daemon not running or socket path differs.
+> ```
 
 ### Step 5: Verify Database Schema
 
@@ -481,11 +576,14 @@ After a deployment, confirm all of the following:
 | Container version matches | `curl localhost:3000/health` (`.version`) | Release version |
 | Container git_sha matches | `curl localhost:3000/health` (`.git_sha`) | Release commit SHA — **NOT `"unknown"`** |
 | Container on fresh image | `docker inspect -f '{{.Image}}' gitwire-gitwire-app-1` | Matches `docker images gitwire-gitwire-app:latest -q` |
-| All containers healthy | `docker ps` | 9 containers, all `(healthy)` |
+| All containers healthy | `docker ps` | 10 containers, all `(healthy)` (v0.23.0+: includes executor-service) |
 | API responds | `curl localhost:3000/health` | `{"status":"ok"}` |
 | External URL works | `curl https://gitwire.erlab.uk/health` | `{"status":"ok"}` |
 | No errors in logs | `docker logs gitwire-gitwire-app-1 --tail 50` | No exceptions |
 | Redis memory durable | `redis-cli CONFIG GET maxmemory` | `268435456` (after recreate) |
+| Executor service healthy | `docker inspect -f '{{.State.Health.Status}}' gitwire-gitwire-executor-service-1` | `"healthy"` |
+| Executor service reachable from app | `curl localhost:3000/health` (`.executor.selected_backend_id`) | `"executor-service"` |
+| App has NO Docker socket | `docker exec gitwire-gitwire-app-1 ls /var/run/docker.sock 2>&1` | `No such file or directory` |
 
 > `git_sha: "unknown"` in `/health` is a **release verification failure**.
 > It means `GITWIRE_COMMIT_SHA` was not exported at build time (Step 3).
