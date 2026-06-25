@@ -43,8 +43,7 @@ COPY scripts ./scripts
 # omit devDependencies. P1 fix from review.
 RUN npm ci --include=dev --ignore-scripts
 
-# Copy the remaining repo files needed for validation.
-COPY eslint.config.* ./
+# Copy the entrypoint into the image.
 COPY validator-image/docker-entrypoint.sh /usr/local/bin/gitwire-validator-entrypoint
 RUN chmod +x /usr/local/bin/gitwire-validator-entrypoint
 
