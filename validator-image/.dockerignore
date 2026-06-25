@@ -1,0 +1,23 @@
+# Exclude files not needed in the validator image.
+# The image only needs: package.json, package-lock.json, packages/, scripts/,
+# eslint config, and the entrypoint. Everything else is dead weight.
+
+.git
+.github
+.husky
+docs
+landing
+node_modules
+**/node_modules
+**/.next
+**/dist
+**/build
+rewrite-rules.txt
+*.md
+!validator-image/README.md
+secrets/
+backups/
+*.log
+.env*
+.DS_Store
+Thumbs.db

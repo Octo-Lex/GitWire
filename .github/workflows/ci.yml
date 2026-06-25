@@ -245,3 +245,27 @@ jobs:
         if: failure()
         run: docker logs gitwire-executor-service-ci || true
 
+  docker-build-validator-image:
+    # v0.23.0: smoke-build the validator image. Verifies the Dockerfile builds,
+    # the entrypoint is present + executable, and npm ci succeeds against the
+    # repo's dependencies. Does NOT run validation (no patched workspace); this
+    # is a build-time check only.
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the validator image
+        run: docker build -t gitwire-validator:ci -f validator-image/Dockerfile .
+      - name: Verify entrypoint exists and is executable
+        run: |
+          docker run --rm --entrypoint ls gitwire-validator:ci -la /usr/local/bin/gitwire-validator-entrypoint
+      - name: Verify npm is available
+        run: |
+          docker run --rm --entrypoint npm gitwire-validator:ci --version
+      - name: Verify lint script exists in the baseline
+        run: |
+          docker run --rm --entrypoint npx gitwire-validator:ci -- npm run lint -- --help 2>/dev/null || true
+          # The lint script should at least exist in package.json.
+          docker run --rm --entrypoint node gitwire-validator:ci -e "const p=require('/opt/gitwire-base/package.json');if(!p.scripts||!p.scripts.lint){process.exit(1)}"
+
