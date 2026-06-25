@@ -112,6 +112,17 @@ export GITWIRE_COMMIT_SHA="$(git rev-parse --short=12 HEAD)"
 export DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock)"
 echo "Docker socket GID: $DOCKER_SOCKET_GID"
 
+# v0.23.0+: Prepare the host-shared workspace tempdir for the executor service.
+# The executor-service container runs as uid 1000 and creates validator workspace
+# tempdirs here. The nested Docker daemon (Docker-in-LXC) mounts these paths
+# directly from the host filesystem. If this path doesn't exist or is root-owned,
+# the executor-service fails with EACCES on mkdtemp.
+# Run this ONCE per host (not per deploy); it persists across recreates.
+mkdir -p /workspace-tmp
+chown 1000:1000 /workspace-tmp
+chmod 1777 /workspace-tmp
+echo "Workspace tempdir: $(ls -ld /workspace-tmp)"
+
 # Rebuild with --no-cache to guarantee the new code lands in the image layer
 # (cache hits on an identical-looking context can otherwise ship stale code).
 docker compose build --no-cache

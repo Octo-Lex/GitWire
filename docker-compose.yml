@@ -63,6 +63,13 @@ services:
       # daemon mounts them as --volume=<path>:/workspace. A named volume would
       # not be accessible to the nested Docker daemon at the same path.
       # Docker-in-LXC requires the path to be visible on the host filesystem.
+      #
+      # OPERATOR: this host path MUST be prepared before docker compose up:
+      #   sudo mkdir -p /workspace-tmp
+      #   sudo chown 1000:1000 /workspace-tmp
+      #   sudo chmod 1777 /workspace-tmp
+      # The executor-service runs as uid 1000 and creates tempdirs here; if
+      # the host path is root-owned, mkdtemp fails with EACCES.
       - /workspace-tmp:/workspace-tmp
     # P2 fix: the executor image runs as non-root uid 1000 (node user). The
     # Docker socket is typically root:docker (gid ~998) with 0660 permissions.
