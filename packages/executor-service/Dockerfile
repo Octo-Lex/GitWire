@@ -38,7 +38,7 @@ COPY --chown=node:node src ./src
 # Build-info via build args (v0.22.0+ pattern). The service doesn't currently
 # report these in /health, but they're here for parity with other packages
 # and future use.
-ARG GITWIRE_VERSION=0.22.0
+ARG GITWIRE_VERSION=0.23.0
 ARG GITWIRE_COMMIT_SHA=unknown
 ARG GITWIRE_BUILT_AT=unknown
 ENV GITWIRE_VERSION=$GITWIRE_VERSION \
