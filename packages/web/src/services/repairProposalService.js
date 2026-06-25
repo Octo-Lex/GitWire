@@ -2100,8 +2100,13 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
       );
     }
 
-    // Validate executed commands against the required plan
-    const requiredCommands = [...envelope.required_validation].sort();
+    // Validate executed commands against the compiled validation plan
+    // v0.23.0 Task 9: compile semantic IDs to executable commands, then compare.
+    // Comparing raw envelope.required_validation against executed commands
+    // fails because the executor receives compiled command IDs (test, build),
+    // not semantic IDs (test_or_build_result, policy_scope_check).
+    const compiledPlan = compileValidationPlan(envelope.required_validation);
+    const requiredCommands = compiledPlan.executable_commands;
     const executedCommands = verificationInput.commands.map((c) => c.command).sort();
     const commandCheck = validateCommandSetInternal(executedCommands, requiredCommands);
     if (!commandCheck.valid) {
