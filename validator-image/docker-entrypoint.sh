@@ -31,13 +31,14 @@ find /workspace -mindepth 1 -maxdepth 1 ! -name ".gitwire-patch" \
   -exec mv {} "$PATCH_DIR"/ \;
 
 # 2. Seed full baseline repo from the image.
-cp -a /opt/gitwire-base/. /workspace/
+# Use cp -r (not cp -a) because --read-only rootfs makes utimes fail on
+# the bind-mounted /workspace directory. cp -a tries to preserve timestamps
+# which triggers a utimes() syscall that the read-only rootfs rejects.
+cp -r /opt/gitwire-base/. /workspace/
 
 # 3. Overlay patched files onto the baseline.
-# cp -a preserves permissions; errors on identical files are expected
-# (the patched version wins). Use -f to force overwrite.
 if [ -d "$PATCH_DIR" ] && [ "$(ls -A "$PATCH_DIR" 2>/dev/null)" ]; then
-  cp -af "$PATCH_DIR"/. /workspace/
+  cp -rf "$PATCH_DIR"/. /workspace/
 fi
 
 # 4. Clean up staging.

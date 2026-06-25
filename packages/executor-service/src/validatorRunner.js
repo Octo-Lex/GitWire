@@ -19,7 +19,7 @@
 // implementations.
 
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -135,9 +135,24 @@ function hashOutput(s) {
   return "sha256:" + createHash("sha256").update(s || "").digest("hex");
 }
 
+// Workspace tempdir base. Must be a host-shared volume (Docker-in-LXC: the
+// nested Docker daemon needs to see these files on the host filesystem, not
+// inside the executor-service container's overlay). docker-compose.yml mounts
+// executor_workspaces:/workspace-tmp for this purpose. Falls back to tmpdir()
+// in non-container (dev/test) contexts.
+const WORKSPACE_TMP = process.env.EXECUTOR_WORKSPACE_TMP || "/workspace-tmp";
+
 // ── Workspace materialization ───────────────────────────────────────────────
 async function materializeWorkspace(files) {
-  const workspace = await mkdtemp(join(tmpdir(), "gitwire-validator-"));
+  const tmpBase = WORKSPACE_TMP && await import("node:fs/promises").then(fs => fs.access(WORKSPACE_TMP).then(() => WORKSPACE_TMP).catch(() => tmpdir())) || tmpdir();
+  const workspace = await mkdtemp(join(tmpBase, "gitwire-validator-"));
+  // Docker-in-LXC UID mapping: the executor-service container runs as uid 1000,
+  // but the host sees the tempdir as root-owned (uid 0). The nested Docker
+  // container (validator) runs as --user=1000:1000 and can't write to a
+  // root-owned directory. chmod 0o777 makes the workspace writable regardless
+  // of how Docker-in-LXC maps UIDs. Safe because it's an ephemeral tempdir
+  // cleaned up in finally.
+  await chmod(workspace, 0o777);
   for (const f of files || []) {
     // Path-traversal guard — mirrors dockerExecutorBackend.
     if (f.path.includes("..") || f.path.startsWith("/")) {

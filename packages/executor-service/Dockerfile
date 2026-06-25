@@ -25,6 +25,10 @@ WORKDIR /app
 USER root
 RUN apk add --no-cache docker-cli wget
 
+# Create workspace-tmp dir owned by uid 1000 so the validator runner can create
+# tempdirs there (mounted as a Docker volume in compose for Docker-in-LXC visibility).
+RUN mkdir -p /workspace-tmp && chown 1000:1000 /workspace-tmp && chmod 777 /workspace-tmp
+
 # Drop root. node:20-alpine already ships a non-root `node` user at uid 1000
 # (gid 1000), which matches the validator container's non-root contract.
 # Creating a fresh executor group at gid 1000 collides with the existing node
@@ -38,7 +42,7 @@ COPY --chown=node:node src ./src
 # Build-info via build args (v0.22.0+ pattern). The service doesn't currently
 # report these in /health, but they're here for parity with other packages
 # and future use.
-ARG GITWIRE_VERSION=0.23.0
+ARG GITWIRE_VERSION=0.23.1
 ARG GITWIRE_COMMIT_SHA=unknown
 ARG GITWIRE_BUILT_AT=unknown
 ENV GITWIRE_VERSION=$GITWIRE_VERSION \
