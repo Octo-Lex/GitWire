@@ -42,6 +42,12 @@ const lockRaw = readFileSync(join(ROOT, "package-lock.json"), "utf-8");
 const lock = JSON.parse(lockRaw);
 check("package-lock.json version matches root", lock.version === rootVersion,
   `lockfile has "${lock.version}"`);
+// Also check the root package entry inside the lockfile (lockfileVersion 3
+// stores packages[""].version which is separate from lock.version and can drift).
+const lockRootPkg = lock.packages && lock.packages[""];
+check("package-lock.json packages[\"\"].version matches root",
+  lockRootPkg && lockRootPkg.version === rootVersion,
+  lockRootPkg ? `has "${lockRootPkg.version}"` : "packages[\"\"] not found");
 
 // ── 3. Workspace packages ───────────────────────────────────────────────────
 const pkgsDir = join(ROOT, "packages");
