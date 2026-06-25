@@ -23,6 +23,7 @@ import {
   deriveBackendReachability,
 } from "./executorReachability.js";
 import { resolveValidatorImage } from "./validatorImage.js";
+import { compileValidationPlan } from "./validationPlanAdapter.js";
 
 // Pinned sandbox image digest.
 // In production, this would be the SHA-256 digest of the container image.
@@ -55,10 +56,8 @@ export function buildValidationPlan(taskEnvelope) {
     throw new Error("Task envelope must contain required_validation array");
   }
 
-  const commands = [...taskEnvelope.required_validation].sort(); // canonical order
-
-  // Validate each command
-  for (const cmd of commands) {
+  // Validate each requirement ID (sanity + security checks).
+  for (const cmd of taskEnvelope.required_validation) {
     if (typeof cmd !== "string" || cmd.length === 0) {
       throw new Error(`Invalid validation command: must be a non-empty string`);
     }
@@ -66,19 +65,25 @@ export function buildValidationPlan(taskEnvelope) {
       throw new Error(`Validation command exceeds max length: ${cmd.substring(0, 40)}...`);
     }
     // No shell metacharacters — prevents injection
-    // The regex matches: ; & | ` $ ( ) { } < > \n \r \t
     if (/[;&|`$(){}<>\n\r\t]/.test(cmd)) {
       throw new Error(`Validation command contains shell metacharacters: ${cmd}`);
     }
   }
 
+  // v0.23.0 Task 9: compile semantic IDs into executable commands via the
+  // validation-plan adapter.
+  const plan = compileValidationPlan(taskEnvelope.required_validation);
+  const commands = plan.executable_commands;
+
   const planContent = JSON.stringify({
     commands,
     image_digest: SANDBOX_IMAGE_DIGEST,
+    required_validation: taskEnvelope.required_validation,
+    acceptance_policy: plan.acceptance_policy,
   });
   const validationPlanHash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
 
-  return { commands, validation_plan_hash: validationPlanHash };
+  return { commands, validation_plan_hash: validationPlanHash, acceptance_policy: plan.acceptance_policy, unmapped: plan.unmapped };
 }
 
 /**

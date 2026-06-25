@@ -17,6 +17,7 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import crypto from "crypto";
+import { compileValidationPlan } from "../lib/validationPlanAdapter.js";
 import {
   ACTOR_KINDS,
   canCreateProposal,
@@ -2296,10 +2297,16 @@ function validateCommandSetInternal(executedCommands, requiredCommands) {
  * server-side from locked state — not from caller-supplied values.
  */
 function buildValidationPlanForRecorder(envelope) {
-  const commands = [...envelope.required_validation].sort();
+  // v0.23.0 Task 9: use the validation-plan adapter for the same semantic→executable
+  // compilation as sandboxRunner.buildValidationPlan. Both sides must produce the
+  // same hash content or the verifier rejects the receipt.
+  const plan = compileValidationPlan(envelope.required_validation);
+  const commands = plan.executable_commands;
   const planContent = JSON.stringify({
     commands,
     image_digest: "sha256:node-executor-v1",
+    required_validation: envelope.required_validation,
+    acceptance_policy: plan.acceptance_policy,
   });
   const validation_plan_hash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
   return { commands, validation_plan_hash };

@@ -243,8 +243,11 @@ describe("Verification Worker — sandbox runner contracts", () => {
     expect(sandboxRunner).toMatch(/required_validation/);
   });
 
-  it("validation plan is sorted canonically", () => {
-    expect(sandboxRunner).toMatch(/\.sort\(\)/);
+  it("validation plan uses the validation-plan adapter for command compilation", () => {
+    // v0.23.0 Task 9: buildValidationPlan now uses compileValidationPlan()
+    // from validationPlanAdapter.js instead of raw .sort() on required_validation.
+    // The adapter handles semantic→executable translation + deduplication + sorting.
+    expect(sandboxRunner).toMatch(/compileValidationPlan/);
   });
 
   it("rejects shell metacharacters in commands", () => {
