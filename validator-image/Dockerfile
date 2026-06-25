@@ -15,9 +15,9 @@
 
 FROM node:20-bookworm-slim
 
-# Create non-root user matching the executor's --user=1000:1000 contract.
-RUN groupadd -g 1000 validator && \
-    useradd -u 1000 -g 1000 -m -s /bin/sh validator
+# node:20-bookworm-slim already ships a non-root `node` user at uid/gid 1000,
+# which matches the executor's --user=1000:1000 contract. Reuse it rather than
+# creating a new user (groupadd -g 1000 would collide with the existing node group).
 
 # Redirect npm/HOME writes to /workspace (the writable bind mount).
 # Without this, npm tries to write to ~ or / which are read-only at runtime.
