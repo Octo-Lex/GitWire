@@ -174,7 +174,8 @@ export async function generatePatchForProposal(proposalId, options = {}) {
     throw new Error("Cannot generate patch: proposal has no repo_full_name");
   }
   const config = await getConfigForRepo(proposal.repo_full_name);
-  checkPatchPolicy(config?.ci_healing, diagnosis);
+  const healingConfig = config?.pillars?.ci_healing ?? config?.ci_healing;
+  checkPatchPolicy(healingConfig, diagnosis);
 
   // ── 5. Build bounded PatchInputBundle BEFORE generation ──────────────────
   const canonicalBundle = buildPatchInputBundle(proposal, diagnosis, evidenceRefs);
