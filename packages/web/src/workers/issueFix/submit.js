@@ -93,10 +93,12 @@ export async function submitFix(ctx, analysis, validated) {
     // Mark action as succeeded
     await succeed(fixAction.id, { pr_number: pr.number, pr_url: pr.html_url, branch: branchName });
 
-    // Notify Telegram subscribers
+    // Notify Telegram subscribers (non-blocking but caught)
     notifyIssueFix(repo, {
       issue_number: issueNumber,
       status: "fix_pr_created",
+    }).catch((err) => {
+      logger.warn({ err: err.message, repo }, "Telegram issue-fix notification failed (non-fatal)");
     });
 
     // Add labels to PR

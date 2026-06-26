@@ -117,12 +117,14 @@ webhookRouter.post(
             { deliveryId, rules: customResults.map((r) => r.name) },
             "Custom rules executed"
           );
-          // Notify Telegram subscribers
+          // Notify Telegram subscribers (non-blocking but caught)
           for (const r of customResults) {
             notifyCustomRule(payload.repository.full_name, {
               rule_name: r.name,
               action_type: r.actions?.[0]?.type,
               matched: true,
+            }).catch((err) => {
+              logger.warn({ err: err.message }, "Telegram custom rule notification failed (non-fatal)");
             });
           }
         }
@@ -152,13 +154,15 @@ webhookRouter.post(
               { deliveryId, pr: pr.number, gateResults: gateResults.length, failed: failed.length },
               "Quality gates evaluated"
             );
-            // Notify Telegram subscribers
+            // Notify Telegram subscribers (non-blocking but caught)
             const allPassed = failed.length === 0;
             notifyGateResult(payload.repository.full_name, {
               pr_number: pr.number,
               passed: allPassed,
               gate_name: gateResults.map((g) => g.name).join(", "),
               summary: allPassed ? "All gates passed" : `${failed.length} gate(s) failed`,
+            }).catch((err) => {
+              logger.warn({ err: err.message }, "Telegram gate result notification failed (non-fatal)");
             });
           }
         }
