@@ -659,7 +659,7 @@ export async function runSandboxVerification(options) {
     commands: execResult.command_results,
     exit_status: execResult.aggregate_exit_status,
     validation_plan_hash,
-    sandbox_image_digest: isolation.sandbox_image_digest,
+    sandbox_image_digest: resolvedSandboxDigest,
     limits_applied: appliedLimits,
     redacted_summary: execResult.inconclusive_reason || `executed ${commandsExecuted.length} commands`,
     ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),

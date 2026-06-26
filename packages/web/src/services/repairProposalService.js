@@ -2101,12 +2101,21 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
       );
     }
 
-    // P1 FIX: Verify sandbox_image_digest against the approved pinned digest.
-    // The caller cannot use an arbitrary image identity.
+    // P1 FIX: Verify sandbox_image_digest against an approved pinned digest.
+    // The caller cannot use an arbitrary image identity. For node-executor,
+    // the approved digest is the static SANDBOX_IMAGE_DIGEST. For executor-
+    // service, the approved digest is the configured validator image digest
+    // (GITWIRE_VALIDATOR_IMAGE_DIGEST) — the executor-service inspects the real
+    // image and returns inspected_image_digest, which must match the config.
     const { SANDBOX_IMAGE_DIGEST } = await import("../lib/sandboxRunner.js");
-    if (verificationInput.sandbox_image_digest !== SANDBOX_IMAGE_DIGEST) {
+    const configuredValidatorDigest = process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST;
+    const approvedDigests = new Set([SANDBOX_IMAGE_DIGEST]);
+    if (configuredValidatorDigest) approvedDigests.add(configuredValidatorDigest);
+    if (!approvedDigests.has(verificationInput.sandbox_image_digest)) {
       throw new Error(
-        `Verification sandbox_image_digest does not match approved pinned image digest`
+        `Verification sandbox_image_digest does not match any approved pinned image digest ` +
+        `(got: ${verificationInput.sandbox_image_digest?.slice(0, 30)}..., ` +
+        `approved: [${[...approvedDigests].map(d => d.slice(0, 30)).join(", ")}])`
       );
     }
 
