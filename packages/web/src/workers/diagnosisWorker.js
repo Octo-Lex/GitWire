@@ -43,7 +43,7 @@ export function startDiagnosisWorker() {
         const refreshedProposal = await getProposal(proposalId);
         if (refreshedProposal && refreshedProposal.status === "evidence_collected") {
           const config = await getConfigForRepo(refreshedProposal.repo_full_name);
-          const healingConfig = config?.ci_healing;
+          const healingConfig = config?.pillars?.ci_healing ?? config?.ci_healing;
 
           if (healingConfig?.auto_patch === true) {
             const minConfidence = healingConfig.min_confidence_to_patch || "medium";
