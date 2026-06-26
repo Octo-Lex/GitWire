@@ -17,6 +17,7 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import crypto from "crypto";
+import { compileValidationPlan } from "../lib/validationPlanAdapter.js";
 import {
   ACTOR_KINDS,
   canCreateProposal,
@@ -2099,8 +2100,13 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
       );
     }
 
-    // Validate executed commands against the required plan
-    const requiredCommands = [...envelope.required_validation].sort();
+    // Validate executed commands against the compiled validation plan
+    // v0.23.0 Task 9: compile semantic IDs to executable commands, then compare.
+    // Comparing raw envelope.required_validation against executed commands
+    // fails because the executor receives compiled command IDs (test, build),
+    // not semantic IDs (test_or_build_result, policy_scope_check).
+    const compiledPlan = compileValidationPlan(envelope.required_validation);
+    const requiredCommands = compiledPlan.executable_commands;
     const executedCommands = verificationInput.commands.map((c) => c.command).sort();
     const commandCheck = validateCommandSetInternal(executedCommands, requiredCommands);
     if (!commandCheck.valid) {
@@ -2296,10 +2302,16 @@ function validateCommandSetInternal(executedCommands, requiredCommands) {
  * server-side from locked state — not from caller-supplied values.
  */
 function buildValidationPlanForRecorder(envelope) {
-  const commands = [...envelope.required_validation].sort();
+  // v0.23.0 Task 9: use the validation-plan adapter for the same semantic→executable
+  // compilation as sandboxRunner.buildValidationPlan. Both sides must produce the
+  // same hash content or the verifier rejects the receipt.
+  const plan = compileValidationPlan(envelope.required_validation);
+  const commands = plan.executable_commands;
   const planContent = JSON.stringify({
     commands,
     image_digest: "sha256:node-executor-v1",
+    required_validation: envelope.required_validation,
+    acceptance_policy: plan.acceptance_policy,
   });
   const validation_plan_hash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
   return { commands, validation_plan_hash };
