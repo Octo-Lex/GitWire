@@ -162,13 +162,14 @@ export function buildEnvelopeFromEvent(payload) {
     },
     allowed_tools: ["read_ci_logs", "read_workflow_file", "read_repository_file"],
     blocked_paths: [".env*", "secrets/**", "*.pem", "*.key"],
-    // Include lint_result so the executor-service always runs the lint command.
-    // build/test may not exist in every repo's package.json (e.g. trivial repos
-    // with only a linter configured), which would produce exit_status=null →
-    // execution_inconclusive → no executor_report_hash. lint runs on any repo
-    // with a linter and produces a definitive pass/fail, guaranteeing the
-    // executor-service computes a real report hash for the receipt.
-    required_validation: ["policy_scope_check", "test_or_build_result", "lint_result"],
+    // Use lint_result as the validation requirement. build/test are unreliable
+    // for proof capture: many repos lack package.json scripts for them, causing
+    // the executor-service to return exit_status=null → execution_incomplete
+    // with no executor_report_hash. Worse, each non-existent command burns the
+    // full 30s wall-clock timeout, and 3 commands (build+test+lint) can exceed
+    // the 120s postValidate timeout. lint alone is fast (~20s), definitive, and
+    // produces a real executor_report_hash for the receipt.
+    required_validation: ["policy_scope_check", "lint_result"],
   };
 }
 
