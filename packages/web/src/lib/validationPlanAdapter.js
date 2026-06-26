@@ -26,6 +26,11 @@ export const VALIDATION_PLAN_MAPPINGS = Object.freeze({
     acceptance: "test_or_build",
     app_side_only: false,
   },
+  lint_result: {
+    commands: ["lint"],
+    acceptance: "lint_pass",
+    app_side_only: false,
+  },
   policy_scope_check: {
     commands: [],
     acceptance: "policy_scope_predicate",
