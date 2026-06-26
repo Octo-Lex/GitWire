@@ -38,7 +38,8 @@ export async function handleWorkflowRun(payload, deliveryId, ctx) {
         {
           priority: 2,
           // Dedup: same delivery ID = same webhook delivery
-          jobId: "ci-evidence:" + deliveryId,
+          // BullMQ jobIds cannot contain ":" — use "-" as separator.
+          jobId: "ci-evidence-" + deliveryId,
         }
       );
       ctx.logger.info(
