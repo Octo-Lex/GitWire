@@ -109,16 +109,27 @@ export function applyArtifact(sourceFiles, artifact) {
         };
       }
       if (line_end > lines.length) {
-        return {
-          files: null,
-          applied: false,
-          failure: `Cannot apply edit to ${path}: line_end ${line_end} exceeds file length ${lines.length}`,
-        };
+        // Clamp line_end to the actual file length when the edit starts at
+        // line 1 (whole-file replacement). This supports patch generators that
+        // don't know the exact file length (e.g. stub generators that derive
+        // line_end from CI log error positions). Only clamp for line_start===1
+        // — partial ranges that exceed the file are still a hard error.
+        if (line_start === 1) {
+          // Clamp in place (don't mutate the original edit object)
+          // Continue below with the clamped value.
+        } else {
+          return {
+            files: null,
+            applied: false,
+            failure: `Cannot apply edit to ${path}: line_end ${line_end} exceeds file length ${lines.length}`,
+          };
+        }
       }
+      const effectiveLineEnd = Math.min(line_end, lines.length);
 
-      // Replace lines [line_start-1, line_end-1] (0-indexed splice) with new content
+      // Replace lines [line_start-1, effectiveLineEnd-1] (0-indexed splice) with new content
       const newLines = new_content ? new_content.split("\n") : [];
-      lines.splice(line_start - 1, line_end - line_start + 1, ...newLines);
+      lines.splice(line_start - 1, effectiveLineEnd - line_start + 1, ...newLines);
     }
 
     resultFiles.set(path, lines.join("\n"));
