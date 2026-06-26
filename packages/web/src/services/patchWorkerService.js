@@ -111,15 +111,39 @@ export async function generateCandidatePatch(bundle) {
       }
     }
 
-    if (unusedVars.length > 0) {
-      // Remove lines that declare unused variables. Match common patterns:
-      //   const varName = ...;
-      //   let varName = ...;
-      //   var varName = ...;
-      // Only remove declarations where the variable is unused (not reassignments).
+    if (unusedVars.length > 0 || isUnusedVarsFailure) {
+      // The diagnosis may only capture the FIRST ESLint error (CI logs are
+      // often truncated). Supplement with a source-content scan: find ALL
+      // const/let/var declarations whose names are never referenced elsewhere
+      // in the file. This is a mini dead-declaration detector — sufficient
+      // for the no-unused-vars lint rule, which is the common proof case.
       const lines = sourceContent.split("\n");
+      // Collect all declarations: { name, lineIndex }
+      const declarations = [];
+      const declRegex = /^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=/;
+      for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(declRegex);
+        if (m) declarations.push({ name: m[1], lineIndex: i });
+      }
+      // A declaration is "unused" if its name doesn't appear on any OTHER line
+      // (the declaration line itself always contains the name). This is a
+      // conservative heuristic — it won't remove declarations that are
+      // referenced even once.
+      const unusedFromSource = declarations.filter((d) => {
+        for (let i = 0; i < lines.length; i++) {
+          if (i === d.lineIndex) continue;
+          // Word-boundary match to avoid partial matches
+          const refRegex = new RegExp(`\\b${escapeRegex(d.name)}\\b`);
+          if (refRegex.test(lines[i])) return false; // referenced → not unused
+        }
+        return true; // never referenced → unused
+      }).map(d => d.name);
+
+      // Merge: diagnosis-reported vars + source-detected unused vars
+      const allUnused = [...new Set([...unusedVars, ...unusedFromSource])];
+
       const fixedLines = lines.filter((line) => {
-        for (const v of unusedVars) {
+        for (const v of allUnused) {
           // Match declaration at start of line (after optional whitespace):
           //   const/let/var varName =
           const declPattern = new RegExp(`^\\s*(?:const|let|var)\\s+${escapeRegex(v)}\\s*=`);
