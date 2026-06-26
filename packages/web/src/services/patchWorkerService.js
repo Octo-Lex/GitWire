@@ -93,8 +93,20 @@ export async function generateCandidatePatch(bundle) {
     sourceFile = allSourceFiles.find(f => f.path === failingFileName || f.path.endsWith("/" + failingFileName)) || null;
   }
   if (!sourceFile) {
-    // Fall back: first .js source file (skip workflow YAML/configs)
-    sourceFile = allSourceFiles.find(f => /\.m?[jt]sx?$/.test(f.path)) || allSourceFiles[0] || null;
+    // For no-unused-vars: find the source file that CONTAINS the unused
+    // variable mentioned in the diagnosis. This is more reliable than
+    // guessing by file extension — the diagnosis tells us the variable name.
+    const unusedVarInDiag = diagTextRaw.match(/'([A-Za-z_$][A-Za-z0-9_$]*)' is assigned a value but never used/);
+    if (unusedVarInDiag) {
+      const varName = unusedVarInDiag[1];
+      sourceFile = allSourceFiles.find(f =>
+        f.content && new RegExp(`(?:const|let|var)\\s+${escapeRegex(varName)}\\s*=`).test(f.content)
+      ) || null;
+    }
+  }
+  if (!sourceFile) {
+    // Fall back: first .js source file (skip workflow YAML/configs/package.json)
+    sourceFile = allSourceFiles.find(f => /\.m?[jt]sx?$/.test(f.path) && !f.path.includes("node_modules")) || allSourceFiles[0] || null;
   }
 
   const targetPath = sourceFile ? sourceFile.path : "src/unknown";
