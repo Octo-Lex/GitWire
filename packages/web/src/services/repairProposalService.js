@@ -1677,9 +1677,16 @@ export async function recordPatchProposal(id, patchInput = {}, options = {}) {
   }
 
   return db.transaction(async (client) => {
-    // Lock the row
+    // Lock the row. JOIN repositories so repo_full_name is available for the
+    // policy re-check below — repair_proposals only stores repo_id, not the
+    // resolved name. SELECT ... FOR UPDATE locks the proposal row; the JOIN
+    // to repositories is read-only and does not extend the lock.
     const { rows: [proposal] } = await client.query(
-      "SELECT * FROM repair_proposals WHERE id = $1 FOR UPDATE",
+      `SELECT p.*, r.full_name as repo_full_name
+       FROM repair_proposals p
+       LEFT JOIN repositories r ON r.github_id = p.repo_id
+       WHERE p.id = $1
+       FOR UPDATE OF p`,
       [id]
     );
     if (!proposal) throw new Error(`Repair proposal not found: ${id}`);
