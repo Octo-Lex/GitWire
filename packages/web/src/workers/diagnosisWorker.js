@@ -61,7 +61,7 @@ export function startDiagnosisWorker() {
                 },
                 {
                   priority: 4,
-                  jobId: `patch:${proposalId}`,
+                  jobId: `patch-${proposalId}`,
                 }
               );
               logger.info(

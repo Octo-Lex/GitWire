@@ -46,7 +46,7 @@ export function startPatchWorker() {
           },
           {
             priority: 5,
-            jobId: `verify:${proposalId}`,
+            jobId: `verify-${proposalId}`,
           }
         );
         logger.info(
