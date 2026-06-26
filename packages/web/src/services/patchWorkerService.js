@@ -88,11 +88,15 @@ export async function generateCandidatePatch(bundle) {
 
   // Parse to derive scope values from actual artifact content
   // (recordPatchProposal will re-verify these)
+  // Each file entry references the same content-addressed artifact_ref —
+  // the patch is stored as a single blob covering all files, so every
+  // file entry points back to that durable artifact for verification.
   const parsed = JSON.parse(artifactContent);
   const derived = {
     changed_files: parsed.files.map((f) => ({
       path: f.path,
       change_type: f.change_type,
+      artifact_ref: ref,
       lines_changed: f.edits.reduce((s, e) => {
         const oldLines = Math.max(0, e.line_end - e.line_start + 1);
         const newLines = e.new_content ? e.new_content.split("\n").length : 0;

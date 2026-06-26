@@ -396,7 +396,8 @@ describe("Patch Worker — policy-gated enqueue from diagnosis worker", () => {
 
   it("enqueues patch job only when policy allows", () => {
     expect(diagnosisWorker).toMatch(/patchQueue\.add/);
-    expect(diagnosisWorker).toMatch(/patch:\$\{proposalId\}/);
+    // BullMQ forbids ":" in jobId strings — must use a hyphen separator.
+    expect(diagnosisWorker).toMatch(/patch-\$\{proposalId\}/);
   });
 
   it("policy failure does not block diagnosis completion", () => {
