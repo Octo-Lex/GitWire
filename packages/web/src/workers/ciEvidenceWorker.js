@@ -68,7 +68,7 @@ export function startCIEvidenceWorker() {
           },
           {
             priority: 3,
-            jobId: `diagnosis:${proposal.id}`,
+            jobId: `diagnosis-${proposal.id}`,
           }
         );
         logger.info(
