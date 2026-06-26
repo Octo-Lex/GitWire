@@ -192,12 +192,10 @@ export async function generateCandidatePatch(bundle) {
         // is replaced. This is a stub-only approach — the LLM-backed engine
         // would fetch and modify the actual source.
         fixedContent = `// Fixed by GitWire: removed unused variables (${unusedVars.join(", ")})`;
-        // Derive the file's line count from the CI log: the highest ESLint
-        // error line number + a buffer. applyArtifact fails closed if line_end
-        // exceeds the actual file length, so this must be >= real line count.
-        // ESLint errors reference line:col (e.g. "45:7  error  ...").
-        const lineNumbers = [...fullDiagText.matchAll(/(\d+):\d+\s+error/g)].map(m => parseInt(m[1], 10));
-        lineCount = lineNumbers.length > 0 ? Math.max(...lineNumbers) + 10 : 100;
+        // Use a large line_end for the whole-file replacement. applyArtifact
+        // clamps line_end to the actual file length when line_start===1, so
+        // this safely covers any file size without knowing the exact count.
+        lineCount = 999999;
       }
 
       artifactContent = JSON.stringify({
