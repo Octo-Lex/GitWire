@@ -26,6 +26,17 @@
 
 import { validateBackendContract } from "./executorBackend.js";
 
+// Lazy logger — avoids hard dependency on @gitwire/runtime at module load (which
+// throws if the runtime isn't initialized, breaking unit tests). Mirrors
+// executorReachability.js and executorServiceClient.js: console.* with JSON.
+function getLogger() {
+  return {
+    info: (obj, msg) => console.debug(JSON.stringify({ level: 30, msg, ...obj })),
+    warn: (obj, msg) => console.warn(JSON.stringify({ level: 40, msg, ...obj })),
+    error: (obj, msg) => console.error(JSON.stringify({ level: 50, msg, ...obj })),
+  };
+}
+
 /**
  * Normalize an executor-service response to the complete ExecResult shape that
  * sandboxRunner.js expects. The service returns a rich report on success, but
@@ -135,12 +146,19 @@ export const executorServiceBackend = {
   async run({ files, commands, limits, sandbox_image_digest: _ignored }) {
     const url = process.env.GITWIRE_EXECUTOR_SERVICE_URL;
     if (!url) {
+      getLogger().warn(
+        { backend: "executor-service", result_source: "synthetic_inconclusive",
+          inconclusive_reason: "executor_service_url_not_configured" },
+        "executorServiceBackend.run: URL not configured → synthetic"
+      );
       return {
         overall: "inconclusive",
         command_results: [],
         aggregate_exit_status: null,
         inconclusive_reason: "executor_service_url_not_configured",
         inconclusive_detail: "GITWIRE_EXECUTOR_SERVICE_URL not set",
+        validation_response_source: "synthetic_inconclusive",
+        synthetic_fallback_used: true,
       };
     }
     const token = process.env.GITWIRE_EXECUTOR_SERVICE_TOKEN;
@@ -166,7 +184,60 @@ export const executorServiceBackend = {
       },
     };
 
+    // DIAGNOSTIC (Task 8 Step 5): log that the backend was invoked with a real
+    // request. Guards the proof-critical config presence without logging values.
+    getLogger().info(
+      {
+        backend: "executor-service",
+        backend_invoked: true,
+        selected_backend_id: "executor-service",
+        supports_pass: this.supports_pass,
+        request_id: requestBody.request_id,
+        executor_url: url.replace(/\/+$/, ""),
+        command_count: requestBody.commands.length,
+        file_count: requestBody.files.length,
+        has_token: Boolean(token),
+        has_validator_image_ref: Boolean(validator_image_ref),
+        has_validator_image_digest: Boolean(validator_image_digest),
+        validator_image_digest_prefix: validator_image_digest?.slice(0, 20) || null,
+      },
+      "executorServiceBackend.run: invoked"
+    );
+
     const response = await postValidate({ url, token, body: requestBody });
+
+    // DIAGNOSTIC: classify the response source. This is the load-bearing
+    // classification — synthetic responses MUST be marked so downstream receipt
+    // persistence doesn't produce a receipt that looks like it came from the
+    // executor-service when it actually came from client fallback.
+    const isSynthetic = response.synthetic_fallback_used === true ||
+      response.validation_response_source === "synthetic_inconclusive";
+    const resultSource = isSynthetic
+      ? "synthetic_inconclusive"
+      : (response.executor_report_hash ? "real_executor_service" : "executor_service_inconclusive");
+
+    getLogger().info(
+      {
+        backend: "executor-service",
+        postValidate_returned: true,
+        result_source: resultSource,
+        synthetic_fallback_used: isSynthetic,
+        overall: ["pass", "fail", "inconclusive"].includes(response.overall) ? response.overall : "inconclusive",
+        aggregate_exit_status: response.aggregate_exit_status ?? null,
+        inconclusive_reason: response.inconclusive_reason || null,
+        // Proof-critical field PRESENCE (not values) — the exact fields whose
+        // null-ness in persisted receipts is the open issue.
+        executor_report_hash_present: response.executor_report_hash != null,
+        executor_report_ref_present: response.executor_report_ref != null,
+        inspected_image_digest_present: response.inspected_image_digest != null,
+        runtime_version: response.runtime_version || null,
+        command_result_count: (response.command_results || []).length,
+        sandbox_image_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        validator_image_digest: validator_image_digest?.slice(0, 20) + "..." || null,
+      },
+      "executorServiceBackend.run: response classified"
+    );
+
     // P1 #3 fix: normalize EVERY return to the complete ExecResult shape that
     // sandboxRunner expects. postValidate synthesizes failure responses with
     // only { overall, inconclusive_reason, inconclusive_detail } — missing
@@ -176,7 +247,12 @@ export const executorServiceBackend = {
     //
     // On success, the response already has command_results + aggregate_exit_status;
     // this normalization is a no-op for well-formed responses.
-    return normalizeExecResult(response);
+    const normalized = normalizeExecResult(response);
+    // Carry the diagnostic classification through to the exec result so the
+    // receipt path can mark synthetic responses.
+    normalized.validation_response_source = resultSource;
+    normalized.synthetic_fallback_used = isSynthetic;
+    return normalized;
   },
 };
 

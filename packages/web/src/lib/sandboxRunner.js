@@ -198,6 +198,12 @@ export function buildExecutionReceipt(params) {
     executor_report_ref,
     inspected_image_digest,
     inspection_hash,
+    // DIAGNOSTIC (Task 8 Step 5): source classification. Marks whether the
+    // receipt's executor result came from a real executor-service response or
+    // from client-side synthetic fallback. Part of the content-addressed hash
+    // so synthetic and real receipts are always distinct. Absent for non-
+    // executor-service backends (treated as null).
+    validation_response_source,
   } = params;
 
   const receiptObject = {
@@ -239,6 +245,12 @@ export function buildExecutionReceipt(params) {
     executor_report_ref: executor_report_ref || null,
     inspected_image_digest: inspected_image_digest || null,
     inspection_hash: inspection_hash || null,
+    // DIAGNOSTIC (Task 8 Step 5): source classification. "executor_service" =
+    // real response from the service; "synthetic_inconclusive" = client-side
+    // fallback (network error, non-200, timeout). null for non-executor-service
+    // backends. This field makes synthetic receipts unambiguous — they can no
+    // longer masquerade as executor-service receipts missing report bindings.
+    validation_response_source: validation_response_source || null,
     ...(inconclusive_reason ? { inconclusive_reason } : {}),
     // NO timestamps or DB IDs — hash is content-addressed only
   };
@@ -504,6 +516,11 @@ export async function runSandboxVerification(options) {
     executor_report_ref: execResult.executor_report_ref,
     inspected_image_digest: execResult.inspected_image_digest,
     inspection_hash: execResult.inspection_hash,
+    // DIAGNOSTIC (Task 8 Step 5): carry the response source classification
+    // from the backend into the receipt. For executor-service, this is
+    // "executor_service" / "synthetic_inconclusive" / etc. For other backends,
+    // undefined → null.
+    validation_response_source: execResult.validation_response_source,
   });
 
   // v0.23.0 Task 6 — persist the raw executor report durably if the backend
@@ -592,6 +609,7 @@ export async function runSandboxVerification(options) {
         executor_report_ref: null,
         inspected_image_digest: execResult.inspected_image_digest,
         inspection_hash: execResult.inspection_hash,
+        validation_response_source: execResult.validation_response_source,
       }),
     };
   }
