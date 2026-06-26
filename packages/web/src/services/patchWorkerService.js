@@ -70,8 +70,33 @@ export async function generateCandidatePatch(bundle) {
     throw new Error("Cannot generate patch: bundle missing evidence_refs");
   }
 
-  // Derive target file from source_files or workflow_file evidence
-  const sourceFile = (bundle.source_files || [])[0];
+  // Derive target file from source_files or workflow_file evidence.
+  // For lint errors, prefer the file mentioned in the diagnosis (e.g. the
+  // file that ESLint flagged), not just source_files[0] which may be the
+  // workflow YAML rather than the actual source file with the lint error.
+  const allSourceFiles = bundle.source_files || [];
+  const diagTextRaw = [
+    bundle.diagnosis.root_cause_claim || "",
+    bundle.diagnosis.suggested_fix || "",
+    bundle.diagnosis.summary || "",
+  ].join(" ");
+
+  // Try to find the failing file name from the diagnosis text. ESLint output
+  // and CI logs typically reference the file path (e.g. "app.js", "src/x.ts").
+  // Match common source file extensions.
+  const fileRefMatch = diagTextRaw.match(/([\w./-]+\.(?:js|ts|mjs|cjs|jsx|tsx|py|go|rs|java|rb|php))/);
+  const failingFileName = fileRefMatch ? fileRefMatch[1] : null;
+
+  // Prefer the file matching the diagnosis; fall back to the first source file.
+  let sourceFile = null;
+  if (failingFileName) {
+    sourceFile = allSourceFiles.find(f => f.path === failingFileName || f.path.endsWith("/" + failingFileName)) || null;
+  }
+  if (!sourceFile) {
+    // Fall back: first .js source file (skip workflow YAML/configs)
+    sourceFile = allSourceFiles.find(f => /\.m?[jt]sx?$/.test(f.path)) || allSourceFiles[0] || null;
+  }
+
   const targetPath = sourceFile ? sourceFile.path : "src/unknown";
   const sourceContent = sourceFile ? sourceFile.content : "";
 
@@ -81,13 +106,7 @@ export async function generateCandidatePatch(bundle) {
   // names either in root_cause_claim (ESLint output) or suggested_fix.
   // This is a targeted stub enhancement for lint_error/no-unused-vars — the
   // general LLM-backed engine would handle arbitrary failure types.
-  const diagText = [
-    bundle.diagnosis.root_cause_claim || "",
-    bundle.diagnosis.suggested_fix || "",
-    bundle.diagnosis.summary || "",
-  ].join(" ");
-
-  const isUnusedVarsFailure = /no-unused-vars|assigned a value but never used/i.test(diagText);
+  const isUnusedVarsFailure = /no-unused-vars|assigned a value but never used/i.test(diagTextRaw);
 
   let artifactContent;
   if (isUnusedVarsFailure && sourceContent) {
@@ -96,13 +115,13 @@ export async function generateCandidatePatch(bundle) {
     const unusedVarPattern = /'([^']+)' is assigned a value but never used/g;
     const unusedVars = [];
     let match;
-    while ((match = unusedVarPattern.exec(diagText)) !== null) {
+    while ((match = unusedVarPattern.exec(diagTextRaw)) !== null) {
       unusedVars.push(match[1]);
     }
 
     // Also match suggested_fix patterns like: Remove unused variables 'a', 'b'
     const removePattern = /Remove.*?variables?\s+(.+)/i;
-    const removeMatch = diagText.match(removePattern);
+    const removeMatch = diagTextRaw.match(removePattern);
     if (removeMatch) {
       // Extract quoted names from the suggested fix
       const quoted = removeMatch[1].matchAll(/'([^']+)'/g);
