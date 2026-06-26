@@ -2168,12 +2168,19 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
     }
 
     // Verify the verification fingerprint against CANONICAL values
-    // (not caller-controlled equivalents)
+    // (not caller-controlled equivalents). For executor-service, the
+    // sandbox_image_digest in the fingerprint is the configured validator image
+    // digest (inspected_image_digest), not the static node-executor digest.
+    // Match the approved digest that was used to build the fingerprint.
+    const fingerprintSandboxDigest =
+      approvedDigests.has(verificationInput.sandbox_image_digest)
+        ? verificationInput.sandbox_image_digest
+        : SANDBOX_IMAGE_DIGEST;
     const expectedFingerprint = computeVerificationFingerprintInternal({
       patch_artifact_hash: patchProposal.artifact_hash,
       base_sha: proposal.head_sha,
       input_bundle_hash: patchProposal.input_bundle_hash,
-      sandbox_image_digest: SANDBOX_IMAGE_DIGEST,
+      sandbox_image_digest: fingerprintSandboxDigest,
       validation_plan_hash: canonicalPlan.validation_plan_hash,
     });
     if (verificationInput.verification_fingerprint !== expectedFingerprint) {
