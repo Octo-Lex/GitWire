@@ -254,7 +254,14 @@ export async function generateCandidatePatch(bundle) {
       change_type: f.change_type,
       artifact_ref: ref,
       lines_changed: f.edits.reduce((s, e) => {
-        const oldLines = Math.max(0, e.line_end - e.line_start + 1);
+        // For whole-file replacements with line_end=999999 (sentinel for
+        // "replace entire file"), use the new_content's line count as the
+        // actual changed line count, not the sentinel value. The real old
+        // line count is unknown to the stub (no source content), but the
+        // new content is what matters for scope budgeting.
+        const oldLines = e.line_end >= 999999
+          ? (e.new_content ? e.new_content.split("\n").length : 0)
+          : Math.max(0, e.line_end - e.line_start + 1);
         const newLines = e.new_content ? e.new_content.split("\n").length : 0;
         return s + Math.max(oldLines, newLines);
       }, 0),

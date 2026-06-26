@@ -158,7 +158,11 @@ export function parseArtifact(content) {
         throw new Error(`Invalid edit range for ${file.path}`);
       }
       // Lines changed = span of the edit + new content lines
-      const oldLines = Math.max(0, edit.line_end - edit.line_start + 1);
+      // For whole-file replacements (line_end=999999 sentinel), use the new
+      // content's line count since the sentinel doesn't reflect real line count.
+      const oldLines = edit.line_end >= 999999
+        ? (edit.new_content ? edit.new_content.split("\n").length : 0)
+        : Math.max(0, edit.line_end - edit.line_start + 1);
       const newLines = edit.new_content ? edit.new_content.split("\n").length : 0;
       fileLinesChanged += Math.max(oldLines, newLines);
     }
