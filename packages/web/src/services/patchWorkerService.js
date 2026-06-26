@@ -40,6 +40,15 @@ export { buildPatchInputBundle };
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
+ * Escape a string for safe use inside a RegExp.
+ * @param {string} s
+ * @returns {string}
+ */
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
  * Generate a candidate patch artifact from the bounded bundle.
  *
  * Produces canonical JSON structured edit operations, stores them in the
@@ -64,24 +73,102 @@ export async function generateCandidatePatch(bundle) {
   // Derive target file from source_files or workflow_file evidence
   const sourceFile = (bundle.source_files || [])[0];
   const targetPath = sourceFile ? sourceFile.path : "src/unknown";
+  const sourceContent = sourceFile ? sourceFile.content : "";
 
-  // Build structured edit operations — real content that can be parsed and verified
-  const artifactContent = JSON.stringify({
-    base_sha: bundle.head_sha,
-    files: [
-      {
-        path: targetPath,
-        change_type: "fix",
-        edits: [
+  // ── no-unused-vars fix path ─────────────────────────────────────────────
+  // When the diagnosis indicates unused-variable lint errors, produce a patch
+  // that removes the offending declarations. The diagnosis carries the variable
+  // names either in root_cause_claim (ESLint output) or suggested_fix.
+  // This is a targeted stub enhancement for lint_error/no-unused-vars — the
+  // general LLM-backed engine would handle arbitrary failure types.
+  const diagText = [
+    bundle.diagnosis.root_cause_claim || "",
+    bundle.diagnosis.suggested_fix || "",
+    bundle.diagnosis.summary || "",
+  ].join(" ");
+
+  const isUnusedVarsFailure = /no-unused-vars|assigned a value but never used/i.test(diagText);
+
+  let artifactContent;
+  if (isUnusedVarsFailure && sourceContent) {
+    // Extract variable names from ESLint-style error messages:
+    //   'varName' is assigned a value but never used
+    const unusedVarPattern = /'([^']+)' is assigned a value but never used/g;
+    const unusedVars = [];
+    let match;
+    while ((match = unusedVarPattern.exec(diagText)) !== null) {
+      unusedVars.push(match[1]);
+    }
+
+    // Also match suggested_fix patterns like: Remove unused variables 'a', 'b'
+    const removePattern = /Remove.*?variables?\s+(.+)/i;
+    const removeMatch = diagText.match(removePattern);
+    if (removeMatch) {
+      // Extract quoted names from the suggested fix
+      const quoted = removeMatch[1].matchAll(/'([^']+)'/g);
+      for (const q of quoted) {
+        if (!unusedVars.includes(q[1])) unusedVars.push(q[1]);
+      }
+    }
+
+    if (unusedVars.length > 0) {
+      // Remove lines that declare unused variables. Match common patterns:
+      //   const varName = ...;
+      //   let varName = ...;
+      //   var varName = ...;
+      // Only remove declarations where the variable is unused (not reassignments).
+      const lines = sourceContent.split("\n");
+      const fixedLines = lines.filter((line) => {
+        for (const v of unusedVars) {
+          // Match declaration at start of line (after optional whitespace):
+          //   const/let/var varName =
+          const declPattern = new RegExp(`^\\s*(?:const|let|var)\\s+${escapeRegex(v)}\\s*=`);
+          if (declPattern.test(line)) return false; // remove this line
+        }
+        return true;
+      });
+      const fixedContent = fixedLines.join("\n");
+
+      artifactContent = JSON.stringify({
+        base_sha: bundle.head_sha,
+        files: [
           {
-            line_start: 1,
-            line_end: 1,
-            new_content: `// Candidate fix for ${bundle.diagnosis.failure_category}: ${bundle.diagnosis.summary}`,
+            path: targetPath,
+            change_type: "fix",
+            edits: [
+              {
+                line_start: 1,
+                line_end: lines.length,
+                new_content: fixedContent,
+              },
+            ],
           },
         ],
-      },
-    ],
-  });
+      });
+    }
+  }
+
+  // ── Default stub path (comment-only, non-passing) ───────────────────────
+  // Used when the diagnosis doesn't match a targeted fix path, or when no
+  // source content is available. Produces a placeholder comment edit.
+  if (!artifactContent) {
+    artifactContent = JSON.stringify({
+      base_sha: bundle.head_sha,
+      files: [
+        {
+          path: targetPath,
+          change_type: "fix",
+          edits: [
+            {
+              line_start: 1,
+              line_end: 1,
+              new_content: `// Candidate fix for ${bundle.diagnosis.failure_category}: ${bundle.diagnosis.summary}`,
+            },
+          ],
+        },
+      ],
+    });
+  }
 
   // Store in durable content-addressed artifact store
   const { ref, hash } = await storeArtifact(artifactContent);
