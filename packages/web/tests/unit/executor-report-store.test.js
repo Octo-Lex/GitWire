@@ -119,3 +119,55 @@ describe("verifyExecutorReportHash — resolve + recompute + compare", () => {
     ).rejects.toThrow(/not found/);
   });
 });
+
+// ── Task 8 Step 5 regression: raw report storage invariant ──────────────────
+// The executor-service computes executor_report_hash over its raw response.
+// The app adds diagnostic fields (validation_response_source,
+// synthetic_fallback_used) AFTER receiving the response. Storing the
+// app-annotated object would make verifyExecutorReportHash fail because the
+// stored content differs from what the service hashed. These tests enforce
+// that the raw report (without app annotations) is what verifies correctly.
+
+describe("Task 8 Step 5 — raw report hash invariant", () => {
+  it("report with app diagnostic fields does NOT hash back (simulating the bug)", async () => {
+    // The raw report the executor-service hashed (no app fields):
+    const rawReport = {
+      report_schema_version: 1,
+      executor_service_id: "executor-service",
+      overall: "fail",
+      aggregate_exit_status: 2,
+    };
+    const crypto = await import("node:crypto");
+    const hash = "sha256:" + crypto.createHash("sha256").update(JSON.stringify(rawReport)).digest("hex");
+
+    // The app-annotated version (what the bug stored):
+    const annotatedReport = {
+      ...rawReport,
+      validation_response_source: "real_executor_service",
+      synthetic_fallback_used: false,
+      executor_report_hash: hash,
+    };
+
+    db.query.mockResolvedValueOnce({ rows: [{ content: JSON.stringify(annotatedReport) }] });
+    const result = await verifyExecutorReportHash(`executor-report:${hash}`, hash);
+    // The annotated report must NOT verify — it has fields the service didn't hash.
+    expect(result).toBe(false);
+  });
+
+  it("raw report (without app fields) hashes back correctly", async () => {
+    const rawReport = {
+      report_schema_version: 1,
+      executor_service_id: "executor-service",
+      overall: "fail",
+      aggregate_exit_status: 2,
+      command_results: [{ command: "lint", exit_status: 2 }],
+    };
+    const crypto = await import("node:crypto");
+    const hash = "sha256:" + crypto.createHash("sha256").update(JSON.stringify(rawReport)).digest("hex");
+    const storedReport = { ...rawReport, executor_report_hash: hash };
+
+    db.query.mockResolvedValueOnce({ rows: [{ content: JSON.stringify(storedReport) }] });
+    const result = await verifyExecutorReportHash(`executor-report:${hash}`, hash);
+    expect(result).toBe(true);
+  });
+});

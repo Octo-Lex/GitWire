@@ -475,6 +475,29 @@ export async function runSandboxVerification(options) {
   const receiptContainerRuntime = execResult.container_runtime || isolation.container_runtime;
   const receiptRuntimeVersion = execResult.runtime_version || isolation.runtime_version;
 
+  // v0.23.0 Task 8 Step 5 fix: for executor-service, the real sandbox image
+  // digest is the one the service INSPECTED (or the configured validator
+  // digest), NOT the backend's static placeholder. The placeholder
+  // (sha256:0000...) exists only to satisfy validateBackendContract at module
+  // load; the service provides the real digest at run time via
+  // inspected_image_digest. If neither is present (non-executor-service backend,
+  // or inconclusive result), fall back to the isolation value. Fail-closed:
+  // if the result is real but the digest is missing/placeholder, log a warning.
+  const PLACEHOLDER_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+  const resolvedSandboxDigest =
+    (execResult.inspected_image_digest && execResult.inspected_image_digest !== PLACEHOLDER_DIGEST)
+      ? execResult.inspected_image_digest
+      : (execResult.validator_image_digest && execResult.validator_image_digest !== PLACEHOLDER_DIGEST
+          && execResult.validation_response_source === "real_executor_service")
+        ? execResult.validator_image_digest
+        : isolation.sandbox_image_digest;
+  if (resolvedSandboxDigest === PLACEHOLDER_DIGEST && execResult.validation_response_source === "real_executor_service") {
+    logger.warn(
+      { backend: backend.id, inspected: execResult.inspected_image_digest, validator: execResult.validator_image_digest },
+      "Real executor-service response but no valid sandbox_image_digest resolved — using placeholder"
+    );
+  }
+
   const receipt = buildExecutionReceipt({
     execution_backend_id: isolation.execution_backend_id,
     executor_version: isolation.executor_version,
@@ -482,7 +505,7 @@ export async function runSandboxVerification(options) {
     patch_artifact_hash,
     base_sha,
     input_bundle_hash,
-    sandbox_image_digest: isolation.sandbox_image_digest,
+    sandbox_image_digest: resolvedSandboxDigest,
     validation_plan_hash,
     commands_executed: commandsExecuted,
     per_command_exit_statuses: perCommandExitStatuses,
@@ -535,8 +558,20 @@ export async function runSandboxVerification(options) {
   if (execResult.executor_report_ref && execResult.executor_report_hash) {
     try {
       const { storeExecutorReport } = await import("./executionReceiptStore.js");
+      // Store the RAW executor-service report — exactly the object the service
+      // hashed. The app adds diagnostic fields (validation_response_source,
+      // synthetic_fallback_used) AFTER the service returned the report; those
+      // were NOT present when the service computed executor_report_hash. Storing
+      // the app-annotated object would make resolve(ref) → recompute(hash) fail.
+      // Strip the app-side annotation fields to reconstruct the exact object
+      // the service hashed.
+      const APP_ADDED_FIELDS = new Set(["validation_response_source", "synthetic_fallback_used"]);
+      const rawReport = {};
+      for (const key of Object.keys(execResult)) {
+        if (!APP_ADDED_FIELDS.has(key)) rawReport[key] = execResult[key];
+      }
       await storeExecutorReport(
-        JSON.stringify(execResult),
+        JSON.stringify(rawReport),
         execResult.executor_report_hash,
         execResult.executor_report_ref
       );
@@ -582,7 +617,7 @@ export async function runSandboxVerification(options) {
         patch_artifact_hash,
         base_sha,
         input_bundle_hash,
-        sandbox_image_digest: isolation.sandbox_image_digest,
+        sandbox_image_digest: resolvedSandboxDigest,
         validation_plan_hash,
         commands_executed: commandsExecuted,
         per_command_exit_statuses: perCommandExitStatuses,
