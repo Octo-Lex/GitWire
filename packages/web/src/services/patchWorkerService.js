@@ -113,8 +113,11 @@ export async function generateCandidatePatch(bundle) {
     }
   }
   if (!sourceFile) {
-    // Fall back: first .js source file (skip workflow YAML/configs/package.json)
-    sourceFile = allSourceFiles.find(f => /\.m?[jt]sx?$/.test(f.path) && !f.path.includes("node_modules")) || allSourceFiles[0] || null;
+    // Fall back: first .js source file (skip workflow YAML/configs/package.json).
+    // Do NOT fall back to allSourceFiles[0] if it's a non-JS file (e.g. workflow
+    // YAML) — for lint errors we need the actual source file. If no JS file is
+    // found, leave sourceFile null so targetPath defaults to "app.js".
+    sourceFile = allSourceFiles.find(f => /\.m?[jt]sx?$/.test(f.path) && !f.path.includes("node_modules")) || null;
   }
 
   const targetPath = sourceFile ? sourceFile.path : (failingFileName || "app.js");
