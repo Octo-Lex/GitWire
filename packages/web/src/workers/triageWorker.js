@@ -187,11 +187,13 @@ async function triageIssue({ payload }) {
 
   logger.info({ issue: issue.number, type: classification.type, priority: classification.priority }, "Issue triage persisted");
 
-  // Notify Telegram subscribers
+  // Notify Telegram subscribers (non-blocking but caught)
   notifyTriage(repository.full_name, {
     issue_number: issue.number,
     priority: classification.priority,
     triage_type: classification.type,
+  }).catch((err) => {
+    logger.warn({ err: err.message, repo: repository.full_name }, "Telegram triage notification failed (non-fatal)");
   });
 
   // ── Log decision ──────────────────────────────────────────────────────────
@@ -402,6 +404,8 @@ async function triagePR({ payload }) {
     pr_number: pr.number,
     risk: classification.risk,
     triage_type: classification.type,
+  }).catch((err) => {
+    logger.warn({ err: err.message, repo: repository.full_name }, "Telegram triage notification failed (non-fatal)");
   });
 }
 

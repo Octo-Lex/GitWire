@@ -95,7 +95,13 @@ async function main() {
   });
 
   process.on("unhandledRejection", (reason) => {
-    logger.fatal({ reason }, "Unhandled rejection — shutting down");
+    // Serialize the reason properly — Error objects, AbortError, DOMException,
+    // and plain objects all need different treatment. Without this, the log
+    // shows reason: {} which is useless for debugging.
+    const serialized = reason instanceof Error
+      ? { name: reason.name, message: reason.message, stack: reason.stack }
+      : (typeof reason === "string" ? reason : JSON.stringify(reason));
+    logger.fatal({ reason: serialized }, "Unhandled rejection — shutting down");
     shutdown("unhandledRejection");
   });
 }

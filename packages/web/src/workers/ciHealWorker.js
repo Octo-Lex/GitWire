@@ -692,12 +692,15 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       repo: repository.full_name,
     });
 
-    // Notify Telegram subscribers
+    // Notify Telegram subscribers (non-blocking but caught — never crash the
+    // worker on a notification failure).
     notifyCIFailure(repository.full_name, {
       pr_number: pr.number,
       failure_type: diagnosis.failure_type,
       confidence: diagnosis.confidence,
       healed: true,
+    }).catch((err) => {
+      logger.warn({ err: err.message, repo: repository.full_name }, "Telegram notification failed (non-fatal)");
     });
 
     // 6. Add labels and request review from last committer
