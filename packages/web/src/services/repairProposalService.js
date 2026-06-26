@@ -1790,7 +1790,10 @@ export async function recordPatchProposal(id, patchInput = {}, options = {}) {
     }
     try {
       const config = await getConfigForRepo(proposal.repo_full_name);
-      checkPatchPolicy(config?.ci_healing, diagnosis);
+      // getConfigForRepo() nests config under .pillars (defaults <- org <- repo).
+      // Fall back to config?.ci_healing for any older config that wasn't layered.
+      const healingConfig = config?.pillars?.ci_healing ?? config?.ci_healing;
+      checkPatchPolicy(healingConfig, diagnosis);
     } catch (policyErr) {
       if (policyErr.message.includes("rejected")) throw policyErr;
       throw new Error(
