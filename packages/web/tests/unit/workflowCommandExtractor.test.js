@@ -56,6 +56,35 @@ jobs:
     const out = extractValidationCommands(yaml, { failedJobName: "lint" });
     expect(out[0].argv).toEqual(["npx", "--no-install", "eslint", "app.js"]);
   });
+
+  // The already-safe form must still extract. Without this, a repo that writes
+  // `npx --no-install eslint app.js` gets NO descriptor and silently falls back
+  // to the legacy `npm run lint --` — defeating the whole repo-aware point.
+  it("extracts the already-safe `npx --no-install eslint app.js` form", () => {
+    const yaml = `
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npx --no-install eslint app.js
+`;
+    const out = extractValidationCommands(yaml, { failedJobName: "lint" });
+    expect(out).toHaveLength(1);
+    expect(out[0].argv).toEqual(["npx", "--no-install", "eslint", "app.js"]);
+    expect(out[0].target_paths).toEqual(["app.js"]);
+  });
+
+  it("does not double-add --no-install when already present mid-argv", () => {
+    const yaml = `
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npx --yes --no-install eslint app.js
+`;
+    const out = extractValidationCommands(yaml, { failedJobName: "lint" });
+    expect(out[0].argv).toEqual(["npx", "--no-install", "eslint", "app.js"]);
+  });
 });
 
 describe("extractValidationCommands — npm run is never a descriptor", () => {

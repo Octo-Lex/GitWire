@@ -274,6 +274,12 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
               semantic_id: descriptor.semantic_id || null,
               command_source: "ci_workflow",
               status: "rejected",
+              // Task 8D blocker fix: a shape_invalid descriptor carries no
+              // argv/target_paths by definition (its shape is the reason it
+              // was rejected). Record them as empty arrays so the receipt's
+              // command_result shape is uniform across accepted/rejected results.
+              executed_argv: [],
+              target_paths: [],
               policy_reasons: (descriptor.shape_reasons || []).map(r => `descriptor shape invalid: ${r}`),
               exit_status: null,
               output_ref: null,
@@ -292,6 +298,13 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
               semantic_id: descriptor.semantic_id || null,
               command_source: "ci_workflow",
               status: "rejected",
+              // Task 8D blocker fix: carry the full audit fields. The
+              // descriptor was policy-rejected (not executed), but its
+              // intended argv/target_paths are part of the audit trail —
+              // they show exactly what was refused and why. exit_status is
+              // null because the command never ran.
+              executed_argv: descriptor.argv || [],
+              target_paths: descriptor.target_paths || [],
               policy_reasons: policy.reasons,
               exit_status: null,
               output_ref: null,

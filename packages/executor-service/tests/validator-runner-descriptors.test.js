@@ -136,6 +136,42 @@ describe("runValidatorJob — shape_invalid descriptor rejected", () => {
     expect(cr.command_source).toBe("ci_workflow");
     expect(cr.policy_reasons.join("; ")).toMatch(/shape invalid/);
   });
+
+  // Blocker 1 regression: rejected descriptor command_results MUST carry the
+  // full audit fields (executed_argv + target_paths), not just command/status/
+  // policy_reasons/exit_status. A shape_invalid descriptor has no argv/
+  // target_paths by definition → both must be present as empty arrays so the
+  // receipt's command_result shape is uniform across accepted and rejected
+  // results.
+  it("shape_invalid rejected result carries executed_argv=[] and target_paths=[]", async () => {
+    const shapeInvalid = {
+      command_id: "repo_lint",
+      semantic_id: "lint_result",
+      source: "ci_workflow",
+      policy_status: "shape_invalid",
+      shape_reasons: ["argv must be a non-empty string array"],
+    };
+    const r = await runValidatorJob({
+      request: {
+        request_id: "req-3b",
+        files: [{ path: "app.js", content: "x" }],
+        commands: ["repo_lint"],
+        command_descriptors: { repo_lint: shapeInvalid },
+        limits: { wall_clock_ms: 5000, memory_mb: 256, pids_limit: 32, output_bytes: 65536 },
+        validator_image_ref: REF,
+        validator_image_digest: DIGEST,
+        expected_executor_policy: { network_disabled: true, non_root: true, read_only_rootfs: true, resource_limits: true },
+      },
+      config: makeConfig(),
+    });
+    const cr = r.command_results[0];
+    expect(cr.status).toBe("rejected");
+    expect(cr.executed_argv).toEqual([]);
+    expect(cr.target_paths).toEqual([]);
+    expect(cr.exit_status).toBeNull();
+    expect(cr.output_ref).toBeNull();
+    expect(cr.output_hash).toBeNull();
+  });
 });
 
 describe("runValidatorJob — policy-invalid descriptor rejected", () => {
@@ -161,6 +197,36 @@ describe("runValidatorJob — policy-invalid descriptor rejected", () => {
     const cr = r.command_results[0];
     expect(cr.status).toBe("rejected");
     expect(cr.policy_reasons.join("; ")).toMatch(/--no-install/);
+  });
+
+  // Blocker 1 regression: a policy-rejected descriptor was never executed, but
+  // its intended argv/target_paths are part of the audit trail — they show
+  // exactly what was refused. executed_argv + target_paths must carry the
+  // descriptor's intended values.
+  it("policy-invalid rejected result carries the intended executed_argv + target_paths", async () => {
+    const policyInvalid = {
+      ...VALID_DESCRIPTOR,
+      argv: ["npx", "eslint", "app.js", "../secret.js"], // missing --no-install + traversal
+      target_paths: ["app.js", "../secret.js"],
+    };
+    const r = await runValidatorJob({
+      request: {
+        request_id: "req-4b",
+        files: [{ path: "app.js", content: "x" }],
+        commands: ["repo_lint"],
+        command_descriptors: { repo_lint: policyInvalid },
+        limits: { wall_clock_ms: 5000, memory_mb: 256, pids_limit: 32, output_bytes: 65536 },
+        validator_image_ref: REF,
+        validator_image_digest: DIGEST,
+        expected_executor_policy: { network_disabled: true, non_root: true, read_only_rootfs: true, resource_limits: true },
+      },
+      config: makeConfig(),
+    });
+    const cr = r.command_results[0];
+    expect(cr.status).toBe("rejected");
+    expect(cr.executed_argv).toEqual(["npx", "eslint", "app.js", "../secret.js"]);
+    expect(cr.target_paths).toEqual(["app.js", "../secret.js"]);
+    expect(cr.exit_status).toBeNull();
   });
 });
 

@@ -16,10 +16,56 @@
 //   - no shell metacharacters in any argv element
 //   - target_paths: non-empty, all relative, no "..", no globs, no absolute
 //   - argv length bounded
-
-import { validateDescriptorShape } from "@gitwire/core";
+//
+// SHAPE INVARIANCE NOTE:
+// The executor-service is a deliberately standalone, zero-npm-dependency image
+// (Dockerfile build context is packages/executor-service/ only). It cannot
+// import @gitwire/core at runtime. validateDescriptorShape() is therefore
+// inlined here as validateShapeLocal(), DUPLICATING the shape check that also
+// lives in @gitwire/core. The two MUST stay behaviorally identical; the parity
+// test in tests/commandDescriptorPolicy.test.js ("core parity") pins this by
+// importing @gitwire/core at TEST time only (the monorepo's shared
+// node_modules/@gitwire/core workspace symlink is available under jest, but NOT
+// inside the production image). If you change one, change both + the parity
+// test.
 
 const ALLOWED_BINARIES = new Set(["npx", "node", "tsc"]);
+
+// Required non-empty string fields on every descriptor.
+const REQUIRED_STRING_FIELDS = ["command_id", "semantic_id", "source"];
+
+/**
+ * Local copy of @gitwire/core's validateDescriptorShape.
+ * MUST stay byte-for-byte behaviorally identical to packages/core/src/commandDescriptor.js.
+ * See the SHAPE INVARIANCE NOTE above; the parity test enforces this.
+ *
+ * @param {object} d - candidate descriptor
+ * @returns {{ ok: boolean, reasons: string[] }}
+ */
+function validateShapeLocal(d) {
+  const reasons = [];
+  if (!d || typeof d !== "object" || Array.isArray(d)) {
+    return { ok: false, reasons: ["descriptor must be a plain object"] };
+  }
+  for (const f of REQUIRED_STRING_FIELDS) {
+    if (typeof d[f] !== "string" || d[f].length === 0) {
+      reasons.push(`${f} must be a non-empty string`);
+    }
+  }
+  // argv must be a non-empty array of strings.
+  if (!Array.isArray(d.argv) || d.argv.length === 0 ||
+      !d.argv.every(a => typeof a === "string" && a.length > 0)) {
+    reasons.push("argv must be a non-empty string array");
+  }
+  // target_paths must be a non-empty array of strings (files-only is a
+  // security-policy concern enforced below; here we only check it is a string
+  // array).
+  if (!Array.isArray(d.target_paths) || d.target_paths.length === 0 ||
+      !d.target_paths.every(p => typeof p === "string" && p.length > 0)) {
+    reasons.push("target_paths must be a non-empty string array");
+  }
+  return { ok: reasons.length === 0, reasons };
+}
 
 const MAX_ARGV_LENGTH = 64;
 
@@ -39,7 +85,7 @@ const SHELL_METACHARS = /[;&|`$(){}<>\n\r\t\\]/;
 export function enforceDescriptorPolicy(descriptor) {
   // First the shared shape check. A shape-invalid descriptor is also
   // policy-invalid, but the reasons are reported distinctly.
-  const shape = validateDescriptorShape(descriptor);
+  const shape = validateShapeLocal(descriptor);
   if (!shape.ok) {
     return {
       ok: false,

@@ -78,6 +78,57 @@ describe("compileValidationPlan — shape-invalid descriptor is explicit (no fal
     const plan = compileValidationPlan(["lint_result"], evidenceWith(invalidDescriptor));
     expect(plan.command_descriptors.repo_lint.shape_reasons.join("; ")).toMatch(/argv/);
   });
+
+  // Blocker 2 regression: when the extractor (workflowCommandExtractor) has
+  // ALREADY classified a descriptor as shape_invalid with specific path reasons
+  // (glob/absolute/traversal/empty), the adapter MUST preserve those original
+  // reasons verbatim. Re-running generic shape validation here would replace
+  // the specific path reason (e.g. "must not contain glob characters") with a
+  // generic "argv must be a non-empty string array" — losing the actionable
+  // detail that the extractor derived from the actual workflow command.
+  describe("compileValidationPlan — preserves extractor-provided shape_reasons", () => {
+    it("preserves a glob-specific reason from the extractor", () => {
+      const extractorRejected = {
+        command_id: "repo_lint",
+        semantic_id: "lint_result",
+        source: "ci_workflow",
+        policy_status: "shape_invalid",
+        shape_reasons: ["target_path must not contain glob characters: packages/*/src"],
+      };
+      const plan = compileValidationPlan(["lint_result"], evidenceWith(extractorRejected));
+      const d = plan.command_descriptors.repo_lint;
+      expect(d.policy_status).toBe("shape_invalid");
+      // The glob-specific reason survives — NOT replaced by a generic argv message.
+      expect(d.shape_reasons).toEqual(["target_path must not contain glob characters: packages/*/src"]);
+      expect(d.shape_reasons.join("; ")).not.toMatch(/argv must be a non-empty/);
+    });
+
+    it("preserves a traversal-specific reason from the extractor", () => {
+      const extractorRejected = {
+        command_id: "repo_lint",
+        semantic_id: "lint_result",
+        source: "ci_workflow",
+        policy_status: "shape_invalid",
+        shape_reasons: ["target_path must not contain traversal (..): ../secret.js"],
+      };
+      const plan = compileValidationPlan(["lint_result"], evidenceWith(extractorRejected));
+      const d = plan.command_descriptors.repo_lint;
+      expect(d.shape_reasons).toEqual(["target_path must not contain traversal (..): ../secret.js"]);
+    });
+
+    it("preserves an absolute-path reason from the extractor", () => {
+      const extractorRejected = {
+        command_id: "repo_lint",
+        semantic_id: "lint_result",
+        source: "ci_workflow",
+        policy_status: "shape_invalid",
+        shape_reasons: ["target_path must be relative, not absolute: /etc/passwd"],
+      };
+      const plan = compileValidationPlan(["lint_result"], evidenceWith(extractorRejected));
+      const d = plan.command_descriptors.repo_lint;
+      expect(d.shape_reasons).toEqual(["target_path must be relative, not absolute: /etc/passwd"]);
+    });
+  });
 });
 
 describe("compileValidationPlan — determinism", () => {

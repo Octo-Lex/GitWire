@@ -146,12 +146,15 @@ function compileStepToDescriptor(runLine) {
 
   if (binary === "npx") {
     // npx <pkg> [args...]  → force --no-install right after npx.
-    // Find the package name (skip flags like --yes/-y).
+    // Find the package name (skip flags like --yes/-y AND an already-present
+    // --no-install). The already-safe form `npx --no-install eslint app.js`
+    // must still extract — otherwise a repo that writes the safe form would
+    // get NO descriptor and silently fall back to the legacy template.
     let i = 1;
     let pkgName = null;
     while (i < tokens.length) {
       const t = tokens[i];
-      if (t === "--yes" || t === "-y") { i++; continue; }
+      if (t === "--yes" || t === "-y" || t === "--no-install") { i++; continue; }
       pkgName = t; i++; break;
     }
     if (!pkgName) return null;

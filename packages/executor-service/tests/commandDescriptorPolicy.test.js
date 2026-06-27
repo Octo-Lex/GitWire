@@ -121,3 +121,51 @@ describe("enforceDescriptorPolicy — shape-invalid", () => {
     expect(r.reasons.join("; ")).toMatch(/shape invalid/);
   });
 });
+
+// Parity guard: the executor-service inlines validateDescriptorShape (as
+// validateShapeLocal) because it is a zero-dependency image that cannot import
+// @gitwire/core at runtime. This test imports @gitwire/core at TEST time
+// (available via the monorepo's shared node_modules workspace symlink, NOT in
+// the production image) and asserts the two implementations produce identical
+// results over a corpus of descriptors. If you change one, change both.
+import { validateDescriptorShape as coreValidateDescriptorShape } from "@gitwire/core";
+
+describe("enforceDescriptorPolicy — core parity (validateShapeLocal vs @gitwire/core)", () => {
+  // Re-derive the local shape check through the policy module's public surface:
+  // a shape-invalid descriptor yields ok=false with reasons prefixed
+  // "descriptor shape invalid: ". Strip the prefix to compare against core.
+  function localReasons(descriptor) {
+    const r = enforceDescriptorPolicy(descriptor);
+    if (r.ok) return [];
+    return r.reasons
+      .filter(x => x.startsWith("descriptor shape invalid: "))
+      .map(x => x.slice("descriptor shape invalid: ".length));
+  }
+
+  const corpus = [
+    { label: "valid", d: VALID },
+    { label: "argv undefined", d: { ...VALID, argv: undefined } },
+    { label: "argv empty", d: { ...VALID, argv: [] } },
+    { label: "argv non-string element", d: { ...VALID, argv: ["npx", 123] } },
+    { label: "target_paths empty", d: { ...VALID, target_paths: [] } },
+    { label: "target_paths missing", d: { ...VALID, target_paths: undefined } },
+    { label: "command_id missing", d: { ...VALID, command_id: "" } },
+    { label: "semantic_id missing", d: { ...VALID, semantic_id: "" } },
+    { label: "source missing", d: { ...VALID, source: "" } },
+    { label: "not an object", d: null },
+    { label: "array", d: [1, 2, 3] },
+  ];
+
+  for (const { label, d } of corpus) {
+    it(`matches core for: ${label}`, () => {
+      const coreResult = coreValidateDescriptorShape(d);
+      const local = localReasons(d);
+      // The local implementation must agree on ok/not-ok and on the exact
+      // reason set (order-independent for robustness).
+      expect(local.length === 0).toBe(coreResult.ok);
+      if (!coreResult.ok) {
+        expect(local.sort()).toEqual([...coreResult.reasons].sort());
+      }
+    });
+  }
+});

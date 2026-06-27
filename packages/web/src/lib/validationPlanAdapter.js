@@ -106,6 +106,29 @@ export function compileValidationPlan(requiredValidation, evidenceRefs) {
     if (DESCRIPTOR_ELIGIBLE_SEMANTICS.has(id)) {
       const descriptor = findDescriptorForSemantic(id, evidenceRefs);
       if (descriptor) {
+        // Task 8D blocker fix: if the extractor already classified this
+        // descriptor as shape_invalid (it carries specific path reasons such
+        // as glob/absolute/traversal failures), preserve those original
+        // reasons verbatim. Re-running generic shape validation here would
+        // replace the specific path reasons with generic "argv must be..." /
+        // "target_paths must be..." messages, losing the actionable detail.
+        if (descriptor.policy_status === "shape_invalid") {
+          const cmdId = descriptor.command_id || ("invalid_" + id);
+          executableSet.add(cmdId);
+          rawDescriptors[cmdId] = {
+            command_id: cmdId,
+            semantic_id: descriptor.semantic_id || id,
+            source: descriptor.source || "ci_workflow",
+            policy_status: "shape_invalid",
+            shape_reasons: Array.isArray(descriptor.shape_reasons) && descriptor.shape_reasons.length > 0
+              ? [...descriptor.shape_reasons]
+              : ["descriptor shape invalid (no specific reasons carried)"],
+          };
+          const mapping = VALIDATION_PLAN_MAPPINGS[id];
+          if (mapping) policies.push(mapping.acceptance);
+          continue;
+        }
+
         const shape = validateDescriptorShape(descriptor);
         if (shape.ok) {
           // Valid descriptor → use it. Add its command_id to the executable
