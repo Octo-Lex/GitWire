@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { computeExecutorReportHash, buildExecutorReportRef } from "./executorReportHash.js";
+import { enforceDescriptorPolicy } from "./commandDescriptorPolicy.js";
 
 // ── Command allowlist (duplicated locally to keep the package standalone) ───
 // Mirrors packages/web/src/lib/validationCommandTemplates.js. Four IDs only;
@@ -248,10 +249,100 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
     // workspace tempdir is always cleaned up, regardless of pass/fail/error.
     try {
       // ── Step 3: run each allowlisted command ─────────────────────────────
+      // Task 8D: when the request carries a command_descriptors entry keyed by
+      // command_id, the descriptor's argv is executed (argv-only, no shell)
+      // AFTER passing the authoritative policy gate. A policy-rejected
+      // descriptor produces a visible rejected command_result (fail-closed,
+      // never a silent fallback to the legacy template). Commands without a
+      // descriptor use the legacy COMMAND_TEMPLATES.
       const commandResults = [];
       let aggregateExitStatus = 0;
+      const descriptors = (request.command_descriptors && typeof request.command_descriptors === "object")
+        ? request.command_descriptors
+        : {};
 
       for (const cmdId of request.commands) {
+        const descriptor = descriptors[cmdId];
+
+        // ── Descriptor path ────────────────────────────────────────────────
+        if (descriptor) {
+          // A shape_invalid descriptor (carried from the web adapter) is
+          // rejected immediately — preserve its shape_reasons.
+          if (descriptor.policy_status === "shape_invalid") {
+            commandResults.push({
+              command: cmdId,
+              semantic_id: descriptor.semantic_id || null,
+              command_source: "ci_workflow",
+              status: "rejected",
+              // Task 8D blocker fix: a shape_invalid descriptor carries no
+              // argv/target_paths by definition (its shape is the reason it
+              // was rejected). Record them as empty arrays so the receipt's
+              // command_result shape is uniform across accepted/rejected results.
+              executed_argv: [],
+              target_paths: [],
+              policy_reasons: (descriptor.shape_reasons || []).map(r => `descriptor shape invalid: ${r}`),
+              exit_status: null,
+              output_ref: null,
+              output_hash: null,
+              duration_ms: 0,
+            });
+            aggregateExitStatus = null;
+            continue;
+          }
+
+          // Authoritative policy gate (fail-closed).
+          const policy = enforceDescriptorPolicy(descriptor);
+          if (!policy.ok) {
+            commandResults.push({
+              command: cmdId,
+              semantic_id: descriptor.semantic_id || null,
+              command_source: "ci_workflow",
+              status: "rejected",
+              // Task 8D blocker fix: carry the full audit fields. The
+              // descriptor was policy-rejected (not executed), but its
+              // intended argv/target_paths are part of the audit trail —
+              // they show exactly what was refused and why. exit_status is
+              // null because the command never ran.
+              executed_argv: descriptor.argv || [],
+              target_paths: descriptor.target_paths || [],
+              policy_reasons: policy.reasons,
+              exit_status: null,
+              output_ref: null,
+              output_hash: null,
+              duration_ms: 0,
+            });
+            aggregateExitStatus = null;
+            continue;
+          }
+
+          // Execute the descriptor argv directly (shell=false via spawn argv).
+          const argv = descriptor.argv;
+          const argvFull = buildRunArgv(runtime, config.validator_image_ref, argv, limits, workspace);
+
+          const start = Date.now();
+          const r = runCmd(argvFull, { cwd: workspace, timeoutMs: limits.wall_clock_ms });
+          const duration_ms = Date.now() - start;
+
+          const combined = (r.stdout || "") + "\n" + (r.stderr || "");
+          const outputHash = hashOutput(combined);
+
+          commandResults.push({
+            command: cmdId,
+            semantic_id: descriptor.semantic_id || null,
+            command_source: "ci_workflow",
+            executed_argv: argv,
+            target_paths: descriptor.target_paths || [],
+            exit_status: r.code,
+            output_ref: `output:${outputHash}`,
+            output_hash: outputHash,
+            duration_ms,
+          });
+          if (r.code === null) aggregateExitStatus = null;
+          else if (aggregateExitStatus === 0 && r.code !== 0) aggregateExitStatus = r.code;
+          continue;
+        }
+
+        // ── Legacy template path ───────────────────────────────────────────
         let argv;
         try {
           argv = resolveCommandTemplate(cmdId);
@@ -274,6 +365,7 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
 
         commandResults.push({
           command: cmdId,
+          command_source: "fallback_template",
           exit_status: r.code,
           output_ref: `output:${outputHash}`,
           output_hash: outputHash,
@@ -284,8 +376,15 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
       }
 
       // ── Step 4: derive overall + build report ────────────────────────────
+      // Task 8D: a policy-rejected descriptor is a DEFINITE failure (overall
+      // cannot be "pass"), distinct from execution_incomplete (inconclusive).
       let overall, inconclusiveReason;
-      if (commandResults.some(cr => cr.exit_status === null)) {
+      const hasRejected = commandResults.some(cr => cr.status === "rejected");
+      const hasIncomplete = commandResults.some(cr => cr.exit_status === null && cr.status !== "rejected");
+      if (hasRejected) {
+        overall = "fail";
+        inconclusiveReason = null;
+      } else if (hasIncomplete) {
         overall = "inconclusive";
         inconclusiveReason = "execution_incomplete";
       } else if (aggregateExitStatus === 0) {

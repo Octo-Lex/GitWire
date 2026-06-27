@@ -2094,7 +2094,10 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
     // P1 FIX: Recompute the validation plan hash from the locked envelope.
     // The caller-supplied validation_plan_hash must match the canonical plan
     // derived from the locked task_envelope — not an arbitrary caller value.
-    const canonicalPlan = buildValidationPlanForRecorder(envelope);
+    // Task 8D: evidence_refs is also consulted so descriptor-derived plans hash
+    // identically to what sandboxRunner produced.
+    const recorderEvidenceRefs = parseJsonb(proposal.evidence_refs);
+    const canonicalPlan = buildValidationPlanForRecorder(envelope, recorderEvidenceRefs);
     if (verificationInput.validation_plan_hash !== canonicalPlan.validation_plan_hash) {
       throw new Error(
         `Verification validation_plan_hash does not match canonical plan derived from locked task_envelope`
@@ -2124,7 +2127,7 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
     // Comparing raw envelope.required_validation against executed commands
     // fails because the executor receives compiled command IDs (test, build),
     // not semantic IDs (test_or_build_result, policy_scope_check).
-    const compiledPlan = compileValidationPlan(envelope.required_validation);
+    const compiledPlan = compileValidationPlan(envelope.required_validation, recorderEvidenceRefs);
     const requiredCommands = compiledPlan.executable_commands;
     const executedCommands = verificationInput.commands.map((c) => c.command).sort();
     const commandCheck = validateCommandSetInternal(executedCommands, requiredCommands);
@@ -2326,21 +2329,28 @@ function validateCommandSetInternal(executedCommands, requiredCommands) {
  * Build the canonical validation plan from a locked task envelope.
  * Used by recordVerificationResult() to recompute the plan hash
  * server-side from locked state — not from caller-supplied values.
+ *
+ * Task 8D: now accepts the locked evidence_refs so descriptor-derived plans
+ * hash identically to sandboxRunner.buildValidationPlan(). The hash content
+ * MUST match sandboxRunner exactly (same fields, same order, same
+ * canonicalization via @gitwire/core).
  */
-function buildValidationPlanForRecorder(envelope) {
-  // v0.23.0 Task 9: use the validation-plan adapter for the same semantic→executable
-  // compilation as sandboxRunner.buildValidationPlan. Both sides must produce the
-  // same hash content or the verifier rejects the receipt.
-  const plan = compileValidationPlan(envelope.required_validation);
+export function buildValidationPlanForRecorder(envelope, evidenceRefs) {
+  // v0.23.0 Task 9 / Task 8D: use the validation-plan adapter for the same
+  // semantic→executable compilation as sandboxRunner.buildValidationPlan. Both
+  // sides must produce the same hash content or the verifier rejects the receipt.
+  const plan = compileValidationPlan(envelope.required_validation, evidenceRefs);
   const commands = plan.executable_commands;
+  const command_descriptors = plan.command_descriptors || {};
   const planContent = JSON.stringify({
     commands,
+    command_descriptors,
     image_digest: "sha256:node-executor-v1",
     required_validation: envelope.required_validation,
     acceptance_policy: plan.acceptance_policy,
   });
   const validation_plan_hash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
-  return { commands, validation_plan_hash };
+  return { commands, command_descriptors, validation_plan_hash };
 }
 
 function computeVerificationFingerprintInternal(params) {

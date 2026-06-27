@@ -161,3 +161,75 @@ describe("POST /v1/validate — malformed body", () => {
     expect(r.status).toBe(400);
   });
 });
+
+// Task 8D: repo-aware command descriptor path through the HTTP layer.
+describe("POST /v1/validate — command_descriptors (Task 8D)", () => {
+  let server, baseUrl;
+  beforeAll(async () => {
+    server = createServer({ config: makeConfig(), probe: () => ({ reachable: true, container_runtime: "docker", runtime_version: "29.5.0" }) });
+    await new Promise(r => server.listen(0, "127.0.0.1", r));
+    baseUrl = `http://127.0.0.1:${server.address().port}`;
+    _setCmdRunnerForTests(successRunner());
+    _setImageInspectorForTests(matchingInspector());
+  });
+  afterAll(async () => {
+    _setCmdRunnerForTests(null);
+    _setImageInspectorForTests(null);
+    if (server) await new Promise(r => server.close(r));
+  });
+
+  it("accepts command_descriptors and returns executed_argv in the receipt", async () => {
+    const descriptor = {
+      command_id: "repo_lint",
+      semantic_id: "lint_result",
+      source: "ci_workflow",
+      argv: ["npx", "--no-install", "eslint", "app.js"],
+      target_paths: ["app.js"],
+      network: "disabled",
+      requires_shell: false,
+      policy_status: "pending_executor_validation",
+    };
+    const r = await fetch(`${baseUrl}/v1/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: "Bearer secret-token" },
+      body: JSON.stringify(makeRequestBody({
+        commands: ["repo_lint"],
+        command_descriptors: { repo_lint: descriptor },
+      })),
+    });
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body.overall).toBe("pass");
+    expect(body.command_results).toHaveLength(1);
+    expect(body.command_results[0].command_source).toBe("ci_workflow");
+    expect(body.command_results[0].executed_argv).toEqual(["npx", "--no-install", "eslint", "app.js"]);
+    expect(body.command_results[0].target_paths).toEqual(["app.js"]);
+    expect(body.executor_report_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("rejects an unsafe descriptor fail-closed (overall not pass)", async () => {
+    const descriptor = {
+      command_id: "repo_lint",
+      semantic_id: "lint_result",
+      source: "ci_workflow",
+      argv: ["npx", "eslint", "app.js"], // missing --no-install
+      target_paths: ["app.js"],
+      network: "disabled",
+      requires_shell: false,
+      policy_status: "pending_executor_validation",
+    };
+    const r = await fetch(`${baseUrl}/v1/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: "Bearer secret-token" },
+      body: JSON.stringify(makeRequestBody({
+        commands: ["repo_lint"],
+        command_descriptors: { repo_lint: descriptor },
+      })),
+    });
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body.overall).not.toBe("pass");
+    expect(body.command_results[0].status).toBe("rejected");
+    expect(body.command_results[0].policy_reasons.join("; ")).toMatch(/--no-install/);
+  });
+});

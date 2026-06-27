@@ -147,8 +147,9 @@ export async function verifyProposal(proposalId, options = {}) {
     source_snapshot_hash = snapshot.snapshot_hash;
   }
 
-  // ── 8. Build validation plan from envelope ───────────────────────────────
-  const { validation_plan_hash } = buildValidationPlan(envelope);
+  // ── 8. Build validation plan from envelope (+ evidence for Task 8D descriptors) ──
+  const evidenceRefs = Array.isArray(proposal.evidence_refs) ? proposal.evidence_refs : null;
+  const { validation_plan_hash } = buildValidationPlan(envelope, evidenceRefs);
 
   // ── 9. Run sandbox verification ──────────────────────────────────────────
   const sandboxResult = await runSandboxVerification({
@@ -159,6 +160,7 @@ export async function verifyProposal(proposalId, options = {}) {
     source_snapshot_hash,
     input_bundle_hash: patchProposal.input_bundle_hash,
     patch_artifact_hash: patchProposal.artifact_hash,
+    evidenceRefs,
   });
 
   // ── 10. Store execution receipt durably ──────────────────────────────────
