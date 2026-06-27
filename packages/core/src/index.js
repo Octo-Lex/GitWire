@@ -78,3 +78,13 @@ export const HEALABLE_TYPES = new Set([
 // The committed fallback carries the current release version; the generator
 // script overwrites it during Docker/CI builds with the real values.
 export { VERSION } from "./buildInfo.js";
+
+// ── Repo-aware command descriptors (Task 8D) ───────────────────────────────
+// Shared, PURE canonicalization + shape validation. Imported by both web
+// (validationPlanAdapter) and executor-service (validatorRunner). Security
+// policy lives only in executor-service; this layer is shape/canonical only.
+export {
+  validateDescriptorShape,
+  canonicalizeDescriptor,
+  canonicalizePlan,
+} from "./commandDescriptor.js";

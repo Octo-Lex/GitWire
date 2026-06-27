@@ -45,13 +45,15 @@ export const DEFAULT_LIMITS = {
 /**
  * Build a canonical validation plan from the proposal's task envelope.
  *
- * The plan is derived ONLY from task_envelope.required_validation.
- * No open-ended command execution — only the approved allowlist.
+ * The plan is derived from task_envelope.required_validation plus, when
+ * provided, the frozen ci_workflow_command descriptors in evidence_refs
+ * (Task 8D — repo-aware command descriptors).
  *
  * @param {object} taskEnvelope - the proposal's task envelope
- * @returns {{ commands: string[], validation_plan_hash: string }}
+ * @param {object[]} [evidenceRefs] - CI evidence refs (may carry descriptors)
+ * @returns {{ commands: string[], validation_plan_hash: string, command_descriptors: object }}
  */
-export function buildValidationPlan(taskEnvelope) {
+export function buildValidationPlan(taskEnvelope, evidenceRefs) {
   if (!taskEnvelope || !Array.isArray(taskEnvelope.required_validation)) {
     throw new Error("Task envelope must contain required_validation array");
   }
@@ -70,20 +72,26 @@ export function buildValidationPlan(taskEnvelope) {
     }
   }
 
-  // v0.23.0 Task 9: compile semantic IDs into executable commands via the
-  // validation-plan adapter.
-  const plan = compileValidationPlan(taskEnvelope.required_validation);
+  // v0.23.0 Task 9 / Task 8D: compile semantic IDs into executable commands via
+  // the validation-plan adapter. When evidence_refs carries ci_workflow_command
+  // descriptors, they override the fixed templates.
+  const plan = compileValidationPlan(taskEnvelope.required_validation, evidenceRefs);
   const commands = plan.executable_commands;
+  const command_descriptors = plan.command_descriptors || {};
 
+  // The hash content includes command_descriptors so a descriptor change is
+  // reflected in validation_plan_hash. Both this function and
+  // buildValidationPlanForRecorder() must serialize the SAME shape.
   const planContent = JSON.stringify({
     commands,
+    command_descriptors,
     image_digest: SANDBOX_IMAGE_DIGEST,
     required_validation: taskEnvelope.required_validation,
     acceptance_policy: plan.acceptance_policy,
   });
   const validationPlanHash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
 
-  return { commands, validation_plan_hash: validationPlanHash, acceptance_policy: plan.acceptance_policy, unmapped: plan.unmapped };
+  return { commands, command_descriptors, validation_plan_hash: validationPlanHash, acceptance_policy: plan.acceptance_policy, unmapped: plan.unmapped };
 }
 
 /**
@@ -304,6 +312,7 @@ export async function runSandboxVerification(options) {
     patch_artifact_hash,
     limits,
     backend_id,
+    evidenceRefs,
   } = options;
 
   if (!artifactContent) throw new Error("artifactContent is required");
@@ -384,8 +393,8 @@ export async function runSandboxVerification(options) {
 
   logger.info({ backend: backend.id, supports_pass: backend.supports_pass }, "Executor backend selected");
 
-  // Build validation plan from envelope
-  const { commands, validation_plan_hash } = buildValidationPlan(taskEnvelope);
+  // Build validation plan from envelope (+ evidence for Task 8D descriptors)
+  const { commands, command_descriptors, validation_plan_hash } = buildValidationPlan(taskEnvelope, evidenceRefs);
 
   // Parse artifact
   let parsedArtifact;
@@ -461,6 +470,7 @@ export async function runSandboxVerification(options) {
   const execResult = await backend.run({
     files: applyResult.files,
     commands,
+    command_descriptors,
     limits: appliedLimits,
     sandbox_image_digest: isolation.sandbox_image_digest,
   });

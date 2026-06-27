@@ -4,6 +4,6 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "test": "echo \"@gitwire/core: no tests yet\""
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config jest.config.js --forceExit"
   }
 }

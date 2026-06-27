@@ -22,6 +22,7 @@ import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { redactSecrets } from "../lib/redact.js";
 import { contentHash } from "./repairProposalService.js";
+import { extractValidationCommands } from "../lib/workflowCommandExtractor.js";
 import {
   createProposal,
   getProposal,
@@ -53,6 +54,11 @@ export const CI_EVIDENCE_TYPES = new Set([
   "ci_job",
   "ci_log_excerpt",
   "workflow_file",
+  // Task 8D: repo-aware command descriptor extracted from the failing workflow
+  // YAML. Carries a frozen {descriptor} derived at collection time so the
+  // verifier runs the target repo's actual command (e.g. `npx --no-install
+  // eslint app.js`) instead of the GitWire baseline's `npm run lint --`.
+  "ci_workflow_command",
 ]);
 
 // ── Truncation marker ───────────────────────────────────────────────────────
@@ -329,7 +335,13 @@ export async function collectEvidenceRefs(octokit, params) {
     }
   }
 
-  // ── 5. Workflow file reference ──────────────────────────────────────────
+  // ── 5. Workflow file reference + repo-aware command descriptor ──────────
+  // Task 8D: when the workflow path is known, fetch its YAML content PINNED
+  // to head_sha (never the default branch — protects against drift between
+  // evidence collection and verification) and extract repo-aware validation
+  // commands. The descriptor is frozen into a ci_workflow_command evidence ref
+  // so the verifier executes the target repo's actual command instead of the
+  // GitWire baseline's `npm run lint --`.
   if (evidenceRefs.length < LIMITS.MAX_EVIDENCE_REFS && workflowPath) {
     evidenceRefs.push({
       type: "workflow_file",
@@ -337,6 +349,49 @@ export async function collectEvidenceRefs(octokit, params) {
       excerpt_hash: contentHash({ path: workflowPath, sha: headSha }),
       description: "Workflow definition evaluated by the failed run",
     });
+
+    // Fetch workflow YAML pinned to head_sha. Use the first failed job for
+    // conservative job matching (Amendment 5: exact-id → exact-name →
+    // single-job → none). Fetch/parse failures are non-fatal → legacy fallback.
+    try {
+      const { data: wfData } = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        { owner, repo, path: workflowPath, ref: headSha }
+      );
+      const wfContent = Buffer.from(wfData.content, "base64").toString("utf8");
+      const wfBlobSha = wfData.sha;
+      const firstFailed = failedJobs[0] || {};
+      const descriptors = extractValidationCommands(wfContent, {
+        failedJobName: firstFailed.name,
+        failedJobId: null, // GitHub job.id is numeric; YAML keys are job-ids
+      });
+      for (const descriptor of descriptors) {
+        if (evidenceRefs.length >= LIMITS.MAX_EVIDENCE_REFS) break;
+        const descriptorHash = contentHash({
+          workflow_path: workflowPath,
+          workflow_ref: headSha,
+          descriptor,
+        });
+        evidenceRefs.push({
+          type: "ci_workflow_command",
+          source: workflowPath + "@" + headSha.substring(0, 12),
+          excerpt_hash: descriptorHash,
+          workflow_path: workflowPath,
+          workflow_ref: headSha,
+          workflow_blob_sha: wfBlobSha,
+          descriptor_hash: descriptorHash,
+          descriptor,
+          description: "Repo-aware validation command extracted from CI workflow",
+        });
+      }
+    } catch (err) {
+      // Non-fatal: without a derived descriptor the verifier falls back to
+      // the legacy fixed command templates.
+      logger.warn(
+        { err: err.message, workflowPath, headSha: headSha.substring(0, 12) },
+        "Could not fetch/parse workflow YAML for command descriptor"
+      );
+    }
   }
 
   return { evidence_refs: evidenceRefs, correlation_id: correlationId };

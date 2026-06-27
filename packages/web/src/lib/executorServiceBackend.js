@@ -136,14 +136,18 @@ export const executorServiceBackend = {
    * calls postValidate, and returns the service's response. When the URL
    * isn't configured, returns inconclusive with a typed reason (not a crash).
    *
+   * Task 8D: forwards command_descriptors (keyed by command_id) when present.
+   * The executor-service policy-checks each descriptor before execution.
+   *
    * @param {object} params
    * @param {Array<{path: string, content: string}>} params.files
-   * @param {string[]} params.commands - allowlisted command IDs (lint/test/build/typecheck)
+   * @param {string[]} params.commands - allowlisted command IDs (lint/test/build/typecheck or repo_*)
+   * @param {object} [params.command_descriptors] - Task 8D keyed descriptors
    * @param {object} params.limits - wall_clock_ms/memory_mb/pids_limit/output_bytes
    * @param {string} params.sandbox_image_digest - ignored (the service inspects the real image)
    * @returns {Promise<object>} the executor service's validate response
    */
-  async run({ files, commands, limits, sandbox_image_digest: _ignored }) {
+  async run({ files, commands, command_descriptors, limits, sandbox_image_digest: _ignored }) {
     const url = process.env.GITWIRE_EXECUTOR_SERVICE_URL;
     if (!url) {
       getLogger().warn(
@@ -173,6 +177,11 @@ export const executorServiceBackend = {
       request_id: `backend-${Date.now()}`,
       files: files || [],
       commands: commands || [],
+      // Task 8D: repo-aware command descriptors (keyed by command_id). Omitted
+      // entirely when no descriptor is present so the legacy path is untouched.
+      ...(command_descriptors && Object.keys(command_descriptors).length > 0
+        ? { command_descriptors }
+        : {}),
       limits: limits || {},
       validator_image_ref,
       validator_image_digest,
