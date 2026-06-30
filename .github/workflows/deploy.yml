@@ -83,6 +83,17 @@ jobs:
           echo "actor=${{ github.actor }}" >> $GITHUB_OUTPUT
           echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
+      # GITWIRE_COMMIT_SHA must be in the shell env BEFORE `docker compose
+      # build` so the build-arg in docker-compose.yml
+      # (GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-unknown}) bakes the real
+      # SHA into the image. Without this, /health.git_sha reports "unknown",
+      # which the deployment runbook classifies as a release verification
+      # failure (see docs/installation/deployment-runbook.md lines 184-187).
+      # Exported via $GITHUB_ENV so it persists into subsequent steps.
+      - name: Export commit SHA for build
+        run: |
+          echo "GITWIRE_COMMIT_SHA=${{ steps.ctx.outputs.sha }}" >> "$GITHUB_ENV"
+
       - name: Clean up disk (if needed)
         run: |
           USED=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
@@ -94,8 +105,14 @@ jobs:
       - name: Build & Deploy
         run: |
           cd /opt/gitwire
+          # GITWIRE_COMMIT_SHA was exported to $GITHUB_ENV in the prior step;
+          # docker compose build picks it up via the build-arg default
+          # (${GITWIRE_COMMIT_SHA:-unknown}) declared in docker-compose.yml.
           docker compose build gitwire-app dashboard 2>&1
-          docker compose up -d gitwire-app dashboard 2>&1
+          # --force-recreate so the freshly built image actually replaces the
+          # running container (runbook parity — bare `up -d` would no-op when
+          # the existing container is healthy on the old image).
+          docker compose up -d --force-recreate gitwire-app dashboard 2>&1
 
       - name: Wait for healthy
         run: |
@@ -113,6 +130,8 @@ jobs:
 
       - name: Health check + Deploy summary
         if: always()
+        env:
+          EXPECTED_SHA: ${{ steps.ctx.outputs.sha }}
         run: |
           # ── Health checks ───────────────────────────────────────
           APP_HEALTH=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo "FAILED")
@@ -121,6 +140,19 @@ jobs:
           echo "gitwire-app:   $APP_HEALTH"
           echo "dashboard:     $DASH_HEALTH"
 
+          # ── Extract reported git_sha from /health JSON body ─────
+          # /health returns JSON with a git_sha field (see
+          # packages/web/src/lib/deploymentInfo.js). Pull the value with a
+          # grep regex rather than jq — jq is not guaranteed on the host.
+          # Handles "git_sha":"<sha>" and "git_sha":null variants.
+          REPORTED_SHA=$(echo "$APP_HEALTH" | grep -oE '"git_sha"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"git_sha"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' | head -1)
+          if [ -z "$REPORTED_SHA" ]; then
+            # git_sha was null or absent — normalize to unknown for the gate.
+            REPORTED_SHA="unknown"
+          fi
+          echo "Reported git_sha: $REPORTED_SHA"
+          echo "Expected git_sha: $EXPECTED_SHA"
+
           # ── Capture image IDs ───────────────────────────────────
           APP_IMAGE=$(docker images gitwire-gitwire-app --format '{{.ID}}' | head -1)
           DASH_IMAGE=$(docker images gitwire-dashboard --format '{{.ID}}' | head -1)
@@ -128,12 +160,22 @@ jobs:
           # ── Capture container status ────────────────────────────
           CONTAINER_STATUS=$(docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'gitwire|NAMES')
 
+          # ── Determine SHA match status for summary ──────────────
+          if [ "$REPORTED_SHA" = "$EXPECTED_SHA" ]; then
+            SHA_STATUS="MATCH"
+          else
+            SHA_STATUS="MISMATCH"
+          fi
+
           # ── Write GitHub step summary ───────────────────────────
           echo "## GitWire Deploy Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit | \`${{ steps.ctx.outputs.sha_short }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit (built) | \`${{ steps.ctx.outputs.sha_short }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Expected SHA | \`${EXPECTED_SHA}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Reported /health.git_sha | \`${REPORTED_SHA}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA match | \`${SHA_STATUS}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Actor | \`${{ steps.ctx.outputs.actor }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Deployed at | \`${{ steps.ctx.outputs.timestamp }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| App image | \`${APP_IMAGE:-unknown}\` |" >> $GITHUB_STEP_SUMMARY
@@ -147,7 +189,7 @@ jobs:
           echo "$CONTAINER_STATUS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-          # ── Final gate ──────────────────────────────────────────
+          # ── Final gate: health ──────────────────────────────────
           if echo "$APP_HEALTH" | grep -q "FAILED"; then
             echo "::error::gitwire-app health check failed"
             echo "--- Last 20 lines of app logs ---"
@@ -161,4 +203,23 @@ jobs:
             exit 1
           fi
 
-          echo "All services healthy"
+          # ── Final gate: git_sha identity ────────────────────────
+          # The deployment runbook (docs/installation/deployment-runbook.md
+          # lines 184-187) treats git_sha="unknown" as a release verification
+          # failure. Enforce the same contract here: the reported SHA must be
+          # non-empty, non-"unknown", and equal to the commit we just built.
+          if [ "$REPORTED_SHA" = "unknown" ]; then
+            echo "::error::/health.git_sha is \"unknown\" — GITWIRE_COMMIT_SHA was not propagated into the build"
+            echo "   Expected: $EXPECTED_SHA"
+            echo "   This means the image was built without the commit identity baked in."
+            exit 1
+          fi
+          if [ "$REPORTED_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::/health.git_sha mismatch — deployed image does not match the built commit"
+            echo "   Expected: $EXPECTED_SHA"
+            echo "   Reported: $REPORTED_SHA"
+            echo "   The running container may be on a stale image. Check --force-recreate and image IDs."
+            exit 1
+          fi
+
+          echo "All services healthy and git_sha matches expected commit"
