@@ -25,6 +25,12 @@ import {
 import { resolveValidatorImage } from "./validatorImage.js";
 import { compileValidationPlan } from "./validationPlanAdapter.js";
 import { computeValidationPlanHash, resolveDescriptorActivation } from "@gitwire/core";
+import {
+  normalizeNormativeSteps,
+  normalizeExecutedSteps,
+  derivePlanExecutionRelation,
+} from "./planExecutionConformance.js";
+import { deriveResultEligibility, mapResultOutcome } from "./resultEligibility.js";
 
 // Pinned sandbox image digest.
 // In production, this would be the SHA-256 digest of the container image.
@@ -413,7 +419,8 @@ export async function runSandboxVerification(options) {
   logger.info({ backend: backend.id, supports_pass: backend.supports_pass }, "Executor backend selected");
 
   // Build validation plan from envelope (+ evidence for Task 8D descriptors)
-  const { commands, command_descriptors, validation_plan_hash } = buildValidationPlan(taskEnvelope, evidenceRefs);
+  const buildPlanResult = buildValidationPlan(taskEnvelope, evidenceRefs);
+  const { commands, command_descriptors, validation_plan_hash } = buildPlanResult;
 
   // Parse artifact
   let parsedArtifact;
@@ -527,6 +534,47 @@ export async function runSandboxVerification(options) {
     );
   }
 
+  // ── Plan-execution conformance (commit 3) ──────────────────────────────
+  // Derive the relation between planned normative steps and executed steps.
+  // The app derives this independently — it does NOT trust the executor.
+  const normResult = normalizeNormativeSteps(buildPlanResult);
+  const execNormResult = normalizeExecutedSteps(execResult);
+  const conformance = derivePlanExecutionRelation({
+    plannedSteps: normResult.steps,
+    executedSteps: execNormResult.steps,
+    executionAttempted: execNormResult.executionAttempted,
+    evidenceComplete: normResult.evidenceComplete && execNormResult.evidenceComplete,
+  });
+
+  // Derive result eligibility: combines relation + features + pass-capability +
+  // report-integrity. Does NOT choose pass/fail — that's mapResultOutcome.
+  const eligibility = deriveResultEligibility({
+    planExecutionRelation: conformance.relation,
+    requiredExecutionFeatures: buildPlanResult.required_execution_features || [],
+    backendExecutionFeatures: backend.execution_features || [],
+    backendPassCapable: executorPassCapable,
+    selectedBackendReachable: backend_reachable,
+    validatorImageIdentityValid: validatorImage.identity_complete,
+    reportIntegrityValid: true, // construction-time: report not yet persisted; verification-time rechecks
+    executionEvidenceComplete: normResult.evidenceComplete && execNormResult.evidenceComplete,
+    planSchemaSupported: buildPlanResult.plan_schema_version === 2,
+  });
+
+  // Map the execution outcome to the final validator_result.
+  const hasTimeout = execResult.command_results.some(c => c.timed_out);
+  const resultMapping = mapResultOutcome({
+    eligible: eligibility.eligible,
+    executionOverall: execResult.overall,
+    hasTimeout,
+  });
+
+  if (conformance.relation !== "exact") {
+    logger.warn(
+      { backend: backend.id, relation: conformance.relation, reason_codes: conformance.reason_codes },
+      "Plan-execution conformance: relation is not exact — downgrading to inconclusive"
+    );
+  }
+
   const receipt = buildExecutionReceipt({
     execution_backend_id: isolation.execution_backend_id,
     executor_version: isolation.executor_version,
@@ -553,14 +601,22 @@ export async function runSandboxVerification(options) {
     resource_limits: isolation.resource_limits,
     // Gap 1 validator bindings. The validator result mirrors the execution
     // overall, but is downgraded to inconclusive when the backend isn't
-    // pass-capable. This guarantees a local-process (or unreachable-Docker)
-    // receipt's validator_result_status is always inconclusive, never pass.
+    // pass-capable OR when plan-execution conformance is not exact. This
+    // guarantees a local-process (or unreachable-Docker) receipt's
+    // validator_result_status is always inconclusive, never pass. It also
+    // guarantees a divergent execution (plan says descriptor, backend ran
+    // legacy) can never produce pass.
     executor_kind: executorKind,
     executor_pass_capable: executorPassCapable,
     validator_image_ref: validatorImage.ref,
     validator_image_digest: validatorImage.digest,
-    validator_result: executorPassCapable ? execResult.overall : "inconclusive",
-    validator_result_status: executorPassCapable ? execResult.overall : "inconclusive",
+    validator_result: resultMapping.validator_result,
+    validator_result_status: resultMapping.validator_result,
+    // Plan-execution conformance: the app-derived relation + reason codes.
+    // The verifier recomputes this independently and does NOT trust this
+    // stored value — it's for auditability and operational diagnostics.
+    plan_execution_relation: conformance.relation,
+    plan_execution_reason_codes: conformance.reason_codes,
     // v0.23.0 Task 6 — executor report bindings. These come from the
     // executor-service backend's run() response. For non-executor-service
     // backends, they're undefined → null in the receipt.
