@@ -573,6 +573,12 @@ export async function runSandboxVerification(options) {
     // "executor_service" / "synthetic_inconclusive" / etc. For other backends,
     // undefined → null.
     validation_response_source: execResult.validation_response_source,
+    // Plan-execution conformance: structured step evidence + frozen backend
+    // feature snapshot. The receipt-bound features are used for historical
+    // verification — NOT the current backend registry. The executed_steps
+    // capture the actual argv passed to the process API.
+    executed_steps: execResult.executed_steps || [],
+    backend_execution_features: backend.execution_features || [],
   });
 
   // v0.23.0 Task 6 — persist the raw executor report durably if the backend

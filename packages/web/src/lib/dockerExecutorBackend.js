@@ -343,6 +343,7 @@ export async function runDockerExecution(params) {
     return {
       overall: "inconclusive",
       command_results: [],
+      executed_steps: [],
       aggregate_exit_status: null,
       sandbox_image_digest,
       limits_applied: appliedLimits,
@@ -365,6 +366,7 @@ export async function runDockerExecution(params) {
         return {
           overall: "inconclusive",
           command_results: [],
+          executed_steps: [],
           aggregate_exit_status: null,
           sandbox_image_digest,
           limits_applied: appliedLimits,
@@ -409,6 +411,9 @@ export async function runDockerExecution(params) {
         output_ref: result.output_ref,
         output_hash: result.output_hash,
         duration_ms: result.duration_ms,
+        // Plan-execution conformance: actual argv passed to the container.
+        executed_argv: argv,
+        command_source: "fallback_template",
         ...(result.timed_out ? { timed_out: true, timeout_reason: result.timeout_reason } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
@@ -452,6 +457,15 @@ export async function runDockerExecution(params) {
     return {
       overall,
       command_results: commandResults,
+      // Plan-execution conformance: structured step evidence.
+      executed_steps: commandResults.map((cr, i) => ({
+        step_id: cr.command,
+        sequence: i,
+        command_source: cr.command_source || "fallback_template",
+        executed_argv: cr.executed_argv || null,
+        target_paths: null,
+        exit_status: cr.exit_status,
+      })),
       aggregate_exit_status: aggregateExitStatus,
       sandbox_image_digest,
       limits_applied: appliedLimits,
@@ -464,6 +478,7 @@ export async function runDockerExecution(params) {
     return {
       overall: "inconclusive",
       command_results: [],
+      executed_steps: [],
       aggregate_exit_status: null,
       sandbox_image_digest,
       limits_applied: appliedLimits,
@@ -514,6 +529,10 @@ const dockerExecutorBackend = {
     wall_clock_ms: true,
     output_bytes: true,
   },
+
+  // Plan-execution conformance: this backend produces structured executed_steps.
+  // It does NOT support command-descriptor-v1 (legacy templates only).
+  execution_features: Object.freeze(["normative-step-reporting-v1"]),
 
   /**
    * Return the isolation binding for receipt construction.

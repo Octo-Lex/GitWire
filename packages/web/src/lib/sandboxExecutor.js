@@ -245,6 +245,11 @@ export async function runSandboxExecution(params) {
         output_ref: result.output_ref,
         output_hash: result.output_hash,
         duration_ms: result.duration_ms,
+        // Plan-execution conformance: record the actual argv passed to the
+        // process API. This is NOT reconstructed from a command string —
+        // it's the resolved template argv that was directly spawned.
+        executed_argv: argv,
+        command_source: "fallback_template",
         ...(result.timed_out ? { timed_out: true, timeout_reason: result.timeout_reason } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
@@ -286,6 +291,17 @@ export async function runSandboxExecution(params) {
     return {
       overall,
       command_results: commandResults,
+      // Plan-execution conformance: structured step evidence. The argv here
+      // is the actual resolved template — captured from what was passed to
+      // the process API, not reconstructed by splitting a command string.
+      executed_steps: commandResults.map((cr, i) => ({
+        step_id: cr.command,
+        sequence: i,
+        command_source: cr.command_source || "fallback_template",
+        executed_argv: cr.executed_argv || null,
+        target_paths: null,
+        exit_status: cr.exit_status,
+      })),
       aggregate_exit_status: aggregateExitStatus,
       sandbox_image_digest,
       limits_applied: appliedLimits,
@@ -296,6 +312,7 @@ export async function runSandboxExecution(params) {
     return {
       overall: "inconclusive",
       command_results: [],
+      executed_steps: [],
       aggregate_exit_status: null,
       sandbox_image_digest,
       limits_applied: appliedLimits,

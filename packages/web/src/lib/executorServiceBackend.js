@@ -107,6 +107,10 @@ export const executorServiceBackend = {
     output_bytes: true,
   },
 
+  // Plan-execution conformance: this backend produces structured executed_steps
+  // AND supports command-descriptor-v1 (descriptor argv execution + policy gate).
+  execution_features: Object.freeze(["normative-step-reporting-v1", "command-descriptor-v1"]),
+
   /**
    * Return the isolation binding for receipt construction.
    * @returns {object}
@@ -158,6 +162,7 @@ export const executorServiceBackend = {
       return {
         overall: "inconclusive",
         command_results: [],
+        executed_steps: [],
         aggregate_exit_status: null,
         inconclusive_reason: "executor_service_url_not_configured",
         inconclusive_detail: "GITWIRE_EXECUTOR_SERVICE_URL not set",

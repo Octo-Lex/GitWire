@@ -414,6 +414,19 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
         read_only_rootfs: true,
         resource_limits: { memory_mb: limits.memory_mb, pids_limit: limits.pids_limit },
         command_results: commandResults,
+        // Plan-execution conformance: structured step evidence for app-side
+        // conformance derivation. This is a normalized projection of
+        // command_results — the app verifies they match. Backends must capture
+        // the actual argv passed to the process API, not reconstruct by
+        // splitting command strings.
+        executed_steps: commandResults.map((cr, i) => ({
+          step_id: cr.command,       // propagated from the plan's step_id
+          sequence: i,
+          command_source: cr.command_source || null,
+          executed_argv: cr.executed_argv || null,
+          target_paths: cr.target_paths || null,
+          exit_status: cr.exit_status,
+        })),
         aggregate_exit_status: aggregateExitStatus,
         overall,
       };
