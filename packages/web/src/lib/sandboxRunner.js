@@ -24,6 +24,7 @@ import {
 } from "./executorReachability.js";
 import { resolveValidatorImage } from "./validatorImage.js";
 import { compileValidationPlan } from "./validationPlanAdapter.js";
+import { computeValidationPlanHash, resolveDescriptorActivation } from "@gitwire/core";
 
 // Pinned sandbox image digest.
 // In production, this would be the SHA-256 digest of the container image.
@@ -75,23 +76,41 @@ export function buildValidationPlan(taskEnvelope, evidenceRefs) {
   // v0.23.0 Task 9 / Task 8D: compile semantic IDs into executable commands via
   // the validation-plan adapter. When evidence_refs carries ci_workflow_command
   // descriptors, they override the fixed templates.
-  const plan = compileValidationPlan(taskEnvelope.required_validation, evidenceRefs);
+  //
+  // Plan-execution conformance: activation is resolved once and injected.
+  // The plan now carries normative_steps, descriptor_policy, and
+  // required_execution_features. The hash is computed by the shared
+  // computeValidationPlanHash() — no inline JSON.stringify here.
+  const descriptorActivation = resolveDescriptorActivation(process.env.GITWIRE_DESCRIPTOR_ACTIVATION);
+  const plan = compileValidationPlan(taskEnvelope.required_validation, evidenceRefs, { descriptorActivation });
   const commands = plan.executable_commands;
   const command_descriptors = plan.command_descriptors || {};
 
-  // The hash content includes command_descriptors so a descriptor change is
-  // reflected in validation_plan_hash. Both this function and
-  // buildValidationPlanForRecorder() must serialize the SAME shape.
-  const planContent = JSON.stringify({
+  // Shared hash computation — both this function and
+  // buildValidationPlanForRecorder() MUST use computeValidationPlanHash().
+  const validation_plan_hash = computeValidationPlanHash({
     commands,
     command_descriptors,
     image_digest: SANDBOX_IMAGE_DIGEST,
     required_validation: taskEnvelope.required_validation,
     acceptance_policy: plan.acceptance_policy,
+    plan_schema_version: plan.plan_schema_version,
+    descriptor_policy: plan.descriptor_policy,
+    normative_steps: plan.normative_steps,
+    required_execution_features: plan.required_execution_features,
   });
-  const validationPlanHash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
 
-  return { commands, command_descriptors, validation_plan_hash: validationPlanHash, acceptance_policy: plan.acceptance_policy, unmapped: plan.unmapped };
+  return {
+    commands,
+    command_descriptors,
+    validation_plan_hash,
+    acceptance_policy: plan.acceptance_policy,
+    unmapped: plan.unmapped,
+    plan_schema_version: plan.plan_schema_version,
+    descriptor_policy: plan.descriptor_policy,
+    normative_steps: plan.normative_steps,
+    required_execution_features: plan.required_execution_features,
+  };
 }
 
 /**

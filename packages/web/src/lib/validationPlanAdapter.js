@@ -23,7 +23,7 @@
 // repairProposalService.buildValidationPlanForRecorder() produce byte-identical
 // validation_plan_hash values.
 
-import { validateDescriptorShape, canonicalizePlan } from "@gitwire/core";
+import { validateDescriptorShape, canonicalizePlan, resolveDescriptorActivation } from "@gitwire/core";
 
 // Mappings:
 //   test_or_build_result → commands [test, build], acceptance "pass if either"
@@ -86,18 +86,34 @@ function findDescriptorForSemantic(semanticId, evidenceRefs) {
  * @param {object[]} [evidenceRefs] — CI evidence refs (may carry ci_workflow_command
  *   descriptors). Optional for backward compatibility; when omitted, legacy
  *   behavior is preserved.
+ * @param {{ descriptorActivation?: "observed"|"selected" }} [opts]
+ *   Injection of the resolved activation policy. When omitted, reads from
+ *   process.env.GITWIRE_DESCRIPTOR_ACTIVATION once (default "observed").
+ *   Tests should inject explicitly to avoid env leakage.
  * @returns {{
- *   executable_commands: string[],     — deduplicated, sorted executor command IDs
+ *   executable_commands: string[],     — deduplicated, sorted executor command IDs (backward compat)
  *   acceptance_policy: string,         — how to interpret the command results
  *   unmapped: string[],                — IDs that have no mapping (for diagnostics)
- *   command_descriptors: Record<string, object>, — Task 8D: keyed descriptors
+ *   command_descriptors: Record<string, object>, — candidate descriptors (evidence)
+ *   plan_schema_version: number,       — 2 for plan-execution conformance model
+ *   descriptor_policy: { activation: string }, — resolved activation mode
+ *   normative_steps: object[],         — the selected execution requirements (source of truth)
+ *   required_execution_features: string[], — features the backend must advertise
  * }}
  */
-export function compileValidationPlan(requiredValidation, evidenceRefs) {
+export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {}) {
+  // Resolve activation: injected for tests, env for production, default observed.
+  const descriptorActivation = opts.descriptorActivation
+    ? resolveDescriptorActivation(opts.descriptorActivation)
+    : resolveDescriptorActivation(process.env.GITWIRE_DESCRIPTOR_ACTIVATION);
+
   const executableSet = new Set();
   const unmapped = [];
   const policies = [];
   const rawDescriptors = {};
+  const normativeSteps = [];
+  const requiredFeatures = new Set(["normative-step-reporting-v1"]);
+  let stepSeq = 0;
 
   for (const id of requiredValidation || []) {
     // ── Task 8D: repo-aware descriptor override ──────────────────────────
@@ -106,6 +122,15 @@ export function compileValidationPlan(requiredValidation, evidenceRefs) {
     if (DESCRIPTOR_ELIGIBLE_SEMANTICS.has(id)) {
       const descriptor = findDescriptorForSemantic(id, evidenceRefs);
       if (descriptor) {
+        // In "observed" mode, descriptors are candidates/evidence only.
+        // Legacy commands remain normative. The descriptor is still recorded
+        // in command_descriptors for auditability, but the normative step
+        // uses the legacy template.
+        //
+        // In "selected" mode, valid descriptors become normative. An invalid
+        // descriptor is fail-closed (no legacy fallback).
+        const useDescriptorAsNormative = descriptorActivation === "selected";
+
         // Task 8D blocker fix: if the extractor already classified this
         // descriptor as shape_invalid (it carries specific path reasons such
         // as glob/absolute/traversal failures), preserve those original
@@ -124,6 +149,37 @@ export function compileValidationPlan(requiredValidation, evidenceRefs) {
               ? [...descriptor.shape_reasons]
               : ["descriptor shape invalid (no specific reasons carried)"],
           };
+          // Normative step: in "selected" mode, an invalid descriptor is
+          // fail-closed — the invalid command_id is normative (will fail).
+          // In "observed" mode, legacy commands are normative.
+          if (useDescriptorAsNormative) {
+            normativeSteps.push({
+              step_id: `${id}:${stepSeq++}`,
+              sequence: normativeSteps.length,
+              semantic: id,
+              command_source: "ci_workflow_descriptor",
+              command_id: cmdId,
+              argv: null,
+              target_paths: null,
+              policy_status: "shape_invalid",
+            });
+          } else {
+            // Observed: legacy is normative for this semantic.
+            const mapping = VALIDATION_PLAN_MAPPINGS[id];
+            if (mapping) {
+              for (const legacyCmd of mapping.commands) {
+                normativeSteps.push({
+                  step_id: `${id}:${stepSeq++}`,
+                  sequence: normativeSteps.length,
+                  semantic: id,
+                  command_source: "legacy_template",
+                  command_id: legacyCmd,
+                  argv: null,
+                  target_paths: null,
+                });
+              }
+            }
+          }
           const mapping = VALIDATION_PLAN_MAPPINGS[id];
           if (mapping) policies.push(mapping.acceptance);
           continue;
@@ -131,14 +187,42 @@ export function compileValidationPlan(requiredValidation, evidenceRefs) {
 
         const shape = validateDescriptorShape(descriptor);
         if (shape.ok) {
-          // Valid descriptor → use it. Add its command_id to the executable
-          // plan and register the descriptor (pending executor policy).
+          // Valid descriptor → register as candidate evidence.
           const cmdId = descriptor.command_id;
           executableSet.add(cmdId);
           rawDescriptors[cmdId] = {
             ...descriptor,
             policy_status: descriptor.policy_status || "pending_executor_validation",
           };
+          // Normative step: in "selected" mode, the descriptor IS normative.
+          // In "observed" mode, legacy is normative (descriptor is evidence only).
+          if (useDescriptorAsNormative) {
+            requiredFeatures.add("command-descriptor-v1");
+            normativeSteps.push({
+              step_id: `${id}:${stepSeq++}`,
+              sequence: normativeSteps.length,
+              semantic: id,
+              command_source: "ci_workflow_descriptor",
+              command_id: cmdId,
+              argv: [...descriptor.argv],
+              target_paths: [...descriptor.target_paths],
+            });
+          } else {
+            const legMapping = VALIDATION_PLAN_MAPPINGS[id];
+            if (legMapping) {
+              for (const legacyCmd of legMapping.commands) {
+                normativeSteps.push({
+                  step_id: `${id}:${stepSeq++}`,
+                  sequence: normativeSteps.length,
+                  semantic: id,
+                  command_source: "legacy_template",
+                  command_id: legacyCmd,
+                  argv: null,
+                  target_paths: null,
+                });
+              }
+            }
+          }
         } else {
           // Shape-INVALID → explicit rejected artifact. Preserve identity so
           // the executor-service records a rejected result. Do NOT fall back
@@ -152,6 +236,35 @@ export function compileValidationPlan(requiredValidation, evidenceRefs) {
             policy_status: "shape_invalid",
             shape_reasons: shape.reasons,
           };
+          // Normative step: in "selected" mode, fail-closed (invalid descriptor
+          // is normative — will fail). In "observed" mode, legacy is normative.
+          if (useDescriptorAsNormative) {
+            normativeSteps.push({
+              step_id: `${id}:${stepSeq++}`,
+              sequence: normativeSteps.length,
+              semantic: id,
+              command_source: "ci_workflow_descriptor",
+              command_id: cmdId,
+              argv: null,
+              target_paths: null,
+              policy_status: "shape_invalid",
+            });
+          } else {
+            const legMapping = VALIDATION_PLAN_MAPPINGS[id];
+            if (legMapping) {
+              for (const legacyCmd of legMapping.commands) {
+                normativeSteps.push({
+                  step_id: `${id}:${stepSeq++}`,
+                  sequence: normativeSteps.length,
+                  semantic: id,
+                  command_source: "legacy_template",
+                  command_id: legacyCmd,
+                  argv: null,
+                  target_paths: null,
+                });
+              }
+            }
+          }
         }
         // Still record the acceptance policy for the semantic requirement.
         const mapping = VALIDATION_PLAN_MAPPINGS[id];
@@ -166,6 +279,15 @@ export function compileValidationPlan(requiredValidation, evidenceRefs) {
     if (mapping) {
       for (const cmd of mapping.commands) {
         executableSet.add(cmd);
+        normativeSteps.push({
+          step_id: `${id}:${stepSeq++}`,
+          sequence: normativeSteps.length,
+          semantic: id,
+          command_source: "legacy_template",
+          command_id: cmd,
+          argv: null,
+          target_paths: null,
+        });
       }
       policies.push(mapping.acceptance);
       continue;
@@ -174,6 +296,15 @@ export function compileValidationPlan(requiredValidation, evidenceRefs) {
     // Check if it's already an executable command ID.
     if (EXECUTABLE_COMMAND_IDS.has(id)) {
       executableSet.add(id);
+      normativeSteps.push({
+        step_id: `${id}:${stepSeq++}`,
+        sequence: normativeSteps.length,
+        semantic: null,
+        command_source: "legacy_template",
+        command_id: id,
+        argv: null,
+        target_paths: null,
+      });
       continue;
     }
 
@@ -206,5 +337,10 @@ export function compileValidationPlan(requiredValidation, evidenceRefs) {
     acceptance_policy: acceptancePolicy,
     unmapped,
     command_descriptors,
+    // Plan schema v2 — plan-execution conformance model
+    plan_schema_version: 2,
+    descriptor_policy: { activation: descriptorActivation },
+    normative_steps: normativeSteps,
+    required_execution_features: [...requiredFeatures].sort(),
   };
 }

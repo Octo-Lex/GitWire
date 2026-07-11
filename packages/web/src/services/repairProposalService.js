@@ -18,6 +18,7 @@ import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import crypto from "crypto";
 import { compileValidationPlan } from "../lib/validationPlanAdapter.js";
+import { computeValidationPlanHash, resolveDescriptorActivation } from "@gitwire/core";
 import {
   ACTOR_KINDS,
   canCreateProposal,
@@ -2339,18 +2340,34 @@ export function buildValidationPlanForRecorder(envelope, evidenceRefs) {
   // v0.23.0 Task 9 / Task 8D: use the validation-plan adapter for the same
   // semantic→executable compilation as sandboxRunner.buildValidationPlan. Both
   // sides must produce the same hash content or the verifier rejects the receipt.
-  const plan = compileValidationPlan(envelope.required_validation, evidenceRefs);
+  //
+  // Plan-execution conformance: activation is resolved once and injected.
+  // The hash is computed by the shared computeValidationPlanHash() — no inline
+  // JSON.stringify here. This eliminates the two-site duplication hazard.
+  const descriptorActivation = resolveDescriptorActivation(process.env.GITWIRE_DESCRIPTOR_ACTIVATION);
+  const plan = compileValidationPlan(envelope.required_validation, evidenceRefs, { descriptorActivation });
   const commands = plan.executable_commands;
   const command_descriptors = plan.command_descriptors || {};
-  const planContent = JSON.stringify({
+  const validation_plan_hash = computeValidationPlanHash({
     commands,
     command_descriptors,
     image_digest: "sha256:node-executor-v1",
     required_validation: envelope.required_validation,
     acceptance_policy: plan.acceptance_policy,
+    plan_schema_version: plan.plan_schema_version,
+    descriptor_policy: plan.descriptor_policy,
+    normative_steps: plan.normative_steps,
+    required_execution_features: plan.required_execution_features,
   });
-  const validation_plan_hash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
-  return { commands, command_descriptors, validation_plan_hash };
+  return {
+    commands,
+    command_descriptors,
+    validation_plan_hash,
+    plan_schema_version: plan.plan_schema_version,
+    descriptor_policy: plan.descriptor_policy,
+    normative_steps: plan.normative_steps,
+    required_execution_features: plan.required_execution_features,
+  };
 }
 
 function computeVerificationFingerprintInternal(params) {
