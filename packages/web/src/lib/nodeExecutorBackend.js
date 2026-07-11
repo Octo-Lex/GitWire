@@ -42,13 +42,12 @@ const nodeExecutorBackend = {
     memory_mb: null,
     pids_limit: null,
     wall_clock_ms: true,  // wall-clock timeout enforced by JS timer
+    output_bytes: true,   // output truncation enforced by JS
   },
 
   // Plan-execution conformance: this backend produces structured executed_steps.
   // It does NOT support command-descriptor-v1 (host spawn, no descriptor execution).
   execution_features: Object.freeze(["normative-step-reporting-v1"]),
-    output_bytes: true,   // output truncation enforced by JS
-  },
 
   /**
    * Return the isolation binding for receipt construction.
