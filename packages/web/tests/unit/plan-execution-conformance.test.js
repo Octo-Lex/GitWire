@@ -128,7 +128,7 @@ describe("P0: plan-execution conformance matrix", () => {
     expect(result.reason_codes.some(r => r.includes("command_source_mismatch"))).toBe(true);
   });
 
-  // 4. Missing execution evidence → unverifiable
+  // 4. Missing execution evidence → unverifiable (not none)
   test("missing executed_steps → unverifiable", () => {
     const plan = planWith([DESCRIPTOR_STEP]);
     const exec = { overall: "inconclusive", inconclusive_reason: "executor_service_url_not_configured" };
@@ -140,7 +140,8 @@ describe("P0: plan-execution conformance matrix", () => {
       executionAttempted: execNorm.executionAttempted,
       evidenceComplete: norm.evidenceComplete && execNorm.evidenceComplete,
     });
-    expect(result.relation).toBe("none");
+    // Missing executed_steps field → evidence incomplete → unverifiable
+    expect(result.relation).toBe("unverifiable");
   });
 
   // 5. Duplicate normative step IDs → divergent
@@ -159,12 +160,13 @@ describe("P0: plan-execution conformance matrix", () => {
     expect(result.reason_codes).toContain("duplicate_planned_step_ids");
   });
 
-  // 6. Reordered commands → divergent (step_id mismatch)
-  test("reordered steps → divergent (missing step)", () => {
-    const step1 = { ...DESCRIPTOR_STEP, step_id: "lint_result:0", argv: ["npx", "--no-install", "eslint", "a.js"], target_paths: ["a.js"] };
-    const step2 = { ...DESCRIPTOR_STEP, step_id: "test_or_build_result:0", argv: ["node", "test.js"], target_paths: ["test.js"] };
-    const exec1 = { ...DESCRIPTOR_EXECUTED, step_id: "test_or_build_result:0", executed_argv: ["node", "test.js"], target_paths: ["test.js"] };
-    const exec2 = { ...DESCRIPTOR_EXECUTED, step_id: "lint_result:0", executed_argv: ["npx", "--no-install", "eslint", "a.js"], target_paths: ["a.js"] };
+  // 6. Reordered commands → divergent (sequence mismatch)
+  test("reordered steps → divergent (sequence mismatch)", () => {
+    const step1 = { ...DESCRIPTOR_STEP, step_id: "lint_result:0", sequence: 0, argv: ["npx", "--no-install", "eslint", "a.js"], target_paths: ["a.js"] };
+    const step2 = { ...DESCRIPTOR_STEP, step_id: "test_or_build_result:0", sequence: 1, argv: ["node", "test.js"], target_paths: ["test.js"] };
+    // Executed in reversed order — sequences don't match
+    const exec1 = { ...DESCRIPTOR_EXECUTED, step_id: "test_or_build_result:0", sequence: 0, executed_argv: ["node", "test.js"], target_paths: ["test.js"] };
+    const exec2 = { ...DESCRIPTOR_EXECUTED, step_id: "lint_result:0", sequence: 1, executed_argv: ["npx", "--no-install", "eslint", "a.js"], target_paths: ["a.js"] };
     const plan = planWith([step1, step2]);
     const exec = execWith([exec1, exec2]);
     const norm = normalizeNormativeSteps(plan);
@@ -175,12 +177,8 @@ describe("P0: plan-execution conformance matrix", () => {
       executionAttempted: execNorm.executionAttempted,
       evidenceComplete: norm.evidenceComplete && execNorm.evidenceComplete,
     });
-    // Step IDs match but order differs — the comparator matches by step_id,
-    // so reordering alone doesn't cause divergence. But sequence comparison
-    // would catch it if we checked sequence. Currently we match by ID, so
-    // this is exact (order doesn't matter for ID-based matching).
-    // This test documents the current behavior: ID-based matching is order-independent.
-    expect(result.relation).toBe("exact");
+    expect(result.relation).toBe("divergent");
+    expect(result.reason_codes.some(r => r.includes("sequence_mismatch"))).toBe(true);
   });
 
   // 7. Single-argument difference → divergent

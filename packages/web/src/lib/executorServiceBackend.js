@@ -151,7 +151,7 @@ export const executorServiceBackend = {
    * @param {string} params.sandbox_image_digest - ignored (the service inspects the real image)
    * @returns {Promise<object>} the executor service's validate response
    */
-  async run({ files, commands, command_descriptors, limits, sandbox_image_digest: _ignored }) {
+  async run({ files, commands, command_descriptors, execution_steps, limits, sandbox_image_digest: _ignored }) {
     const url = process.env.GITWIRE_EXECUTOR_SERVICE_URL;
     if (!url) {
       getLogger().warn(
@@ -182,6 +182,9 @@ export const executorServiceBackend = {
       request_id: `backend-${Date.now()}`,
       files: files || [],
       commands: commands || [],
+      // Plan-execution conformance: forward execution_steps so the executor
+      // service echoes planner-issued step_id, sequence, and command_source.
+      execution_steps: execution_steps || [],
       // Task 8D: repo-aware command descriptors (keyed by command_id). Omitted
       // entirely when no descriptor is present so the legacy path is untouched.
       ...(command_descriptors && Object.keys(command_descriptors).length > 0

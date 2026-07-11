@@ -237,6 +237,14 @@ export function buildExecutionReceipt(params) {
     // so synthetic and real receipts are always distinct. Absent for non-
     // executor-service backends (treated as null).
     validation_response_source,
+    // Plan-execution conformance: the app-derived relation, reason codes,
+    // structured executed steps, and frozen backend feature snapshot.
+    // These are part of the content-addressed receipt so historical
+    // verification can recompute the relation independently.
+    plan_execution_relation,
+    plan_execution_reason_codes,
+    executed_steps,
+    backend_execution_features,
   } = params;
 
   const receiptObject = {
@@ -284,6 +292,15 @@ export function buildExecutionReceipt(params) {
     // backends. This field makes synthetic receipts unambiguous — they can no
     // longer masquerade as executor-service receipts missing report bindings.
     validation_response_source: validation_response_source || null,
+    // Plan-execution conformance (part of content-addressed hash). The stored
+    // relation lets the verifier check receipt.plan_execution_relation against
+    // its own recomputation. executed_steps provide structured evidence for
+    // non-executor-service backends. backend_execution_features are the frozen
+    // snapshot used for historical verification.
+    plan_execution_relation: plan_execution_relation || null,
+    plan_execution_reason_codes: plan_execution_reason_codes || [],
+    executed_steps: executed_steps || [],
+    backend_execution_features: backend_execution_features || [],
     ...(inconclusive_reason ? { inconclusive_reason } : {}),
     // NO timestamps or DB IDs — hash is content-addressed only
   };
@@ -472,6 +489,11 @@ export async function runSandboxVerification(options) {
       validator_image_digest: validatorImage.digest,
       validator_result: "inconclusive",
       validator_result_status: "inconclusive",
+      // Plan-execution conformance: no execution occurred (artifact apply failed).
+      plan_execution_relation: "none",
+      plan_execution_reason_codes: ["artifact_apply_failed"],
+      executed_steps: [],
+      backend_execution_features: backend.execution_features || [],
     });
 
     logger.warn(
@@ -492,11 +514,14 @@ export async function runSandboxVerification(options) {
     };
   }
 
-  // Execute validation commands via selected backend
+  // Execute validation commands via selected backend.
+  // Pass execution_steps (from normative_steps) so backends echo planner-issued
+  // step_id, sequence, and command_source — NOT invent their own from command IDs.
   const execResult = await backend.run({
     files: applyResult.files,
     commands,
     command_descriptors,
+    execution_steps: buildPlanResult.normative_steps || [],
     limits: appliedLimits,
     sandbox_image_digest: isolation.sandbox_image_digest,
   });
@@ -736,6 +761,11 @@ export async function runSandboxVerification(options) {
         inspected_image_digest: execResult.inspected_image_digest,
         inspection_hash: execResult.inspection_hash,
         validation_response_source: execResult.validation_response_source,
+        // Plan-execution conformance: persistence failed, downgrade to inconclusive.
+        plan_execution_relation: conformance.relation,
+        plan_execution_reason_codes: conformance.reason_codes,
+        executed_steps: execResult.executed_steps || [],
+        backend_execution_features: backend.execution_features || [],
       }),
     };
   }

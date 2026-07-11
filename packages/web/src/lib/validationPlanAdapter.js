@@ -24,6 +24,16 @@
 // validation_plan_hash values.
 
 import { validateDescriptorShape, canonicalizePlan, resolveDescriptorActivation } from "@gitwire/core";
+import { COMMAND_TEMPLATES } from "./validationCommandTemplates.js";
+
+/**
+ * Canonical command_source vocabulary — used across planner, all backends,
+ * and the verifier. Must match exactly for plan_execution_relation "exact".
+ */
+export const COMMAND_SOURCES = Object.freeze({
+  LEGACY_TEMPLATE: "legacy_template",
+  CI_WORKFLOW_DESCRIPTOR: "ci_workflow_descriptor",
+});
 
 // Mappings:
 //   test_or_build_result → commands [test, build], acceptance "pass if either"
@@ -139,7 +149,6 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
         // "target_paths must be..." messages, losing the actionable detail.
         if (descriptor.policy_status === "shape_invalid") {
           const cmdId = descriptor.command_id || ("invalid_" + id);
-          executableSet.add(cmdId);
           rawDescriptors[cmdId] = {
             command_id: cmdId,
             semantic_id: descriptor.semantic_id || id,
@@ -150,32 +159,33 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
               : ["descriptor shape invalid (no specific reasons carried)"],
           };
           // Normative step: in "selected" mode, an invalid descriptor is
-          // fail-closed — the invalid command_id is normative (will fail).
-          // In "observed" mode, legacy commands are normative.
+          // fail-closed — the invalid command_id is dispatched (will fail).
+          // In "observed" mode, legacy commands are dispatched and normative.
           if (useDescriptorAsNormative) {
+            executableSet.add(cmdId);
             normativeSteps.push({
               step_id: `${id}:${stepSeq++}`,
               sequence: normativeSteps.length,
               semantic: id,
-              command_source: "ci_workflow_descriptor",
+              command_source: COMMAND_SOURCES.CI_WORKFLOW_DESCRIPTOR,
               command_id: cmdId,
               argv: null,
               target_paths: null,
               policy_status: "shape_invalid",
             });
           } else {
-            // Observed: legacy is normative for this semantic.
             const mapping = VALIDATION_PLAN_MAPPINGS[id];
             if (mapping) {
               for (const legacyCmd of mapping.commands) {
+                executableSet.add(legacyCmd);
                 normativeSteps.push({
                   step_id: `${id}:${stepSeq++}`,
                   sequence: normativeSteps.length,
                   semantic: id,
-                  command_source: "legacy_template",
+                  command_source: COMMAND_SOURCES.LEGACY_TEMPLATE,
                   command_id: legacyCmd,
-                  argv: null,
-                  target_paths: null,
+                  argv: [...(COMMAND_TEMPLATES[legacyCmd] || [])],
+                  target_paths: [],
                 });
               }
             }
@@ -187,22 +197,24 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
 
         const shape = validateDescriptorShape(descriptor);
         if (shape.ok) {
-          // Valid descriptor → register as candidate evidence.
+          // Valid descriptor → always register as candidate evidence.
           const cmdId = descriptor.command_id;
-          executableSet.add(cmdId);
           rawDescriptors[cmdId] = {
             ...descriptor,
             policy_status: descriptor.policy_status || "pending_executor_validation",
           };
-          // Normative step: in "selected" mode, the descriptor IS normative.
-          // In "observed" mode, legacy is normative (descriptor is evidence only).
+          // Normative step: in "selected" mode, the descriptor IS normative
+          // AND its command_id enters the dispatch set.
+          // In "observed" mode, legacy is normative — the descriptor
+          // command_id must NOT enter the dispatch set (defect #1 fix).
           if (useDescriptorAsNormative) {
+            executableSet.add(cmdId);
             requiredFeatures.add("command-descriptor-v1");
             normativeSteps.push({
               step_id: `${id}:${stepSeq++}`,
               sequence: normativeSteps.length,
               semantic: id,
-              command_source: "ci_workflow_descriptor",
+              command_source: COMMAND_SOURCES.CI_WORKFLOW_DESCRIPTOR,
               command_id: cmdId,
               argv: [...descriptor.argv],
               target_paths: [...descriptor.target_paths],
@@ -211,14 +223,15 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
             const legMapping = VALIDATION_PLAN_MAPPINGS[id];
             if (legMapping) {
               for (const legacyCmd of legMapping.commands) {
+                executableSet.add(legacyCmd);
                 normativeSteps.push({
                   step_id: `${id}:${stepSeq++}`,
                   sequence: normativeSteps.length,
                   semantic: id,
-                  command_source: "legacy_template",
+                  command_source: COMMAND_SOURCES.LEGACY_TEMPLATE,
                   command_id: legacyCmd,
-                  argv: null,
-                  target_paths: null,
+                  argv: [...(COMMAND_TEMPLATES[legacyCmd] || [])],
+                  target_paths: [],
                 });
               }
             }
@@ -228,7 +241,6 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
           // the executor-service records a rejected result. Do NOT fall back
           // to the legacy template (fail-closed).
           const cmdId = descriptor.command_id || ("invalid_" + id);
-          executableSet.add(cmdId);
           rawDescriptors[cmdId] = {
             command_id: cmdId,
             semantic_id: descriptor.semantic_id || id,
@@ -239,11 +251,12 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
           // Normative step: in "selected" mode, fail-closed (invalid descriptor
           // is normative — will fail). In "observed" mode, legacy is normative.
           if (useDescriptorAsNormative) {
+            executableSet.add(cmdId);
             normativeSteps.push({
               step_id: `${id}:${stepSeq++}`,
               sequence: normativeSteps.length,
               semantic: id,
-              command_source: "ci_workflow_descriptor",
+              command_source: COMMAND_SOURCES.CI_WORKFLOW_DESCRIPTOR,
               command_id: cmdId,
               argv: null,
               target_paths: null,
@@ -253,14 +266,15 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
             const legMapping = VALIDATION_PLAN_MAPPINGS[id];
             if (legMapping) {
               for (const legacyCmd of legMapping.commands) {
+                executableSet.add(legacyCmd);
                 normativeSteps.push({
                   step_id: `${id}:${stepSeq++}`,
                   sequence: normativeSteps.length,
                   semantic: id,
-                  command_source: "legacy_template",
+                  command_source: COMMAND_SOURCES.LEGACY_TEMPLATE,
                   command_id: legacyCmd,
-                  argv: null,
-                  target_paths: null,
+                  argv: [...(COMMAND_TEMPLATES[legacyCmd] || [])],
+                  target_paths: [],
                 });
               }
             }
@@ -283,10 +297,10 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
           step_id: `${id}:${stepSeq++}`,
           sequence: normativeSteps.length,
           semantic: id,
-          command_source: "legacy_template",
+          command_source: COMMAND_SOURCES.LEGACY_TEMPLATE,
           command_id: cmd,
-          argv: null,
-          target_paths: null,
+          argv: [...(COMMAND_TEMPLATES[cmd] || [])],
+          target_paths: [],
         });
       }
       policies.push(mapping.acceptance);
@@ -300,10 +314,10 @@ export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {
         step_id: `${id}:${stepSeq++}`,
         sequence: normativeSteps.length,
         semantic: null,
-        command_source: "legacy_template",
+        command_source: COMMAND_SOURCES.LEGACY_TEMPLATE,
         command_id: id,
-        argv: null,
-        target_paths: null,
+        argv: [...(COMMAND_TEMPLATES[id] || [])],
+        target_paths: [],
       });
       continue;
     }

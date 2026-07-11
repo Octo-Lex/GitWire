@@ -116,9 +116,13 @@ export function validateGap1ValidatorBindings(receipt, canonicalPlan, rawReport)
   // This is the load-bearing conformance check: a receipt whose plan says
   // descriptor but whose execution ran legacy cannot pass, regardless of
   // exit statuses or backend identity.
-  if (canonicalPlan && rawReport) {
+  //
+  // For executor-service: rawReport is available (hash-verified) — use it.
+  // For docker/node: rawReport is null — fall back to receipt.executed_steps.
+  const execEvidence = rawReport || (receipt.executed_steps ? { executed_steps: receipt.executed_steps } : null);
+  if (canonicalPlan && execEvidence) {
     const normResult = normalizeNormativeSteps(canonicalPlan);
-    const execNormResult = normalizeExecutedSteps(rawReport);
+    const execNormResult = normalizeExecutedSteps(execEvidence);
     const recomputed = derivePlanExecutionRelation({
       plannedSteps: normResult.steps,
       executedSteps: execNormResult.steps,
@@ -139,10 +143,15 @@ export function validateGap1ValidatorBindings(receipt, canonicalPlan, rawReport)
       );
     }
   } else if (receipt.plan_execution_relation && receipt.plan_execution_relation !== "exact") {
-    // No canonical plan or raw report available to recompute — but the stored
-    // relation says non-exact. Reject.
+    // No canonical plan or execution evidence available to recompute — but the
+    // stored relation says non-exact. Reject.
     throw new Error(
       `Execution receipt plan_execution_relation is '${receipt.plan_execution_relation}' — pass requires exact conformance`
+    );
+  } else if (!receipt.plan_execution_relation) {
+    // Schema-v1 receipt (no stored relation) — cannot establish exact.
+    throw new Error(
+      "Execution receipt missing plan_execution_relation — schema-v1 receipts without structured conformance evidence cannot establish exact"
     );
   }
 }

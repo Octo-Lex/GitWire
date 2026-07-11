@@ -81,8 +81,8 @@ const nodeExecutorBackend = {
    * @param {string} params.sandbox_image_digest - pinned digest
    * @returns {Promise<object>} execution result
    */
-  async run({ files, commands, limits, sandbox_image_digest }) {
-    return runSandboxExecution({ files, commands, limits, sandbox_image_digest });
+  async run({ files, commands, limits, sandbox_image_digest, execution_steps }) {
+    return runSandboxExecution({ files, commands, limits, sandbox_image_digest, execution_steps });
   },
 };
 

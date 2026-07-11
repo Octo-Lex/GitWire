@@ -72,16 +72,23 @@ export function normalizeNormativeSteps(canonicalPlan) {
  */
 export function normalizeExecutedSteps(executionEvidence) {
   if (!executionEvidence) {
+    // No evidence at all — unverifiable (not "none"). "none" requires
+    // trustworthy evidence that nothing ran; absence is not that.
     return { steps: [], evidenceComplete: false, executionAttempted: false };
   }
   const rawSteps = Array.isArray(executionEvidence)
     ? executionEvidence
-    : (Array.isArray(executionEvidence.executed_steps) ? executionEvidence.executed_steps : []);
+    : (Array.isArray(executionEvidence.executed_steps) ? executionEvidence.executed_steps : null);
+
+  // If executed_steps field is absent (not an empty array), evidence is incomplete.
+  if (rawSteps === null) {
+    return { steps: [], evidenceComplete: false, executionAttempted: false };
+  }
 
   if (rawSteps.length === 0) {
-    // Empty executed_steps — was execution attempted? Check for an
-    // inconclusive_reason that indicates execution was attempted but failed,
-    // vs. not attempted at all.
+    // Explicitly empty executed_steps — execution was attempted but produced
+    // no steps. This is "none" (trustworthy evidence that nothing ran), not
+    // "unverifiable".
     const reason = executionEvidence.inconclusive_reason || executionEvidence.inconclusive_detail;
     const attempted = Boolean(reason) && reason !== "executor_service_url_not_configured";
     return { steps: [], evidenceComplete: true, executionAttempted: attempted };
@@ -190,15 +197,30 @@ export function derivePlanExecutionRelation(input) {
       }
     }
 
-    // Compare target_paths (normalized). For legacy steps (null in plan),
+    // Compare target_paths (normalized). For legacy steps (empty array in plan),
     // skip. For descriptor steps, compare element-by-element.
-    if (plannedStep.target_paths !== null && plannedStep.target_paths !== undefined) {
+    if (plannedStep.target_paths !== null && plannedStep.target_paths !== undefined &&
+        Array.isArray(plannedStep.target_paths) && plannedStep.target_paths.length > 0) {
       const plannedPaths = normalizePaths(plannedStep.target_paths);
       const executedPaths = normalizePaths(executedStep.target_paths);
       if (plannedPaths.length !== executedPaths.length ||
           !plannedPaths.every((p, i) => p === executedPaths[i])) {
         return { relation: "divergent", reason_codes: [`target_paths_mismatch:${plannedStep.step_id}`] };
       }
+    }
+
+    // Compare sequence. Steps must execute in the planned order unless the
+    // plan explicitly allows reordering (not currently supported).
+    if (typeof plannedStep.sequence === "number" && typeof executedStep.sequence === "number" &&
+        plannedStep.sequence !== executedStep.sequence) {
+      return { relation: "divergent", reason_codes: [`sequence_mismatch:${plannedStep.step_id}`] };
+    }
+
+    // Check for rejected/non-executed steps masquerading as executed.
+    // A rejected step (status: "rejected") means the command never ran —
+    // it cannot establish exact conformance for a pass.
+    if (executedStep.status === "rejected" || executedStep.exit_status === null && executedStep.command_source === null) {
+      return { relation: "divergent", reason_codes: [`step_not_executed:${plannedStep.step_id}`] };
     }
   }
 

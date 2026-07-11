@@ -326,7 +326,7 @@ function executeInContainer(runtime, argv, workspace, limits) {
  * @returns {Promise<object>} execution result
  */
 export async function runDockerExecution(params) {
-  const { files, commands, limits, sandbox_image_digest } = params;
+  const { files, commands, limits, sandbox_image_digest, execution_steps } = params;
 
   if (!files || !Array.isArray(files) || files.length === 0) {
     throw new Error("runDockerExecution: files array is required");
@@ -385,7 +385,18 @@ export async function runDockerExecution(params) {
     const commandResults = [];
     let aggregateExitStatus = 0;
 
+    // Build a lookup from execution_steps for planner-issued metadata.
+    const stepMeta = new Map();
+    if (Array.isArray(execution_steps)) {
+      for (const step of execution_steps) {
+        if (step && step.command_id) {
+          stepMeta.set(step.command_id, step);
+        }
+      }
+    }
+
     for (const cmdId of commands) {
+      const meta = stepMeta.get(cmdId) || {};
       let argv;
       try {
         argv = resolveCommandTemplate(cmdId);
@@ -393,6 +404,8 @@ export async function runDockerExecution(params) {
         logger.warn({ cmdId }, "Non-allowlisted validation command rejected");
         commandResults.push({
           command: cmdId,
+          step_id: meta.step_id || cmdId,
+          sequence: meta.sequence ?? commandResults.length,
           exit_status: null,
           output_ref: null,
           output_hash: null,
@@ -407,13 +420,16 @@ export async function runDockerExecution(params) {
       const result = await executeInContainer(runtime, argv, workspace, appliedLimits);
       commandResults.push({
         command: cmdId,
+        step_id: meta.step_id || cmdId,
+        sequence: meta.sequence ?? commandResults.length,
         exit_status: result.exit_status,
         output_ref: result.output_ref,
         output_hash: result.output_hash,
         duration_ms: result.duration_ms,
-        // Plan-execution conformance: actual argv passed to the container.
+        // Plan-execution conformance: echo planner-issued command_source
+        // and actual argv passed to the container.
         executed_argv: argv,
-        command_source: "fallback_template",
+        command_source: meta.command_source || "legacy_template",
         ...(result.timed_out ? { timed_out: true, timeout_reason: result.timeout_reason } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
@@ -459,9 +475,9 @@ export async function runDockerExecution(params) {
       command_results: commandResults,
       // Plan-execution conformance: structured step evidence.
       executed_steps: commandResults.map((cr, i) => ({
-        step_id: cr.command,
-        sequence: i,
-        command_source: cr.command_source || "fallback_template",
+        step_id: cr.step_id || cr.command,
+        sequence: cr.sequence ?? i,
+        command_source: cr.command_source || "legacy_template",
         executed_argv: cr.executed_argv || null,
         target_paths: null,
         exit_status: cr.exit_status,

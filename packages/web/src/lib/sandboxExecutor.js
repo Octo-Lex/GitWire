@@ -169,7 +169,7 @@ function executeCommand(argv, cwd, limits) {
  * @returns {Promise<object>} execution result with per-command results
  */
 export async function runSandboxExecution(params) {
-  const { files, commands, limits, sandbox_image_digest } = params;
+  const { files, commands, limits, sandbox_image_digest, execution_steps } = params;
 
   if (!files || !Array.isArray(files) || files.length === 0) {
     throw new Error("runSandboxExecution: files array is required");
@@ -216,7 +216,18 @@ export async function runSandboxExecution(params) {
     const commandResults = [];
     let aggregateExitStatus = 0;
 
+    // Build a lookup from execution_steps for planner-issued metadata.
+    const stepMeta = new Map();
+    if (Array.isArray(execution_steps)) {
+      for (const step of execution_steps) {
+        if (step && step.command_id) {
+          stepMeta.set(step.command_id, step);
+        }
+      }
+    }
+
     for (const cmdId of commands) {
+      const meta = stepMeta.get(cmdId) || {};
       let argv;
       try {
         argv = resolveCommandTemplate(cmdId);
@@ -225,6 +236,8 @@ export async function runSandboxExecution(params) {
         logger.warn({ cmdId }, "Non-allowlisted validation command rejected by executor");
         commandResults.push({
           command: cmdId,
+          step_id: meta.step_id || cmdId,
+          sequence: meta.sequence ?? commandResults.length,
           exit_status: null,
           output_ref: null,
           output_hash: null,
@@ -241,15 +254,16 @@ export async function runSandboxExecution(params) {
       const result = await executeCommand(argv, workspace, appliedLimits);
       commandResults.push({
         command: cmdId,
+        step_id: meta.step_id || cmdId,
+        sequence: meta.sequence ?? commandResults.length,
         exit_status: result.exit_status,
         output_ref: result.output_ref,
         output_hash: result.output_hash,
         duration_ms: result.duration_ms,
-        // Plan-execution conformance: record the actual argv passed to the
-        // process API. This is NOT reconstructed from a command string —
-        // it's the resolved template argv that was directly spawned.
+        // Plan-execution conformance: echo the planner-issued command_source
+        // and record the actual argv passed to the process API.
         executed_argv: argv,
-        command_source: "fallback_template",
+        command_source: meta.command_source || "legacy_template",
         ...(result.timed_out ? { timed_out: true, timeout_reason: result.timeout_reason } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
@@ -291,13 +305,12 @@ export async function runSandboxExecution(params) {
     return {
       overall,
       command_results: commandResults,
-      // Plan-execution conformance: structured step evidence. The argv here
-      // is the actual resolved template — captured from what was passed to
-      // the process API, not reconstructed by splitting a command string.
+      // Plan-execution conformance: structured step evidence. Echoes
+      // planner-issued step_id, sequence, and canonical command_source.
       executed_steps: commandResults.map((cr, i) => ({
-        step_id: cr.command,
-        sequence: i,
-        command_source: cr.command_source || "fallback_template",
+        step_id: cr.step_id || cr.command,
+        sequence: cr.sequence ?? i,
+        command_source: cr.command_source || "legacy_template",
         executed_argv: cr.executed_argv || null,
         target_paths: null,
         exit_status: cr.exit_status,

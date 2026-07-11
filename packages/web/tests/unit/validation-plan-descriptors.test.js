@@ -24,15 +24,23 @@ function evidenceWith(descriptor) {
   return [{ type: "ci_workflow_command", descriptor }];
 }
 
-describe("compileValidationPlan — descriptor overrides legacy", () => {
-  it("uses repo_lint descriptor when a valid ci_workflow_command is present", () => {
-    const plan = compileValidationPlan(["lint_result"], evidenceWith(VALID_DESCRIPTOR));
+describe("compileValidationPlan — descriptor overrides legacy (selected mode)", () => {
+  it("uses repo_lint descriptor when a valid ci_workflow_command is present (selected)", () => {
+    const plan = compileValidationPlan(["lint_result"], evidenceWith(VALID_DESCRIPTOR), { descriptorActivation: "selected" });
     expect(plan.executable_commands).toContain("repo_lint");
     expect(plan.executable_commands).not.toContain("lint"); // legacy NOT used
     const d = plan.command_descriptors.repo_lint;
     expect(d.argv).toEqual(["npx", "--no-install", "eslint", "app.js"]);
     expect(d.target_paths).toEqual(["app.js"]);
     expect(d.requires_shell).toBe(false);
+  });
+
+  it("observed mode: legacy lint is normative, descriptor is evidence only", () => {
+    const plan = compileValidationPlan(["lint_result"], evidenceWith(VALID_DESCRIPTOR));
+    expect(plan.executable_commands).toContain("lint");
+    expect(plan.executable_commands).not.toContain("repo_lint"); // descriptor NOT dispatched
+    // descriptor is still recorded as candidate evidence
+    expect(plan.command_descriptors.repo_lint).toBeDefined();
   });
 
   it("legacy lint fallback works when descriptor is absent", () => {
@@ -48,15 +56,15 @@ describe("compileValidationPlan — descriptor overrides legacy", () => {
   });
 });
 
-describe("compileValidationPlan — shape-invalid descriptor is explicit (no fallback)", () => {
-  it("a shape-invalid descriptor becomes an explicit shape_invalid artifact, not legacy lint", () => {
+describe("compileValidationPlan — shape-invalid descriptor is explicit (selected mode)", () => {
+  it("a shape-invalid descriptor becomes an explicit shape_invalid artifact, not legacy lint (selected)", () => {
     const invalidDescriptor = {
       command_id: "repo_lint",
       semantic_id: "lint_result",
       source: "ci_workflow",
       // argv missing → shape-invalid
     };
-    const plan = compileValidationPlan(["lint_result"], evidenceWith(invalidDescriptor));
+    const plan = compileValidationPlan(["lint_result"], evidenceWith(invalidDescriptor), { descriptorActivation: "selected" });
     // The command_id is still in the executable plan (identity preserved)...
     expect(plan.executable_commands).toContain("repo_lint");
     // ...but it is marked shape_invalid, NOT legacy lint.
@@ -151,7 +159,7 @@ describe("compileValidationPlan — test_or_build_result descriptor", () => {
       network: "disabled",
       requires_shell: false,
     };
-    const plan = compileValidationPlan(["test_or_build_result"], evidenceWith(descriptor));
+    const plan = compileValidationPlan(["test_or_build_result"], evidenceWith(descriptor), { descriptorActivation: "selected" });
     expect(plan.executable_commands).toContain("repo_node_script");
     expect(plan.command_descriptors.repo_node_script.argv).toEqual(["node", "test.js"]);
   });

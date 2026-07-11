@@ -261,8 +261,19 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
         ? request.command_descriptors
         : {};
 
+      // Build step metadata lookup from execution_steps (planner-issued).
+      const stepMeta = new Map();
+      if (Array.isArray(request.execution_steps)) {
+        for (const step of request.execution_steps) {
+          if (step && step.command_id) {
+            stepMeta.set(step.command_id, step);
+          }
+        }
+      }
+
       for (const cmdId of request.commands) {
         const descriptor = descriptors[cmdId];
+        const meta = stepMeta.get(cmdId) || {};
 
         // ── Descriptor path ────────────────────────────────────────────────
         if (descriptor) {
@@ -271,8 +282,10 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           if (descriptor.policy_status === "shape_invalid") {
             commandResults.push({
               command: cmdId,
+              step_id: meta.step_id || cmdId,
+              sequence: meta.sequence ?? commandResults.length,
               semantic_id: descriptor.semantic_id || null,
-              command_source: "ci_workflow",
+              command_source: "ci_workflow_descriptor",
               status: "rejected",
               // Task 8D blocker fix: a shape_invalid descriptor carries no
               // argv/target_paths by definition (its shape is the reason it
@@ -295,8 +308,10 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           if (!policy.ok) {
             commandResults.push({
               command: cmdId,
+              step_id: meta.step_id || cmdId,
+              sequence: meta.sequence ?? commandResults.length,
               semantic_id: descriptor.semantic_id || null,
-              command_source: "ci_workflow",
+              command_source: "ci_workflow_descriptor",
               status: "rejected",
               // Task 8D blocker fix: carry the full audit fields. The
               // descriptor was policy-rejected (not executed), but its
@@ -328,8 +343,10 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
 
           commandResults.push({
             command: cmdId,
+            step_id: meta.step_id || cmdId,
+            sequence: meta.sequence ?? commandResults.length,
             semantic_id: descriptor.semantic_id || null,
-            command_source: "ci_workflow",
+            command_source: "ci_workflow_descriptor",
             executed_argv: argv,
             target_paths: descriptor.target_paths || [],
             exit_status: r.code,
@@ -348,7 +365,7 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           argv = resolveCommandTemplate(cmdId);
         } catch {
           // Non-allowlisted → null exit_status → inconclusive aggregate.
-          commandResults.push({ command: cmdId, exit_status: null, output_ref: null, output_hash: null, duration_ms: 0 });
+          commandResults.push({ command: cmdId, step_id: meta.step_id || cmdId, sequence: meta.sequence ?? commandResults.length, exit_status: null, output_ref: null, output_hash: null, duration_ms: 0 });
           aggregateExitStatus = null;
           continue;
         }
@@ -365,7 +382,9 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
 
         commandResults.push({
           command: cmdId,
-          command_source: "fallback_template",
+          step_id: meta.step_id || cmdId,
+          sequence: meta.sequence ?? commandResults.length,
+          command_source: "legacy_template",
           exit_status: r.code,
           output_ref: `output:${outputHash}`,
           output_hash: outputHash,
@@ -420,8 +439,8 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
         // the actual argv passed to the process API, not reconstruct by
         // splitting command strings.
         executed_steps: commandResults.map((cr, i) => ({
-          step_id: cr.command,       // propagated from the plan's step_id
-          sequence: i,
+          step_id: cr.step_id || cr.command,
+          sequence: cr.sequence ?? i,
           command_source: cr.command_source || null,
           executed_argv: cr.executed_argv || null,
           target_paths: cr.target_paths || null,
