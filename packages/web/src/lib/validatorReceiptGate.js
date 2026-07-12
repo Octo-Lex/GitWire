@@ -154,6 +154,29 @@ export function validateGap1ValidatorBindings(receipt, canonicalPlan, rawReport)
   // passes canonicalPlan, so the conformance check is enforced there. The
   // schema-v1 rejection (missing plan_execution_relation) only applies when
   // canonicalPlan is available — otherwise legacy receipts would break.
+
+  // 3n. (plan-execution conformance) Recompute result eligibility using
+  // receipt-bound feature declarations. The verifier does NOT trust the
+  // current backend registry — it uses the frozen snapshot from the receipt.
+  if (canonicalPlan && receipt.backend_execution_features) {
+    const eligibility = deriveResultEligibility({
+      planExecutionRelation: receipt.plan_execution_relation || "unverifiable",
+      requiredExecutionFeatures: canonicalPlan.required_execution_features || [],
+      backendExecutionFeatures: receipt.backend_execution_features,
+      backendPassCapable: receipt.executor_pass_capable === true,
+      selectedBackendReachable: true, // the receipt reached us — backend was reachable
+      validatorImageIdentityValid: Boolean(receipt.validator_image_ref && receipt.validator_image_digest),
+      reportIntegrityValid: receipt.execution_backend_id !== "executor-service" ||
+        Boolean(receipt.executor_report_hash && receipt.executor_report_ref),
+      executionEvidenceComplete: Boolean(receipt.executed_steps) || Boolean(rawReport),
+      planSchemaSupported: canonicalPlan.plan_schema_version === 2,
+    });
+    if (!eligibility.eligible) {
+      throw new Error(
+        `Execution receipt result eligibility check failed: ${eligibility.reason_codes.join(", ")}`
+      );
+    }
+  }
 }
 
 /**

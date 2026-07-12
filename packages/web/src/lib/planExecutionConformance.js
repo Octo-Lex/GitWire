@@ -209,17 +209,20 @@ export function derivePlanExecutionRelation(input) {
       }
     }
 
-    // Compare sequence. Steps must execute in the planned order unless the
-    // plan explicitly allows reordering (not currently supported).
-    if (typeof plannedStep.sequence === "number" && typeof executedStep.sequence === "number" &&
-        plannedStep.sequence !== executedStep.sequence) {
-      return { relation: "divergent", reason_codes: [`sequence_mismatch:${plannedStep.step_id}`] };
+    // Compare execution order. The executed step's actual position in the
+    // executedSteps array (executionIndex) must match the planned sequence.
+    // We do NOT trust the echoed sequence field — backends may copy it from
+    // the plan. The array position is the factual execution order.
+    const executionIndex = executedSteps.indexOf(executedStep);
+    if (typeof plannedStep.sequence === "number" && executionIndex !== plannedStep.sequence) {
+      return { relation: "divergent", reason_codes: [`sequence_mismatch:${plannedStep.step_id}:planned=${plannedStep.sequence}:actual=${executionIndex}`] };
     }
 
     // Check for rejected/non-executed steps masquerading as executed.
     // A rejected step (status: "rejected") means the command never ran —
-    // it cannot establish exact conformance for a pass.
-    if (executedStep.status === "rejected" || executedStep.exit_status === null && executedStep.command_source === null) {
+    // it cannot establish exact conformance. A null exit_status also means
+    // the command didn't complete (timeout, spawn failure, or rejection).
+    if (executedStep.status === "rejected" || executedStep.exit_status === null) {
       return { relation: "divergent", reason_codes: [`step_not_executed:${plannedStep.step_id}`] };
     }
   }

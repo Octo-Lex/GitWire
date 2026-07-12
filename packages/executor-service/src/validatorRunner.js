@@ -445,6 +445,7 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           executed_argv: cr.executed_argv || null,
           target_paths: cr.target_paths || null,
           exit_status: cr.exit_status,
+          status: cr.status || null, // preserve "rejected" so conformance can detect non-execution
         })),
         aggregate_exit_status: aggregateExitStatus,
         overall,

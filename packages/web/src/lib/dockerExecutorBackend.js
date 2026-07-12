@@ -575,8 +575,8 @@ const dockerExecutorBackend = {
    * @param {object} params
    * @returns {Promise<object>}
    */
-  async run({ files, commands, limits, sandbox_image_digest }) {
-    return runDockerExecution({ files, commands, limits, sandbox_image_digest });
+  async run({ files, commands, command_descriptors, execution_steps, limits, sandbox_image_digest }) {
+    return runDockerExecution({ files, commands, command_descriptors, execution_steps, limits, sandbox_image_digest });
   },
 };
 
