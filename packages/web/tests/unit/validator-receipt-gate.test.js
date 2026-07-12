@@ -14,6 +14,8 @@ const VALID_PASS_RECEIPT = Object.freeze({
   validator_image_ref: REF,
   validator_image_digest: DIGEST,
   validator_result_status: "pass",
+  // Plan-execution conformance: schema-v2 receipts must carry the relation.
+  plan_execution_relation: "exact",
 });
 
 describe("validateGap1ValidatorBindings — accepts a valid pass receipt", () => {
