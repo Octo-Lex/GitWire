@@ -158,13 +158,24 @@ export function validateGap1ValidatorBindings(receipt, canonicalPlan, rawReport)
   // 3n. (plan-execution conformance) Recompute result eligibility using
   // receipt-bound feature declarations. The verifier does NOT trust the
   // current backend registry — it uses the frozen snapshot from the receipt.
-  if (canonicalPlan && receipt.backend_execution_features) {
+  // Fail closed: missing receipt-bound features or relation → reject.
+  if (canonicalPlan) {
+    if (!Array.isArray(receipt.backend_execution_features)) {
+      throw new Error(
+        "Execution receipt missing backend_execution_features — schema-v2 pass requires receipt-bound feature snapshot"
+      );
+    }
+    if (!receipt.plan_execution_relation) {
+      throw new Error(
+        "Execution receipt missing plan_execution_relation — schema-v2 pass requires app-derived conformance evidence"
+      );
+    }
     const eligibility = deriveResultEligibility({
-      planExecutionRelation: receipt.plan_execution_relation || "unverifiable",
+      planExecutionRelation: receipt.plan_execution_relation,
       requiredExecutionFeatures: canonicalPlan.required_execution_features || [],
       backendExecutionFeatures: receipt.backend_execution_features,
       backendPassCapable: receipt.executor_pass_capable === true,
-      selectedBackendReachable: true, // the receipt reached us — backend was reachable
+      selectedBackendReachable: true,
       validatorImageIdentityValid: Boolean(receipt.validator_image_ref && receipt.validator_image_digest),
       reportIntegrityValid: receipt.execution_backend_id !== "executor-service" ||
         Boolean(receipt.executor_report_hash && receipt.executor_report_ref),

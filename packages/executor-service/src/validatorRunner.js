@@ -385,6 +385,8 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           step_id: meta.step_id || cmdId,
           sequence: meta.sequence ?? commandResults.length,
           command_source: "legacy_template",
+          executed_argv: argv,
+          target_paths: [],
           exit_status: r.code,
           output_ref: `output:${outputHash}`,
           output_hash: outputHash,

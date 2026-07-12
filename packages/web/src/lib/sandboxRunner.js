@@ -106,8 +106,17 @@ export function buildValidationPlan(taskEnvelope, evidenceRefs) {
     required_execution_features: plan.required_execution_features,
   });
 
+  // Derive dispatch order from normative_steps sorted by sequence, NOT the
+  // alphabetically sorted executable_commands. This ensures execution order
+  // matches the planned order (e.g. test before build, not build before test).
+  const dispatch_commands = [...(plan.normative_steps || [])]
+    .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+    .map(s => s.command_id)
+    .filter(Boolean);
+
   return {
     commands,
+    dispatch_commands,
     command_descriptors,
     validation_plan_hash,
     acceptance_policy: plan.acceptance_policy,
@@ -438,6 +447,9 @@ export async function runSandboxVerification(options) {
   // Build validation plan from envelope (+ evidence for Task 8D descriptors)
   const buildPlanResult = buildValidationPlan(taskEnvelope, evidenceRefs);
   const { commands, command_descriptors, validation_plan_hash } = buildPlanResult;
+  // Dispatch in normative-step sequence order, NOT alphabetical. This ensures
+  // execution order matches planned order (test before build, etc.).
+  const dispatchCommands = buildPlanResult.dispatch_commands || commands;
 
   // Parse artifact
   let parsedArtifact;
@@ -519,7 +531,7 @@ export async function runSandboxVerification(options) {
   // step_id, sequence, and command_source — NOT invent their own from command IDs.
   const execResult = await backend.run({
     files: applyResult.files,
-    commands,
+    commands: dispatchCommands,
     command_descriptors,
     execution_steps: buildPlanResult.normative_steps || [],
     limits: appliedLimits,
@@ -615,7 +627,7 @@ export async function runSandboxVerification(options) {
     output_refs: outputRefs,
     output_hashes: outputHashes,
     limits_applied: appliedLimits,
-    result: execResult.overall,
+    result: resultMapping.validator_result,
     ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
     container_runtime: receiptContainerRuntime,
     runtime_version: receiptRuntimeVersion,
@@ -718,7 +730,7 @@ export async function runSandboxVerification(options) {
   // the downgraded state.
   if (persistenceDowngraded) {
     return {
-      overall: execResult.overall,
+      overall: "inconclusive",
       commands: execResult.command_results,
       exit_status: execResult.aggregate_exit_status,
       validation_plan_hash,
@@ -741,7 +753,7 @@ export async function runSandboxVerification(options) {
         output_refs: outputRefs,
         output_hashes: outputHashes,
         limits_applied: appliedLimits,
-        result: execResult.overall,
+        result: "inconclusive",
         inconclusive_reason: execResult.inconclusive_reason,
         container_runtime: receiptContainerRuntime,
         runtime_version: receiptRuntimeVersion,
@@ -776,7 +788,7 @@ export async function runSandboxVerification(options) {
   );
 
   return {
-    overall: execResult.overall,
+    overall: resultMapping.validator_result,
     commands: execResult.command_results,
     exit_status: execResult.aggregate_exit_status,
     validation_plan_hash,
