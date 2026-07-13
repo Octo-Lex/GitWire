@@ -112,10 +112,13 @@ function findDescriptorForSemantic(semanticId, evidenceRefs) {
  * }}
  */
 export function compileValidationPlan(requiredValidation, evidenceRefs, opts = {}) {
-  // Resolve activation: injected for tests, env for production, default observed.
+  // Activation MUST be injected by the caller. The compiler does NOT read
+  // process.env directly — this prevents hidden environment coupling and
+  // ensures test isolation. Both buildValidationPlan (runner) and
+  // buildValidationPlanForRecorder (verifier) resolve from the same source.
   const descriptorActivation = opts.descriptorActivation
     ? resolveDescriptorActivation(opts.descriptorActivation)
-    : resolveDescriptorActivation(process.env.GITWIRE_DESCRIPTOR_ACTIVATION);
+    : "observed"; // safe default when omitted (e.g. legacy callers)
 
   const executableSet = new Set();
   const unmapped = [];
