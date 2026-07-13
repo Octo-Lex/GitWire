@@ -628,7 +628,14 @@ export async function runSandboxVerification(options) {
     output_hashes: outputHashes,
     limits_applied: appliedLimits,
     result: resultMapping.validator_result,
-    ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
+    // Use an effective reason: when conformance downgrades the result (e.g.
+    // executor reported "fail" but conformance is divergent → inconclusive),
+    // the execResult has no inconclusive_reason. Fall back to the mapped
+    // reason so the receipt carries a valid structured reason.
+    ...((execResult.inconclusive_reason ??
+      (resultMapping.validator_result === "inconclusive" ? resultMapping.reason : null))
+      ? { inconclusive_reason: execResult.inconclusive_reason ?? resultMapping.reason }
+      : {}),
     container_runtime: receiptContainerRuntime,
     runtime_version: receiptRuntimeVersion,
     network_disabled: isolation.network_disabled,
@@ -794,8 +801,11 @@ export async function runSandboxVerification(options) {
     validation_plan_hash,
     sandbox_image_digest: resolvedSandboxDigest,
     limits_applied: appliedLimits,
-    redacted_summary: execResult.inconclusive_reason || `executed ${commandsExecuted.length} commands`,
-    ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
+    redacted_summary: execResult.inconclusive_reason ?? resultMapping.reason ?? `executed ${commandsExecuted.length} commands`,
+    ...((execResult.inconclusive_reason ??
+      (resultMapping.validator_result === "inconclusive" ? resultMapping.reason : null))
+      ? { inconclusive_reason: execResult.inconclusive_reason ?? resultMapping.reason }
+      : {}),
     receipt,
     execution_backend_id: backend.id,
   };

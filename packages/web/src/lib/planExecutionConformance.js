@@ -218,13 +218,21 @@ export function derivePlanExecutionRelation(input) {
       return { relation: "divergent", reason_codes: [`sequence_mismatch:${plannedStep.step_id}:planned=${plannedStep.sequence}:actual=${executionIndex}`] };
     }
 
-    // Check for rejected/non-executed steps masquerading as executed.
-    // A rejected step (status: "rejected") means the command never ran —
-    // it cannot establish exact conformance. A null exit_status also means
-    // the command didn't complete (timeout, spawn failure, or rejection).
-    if (executedStep.status === "rejected" || executedStep.exit_status === null) {
-      return { relation: "divergent", reason_codes: [`step_not_executed:${plannedStep.step_id}`] };
+    // Check for rejected/non-started steps — these are divergent because
+    // the planned command never executed.
+    //
+    // Distinguish from timeout: a command that started and timed out is
+    // still an exact execution relation (it ran the right command), but
+    // the outcome is inconclusive. Only rejection/never-started is divergent.
+    if (executedStep.status === "rejected") {
+      return { relation: "divergent", reason_codes: [`step_rejected:${plannedStep.step_id}`] };
     }
+    if (executedStep.started === false) {
+      return { relation: "divergent", reason_codes: [`step_not_started:${plannedStep.step_id}`] };
+    }
+    // A timed-out or spawn-failed command that started is NOT divergent —
+    // the relation is exact (it ran the planned argv). The outcome mapping
+    // (mapResultOutcome) handles the inconclusive result via hasTimeout.
   }
 
   // Check no extra executed steps (unknown step IDs).

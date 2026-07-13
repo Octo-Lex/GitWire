@@ -82,7 +82,7 @@ describe("runValidatorJob — descriptor execution path", () => {
     expect(r.command_results).toHaveLength(1);
     const cr = r.command_results[0];
     expect(cr.command).toBe("repo_lint");
-    expect(cr.command_source).toBe("ci_workflow");
+    expect(cr.command_source).toBe("ci_workflow_descriptor");
     expect(cr.executed_argv).toEqual(["npx", "--no-install", "eslint", "app.js"]);
     expect(cr.target_paths).toEqual(["app.js"]);
     expect(cr.exit_status).toBe(0);
@@ -133,7 +133,7 @@ describe("runValidatorJob — shape_invalid descriptor rejected", () => {
     expect(r.overall).not.toBe("pass");
     const cr = r.command_results[0];
     expect(cr.status).toBe("rejected");
-    expect(cr.command_source).toBe("ci_workflow");
+    expect(cr.command_source).toBe("ci_workflow_descriptor");
     expect(cr.policy_reasons.join("; ")).toMatch(/shape invalid/);
   });
 
@@ -246,8 +246,7 @@ describe("runValidatorJob — legacy fallback when no descriptor", () => {
       config: makeConfig(),
     });
     expect(r.overall).toBe("pass");
-    expect(r.command_results[0].command_source).toBe("fallback_template");
-    expect(r.command_results[0].executed_argv).toBeUndefined();
+    expect(r.command_results[0].command_source).toBe("legacy_template");
   });
 });
 

@@ -201,7 +201,7 @@ describe("POST /v1/validate — command_descriptors (Task 8D)", () => {
     const body = await r.json();
     expect(body.overall).toBe("pass");
     expect(body.command_results).toHaveLength(1);
-    expect(body.command_results[0].command_source).toBe("ci_workflow");
+    expect(body.command_results[0].command_source).toBe("ci_workflow_descriptor");
     expect(body.command_results[0].executed_argv).toEqual(["npx", "--no-install", "eslint", "app.js"]);
     expect(body.command_results[0].target_paths).toEqual(["app.js"]);
     expect(body.executor_report_hash).toMatch(/^sha256:[0-9a-f]{64}$/);

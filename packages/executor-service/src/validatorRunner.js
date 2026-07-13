@@ -81,10 +81,26 @@ function runCmd(cmd, opts = {}) {
       env: opts.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    if (r.error) return { ok: false, stdout: r.stdout || "", stderr: r.stderr || "", code: null };
-    return { ok: r.status === 0, stdout: r.stdout || "", stderr: r.stderr || "", code: r.status };
+    if (r.error) {
+      // Distinguish timeout from spawn failure. spawnSync sets signal='SIGTERM'
+      // (or the timeout's signal) when the timeout fires.
+      const timedOut = r.signal != null || (r.error && r.error.code === "ETIMEDOUT");
+      return {
+        ok: false, stdout: r.stdout || "", stderr: r.stderr || "", code: null,
+        started: !timedOut || r.status !== undefined,
+        completed: false,
+        timed_out: Boolean(timedOut),
+      };
+    }
+    return {
+      ok: r.status === 0, stdout: r.stdout || "", stderr: r.stderr || "", code: r.status,
+      started: true, completed: true, timed_out: false,
+    };
   } catch (err) {
-    return { ok: false, stdout: "", stderr: err.message, code: null };
+    return {
+      ok: false, stdout: "", stderr: err.message, code: null,
+      started: false, completed: false, timed_out: false,
+    };
   }
 }
 
@@ -350,6 +366,9 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
             executed_argv: argv,
             target_paths: descriptor.target_paths || [],
             exit_status: r.code,
+            started: r.started !== false,
+            completed: r.completed === true,
+            timed_out: r.timed_out === true,
             output_ref: `output:${outputHash}`,
             output_hash: outputHash,
             duration_ms,
@@ -388,6 +407,9 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           executed_argv: argv,
           target_paths: [],
           exit_status: r.code,
+          started: r.started !== false,
+          completed: r.completed === true,
+          timed_out: r.timed_out === true,
           output_ref: `output:${outputHash}`,
           output_hash: outputHash,
           duration_ms,
@@ -447,7 +469,10 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           executed_argv: cr.executed_argv || null,
           target_paths: cr.target_paths || null,
           exit_status: cr.exit_status,
-          status: cr.status || null, // preserve "rejected" so conformance can detect non-execution
+          status: cr.status || null,
+          started: cr.started !== false,
+          completed: cr.completed === true,
+          timed_out: cr.timed_out === true,
         })),
         aggregate_exit_status: aggregateExitStatus,
         overall,

@@ -430,7 +430,10 @@ export async function runDockerExecution(params) {
         // and actual argv passed to the container.
         executed_argv: argv,
         command_source: meta.command_source || "legacy_template",
-        ...(result.timed_out ? { timed_out: true, timeout_reason: result.timeout_reason } : {}),
+        started: true,
+        completed: !result.timed_out && !result.error,
+        timed_out: Boolean(result.timed_out),
+        ...(result.timed_out ? { timeout_reason: result.timeout_reason } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
 
@@ -481,6 +484,9 @@ export async function runDockerExecution(params) {
         executed_argv: cr.executed_argv || null,
         target_paths: null,
         exit_status: cr.exit_status,
+        started: cr.started !== false,
+        completed: cr.completed === true,
+        timed_out: cr.timed_out === true,
       })),
       aggregate_exit_status: aggregateExitStatus,
       sandbox_image_digest,
