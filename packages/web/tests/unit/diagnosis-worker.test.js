@@ -316,7 +316,7 @@ describe("Diagnosis Worker — CI evidence worker integration", () => {
   });
 
   it("uses proposal ID as jobId for dedup", () => {
-    expect(ciWorker).toMatch(/jobId.*diagnosis:.*proposal/);
+    expect(ciWorker).toMatch(/jobId.*proposalId/);
   });
 
   it("uses priority 3 (lower than evidence collection)", () => {

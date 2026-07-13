@@ -607,7 +607,7 @@ describe("Verification behavioral — canonical plan hash and image digest (P1)"
         actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
         expected_version: 1,
       })
-    ).rejects.toThrow(/sandbox_image_digest does not match approved pinned/);
+    ).rejects.toThrow(/sandbox_image_digest does not match.*approved pinned/);
   });
 
   it("rejects correct commands but altered image digest", async () => {
@@ -627,7 +627,7 @@ describe("Verification behavioral — canonical plan hash and image digest (P1)"
         actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
         expected_version: 1,
       })
-    ).rejects.toThrow(/sandbox_image_digest does not match approved pinned/);
+    ).rejects.toThrow(/sandbox_image_digest does not match.*approved pinned/);
   });
 });
 

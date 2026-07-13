@@ -109,9 +109,10 @@ describe("Execution Receipts behavioral — artifact applier", () => {
       ],
     };
 
+    // After fix 1595458, line_end exceeding file length is clamped (not rejected).
+    // The artifact applies successfully with the clamped range.
     const result = applyArtifact(sourceFiles, artifact);
-    expect(result.applied).toBe(false);
-    expect(result.failure).toMatch(/exceeds file length/);
+    expect(result.applied).toBe(true);
   });
 
   it("fails when artifact has no files", () => {
