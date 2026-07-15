@@ -316,10 +316,6 @@ function executeInContainer(runtime, argv, workspace, limits) {
         error: err.message,
       });
     });
-        timed_out: false,
-        error: err.message,
-      });
-    });
   });
 }
 
