@@ -154,6 +154,8 @@ export const VALID_EVIDENCE_REF_TYPES = new Set([
   "workflow_run",
   "ci_job",
   "ci_log_excerpt",
+  // Repo-aware command descriptor evidence (Task 8D)
+  "ci_workflow_command",
 ]);
 
 // ── Max field lengths ────────────────────────────────────────────────────────
