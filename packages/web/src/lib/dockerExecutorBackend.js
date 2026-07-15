@@ -274,6 +274,12 @@ function executeInContainer(runtime, argv, workspace, limits) {
       }
     });
 
+    let processStarted = false;
+
+    child.on("spawn", () => {
+      processStarted = true;
+    });
+
     const timer = setTimeout(() => {
       timedOut = true;
       try { child.kill("SIGKILL"); } catch (_e) {}
@@ -289,6 +295,8 @@ function executeInContainer(runtime, argv, workspace, limits) {
         output_ref: `output:${hashOutput(combinedOutput)}`,
         output_hash: hashOutput(combinedOutput),
         duration_ms: durationMs,
+        started: processStarted,
+        completed: !timedOut,
         timed_out: timedOut,
         ...(timedOut ? { timeout_reason: "wall_clock_exceeded" } : {}),
       });
@@ -302,6 +310,12 @@ function executeInContainer(runtime, argv, workspace, limits) {
         output_ref: null,
         output_hash: null,
         duration_ms: durationMs,
+        started: processStarted,
+        completed: false,
+        timed_out: false,
+        error: err.message,
+      });
+    });
         timed_out: false,
         error: err.message,
       });
@@ -430,8 +444,8 @@ export async function runDockerExecution(params) {
         // and actual argv passed to the container.
         executed_argv: argv,
         command_source: meta.command_source || "legacy_template",
-        started: true,
-        completed: !result.timed_out && !result.error,
+        started: result.started !== false,
+        completed: result.completed === true,
         timed_out: Boolean(result.timed_out),
         ...(result.timed_out ? { timeout_reason: result.timeout_reason } : {}),
         ...(result.error ? { error: result.error } : {}),

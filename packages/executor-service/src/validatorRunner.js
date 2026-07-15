@@ -82,14 +82,22 @@ function runCmd(cmd, opts = {}) {
       stdio: ["ignore", "pipe", "pipe"],
     });
     if (r.error) {
-      // Distinguish timeout from spawn failure. spawnSync sets signal='SIGTERM'
-      // (or the timeout's signal) when the timeout fires.
-      const timedOut = r.signal != null || (r.error && r.error.code === "ETIMEDOUT");
+      // Distinguish three failure modes:
+      //   1. Timeout: process started, ran past wall_clock, killed by signal.
+      //      spawnSync sets r.signal (typically 'SIGTERM' or 'SIGKILL').
+      //   2. Spawn failure: process never started (ENOENT, EACCES, etc).
+      //      r.status is undefined, r.signal is null.
+      //   3. Other error after start: rare edge case.
+      //
+      // "started" means the OS actually launched the process. A timeout means
+      // the process started. A spawn error (ENOENT/EACCES) means it did not.
+      const isTimeout = r.signal != null || (r.error && r.error.code === "ETIMEDOUT");
+      const processStarted = r.status !== undefined || r.signal != null;
       return {
         ok: false, stdout: r.stdout || "", stderr: r.stderr || "", code: null,
-        started: !timedOut || r.status !== undefined,
+        started: processStarted,
         completed: false,
-        timed_out: Boolean(timedOut),
+        timed_out: isTimeout,
       };
     }
     return {

@@ -122,6 +122,14 @@ function executeCommand(argv, cwd, limits) {
       try { child.kill("SIGKILL"); } catch (_e) { /* already exited */ }
     }, limits.wall_clock_ms || 30000);
 
+    let processStarted = false;
+
+    // The 'spawn' event fires when the OS actually launches the process.
+    // If it never fires (ENOENT, EACCES), the 'error' event fires instead.
+    child.on("spawn", () => {
+      processStarted = true;
+    });
+
     child.on("close", (code) => {
       clearTimeout(timer);
       const durationMs = Date.now() - startTime;
@@ -132,6 +140,8 @@ function executeCommand(argv, cwd, limits) {
         output_ref: `output:${hashOutput(combinedOutput)}`,
         output_hash: hashOutput(combinedOutput),
         duration_ms: durationMs,
+        started: processStarted,
+        completed: !timedOut,
         timed_out: timedOut,
         ...(timedOut ? { timeout_reason: "wall_clock_exceeded" } : {}),
       });
@@ -145,6 +155,8 @@ function executeCommand(argv, cwd, limits) {
         output_ref: null,
         output_hash: null,
         duration_ms: durationMs,
+        started: processStarted, // false if spawn failed before launch
+        completed: false,
         timed_out: false,
         error: err.message,
       });
@@ -264,8 +276,8 @@ export async function runSandboxExecution(params) {
         // and record the actual argv passed to the process API.
         executed_argv: argv,
         command_source: meta.command_source || "legacy_template",
-        started: true,
-        completed: !result.timed_out && !result.error,
+        started: result.started !== false, // factual from executeCommand
+        completed: result.completed === true,
         timed_out: Boolean(result.timed_out),
         ...(result.timed_out ? { timeout_reason: result.timeout_reason } : {}),
         ...(result.error ? { error: result.error } : {}),
