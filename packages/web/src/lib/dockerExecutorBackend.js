@@ -274,6 +274,12 @@ function executeInContainer(runtime, argv, workspace, limits) {
       }
     });
 
+    let processStarted = false;
+
+    child.on("spawn", () => {
+      processStarted = true;
+    });
+
     const timer = setTimeout(() => {
       timedOut = true;
       try { child.kill("SIGKILL"); } catch (_e) {}
@@ -289,6 +295,8 @@ function executeInContainer(runtime, argv, workspace, limits) {
         output_ref: `output:${hashOutput(combinedOutput)}`,
         output_hash: hashOutput(combinedOutput),
         duration_ms: durationMs,
+        started: processStarted,
+        completed: !timedOut,
         timed_out: timedOut,
         ...(timedOut ? { timeout_reason: "wall_clock_exceeded" } : {}),
       });
@@ -302,6 +310,8 @@ function executeInContainer(runtime, argv, workspace, limits) {
         output_ref: null,
         output_hash: null,
         duration_ms: durationMs,
+        started: processStarted,
+        completed: false,
         timed_out: false,
         error: err.message,
       });
@@ -326,7 +336,7 @@ function executeInContainer(runtime, argv, workspace, limits) {
  * @returns {Promise<object>} execution result
  */
 export async function runDockerExecution(params) {
-  const { files, commands, limits, sandbox_image_digest } = params;
+  const { files, commands, limits, sandbox_image_digest, execution_steps } = params;
 
   if (!files || !Array.isArray(files) || files.length === 0) {
     throw new Error("runDockerExecution: files array is required");
@@ -343,6 +353,7 @@ export async function runDockerExecution(params) {
     return {
       overall: "inconclusive",
       command_results: [],
+      executed_steps: [],
       aggregate_exit_status: null,
       sandbox_image_digest,
       limits_applied: appliedLimits,
@@ -365,6 +376,7 @@ export async function runDockerExecution(params) {
         return {
           overall: "inconclusive",
           command_results: [],
+          executed_steps: [],
           aggregate_exit_status: null,
           sandbox_image_digest,
           limits_applied: appliedLimits,
@@ -383,7 +395,18 @@ export async function runDockerExecution(params) {
     const commandResults = [];
     let aggregateExitStatus = 0;
 
+    // Build a lookup from execution_steps for planner-issued metadata.
+    const stepMeta = new Map();
+    if (Array.isArray(execution_steps)) {
+      for (const step of execution_steps) {
+        if (step && step.command_id) {
+          stepMeta.set(step.command_id, step);
+        }
+      }
+    }
+
     for (const cmdId of commands) {
+      const meta = stepMeta.get(cmdId) || {};
       let argv;
       try {
         argv = resolveCommandTemplate(cmdId);
@@ -391,6 +414,8 @@ export async function runDockerExecution(params) {
         logger.warn({ cmdId }, "Non-allowlisted validation command rejected");
         commandResults.push({
           command: cmdId,
+          step_id: meta.step_id || cmdId,
+          sequence: meta.sequence ?? commandResults.length,
           exit_status: null,
           output_ref: null,
           output_hash: null,
@@ -405,11 +430,20 @@ export async function runDockerExecution(params) {
       const result = await executeInContainer(runtime, argv, workspace, appliedLimits);
       commandResults.push({
         command: cmdId,
+        step_id: meta.step_id || cmdId,
+        sequence: meta.sequence ?? commandResults.length,
         exit_status: result.exit_status,
         output_ref: result.output_ref,
         output_hash: result.output_hash,
         duration_ms: result.duration_ms,
-        ...(result.timed_out ? { timed_out: true, timeout_reason: result.timeout_reason } : {}),
+        // Plan-execution conformance: echo planner-issued command_source
+        // and actual argv passed to the container.
+        executed_argv: argv,
+        command_source: meta.command_source || "legacy_template",
+        started: result.started !== false,
+        completed: result.completed === true,
+        timed_out: Boolean(result.timed_out),
+        ...(result.timed_out ? { timeout_reason: result.timeout_reason } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
 
@@ -452,6 +486,18 @@ export async function runDockerExecution(params) {
     return {
       overall,
       command_results: commandResults,
+      // Plan-execution conformance: structured step evidence.
+      executed_steps: commandResults.map((cr, i) => ({
+        step_id: cr.step_id || cr.command,
+        sequence: cr.sequence ?? i,
+        command_source: cr.command_source || "legacy_template",
+        executed_argv: cr.executed_argv || null,
+        target_paths: null,
+        exit_status: cr.exit_status,
+        started: cr.started !== false,
+        completed: cr.completed === true,
+        timed_out: cr.timed_out === true,
+      })),
       aggregate_exit_status: aggregateExitStatus,
       sandbox_image_digest,
       limits_applied: appliedLimits,
@@ -464,6 +510,7 @@ export async function runDockerExecution(params) {
     return {
       overall: "inconclusive",
       command_results: [],
+      executed_steps: [],
       aggregate_exit_status: null,
       sandbox_image_digest,
       limits_applied: appliedLimits,
@@ -515,6 +562,10 @@ const dockerExecutorBackend = {
     output_bytes: true,
   },
 
+  // Plan-execution conformance: this backend produces structured executed_steps.
+  // It does NOT support command-descriptor-v1 (legacy templates only).
+  execution_features: Object.freeze(["normative-step-reporting-v1"]),
+
   /**
    * Return the isolation binding for receipt construction.
    * @returns {object}
@@ -540,8 +591,8 @@ const dockerExecutorBackend = {
    * @param {object} params
    * @returns {Promise<object>}
    */
-  async run({ files, commands, limits, sandbox_image_digest }) {
-    return runDockerExecution({ files, commands, limits, sandbox_image_digest });
+  async run({ files, commands, command_descriptors, execution_steps, limits, sandbox_image_digest }) {
+    return runDockerExecution({ files, commands, command_descriptors, execution_steps, limits, sandbox_image_digest });
   },
 };
 

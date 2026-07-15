@@ -88,3 +88,13 @@ export {
   canonicalizeDescriptor,
   canonicalizePlan,
 } from "./commandDescriptor.js";
+
+// ── Plan-execution conformance model ─────────────────────────────────────
+// Shared hash computation + activation policy resolution. Both sandboxRunner
+// and repairProposalService must use computeValidationPlanHash() instead of
+// inlining their own JSON.stringify blocks.
+export {
+  computeValidationPlanHash,
+  computeValidationPlanHashV1,
+  resolveDescriptorActivation,
+} from "./validationPlanHash.js";

@@ -45,6 +45,10 @@ const nodeExecutorBackend = {
     output_bytes: true,   // output truncation enforced by JS
   },
 
+  // Plan-execution conformance: this backend produces structured executed_steps.
+  // It does NOT support command-descriptor-v1 (host spawn, no descriptor execution).
+  execution_features: Object.freeze(["normative-step-reporting-v1"]),
+
   /**
    * Return the isolation binding for receipt construction.
    * @returns {object}
@@ -77,8 +81,8 @@ const nodeExecutorBackend = {
    * @param {string} params.sandbox_image_digest - pinned digest
    * @returns {Promise<object>} execution result
    */
-  async run({ files, commands, limits, sandbox_image_digest }) {
-    return runSandboxExecution({ files, commands, limits, sandbox_image_digest });
+  async run({ files, commands, limits, sandbox_image_digest, execution_steps }) {
+    return runSandboxExecution({ files, commands, limits, sandbox_image_digest, execution_steps });
   },
 };
 

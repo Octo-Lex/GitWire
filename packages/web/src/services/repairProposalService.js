@@ -18,6 +18,7 @@ import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import crypto from "crypto";
 import { compileValidationPlan } from "../lib/validationPlanAdapter.js";
+import { computeValidationPlanHash, resolveDescriptorActivation } from "@gitwire/core";
 import {
   ACTOR_KINDS,
   canCreateProposal,
@@ -2339,18 +2340,34 @@ export function buildValidationPlanForRecorder(envelope, evidenceRefs) {
   // v0.23.0 Task 9 / Task 8D: use the validation-plan adapter for the same
   // semantic→executable compilation as sandboxRunner.buildValidationPlan. Both
   // sides must produce the same hash content or the verifier rejects the receipt.
-  const plan = compileValidationPlan(envelope.required_validation, evidenceRefs);
+  //
+  // Plan-execution conformance: activation is resolved once and injected.
+  // The hash is computed by the shared computeValidationPlanHash() — no inline
+  // JSON.stringify here. This eliminates the two-site duplication hazard.
+  const descriptorActivation = resolveDescriptorActivation(process.env.GITWIRE_DESCRIPTOR_ACTIVATION);
+  const plan = compileValidationPlan(envelope.required_validation, evidenceRefs, { descriptorActivation });
   const commands = plan.executable_commands;
   const command_descriptors = plan.command_descriptors || {};
-  const planContent = JSON.stringify({
+  const validation_plan_hash = computeValidationPlanHash({
     commands,
     command_descriptors,
     image_digest: "sha256:node-executor-v1",
     required_validation: envelope.required_validation,
     acceptance_policy: plan.acceptance_policy,
+    plan_schema_version: plan.plan_schema_version,
+    descriptor_policy: plan.descriptor_policy,
+    normative_steps: plan.normative_steps,
+    required_execution_features: plan.required_execution_features,
   });
-  const validation_plan_hash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
-  return { commands, command_descriptors, validation_plan_hash };
+  return {
+    commands,
+    command_descriptors,
+    validation_plan_hash,
+    plan_schema_version: plan.plan_schema_version,
+    descriptor_policy: plan.descriptor_policy,
+    normative_steps: plan.normative_steps,
+    required_execution_features: plan.required_execution_features,
+  };
 }
 
 function computeVerificationFingerprintInternal(params) {
@@ -2600,25 +2617,17 @@ async function verifyExecutionReceiptAgainstLockedProposal(
     );
   }
 
-  // ── Gap 1 checks 3f-3j — executor_kind, pass-capability, validator identity.
-  // Logic lives in the pure helper (validatorReceiptGate.js) so it is unit-
-  // testable without a DB. This verifier is only reached for pass receipts
-  // (guarded by `if (result === "pass")` at the call sites), so the helper's
-  // pass-only semantics are safe here — non-pass receipts take a different
-  // path and never reach this check.
-  try {
-    const { validateGap1ValidatorBindings } = await import("../lib/validatorReceiptGate.js");
-    validateGap1ValidatorBindings(receipt);
-  } catch (gap1Err) {
-    throw new Error(`Gap 1 validator binding check failed: ${gap1Err.message}`);
-  }
-
   // ── v0.23.0 Task 6 — DB-backed executor report verification (check 3l) ───
   // For executor-service pass receipts, resolve executor_report_ref → raw
   // report, recompute executor_report_hash, and compare. A pass receipt is
   // NOT accepted unless the raw report can be resolved and its hash matches.
   // This closes the "bare hash" hole: the receipt must carry a ref that
   // resolves to durable content whose recomputed hash equals the receipt's hash.
+  //
+  // The rawReport is hoisted here so it's available for the conformance
+  // check (3m) below — the verifier needs the structured executed_steps
+  // from the raw report to independently derive plan_execution_relation.
+  let rawReport = null;
   if (receipt.execution_backend_id === "executor-service") {
     try {
       const { verifyExecutorReportHash } = await import("../lib/executionReceiptStore.js");
@@ -2628,7 +2637,7 @@ async function verifyExecutionReceiptAgainstLockedProposal(
       // execution_backend_id. They must match — a mismatch means the receipt
       // was not built from this report.
       const rawReportContent = await (await import("../lib/executionReceiptStore.js")).resolveExecutorReport(receipt.executor_report_ref);
-      const rawReport = JSON.parse(rawReportContent);
+      rawReport = JSON.parse(rawReportContent);
       if (rawReport.executor_service_id !== receipt.execution_backend_id) {
         throw new Error(
           `identifier inconsistency: execution_backend_id '${receipt.execution_backend_id}' != executor_service_id '${rawReport.executor_service_id}'`
@@ -2650,6 +2659,18 @@ async function verifyExecutionReceiptAgainstLockedProposal(
         `Gap 1 executor report verification failed: ${reportErr.message}`
       );
     }
+  }
+
+  // ── Gap 1 checks 3f-3j + 3m (plan-execution conformance) ─────────────
+  // Logic lives in the pure helper (validatorReceiptGate.js) so it is unit-
+  // testable without a DB. The conformance check (3m) uses canonicalPlan
+  // and rawReport to independently recompute plan_execution_relation —
+  // it does NOT trust the stored value in the receipt.
+  try {
+    const { validateGap1ValidatorBindings } = await import("../lib/validatorReceiptGate.js");
+    validateGap1ValidatorBindings(receipt, canonicalPlan, rawReport);
+  } catch (gap1Err) {
+    throw new Error(`Gap 1 validator binding check failed: ${gap1Err.message}`);
   }
 
   // 4. executor_version must be allowlisted

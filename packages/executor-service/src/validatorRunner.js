@@ -81,10 +81,43 @@ function runCmd(cmd, opts = {}) {
       env: opts.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    if (r.error) return { ok: false, stdout: r.stdout || "", stderr: r.stderr || "", code: null };
-    return { ok: r.status === 0, stdout: r.stdout || "", stderr: r.stderr || "", code: r.status };
+    if (r.error) {
+      // Distinguish three failure modes:
+      //   1. Timeout: process started, ran past wall_clock, killed by signal.
+      //      spawnSync sets r.signal (typically 'SIGTERM' or 'SIGKILL').
+      //   2. Spawn failure: process never started (ENOENT, EACCES, etc).
+      //      r.status is undefined, r.signal is null.
+      //   3. Other error after start: rare edge case.
+      //
+      // "started" means the OS actually launched the process. A timeout means
+      // the process started. A spawn error (ENOENT/EACCES) means it did not.
+      const isTimeout = r.signal != null || (r.error && r.error.code === "ETIMEDOUT");
+      // Use a positive launch indicator. For ENOENT/EACCES, spawnSync returns
+      // { pid: 0, status: null, signal: null, error: { code: "ENOENT" } }.
+      // null !== undefined is true in JS, so checking status !== undefined
+      // incorrectly reports started=true. Instead check for a positive pid,
+      // an integer status, or a non-null signal — all definitive proof the
+      // OS launched the process.
+      const processStarted =
+        (Number.isInteger(r.pid) && r.pid > 0) ||
+        Number.isInteger(r.status) ||
+        r.signal != null;
+      return {
+        ok: false, stdout: r.stdout || "", stderr: r.stderr || "", code: null,
+        started: processStarted,
+        completed: false,
+        timed_out: isTimeout,
+      };
+    }
+    return {
+      ok: r.status === 0, stdout: r.stdout || "", stderr: r.stderr || "", code: r.status,
+      started: true, completed: true, timed_out: false,
+    };
   } catch (err) {
-    return { ok: false, stdout: "", stderr: err.message, code: null };
+    return {
+      ok: false, stdout: "", stderr: err.message, code: null,
+      started: false, completed: false, timed_out: false,
+    };
   }
 }
 
@@ -261,8 +294,19 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
         ? request.command_descriptors
         : {};
 
+      // Build step metadata lookup from execution_steps (planner-issued).
+      const stepMeta = new Map();
+      if (Array.isArray(request.execution_steps)) {
+        for (const step of request.execution_steps) {
+          if (step && step.command_id) {
+            stepMeta.set(step.command_id, step);
+          }
+        }
+      }
+
       for (const cmdId of request.commands) {
         const descriptor = descriptors[cmdId];
+        const meta = stepMeta.get(cmdId) || {};
 
         // ── Descriptor path ────────────────────────────────────────────────
         if (descriptor) {
@@ -271,8 +315,10 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           if (descriptor.policy_status === "shape_invalid") {
             commandResults.push({
               command: cmdId,
+              step_id: meta.step_id || cmdId,
+              sequence: meta.sequence ?? commandResults.length,
               semantic_id: descriptor.semantic_id || null,
-              command_source: "ci_workflow",
+              command_source: "ci_workflow_descriptor",
               status: "rejected",
               // Task 8D blocker fix: a shape_invalid descriptor carries no
               // argv/target_paths by definition (its shape is the reason it
@@ -295,8 +341,10 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           if (!policy.ok) {
             commandResults.push({
               command: cmdId,
+              step_id: meta.step_id || cmdId,
+              sequence: meta.sequence ?? commandResults.length,
               semantic_id: descriptor.semantic_id || null,
-              command_source: "ci_workflow",
+              command_source: "ci_workflow_descriptor",
               status: "rejected",
               // Task 8D blocker fix: carry the full audit fields. The
               // descriptor was policy-rejected (not executed), but its
@@ -328,11 +376,16 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
 
           commandResults.push({
             command: cmdId,
+            step_id: meta.step_id || cmdId,
+            sequence: meta.sequence ?? commandResults.length,
             semantic_id: descriptor.semantic_id || null,
-            command_source: "ci_workflow",
+            command_source: "ci_workflow_descriptor",
             executed_argv: argv,
             target_paths: descriptor.target_paths || [],
             exit_status: r.code,
+            started: r.started !== false,
+            completed: r.completed === true,
+            timed_out: r.timed_out === true,
             output_ref: `output:${outputHash}`,
             output_hash: outputHash,
             duration_ms,
@@ -348,7 +401,7 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
           argv = resolveCommandTemplate(cmdId);
         } catch {
           // Non-allowlisted → null exit_status → inconclusive aggregate.
-          commandResults.push({ command: cmdId, exit_status: null, output_ref: null, output_hash: null, duration_ms: 0 });
+          commandResults.push({ command: cmdId, step_id: meta.step_id || cmdId, sequence: meta.sequence ?? commandResults.length, exit_status: null, output_ref: null, output_hash: null, duration_ms: 0 });
           aggregateExitStatus = null;
           continue;
         }
@@ -365,8 +418,15 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
 
         commandResults.push({
           command: cmdId,
-          command_source: "fallback_template",
+          step_id: meta.step_id || cmdId,
+          sequence: meta.sequence ?? commandResults.length,
+          command_source: "legacy_template",
+          executed_argv: argv,
+          target_paths: [],
           exit_status: r.code,
+          started: r.started !== false,
+          completed: r.completed === true,
+          timed_out: r.timed_out === true,
           output_ref: `output:${outputHash}`,
           output_hash: outputHash,
           duration_ms,
@@ -394,7 +454,21 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
       }
 
       if (overall === "inconclusive") {
-        return inconclusive(inconclusiveReason, "one or more commands did not complete", config, { command_results: commandResults });
+        return inconclusive(inconclusiveReason, "one or more commands did not complete", config, {
+          command_results: commandResults,
+          executed_steps: commandResults.map((cr, i) => ({
+            step_id: cr.step_id || cr.command,
+            sequence: cr.sequence ?? i,
+            command_source: cr.command_source || null,
+            executed_argv: cr.executed_argv || null,
+            target_paths: cr.target_paths || null,
+            exit_status: cr.exit_status,
+            status: cr.status || null,
+            started: cr.started !== false,
+            completed: cr.completed === true,
+            timed_out: cr.timed_out === true,
+          })),
+        });
       }
 
       const report = {
@@ -414,6 +488,23 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
         read_only_rootfs: true,
         resource_limits: { memory_mb: limits.memory_mb, pids_limit: limits.pids_limit },
         command_results: commandResults,
+        // Plan-execution conformance: structured step evidence for app-side
+        // conformance derivation. This is a normalized projection of
+        // command_results — the app verifies they match. Backends must capture
+        // the actual argv passed to the process API, not reconstruct by
+        // splitting command strings.
+        executed_steps: commandResults.map((cr, i) => ({
+          step_id: cr.step_id || cr.command,
+          sequence: cr.sequence ?? i,
+          command_source: cr.command_source || null,
+          executed_argv: cr.executed_argv || null,
+          target_paths: cr.target_paths || null,
+          exit_status: cr.exit_status,
+          status: cr.status || null,
+          started: cr.started !== false,
+          completed: cr.completed === true,
+          timed_out: cr.timed_out === true,
+        })),
         aggregate_exit_status: aggregateExitStatus,
         overall,
       };

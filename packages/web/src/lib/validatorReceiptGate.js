@@ -21,6 +21,12 @@
 // wrongly reject valid diagnostic evidence.
 
 import { isDigestPinned } from "./imageReference.js";
+import {
+  normalizeNormativeSteps,
+  normalizeExecutedSteps,
+  derivePlanExecutionRelation,
+} from "./planExecutionConformance.js";
+import { deriveResultEligibility } from "./resultEligibility.js";
 
 /**
  * Validate the Gap 1 validator bindings on a pass receipt.
@@ -29,9 +35,11 @@ import { isDigestPinned } from "./imageReference.js";
  * Intended exclusively for pass receipts. See module header.
  *
  * @param {object} receipt - parsed execution receipt object
+ * @param {object} [canonicalPlan] - the canonical validation plan (for conformance check 3m)
+ * @param {object} [rawReport] - the resolved raw executor report (for conformance check 3m)
  * @throws {Error} on any Gap 1 binding violation
  */
-export function validateGap1ValidatorBindings(receipt) {
+export function validateGap1ValidatorBindings(receipt, canonicalPlan, rawReport) {
   if (!receipt || typeof receipt !== "object") {
     throw new Error("validateGap1ValidatorBindings: receipt must be an object");
   }
@@ -97,5 +105,126 @@ export function validateGap1ValidatorBindings(receipt) {
         "Execution receipt missing executor_report_hash — executor-service pass requires verifiable report evidence"
       );
     }
+  }
+
+  // 3m. (plan-execution conformance) The plan_execution_relation must be
+  // "exact" and must match the app's independent recomputation. The verifier
+  // does NOT trust the stored relation — it recomputes from the canonical
+  // plan + the receipt's executed_steps (or the raw executor report, if
+  // available from the caller).
+  //
+  // This is the load-bearing conformance check: a receipt whose plan says
+  // descriptor but whose execution ran legacy cannot pass, regardless of
+  // exit statuses or backend identity.
+  //
+  // For executor-service: rawReport is available (hash-verified) — use it.
+  // For docker/node: rawReport is null — fall back to receipt.executed_steps.
+  const execEvidence = rawReport || (receipt.executed_steps ? { executed_steps: receipt.executed_steps } : null);
+  if (canonicalPlan && execEvidence) {
+    const normResult = normalizeNormativeSteps(canonicalPlan);
+    const execNormResult = normalizeExecutedSteps(execEvidence);
+    const recomputed = derivePlanExecutionRelation({
+      plannedSteps: normResult.steps,
+      executedSteps: execNormResult.steps,
+      executionAttempted: execNormResult.executionAttempted,
+      evidenceComplete: normResult.evidenceComplete && execNormResult.evidenceComplete,
+    });
+
+    if (recomputed.relation !== "exact") {
+      throw new Error(
+        `Execution receipt plan_execution_relation recomputed as '${recomputed.relation}' (reasons: ${recomputed.reason_codes.join(", ")}) — pass requires exact conformance`
+      );
+    }
+
+    // If the receipt carries a stored relation, it must match the recomputation.
+    if (receipt.plan_execution_relation && receipt.plan_execution_relation !== recomputed.relation) {
+      throw new Error(
+        `Execution receipt plan_execution_relation '${receipt.plan_execution_relation}' does not match recomputed '${recomputed.relation}'`
+      );
+    }
+  } else if (receipt.plan_execution_relation && receipt.plan_execution_relation !== "exact") {
+    // No canonical plan or execution evidence available to recompute — but the
+    // stored relation says non-exact. Reject.
+    throw new Error(
+      `Execution receipt plan_execution_relation is '${receipt.plan_execution_relation}' — pass requires exact conformance`
+    );
+  }
+  // Note: when canonicalPlan is null (unit tests calling the gate in isolation),
+  // we cannot recompute or enforce the relation. The full verifier path always
+  // passes canonicalPlan, so the conformance check is enforced there. The
+  // schema-v1 rejection (missing plan_execution_relation) only applies when
+  // canonicalPlan is available — otherwise legacy receipts would break.
+
+  // 3n. (plan-execution conformance) Recompute result eligibility using
+  // receipt-bound feature declarations. The verifier does NOT trust the
+  // current backend registry — it uses the frozen snapshot from the receipt.
+  // Fail closed: missing receipt-bound features or relation → reject.
+  if (canonicalPlan) {
+    if (!Array.isArray(receipt.backend_execution_features)) {
+      throw new Error(
+        "Execution receipt missing backend_execution_features — schema-v2 pass requires receipt-bound feature snapshot"
+      );
+    }
+    if (!receipt.plan_execution_relation) {
+      throw new Error(
+        "Execution receipt missing plan_execution_relation — schema-v2 pass requires app-derived conformance evidence"
+      );
+    }
+    const eligibility = deriveResultEligibility({
+      planExecutionRelation: receipt.plan_execution_relation,
+      requiredExecutionFeatures: canonicalPlan.required_execution_features || [],
+      backendExecutionFeatures: receipt.backend_execution_features,
+      backendPassCapable: receipt.executor_pass_capable === true,
+      selectedBackendReachable: true,
+      validatorImageIdentityValid: Boolean(receipt.validator_image_ref && receipt.validator_image_digest),
+      reportIntegrityValid: receipt.execution_backend_id !== "executor-service" ||
+        Boolean(receipt.executor_report_hash && receipt.executor_report_ref),
+      executionEvidenceComplete: Boolean(receipt.executed_steps) || Boolean(rawReport),
+      planSchemaSupported: canonicalPlan.plan_schema_version === 2,
+    });
+    if (!eligibility.eligible) {
+      throw new Error(
+        `Execution receipt result eligibility check failed: ${eligibility.reason_codes.join(", ")}`
+      );
+    }
+  }
+}
+
+/**
+ * Validate plan-execution conformance with the canonical plan and raw report.
+ *
+ * This is a separate entry point so the verifier (which has the canonicalPlan
+ * and rawReport in scope) can pass them explicitly. The receipt-only check
+ * above is a fallback when those aren't available.
+ *
+ * @param {object} receipt - parsed execution receipt
+ * @param {object} canonicalPlan - the plan from buildValidationPlanForRecorder
+ * @param {object} [rawReport] - the resolved raw executor report (executor-service only)
+ * @throws {Error} on any conformance violation
+ */
+export function validatePlanExecutionConformance(receipt, canonicalPlan, rawReport) {
+  if (!receipt || typeof receipt !== "object") {
+    throw new Error("validatePlanExecutionConformance: receipt must be an object");
+  }
+
+  const normResult = normalizeNormativeSteps(canonicalPlan);
+  const execNormResult = normalizeExecutedSteps(rawReport || receipt);
+  const recomputed = derivePlanExecutionRelation({
+    plannedSteps: normResult.steps,
+    executedSteps: execNormResult.steps,
+    executionAttempted: execNormResult.executionAttempted,
+    evidenceComplete: normResult.evidenceComplete && execNormResult.evidenceComplete,
+  });
+
+  if (recomputed.relation !== "exact") {
+    throw new Error(
+      `Plan-execution conformance check failed: relation is '${recomputed.relation}' (reasons: ${recomputed.reason_codes.join(", ")}) — pass requires exact conformance`
+    );
+  }
+
+  if (receipt.plan_execution_relation && receipt.plan_execution_relation !== recomputed.relation) {
+    throw new Error(
+      `Receipt plan_execution_relation '${receipt.plan_execution_relation}' does not match recomputed '${recomputed.relation}'`
+    );
   }
 }

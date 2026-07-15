@@ -23,6 +23,7 @@
 // │  non_root           boolean   true if runs as non-root uid       │
 // │  read_only_rootfs   boolean   true if rootfs is read-only        │
 // │  resource_limits    object    kernel-enforced limits descriptor  │
+// │  execution_features string[]  capabilities (e.g. "command-descriptor-v1") │
 // │                                                                  │
 // │  describe() → object    returns isolation binding for receipt    │
 // │  run({files, commands, limits, image_digest}) → ExecResult       │
@@ -33,6 +34,10 @@
 //   overall: "pass" | "fail" | "inconclusive"
 //   command_results: Array<{ command, exit_status, output_ref, output_hash, duration_ms, ... }>
 //   aggregate_exit_status: number | null
+//   executed_steps: Array<{ step_id, sequence, command_source, executed_argv, target_paths, exit_status }>
+//                     — structured evidence for plan-execution conformance verification.
+//                     Backends MUST capture the actual argv passed to the process API.
+//                     Shell execution must be represented explicitly or classified unverifiable.
 //   inconclusive_reason?: string
 //   inconclusive_detail?: string
 
@@ -47,7 +52,7 @@ export function validateBackendContract(backend) {
   const required = [
     "id", "version", "image_digest", "supports_pass",
     "container_runtime", "network_disabled", "non_root",
-    "read_only_rootfs", "resource_limits",
+    "read_only_rootfs", "resource_limits", "execution_features",
   ];
 
   for (const field of required) {
@@ -82,6 +87,10 @@ export function validateBackendContract(backend) {
   }
   if (typeof backend.resource_limits !== "object") {
     throw new Error("ExecutorBackend.resource_limits must be an object");
+  }
+  if (!Array.isArray(backend.execution_features) ||
+      !backend.execution_features.every(f => typeof f === "string" && f.length > 0)) {
+    throw new Error("ExecutorBackend.execution_features must be an array of non-empty strings");
   }
   if (typeof backend.describe !== "function") {
     throw new Error("ExecutorBackend.describe must be a function");

@@ -24,6 +24,13 @@ import {
 } from "./executorReachability.js";
 import { resolveValidatorImage } from "./validatorImage.js";
 import { compileValidationPlan } from "./validationPlanAdapter.js";
+import { computeValidationPlanHash, resolveDescriptorActivation } from "@gitwire/core";
+import {
+  normalizeNormativeSteps,
+  normalizeExecutedSteps,
+  derivePlanExecutionRelation,
+} from "./planExecutionConformance.js";
+import { deriveResultEligibility, mapResultOutcome } from "./resultEligibility.js";
 
 // Pinned sandbox image digest.
 // In production, this would be the SHA-256 digest of the container image.
@@ -75,23 +82,50 @@ export function buildValidationPlan(taskEnvelope, evidenceRefs) {
   // v0.23.0 Task 9 / Task 8D: compile semantic IDs into executable commands via
   // the validation-plan adapter. When evidence_refs carries ci_workflow_command
   // descriptors, they override the fixed templates.
-  const plan = compileValidationPlan(taskEnvelope.required_validation, evidenceRefs);
+  //
+  // Plan-execution conformance: activation is resolved once and injected.
+  // The plan now carries normative_steps, descriptor_policy, and
+  // required_execution_features. The hash is computed by the shared
+  // computeValidationPlanHash() — no inline JSON.stringify here.
+  const descriptorActivation = resolveDescriptorActivation(process.env.GITWIRE_DESCRIPTOR_ACTIVATION);
+  const plan = compileValidationPlan(taskEnvelope.required_validation, evidenceRefs, { descriptorActivation });
   const commands = plan.executable_commands;
   const command_descriptors = plan.command_descriptors || {};
 
-  // The hash content includes command_descriptors so a descriptor change is
-  // reflected in validation_plan_hash. Both this function and
-  // buildValidationPlanForRecorder() must serialize the SAME shape.
-  const planContent = JSON.stringify({
+  // Shared hash computation — both this function and
+  // buildValidationPlanForRecorder() MUST use computeValidationPlanHash().
+  const validation_plan_hash = computeValidationPlanHash({
     commands,
     command_descriptors,
     image_digest: SANDBOX_IMAGE_DIGEST,
     required_validation: taskEnvelope.required_validation,
     acceptance_policy: plan.acceptance_policy,
+    plan_schema_version: plan.plan_schema_version,
+    descriptor_policy: plan.descriptor_policy,
+    normative_steps: plan.normative_steps,
+    required_execution_features: plan.required_execution_features,
   });
-  const validationPlanHash = "sha256:" + crypto.createHash("sha256").update(planContent).digest("hex");
 
-  return { commands, command_descriptors, validation_plan_hash: validationPlanHash, acceptance_policy: plan.acceptance_policy, unmapped: plan.unmapped };
+  // Derive dispatch order from normative_steps sorted by sequence, NOT the
+  // alphabetically sorted executable_commands. This ensures execution order
+  // matches the planned order (e.g. test before build, not build before test).
+  const dispatch_commands = [...(plan.normative_steps || [])]
+    .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+    .map(s => s.command_id)
+    .filter(Boolean);
+
+  return {
+    commands,
+    dispatch_commands,
+    command_descriptors,
+    validation_plan_hash,
+    acceptance_policy: plan.acceptance_policy,
+    unmapped: plan.unmapped,
+    plan_schema_version: plan.plan_schema_version,
+    descriptor_policy: plan.descriptor_policy,
+    normative_steps: plan.normative_steps,
+    required_execution_features: plan.required_execution_features,
+  };
 }
 
 /**
@@ -212,6 +246,14 @@ export function buildExecutionReceipt(params) {
     // so synthetic and real receipts are always distinct. Absent for non-
     // executor-service backends (treated as null).
     validation_response_source,
+    // Plan-execution conformance: the app-derived relation, reason codes,
+    // structured executed steps, and frozen backend feature snapshot.
+    // These are part of the content-addressed receipt so historical
+    // verification can recompute the relation independently.
+    plan_execution_relation,
+    plan_execution_reason_codes,
+    executed_steps,
+    backend_execution_features,
   } = params;
 
   const receiptObject = {
@@ -259,6 +301,15 @@ export function buildExecutionReceipt(params) {
     // backends. This field makes synthetic receipts unambiguous — they can no
     // longer masquerade as executor-service receipts missing report bindings.
     validation_response_source: validation_response_source || null,
+    // Plan-execution conformance (part of content-addressed hash). The stored
+    // relation lets the verifier check receipt.plan_execution_relation against
+    // its own recomputation. executed_steps provide structured evidence for
+    // non-executor-service backends. backend_execution_features are the frozen
+    // snapshot used for historical verification.
+    plan_execution_relation: plan_execution_relation || null,
+    plan_execution_reason_codes: plan_execution_reason_codes || [],
+    executed_steps: executed_steps || [],
+    backend_execution_features: backend_execution_features || [],
     ...(inconclusive_reason ? { inconclusive_reason } : {}),
     // NO timestamps or DB IDs — hash is content-addressed only
   };
@@ -394,7 +445,11 @@ export async function runSandboxVerification(options) {
   logger.info({ backend: backend.id, supports_pass: backend.supports_pass }, "Executor backend selected");
 
   // Build validation plan from envelope (+ evidence for Task 8D descriptors)
-  const { commands, command_descriptors, validation_plan_hash } = buildValidationPlan(taskEnvelope, evidenceRefs);
+  const buildPlanResult = buildValidationPlan(taskEnvelope, evidenceRefs);
+  const { commands, command_descriptors, validation_plan_hash } = buildPlanResult;
+  // Dispatch in normative-step sequence order, NOT alphabetical. This ensures
+  // execution order matches planned order (test before build, etc.).
+  const dispatchCommands = buildPlanResult.dispatch_commands || commands;
 
   // Parse artifact
   let parsedArtifact;
@@ -446,6 +501,11 @@ export async function runSandboxVerification(options) {
       validator_image_digest: validatorImage.digest,
       validator_result: "inconclusive",
       validator_result_status: "inconclusive",
+      // Plan-execution conformance: no execution occurred (artifact apply failed).
+      plan_execution_relation: "none",
+      plan_execution_reason_codes: ["artifact_apply_failed"],
+      executed_steps: [],
+      backend_execution_features: backend.execution_features || [],
     });
 
     logger.warn(
@@ -466,11 +526,14 @@ export async function runSandboxVerification(options) {
     };
   }
 
-  // Execute validation commands via selected backend
+  // Execute validation commands via selected backend.
+  // Pass execution_steps (from normative_steps) so backends echo planner-issued
+  // step_id, sequence, and command_source — NOT invent their own from command IDs.
   const execResult = await backend.run({
     files: applyResult.files,
-    commands,
+    commands: dispatchCommands,
     command_descriptors,
+    execution_steps: buildPlanResult.normative_steps || [],
     limits: appliedLimits,
     sandbox_image_digest: isolation.sandbox_image_digest,
   });
@@ -508,6 +571,47 @@ export async function runSandboxVerification(options) {
     );
   }
 
+  // ── Plan-execution conformance (commit 3) ──────────────────────────────
+  // Derive the relation between planned normative steps and executed steps.
+  // The app derives this independently — it does NOT trust the executor.
+  const normResult = normalizeNormativeSteps(buildPlanResult);
+  const execNormResult = normalizeExecutedSteps(execResult);
+  const conformance = derivePlanExecutionRelation({
+    plannedSteps: normResult.steps,
+    executedSteps: execNormResult.steps,
+    executionAttempted: execNormResult.executionAttempted,
+    evidenceComplete: normResult.evidenceComplete && execNormResult.evidenceComplete,
+  });
+
+  // Derive result eligibility: combines relation + features + pass-capability +
+  // report-integrity. Does NOT choose pass/fail — that's mapResultOutcome.
+  const eligibility = deriveResultEligibility({
+    planExecutionRelation: conformance.relation,
+    requiredExecutionFeatures: buildPlanResult.required_execution_features || [],
+    backendExecutionFeatures: backend.execution_features || [],
+    backendPassCapable: executorPassCapable,
+    selectedBackendReachable: backend_reachable,
+    validatorImageIdentityValid: validatorImage.identity_complete,
+    reportIntegrityValid: true, // construction-time: report not yet persisted; verification-time rechecks
+    executionEvidenceComplete: normResult.evidenceComplete && execNormResult.evidenceComplete,
+    planSchemaSupported: buildPlanResult.plan_schema_version === 2,
+  });
+
+  // Map the execution outcome to the final validator_result.
+  const hasTimeout = execResult.command_results.some(c => c.timed_out);
+  const resultMapping = mapResultOutcome({
+    eligible: eligibility.eligible,
+    executionOverall: execResult.overall,
+    hasTimeout,
+  });
+
+  if (conformance.relation !== "exact") {
+    logger.warn(
+      { backend: backend.id, relation: conformance.relation, reason_codes: conformance.reason_codes },
+      "Plan-execution conformance: relation is not exact — downgrading to inconclusive"
+    );
+  }
+
   const receipt = buildExecutionReceipt({
     execution_backend_id: isolation.execution_backend_id,
     executor_version: isolation.executor_version,
@@ -523,8 +627,15 @@ export async function runSandboxVerification(options) {
     output_refs: outputRefs,
     output_hashes: outputHashes,
     limits_applied: appliedLimits,
-    result: execResult.overall,
-    ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
+    result: resultMapping.validator_result,
+    // Use an effective reason: when conformance downgrades the result (e.g.
+    // executor reported "fail" but conformance is divergent → inconclusive),
+    // the execResult has no inconclusive_reason. Fall back to the mapped
+    // reason so the receipt carries a valid structured reason.
+    ...((execResult.inconclusive_reason ??
+      (resultMapping.validator_result === "inconclusive" ? resultMapping.reason : null))
+      ? { inconclusive_reason: execResult.inconclusive_reason ?? resultMapping.reason }
+      : {}),
     container_runtime: receiptContainerRuntime,
     runtime_version: receiptRuntimeVersion,
     network_disabled: isolation.network_disabled,
@@ -534,14 +645,22 @@ export async function runSandboxVerification(options) {
     resource_limits: isolation.resource_limits,
     // Gap 1 validator bindings. The validator result mirrors the execution
     // overall, but is downgraded to inconclusive when the backend isn't
-    // pass-capable. This guarantees a local-process (or unreachable-Docker)
-    // receipt's validator_result_status is always inconclusive, never pass.
+    // pass-capable OR when plan-execution conformance is not exact. This
+    // guarantees a local-process (or unreachable-Docker) receipt's
+    // validator_result_status is always inconclusive, never pass. It also
+    // guarantees a divergent execution (plan says descriptor, backend ran
+    // legacy) can never produce pass.
     executor_kind: executorKind,
     executor_pass_capable: executorPassCapable,
     validator_image_ref: validatorImage.ref,
     validator_image_digest: validatorImage.digest,
-    validator_result: executorPassCapable ? execResult.overall : "inconclusive",
-    validator_result_status: executorPassCapable ? execResult.overall : "inconclusive",
+    validator_result: resultMapping.validator_result,
+    validator_result_status: resultMapping.validator_result,
+    // Plan-execution conformance: the app-derived relation + reason codes.
+    // The verifier recomputes this independently and does NOT trust this
+    // stored value — it's for auditability and operational diagnostics.
+    plan_execution_relation: conformance.relation,
+    plan_execution_reason_codes: conformance.reason_codes,
     // v0.23.0 Task 6 — executor report bindings. These come from the
     // executor-service backend's run() response. For non-executor-service
     // backends, they're undefined → null in the receipt.
@@ -554,6 +673,12 @@ export async function runSandboxVerification(options) {
     // "executor_service" / "synthetic_inconclusive" / etc. For other backends,
     // undefined → null.
     validation_response_source: execResult.validation_response_source,
+    // Plan-execution conformance: structured step evidence + frozen backend
+    // feature snapshot. The receipt-bound features are used for historical
+    // verification — NOT the current backend registry. The executed_steps
+    // capture the actual argv passed to the process API.
+    executed_steps: execResult.executed_steps || [],
+    backend_execution_features: backend.execution_features || [],
   });
 
   // v0.23.0 Task 6 — persist the raw executor report durably if the backend
@@ -612,7 +737,7 @@ export async function runSandboxVerification(options) {
   // the downgraded state.
   if (persistenceDowngraded) {
     return {
-      overall: execResult.overall,
+      overall: "inconclusive",
       commands: execResult.command_results,
       exit_status: execResult.aggregate_exit_status,
       validation_plan_hash,
@@ -635,7 +760,7 @@ export async function runSandboxVerification(options) {
         output_refs: outputRefs,
         output_hashes: outputHashes,
         limits_applied: appliedLimits,
-        result: execResult.overall,
+        result: "inconclusive",
         inconclusive_reason: execResult.inconclusive_reason,
         container_runtime: receiptContainerRuntime,
         runtime_version: receiptRuntimeVersion,
@@ -655,6 +780,11 @@ export async function runSandboxVerification(options) {
         inspected_image_digest: execResult.inspected_image_digest,
         inspection_hash: execResult.inspection_hash,
         validation_response_source: execResult.validation_response_source,
+        // Plan-execution conformance: persistence failed, downgrade to inconclusive.
+        plan_execution_relation: conformance.relation,
+        plan_execution_reason_codes: conformance.reason_codes,
+        executed_steps: execResult.executed_steps || [],
+        backend_execution_features: backend.execution_features || [],
       }),
     };
   }
@@ -665,14 +795,17 @@ export async function runSandboxVerification(options) {
   );
 
   return {
-    overall: execResult.overall,
+    overall: resultMapping.validator_result,
     commands: execResult.command_results,
     exit_status: execResult.aggregate_exit_status,
     validation_plan_hash,
     sandbox_image_digest: resolvedSandboxDigest,
     limits_applied: appliedLimits,
-    redacted_summary: execResult.inconclusive_reason || `executed ${commandsExecuted.length} commands`,
-    ...(execResult.inconclusive_reason ? { inconclusive_reason: execResult.inconclusive_reason } : {}),
+    redacted_summary: execResult.inconclusive_reason ?? resultMapping.reason ?? `executed ${commandsExecuted.length} commands`,
+    ...((execResult.inconclusive_reason ??
+      (resultMapping.validator_result === "inconclusive" ? resultMapping.reason : null))
+      ? { inconclusive_reason: execResult.inconclusive_reason ?? resultMapping.reason }
+      : {}),
     receipt,
     execution_backend_id: backend.id,
   };
