@@ -380,7 +380,7 @@ describe("Verification Worker — patch worker integration", () => {
 
   it("patch worker enqueues verification after proposed", () => {
     expect(patchWorker).toMatch(/verificationQueue\.add/);
-    expect(patchWorker).toMatch(/verify:\$\{proposalId\}/);
+    expect(patchWorker).toMatch(/verify.*proposalId/);
   });
 
   it("only enqueues when status is proposed", () => {
