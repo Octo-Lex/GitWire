@@ -92,7 +92,16 @@ function runCmd(cmd, opts = {}) {
       // "started" means the OS actually launched the process. A timeout means
       // the process started. A spawn error (ENOENT/EACCES) means it did not.
       const isTimeout = r.signal != null || (r.error && r.error.code === "ETIMEDOUT");
-      const processStarted = r.status !== undefined || r.signal != null;
+      // Use a positive launch indicator. For ENOENT/EACCES, spawnSync returns
+      // { pid: 0, status: null, signal: null, error: { code: "ENOENT" } }.
+      // null !== undefined is true in JS, so checking status !== undefined
+      // incorrectly reports started=true. Instead check for a positive pid,
+      // an integer status, or a non-null signal — all definitive proof the
+      // OS launched the process.
+      const processStarted =
+        (Number.isInteger(r.pid) && r.pid > 0) ||
+        Number.isInteger(r.status) ||
+        r.signal != null;
       return {
         ok: false, stdout: r.stdout || "", stderr: r.stderr || "", code: null,
         started: processStarted,
@@ -445,7 +454,21 @@ export async function runValidatorJob({ request, config, cmdRunner, imageInspect
       }
 
       if (overall === "inconclusive") {
-        return inconclusive(inconclusiveReason, "one or more commands did not complete", config, { command_results: commandResults });
+        return inconclusive(inconclusiveReason, "one or more commands did not complete", config, {
+          command_results: commandResults,
+          executed_steps: commandResults.map((cr, i) => ({
+            step_id: cr.step_id || cr.command,
+            sequence: cr.sequence ?? i,
+            command_source: cr.command_source || null,
+            executed_argv: cr.executed_argv || null,
+            target_paths: cr.target_paths || null,
+            exit_status: cr.exit_status,
+            status: cr.status || null,
+            started: cr.started !== false,
+            completed: cr.completed === true,
+            timed_out: cr.timed_out === true,
+          })),
+        });
       }
 
       const report = {

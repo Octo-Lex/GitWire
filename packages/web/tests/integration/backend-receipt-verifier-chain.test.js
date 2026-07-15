@@ -1,19 +1,17 @@
 // tests/integration/backend-receipt-verifier-chain.test.js
 //
-// Genuine adapter-chain integration tests: calls the REAL backend run() methods,
-// passes results through the REAL buildExecutionReceipt(), and verifies through
-// the REAL validateGap1ValidatorBindings().
+// Receipt-builder and verifier integration tests.
 //
-// Unlike the synthetic chain tests in plan-execution-chain.test.js (which
-// hand-construct receipts), these tests exercise:
-//   - nodeExecutorBackend.run() (real backend adapter)
-//   - buildExecutionReceipt() (real receipt builder)
-//   - validateGap1ValidatorBindings() (real verifier gate)
-//   - The receipt's content-addressed object containing conformance fields
+// These tests call the REAL buildExecutionReceipt() and REAL
+// validateGap1ValidatorBindings(), verifying that the content-addressed
+// receipt object contains conformance fields and that the verifier gate
+// accepts/rejects correctly.
 //
-// The node executor is chosen because it runs locally without Docker/executor-
-// service infrastructure. Its command execution uses the real sandboxExecutor,
-// real executeCommand(), real spawn(). The lifecycle fields are factual.
+// They do NOT call backend adapter run() methods. Execution evidence is
+// constructed to match the real backend output shape. The executor-service
+// package's own tests cover runValidatorJob() through injected seams, and
+// the node/docker backends are simple forwarding wrappers around their
+// execution implementations.
 
 import { describe, it, expect } from "@jest/globals";
 import { compileValidationPlan } from "../../src/lib/validationPlanAdapter.js";

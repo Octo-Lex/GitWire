@@ -250,6 +250,46 @@ describe("runValidatorJob — legacy fallback when no descriptor", () => {
   });
 });
 
+describe("runValidatorJob — lifecycle fields propagate from runner", () => {
+  beforeEach(() => {
+    _setCmdRunnerForTests(null);
+    _setImageInspectorForTests(matchingInspector());
+  });
+  afterEach(() => {
+    _setCmdRunnerForTests(null);
+    _setImageInspectorForTests(null);
+  });
+
+  it("ENOENT spawn failure reports started=false (not started=true)", async () => {
+    _setCmdRunnerForTests(() => ({
+      ok: false,
+      stdout: "",
+      stderr: "spawn /nonexistent ENOENT",
+      code: null,
+      started: false,
+      completed: false,
+      timed_out: false,
+    }));
+
+    const r = await runValidatorJob({
+      request: {
+        commands: ["lint"],
+        limits: { wall_clock_ms: 5000, memory_mb: 256, pids_limit: 32, output_bytes: 10240 },
+        validator_image_ref: REF,
+        validator_image_digest: DIGEST,
+      },
+      config: makeConfig(),
+    });
+
+    // overall should be inconclusive (null exit_status, not rejected)
+    expect(r.overall).toBe("inconclusive");
+    // executed_steps should reflect started=false
+    expect(r.executed_steps[0].started).toBe(false);
+    expect(r.executed_steps[0].completed).toBe(false);
+    expect(r.executed_steps[0].timed_out).toBe(false);
+  });
+});
+
 describe("runValidatorJob — hash includes descriptor fields", () => {
   it("the report hash is stable and recomputes identically", async () => {
     const r = await runValidatorJob({
