@@ -635,7 +635,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
       owner, repo,
       path: failingFile,
-      message: "[gitwire-heal] fix(" + failing_file_ext(failingFile) + "): " + truncate(diagnosis.root_cause, 72) + "\n\nApplied by GitWire AI self-healing CI.\n\n" + fix.explanation,
+      message: "[gitwire-heal] fix(" + failing_file_ext(failingFile) + "): " + truncate(diagnosis.root_cause, 72) + "\n\nApplied by GitWire AI self-healing CI.\n\n" + fix.explanation + "\n\nSigned-off-by: gitwire-hq[bot] <285039305+gitwire-hq[bot]@users.noreply.github.com>",
       content: fixedContent,
       sha: fileSha,
       branch: branchName,
