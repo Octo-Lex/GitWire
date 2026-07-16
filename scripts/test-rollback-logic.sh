@@ -409,6 +409,96 @@ else
 fi
 
 echo ""
+echo "=== bootstrap readiness gate tests (executor health validation) ==="
+
+# These tests exercise the EXACT Node validation logic the transition script
+# uses to hard-gate executor readiness. They do not need docker — they test
+# the validation function directly against JSON payloads.
+
+# The transition script's executor health check is:
+#   EXPECTED_REF=... EXPECTED_DIGEST=... node -e '...checks...'
+# We replicate that check as a testable function.
+check_exec_readiness() {
+  local health_json="$1" exp_ref="${2:-}" exp_digest="${3:-}"
+  local tmpf
+  tmpf="$(mktemp)"
+  printf '%s' "$health_json" >"$tmpf"
+  EXPECTED_REF="$exp_ref" EXPECTED_DIGEST="$exp_digest" \
+  node --input-type=module -e '
+    import fs from "node:fs";
+    const h = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const checks = [
+      ["status", h.status, "ok"],
+      ["ready", String(h.ready), "true"],
+      ["container_runtime", h.container_runtime ? "present" : "missing", "present"],
+    ];
+    if (process.env.EXPECTED_REF && h.validator_image_ref !== process.env.EXPECTED_REF)
+      checks.push(["validator_image_ref", h.validator_image_ref, process.env.EXPECTED_REF]);
+    if (process.env.EXPECTED_DIGEST && h.validator_image_digest !== process.env.EXPECTED_DIGEST)
+      checks.push(["validator_image_digest", h.validator_image_digest, process.env.EXPECTED_DIGEST]);
+    for (const [name, got, want] of checks) {
+      if (got !== want) { console.error(`executor ${name}=${got}, expected ${want}`); process.exit(1); }
+    }
+  ' "$tmpf"
+  local rc=$?
+  rm -f "$tmpf"
+  return $rc
+}
+
+VALID_REF="gitwire-validator@sha256:abcdef"
+VALID_DIGEST="sha256:abcdef"
+HEALTHY_EXEC='{"status":"ok","ready":true,"container_runtime":"docker","validator_image_ref":"gitwire-validator@sha256:abcdef","validator_image_digest":"sha256:abcdef","git_sha":"x"}'
+
+# Happy path: all checks pass
+if check_exec_readiness "$HEALTHY_EXEC" "$VALID_REF" "$VALID_DIGEST" 2>/dev/null; then
+  ok "bootstrap readiness: healthy executor accepted"
+else
+  bad "bootstrap readiness: healthy executor rejected"
+fi
+
+# ready=false rejected
+if check_exec_readiness '{"status":"ok","ready":false,"container_runtime":"docker","validator_image_ref":"x","validator_image_digest":"y"}' "" "" 2>/dev/null; then
+  bad "bootstrap readiness: ready=false accepted"
+else
+  ok "bootstrap readiness: ready=false rejected"
+fi
+
+# Missing container_runtime rejected
+if check_exec_readiness '{"status":"ok","ready":true,"container_runtime":null,"validator_image_ref":"x","validator_image_digest":"y"}' "" "" 2>/dev/null; then
+  bad "bootstrap readiness: missing runtime accepted"
+else
+  ok "bootstrap readiness: missing runtime rejected"
+fi
+
+# Empty container_runtime rejected
+if check_exec_readiness '{"status":"ok","ready":true,"container_runtime":"","validator_image_ref":"x","validator_image_digest":"y"}' "" "" 2>/dev/null; then
+  bad "bootstrap readiness: empty runtime accepted"
+else
+  ok "bootstrap readiness: empty runtime rejected"
+fi
+
+# Validator ref mismatch rejected
+if check_exec_readiness "$HEALTHY_EXEC" "DIFFERENT_REF" "$VALID_DIGEST" 2>/dev/null; then
+  bad "bootstrap readiness: validator ref mismatch accepted"
+else
+  ok "bootstrap readiness: validator ref mismatch rejected"
+fi
+
+# Validator digest mismatch rejected
+if check_exec_readiness "$HEALTHY_EXEC" "$VALID_REF" "DIFFERENT_DIGEST" 2>/dev/null; then
+  bad "bootstrap readiness: validator digest mismatch accepted"
+else
+  ok "bootstrap readiness: validator digest mismatch rejected"
+fi
+
+# status not ok rejected
+if check_exec_readiness '{"status":"error","ready":true,"container_runtime":"docker","validator_image_ref":"x","validator_image_digest":"y"}' "" "" 2>/dev/null; then
+  bad "bootstrap readiness: status=error accepted"
+else
+  ok "bootstrap readiness: status=error rejected"
+fi
+
+echo ""
 echo "=== summary ==="
 echo "passed: $passed, failed: $failed"
 

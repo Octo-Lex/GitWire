@@ -29,6 +29,7 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-/opt/gitwire}"
 PROJECT="gitwire"
+PROD_ENV="${PROD_ENV:-$REPO_ROOT/config/production.env}"
 MARKER="$REPO_ROOT/releases/.immutable-transition-ready"
 FORCE=false
 
@@ -36,6 +37,26 @@ FORCE=false
 
 log() { printf '[transition] %s\n' "$*" >&2; }
 die() { printf '[transition][ERROR] %s\n' "$*" >&2; exit 1; }
+
+# ── Require production.env exists with mode 0600 ────────────────────────────
+# The transition reads validator identity from this file to verify the running
+# executor is production-ready. It must exist and be mode 0600 (secrets file).
+[[ -f "$PROD_ENV" ]] || die "production.env not found at $PROD_ENV — create it before transitioning"
+prod_mode="$(stat -c '%a' "$PROD_ENV" 2>/dev/null || stat -f '%A' "$PROD_ENV" 2>/dev/null || echo 'unknown')"
+[[ "$prod_mode" == "600" ]] || die "production.env mode is $prod_mode, expected 600 (secrets file)"
+
+# Read validator identity via read-strict-env.mjs (never source the file).
+read_prod_env() {
+  node "$REPO_ROOT/scripts/read-strict-env.mjs" --get "$1" "$PROD_ENV"
+}
+CONFIG_VALIDATOR_REF="$(read_prod_env GITWIRE_VALIDATOR_IMAGE_REF)"
+CONFIG_VALIDATOR_DIGEST="$(read_prod_env GITWIRE_VALIDATOR_IMAGE_DIGEST)"
+log "validator identity loaded from production.env (ref=${CONFIG_VALIDATOR_REF:0:40}...)"
+
+# Source deploy-release.sh to reuse validate_release_dir (BASH_SOURCE guard
+# prevents main from running). Override REPO_ROOT so paths resolve correctly.
+# shellcheck source=deploy-release.sh
+REPO_ROOT="$REPO_ROOT" source "$REPO_ROOT/scripts/deploy-release.sh" 2>/dev/null || true
 
 # Map of compose service name -> persistent local tag.
 # These MUST match the references the operator places in production.env.
@@ -142,15 +163,28 @@ node --input-type=module -e '
   if (h.db_migration_status !== "current") { console.error("migrations="+h.db_migration_status); process.exit(1); }
 ' || die "app health check failed — fix the running stack before bootstrapping"
 
-# Executor: status=ok.
+# Executor: status=ok, ready=true, runtime present, validator identity matches.
 exec_health="$(docker exec gitwire-gitwire-executor-service-1 wget -qO- http://localhost:3003/health 2>/dev/null || true)"
 [[ -n "$exec_health" ]] || die "executor /health not responding"
 printf '%s' "$exec_health" >/tmp/bootstrap-exec-health.json
+EXPECTED_REF="$CONFIG_VALIDATOR_REF" EXPECTED_DIGEST="$CONFIG_VALIDATOR_DIGEST" \
 node --input-type=module -e '
   import fs from "node:fs";
   const h = JSON.parse(fs.readFileSync("/tmp/bootstrap-exec-health.json", "utf8"));
-  if (h.status !== "ok") { console.error("executor status="+h.status); process.exit(1); }
-' || die "executor health check failed"
+  const checks = [
+    ["status", h.status, "ok"],
+    ["ready", String(h.ready), "true"],
+    ["container_runtime", h.container_runtime ? "present" : "missing", "present"],
+  ];
+  // Validator identity must match production.env.
+  if (process.env.EXPECTED_REF && h.validator_image_ref !== process.env.EXPECTED_REF)
+    checks.push(["validator_image_ref", h.validator_image_ref, process.env.EXPECTED_REF]);
+  if (process.env.EXPECTED_DIGEST && h.validator_image_digest !== process.env.EXPECTED_DIGEST)
+    checks.push(["validator_image_digest", h.validator_image_digest, process.env.EXPECTED_DIGEST]);
+  for (const [name, got, want] of checks) {
+    if (got !== want) { console.error(`executor ${name}=${got}, expected ${want}`); process.exit(1); }
+  }
+' || die "executor health check failed — the bootstrap target must be production-ready (ready=true, runtime reachable, validator identity matching production.env)"
 
 # Dashboard responds.
 docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" >/dev/null 2>&1 \
@@ -187,6 +221,18 @@ cat >"$BOOTSTRAP_STAGING/release.json" <<EOF
 }
 EOF
 
+# Validate the staged bootstrap record BEFORE renaming. Uses the same
+# validate_release_dir contract as deploy-release.sh (cross-checks images.env
+# == release.json.images, requires bootstrap_image_ids, verifies local tags).
+if declare -F validate_release_dir >/dev/null 2>&1; then
+  COMPOSE_FILE="$REPO_ROOT/docker-compose.yml"
+  validate_release_dir "$BOOTSTRAP_STAGING" bootstrap "bootstrap-$BOOTSTRAP_TS" verify-local \
+    || { rm -rf "$BOOTSTRAP_STAGING"; die "staged bootstrap record failed validation"; }
+  log "staged bootstrap record validated"
+else
+  die "validate_release_dir not available — could not source deploy-release.sh"
+fi
+
 # Atomic rename staging → final.
 rm -rf "$BOOTSTRAP_DIR"
 mv "$BOOTSTRAP_STAGING" "$BOOTSTRAP_DIR"
@@ -197,6 +243,11 @@ tmp_link="$REPO_ROOT/releases/.current.bootstrap.$$"
 ln -s "$BOOTSTRAP_DIR" "$tmp_link"
 mv -Tf "$tmp_link" "$current_link"
 log "bootstrap release record created; current -> bootstrap-$BOOTSTRAP_TS"
+
+# Verify current resolves to the bootstrap dir before writing the marker.
+resolved_current="$(readlink -f "$current_link" 2>/dev/null || true)"
+[[ "$resolved_current" == "$BOOTSTRAP_DIR" ]] \
+  || die "releases/current ($resolved_current) does not resolve to bootstrap dir ($BOOTSTRAP_DIR) — refusing to write marker"
 
 # ── Write the transition marker (only after everything above succeeded) ───
 mkdir -p "$(dirname "$MARKER")"
