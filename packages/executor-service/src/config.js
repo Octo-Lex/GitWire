@@ -58,6 +58,10 @@ export function loadExecutorServiceConfig() {
   const validator_image_ref = process.env.GITWIRE_VALIDATOR_IMAGE_REF || null;
   const validator_image_digest = process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST || null;
 
+  // ── build identity (from Dockerfile ENV; normalize missing to "unknown") ─
+  const git_sha = process.env.GITWIRE_COMMIT_SHA || "unknown";
+  const built_at = process.env.GITWIRE_BUILT_AT || "unknown";
+
   /**
    * True only when both ref and digest are set. Used by /health to compute
    * `ready`. Does NOT cross-check the ref's embedded digest against the
@@ -76,8 +80,9 @@ export function loadExecutorServiceConfig() {
     service_token,
     validator_image_ref,
     validator_image_digest,
+    git_sha,
+    built_at,
     validatorIdentityComplete,
-    // Expose the valid-modes list for tests/docs that want to enumerate.
     valid_deployment_modes: VALID_DEPLOYMENT_MODES,
   });
 }

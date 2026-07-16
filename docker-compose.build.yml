@@ -1,0 +1,82 @@
+# =============================================================================
+# docker-compose.build.yml — DEVELOPMENT / CI BUILD OVERRIDE
+# =============================================================================
+# Used together with docker-compose.yml (the production base) to build images
+# locally instead of pulling them. This file is NEVER used in production.
+#
+#   Local development:
+#     cp .env.example .env   # one-time — provides ${VAR:?} placeholders
+#     docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+#
+#   CI smoke tests: the release-tooling-validation job in ci.yml validates that
+#     this merge resolves cleanly.
+#
+# The concrete `image:` tags here ALSO satisfy the base file's ${VAR:?} guards
+# after merge — but Compose evaluates ${VAR:?} during interpolation BEFORE merge
+# resolution, so a project-root .env (or --env-file .env.example) providing
+# placeholder values is STILL REQUIRED for the base file to parse. See
+# .env.example for those placeholders.
+#
+# Validator identity is intentionally blanked in the dev app + executor so the
+# dev executor correctly reports ready=false. Developers with a real local
+# validator image may override these values explicitly.
+services:
+  gitwire-app:
+    image: gitwire-app:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-dev}
+        GITWIRE_BUILT_AT: ${GITWIRE_BUILT_AT:-unknown}
+        GITWIRE_VERSION: ${GITWIRE_VERSION:-dev}
+    environment:
+      GITWIRE_VALIDATOR_IMAGE_REF: ""
+      GITWIRE_VALIDATOR_IMAGE_DIGEST: ""
+
+  gitwire-executor-service:
+    image: gitwire-executor-service:dev
+    build:
+      context: packages/executor-service
+      dockerfile: Dockerfile
+      args:
+        GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-dev}
+        GITWIRE_BUILT_AT: ${GITWIRE_BUILT_AT:-unknown}
+        GITWIRE_VERSION: ${GITWIRE_VERSION:-dev}
+    environment:
+      GITWIRE_VALIDATOR_IMAGE_REF: ""
+      GITWIRE_VALIDATOR_IMAGE_DIGEST: ""
+
+  dashboard:
+    image: gitwire-dashboard:dev
+    build:
+      context: packages/web-dashboard
+      dockerfile: Dockerfile
+      args:
+        GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-dev}
+        GITWIRE_BUILT_AT: ${GITWIRE_BUILT_AT:-unknown}
+        GITWIRE_VERSION: ${GITWIRE_VERSION:-dev}
+
+  bot:
+    image: gitwire-bot:dev
+    build:
+      context: packages/bot
+      dockerfile: Dockerfile
+
+  landing:
+    image: gitwire-landing:dev
+    build:
+      context: landing
+      dockerfile: Dockerfile
+
+  docs:
+    image: gitwire-docs:dev
+    build:
+      context: docs
+      dockerfile: Dockerfile
+
+  demo:
+    image: gitwire-demo:dev
+    build:
+      context: packages/demo-dashboard
+      dockerfile: Dockerfile

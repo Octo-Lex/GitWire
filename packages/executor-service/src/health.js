@@ -40,6 +40,8 @@ export function buildHealthResponse({ config, probeResult }) {
 
   return {
     status: "ok", // liveness-safe; ready reflects deeper readiness
+    git_sha: config.git_sha || "unknown",
+    built_at: config.built_at || "unknown",
     executor_service_id: config.executor_service_id,
     executor_service_version: config.executor_service_version,
     executor_service_instance_id: INSTANCE_ID,

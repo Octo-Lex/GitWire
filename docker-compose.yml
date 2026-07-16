@@ -1,10 +1,31 @@
+# =============================================================================
+# docker-compose.yml — PRODUCTION BASE (build-free, immutable images)
+# =============================================================================
+# Every application service references an image via a mandatory ${VAR:?}
+# variable. The variable MUST be set in the environment or an --env-file,
+# or Compose refuses to interpolate (fail-closed).
+#
+#   Production deployment:  see scripts/deploy-release.sh + the wrapper
+#     compose_release() / compose_current() documented in
+#     docs/installation/deployment-runbook.md ("Immutable (pull-based)
+#     Deployment"). Production uses TWO env files:
+#       /opt/gitwire/config/production.env      — stable (secrets, secondary
+#                                                   image refs, validator identity)
+#       /opt/gitwire/releases/<sha>/images.env  — per-release (3 release refs)
+#     Deployment uses a STAGED release env (from the validated manifest); the
+#     releases/current symlink advances only after all gates pass.
+#
+#   Local development:       docker-compose.build.yml carries the build:
+#     definitions. A project-root .env (from .env.example) provides the
+#     placeholder values that satisfy these ${VAR:?} guards:
+#       docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+#
+# CI build jobs (ci.yml docker-build-*) use direct `docker build` and do NOT
+# depend on this file. Removing build: here does not affect CI.
+
 services:
   gitwire-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-unknown}
+    image: ${GITWIRE_APP_IMAGE:?GITWIRE_APP_IMAGE is required}
     restart: unless-stopped
     env_file: packages/web/.env
     environment:
@@ -16,8 +37,11 @@ services:
       GITWIRE_EXECUTOR_BACKEND: ${GITWIRE_EXECUTOR_BACKEND:-executor-service}
       GITWIRE_EXECUTOR_SERVICE_URL: http://gitwire-executor-service:3003
       GITWIRE_EXECUTOR_SERVICE_TOKEN: ${GITWIRE_EXECUTOR_SERVICE_TOKEN:?GITWIRE_EXECUTOR_SERVICE_TOKEN must be set}
-      GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:-}
-      GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:-}
+      # Validator image identity is MANDATORY in production. The validator
+      # image is an independently published, immutable production dependency.
+      # An empty value is a deployment preflight failure, not a default.
+      GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:?GITWIRE_VALIDATOR_IMAGE_REF must be set}
+      GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:?GITWIRE_VALIDATOR_IMAGE_DIGEST must be set}
     volumes:
       - ./secrets/gitwire-hq.pem:/app/packages/web/gitwire-hq.private-key.pem:ro
       # NOTE: NO /var/run/docker.sock mount here. The app container has zero
@@ -41,9 +65,7 @@ services:
   # exposes a narrow private API (GET /health + POST /v1/validate) on the
   # gitwire-net network; it is NOT published to the host.
   gitwire-executor-service:
-    build:
-      context: packages/executor-service
-      dockerfile: Dockerfile
+    image: ${GITWIRE_EXECUTOR_IMAGE:?GITWIRE_EXECUTOR_IMAGE is required}
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -51,8 +73,11 @@ services:
       EXECUTOR_DEPLOYMENT_MODE: compose-local
       EXECUTOR_WORKSPACE_TMP: /workspace-tmp
       GITWIRE_EXECUTOR_SERVICE_TOKEN: ${GITWIRE_EXECUTOR_SERVICE_TOKEN:?GITWIRE_EXECUTOR_SERVICE_TOKEN must be set}
-      GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:-}
-      GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:-}
+      # Validator identity is MANDATORY. /health.ready is true ONLY when the
+      # runtime is reachable AND both ref+digest are set. Deployment hard-gates
+      # on ready=true; an unset value here makes that gate fail closed.
+      GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:?GITWIRE_VALIDATOR_IMAGE_REF must be set}
+      GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:?GITWIRE_VALIDATOR_IMAGE_DIGEST must be set}
     volumes:
       # CT-local Docker socket mounted into the EXECUTOR SERVICE ONLY.
       # NOT mounted into gitwire-app. See docs/architecture/v0.23-executor-service.md
@@ -131,9 +156,7 @@ services:
       retries: 5
 
   bot:
-    build:
-      context: packages/bot
-      dockerfile: Dockerfile
+    image: ${GITWIRE_BOT_IMAGE:?GITWIRE_BOT_IMAGE is required}
     restart: unless-stopped
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
@@ -154,9 +177,7 @@ services:
       retries: 3
 
   landing:
-    build:
-      context: landing
-      dockerfile: Dockerfile
+    image: ${GITWIRE_LANDING_IMAGE:?GITWIRE_LANDING_IMAGE is required}
     restart: unless-stopped
     networks:
       - gitwire-net
@@ -179,12 +200,7 @@ services:
       - gitwire-net
 
   dashboard:
-    build:
-      context: packages/web-dashboard
-      dockerfile: Dockerfile
-      args:
-        GITWIRE_VERSION: ${GITWIRE_VERSION:-0.20.1}
-        GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-unknown}
+    image: ${GITWIRE_DASHBOARD_IMAGE:?GITWIRE_DASHBOARD_IMAGE is required}
     restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://gitwire-app:3000}
@@ -202,9 +218,7 @@ services:
       retries: 3
 
   docs:
-    build:
-      context: docs
-      dockerfile: Dockerfile
+    image: ${GITWIRE_DOCS_IMAGE:?GITWIRE_DOCS_IMAGE is required}
     restart: unless-stopped
     networks:
       - gitwire-net
@@ -215,9 +229,7 @@ services:
       retries: 3
 
   demo:
-    build:
-      context: packages/demo-dashboard
-      dockerfile: Dockerfile
+    image: ${GITWIRE_DEMO_IMAGE:?GITWIRE_DEMO_IMAGE is required}
     restart: unless-stopped
     networks:
       - gitwire-net
