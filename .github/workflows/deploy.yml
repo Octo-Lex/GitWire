@@ -1,26 +1,55 @@
 name: Deploy to Production
 
+# Triggered when the CI workflow completes on master. The deployment consumes
+# the digest-pinned release images that publish-release-images pushed to GHCR,
+# verified against the triggering run's release manifest artifact.
+#
+# Trust boundary: only a SUCCESSFUL, PUSH-triggered, same-repository, master
+# CI run may deploy. The condition is checked at every job (the `if:` gate)
+# AND re-verified inside deploy-release.sh via explicit workflow metadata.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [master]
 
-# Least-privilege: only read repo contents by default
-# Jobs that need more access must declare it explicitly
 permissions:
-  contents: read
+  actions: read      # download the triggering run's manifest artifact
+  contents: read     # checkout/verify the exact release SHA
+  packages: read     # pull the digest-pinned GHCR images
+
+# No two production deployments may run concurrently. A new trigger queues
+# behind (cancel-in-progress: false) rather than racing the in-flight deploy.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
   # ── Job 1: Security Gate ──────────────────────────────────────
+  # No `environment:` — the scan needs no production secrets. Both jobs share
+  # the same trust gate and run on the production-bound runner label.
   security:
     name: Security Scan
-    runs-on: self-hosted
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: [self-hosted, gitwire-prod]
     timeout-minutes: 5
     steps:
-      - name: Pull latest code
+      - name: Resolve and checkout exact tested SHA
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           cd /opt/gitwire
-          git fetch origin master
-          git reset --hard origin/master
+          git fetch --no-tags origin master
+          # The SHA must exist in the repo's history (rejects forged events).
+          git cat-file -e "${DEPLOY_SHA}^{commit}"
+          git reset --hard "$DEPLOY_SHA"
+          # Assert the working tree is exactly the tested commit.
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          echo "Checked out exact tested SHA: $(git rev-parse --short HEAD)"
 
       - name: Install gitleaks (if missing)
         run: |
@@ -48,178 +77,89 @@ jobs:
           fi
           echo "No secrets detected (full history + working tree scanned)"
 
-      - name: Dependency audit
+      # NOTE: the dependency audit gate is intentionally permissive here.
+      # Commit 4 ("security: enforce exception-aware production dependency
+      # audit") replaces this with a fail-closed, exception-aware gate. Do not
+      # add audit-exception handling in commit 3.
+      - name: Dependency audit (placeholder — replaced by commit 4)
         run: |
           cd /opt/gitwire
           npm audit --omit=dev --audit-level=high 2>&1 | tail -10 || true
 
   # ── Job 2: Deploy ─────────────────────────────────────────────
+  # The ONLY job with `environment: production`. Production-scoped secrets and
+  # protection rules apply here. Needs the security scan to pass first.
   deploy:
-    name: Build & Deploy
+    name: Deploy Immutable Release
     needs: security
-    runs-on: self-hosted
-    timeout-minutes: 10
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: [self-hosted, gitwire-prod]
+    environment: production
+    timeout-minutes: 15
     steps:
-      - name: Configure git credentials
+      - name: Resolve and checkout exact tested SHA
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
-
-      - name: Pull latest code
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           cd /opt/gitwire
-          git fetch origin master
-          git reset --hard origin/master
+          git fetch --no-tags origin master
+          git cat-file -e "${DEPLOY_SHA}^{commit}"
+          git reset --hard "$DEPLOY_SHA"
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
 
-      - name: Capture deploy context
-        id: ctx
+      # Download the triggering run's manifest. The input is `run-id` (NOT
+      # github.run_id, which is THIS run's id). Cross-run download requires
+      # github-token. Extract outside the repository workspace to avoid
+      # polluting the working tree.
+      - name: Download release manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: production-release-manifest
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/production-release
+
+      - name: Verify manifest artifact exists
         run: |
-          cd /opt/gitwire
-          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "actor=${{ github.actor }}" >> $GITHUB_OUTPUT
-          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+          MANIFEST="${{ runner.temp }}/production-release/release-manifest.json"
+          test -f "$MANIFEST"
+          echo "Manifest present: $MANIFEST"
 
-      # GITWIRE_COMMIT_SHA must be in the shell env BEFORE `docker compose
-      # build` so the build-arg in docker-compose.yml
-      # (GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-unknown}) bakes the real
-      # SHA into the image. Without this, /health.git_sha reports "unknown",
-      # which the deployment runbook classifies as a release verification
-      # failure (see docs/installation/deployment-runbook.md lines 184-187).
-      # Exported via $GITHUB_ENV so it persists into subsequent steps.
-      - name: Export commit SHA for build
+      # packages: read grants the token scope, but the Docker client still
+      # needs an explicit login. Use the workflow actor (not repository_owner).
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "GITWIRE_COMMIT_SHA=${{ steps.ctx.outputs.sha }}" >> "$GITHUB_ENV"
+          printf '%s' "$GHCR_TOKEN" | \
+            docker login ghcr.io \
+              --username "${{ github.actor }}" \
+              --password-stdin
 
-      - name: Clean up disk (if needed)
+      - name: Deploy immutable release
+        env:
+          # Production repository root on CT 115. deploy-release.sh defaults
+          # REPO_ROOT to its own parent dir when unset; set it explicitly so
+          # the production path is unambiguous.
+          REPO_ROOT: /opt/gitwire
+          # Explicit workflow trust metadata — passed into deploy-release.sh,
+          # which validates them with :? under set -u before dereferencing.
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
-          USED=$(df / | tail -1 | awk '{print $5}' | tr -d '%')
-          if [ "$USED" -gt 70 ]; then
-            echo "Disk usage at ${USED}%, pruning..."
-            docker system prune -af --volumes 2>/dev/null || true
-          fi
+          bash scripts/deploy-release.sh \
+            "${{ github.event.workflow_run.head_sha }}" \
+            "${{ runner.temp }}/production-release/release-manifest.json" \
+            "/opt/gitwire/config/production.env"
 
-      - name: Build & Deploy
-        run: |
-          cd /opt/gitwire
-          # GITWIRE_COMMIT_SHA was exported to $GITHUB_ENV in the prior step;
-          # docker compose build picks it up via the build-arg default
-          # (${GITWIRE_COMMIT_SHA:-unknown}) declared in docker-compose.yml.
-          docker compose build gitwire-app dashboard 2>&1
-          # --force-recreate so the freshly built image actually replaces the
-          # running container (runbook parity — bare `up -d` would no-op when
-          # the existing container is healthy on the old image).
-          docker compose up -d --force-recreate gitwire-app dashboard 2>&1
-
-      - name: Wait for healthy
-        run: |
-          echo "Waiting for containers to start..."
-          for i in $(seq 1 12); do
-            APP=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo '')
-            DASH=$(docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" 2>/dev/null > /dev/null 2>&1 && echo 'ok' || echo '')
-            echo "  Attempt $i/12: app=${APP:+healthy} dash=${DASH:+healthy}"
-            if [ -n "$APP" ] && [ -n "$DASH" ]; then
-              echo "Both healthy!"
-              break
-            fi
-            sleep 5
-          done
-
-      - name: Health check + Deploy summary
+      - name: GHCR logout
         if: always()
-        env:
-          EXPECTED_SHA: ${{ steps.ctx.outputs.sha }}
-        run: |
-          # ── Health checks ───────────────────────────────────────
-          APP_HEALTH=$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || echo "FAILED")
-          DASH_HEALTH=$(docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" 2>/dev/null > /dev/null && echo "OK" || echo "FAILED")
-
-          echo "gitwire-app:   $APP_HEALTH"
-          echo "dashboard:     $DASH_HEALTH"
-
-          # ── Extract reported git_sha from /health JSON body ─────
-          # /health returns JSON with a git_sha field (see
-          # packages/web/src/lib/deploymentInfo.js). Pull the value with a
-          # grep regex rather than jq — jq is not guaranteed on the host.
-          # Handles "git_sha":"<sha>" and "git_sha":null variants.
-          REPORTED_SHA=$(echo "$APP_HEALTH" | grep -oE '"git_sha"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"git_sha"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' | head -1)
-          if [ -z "$REPORTED_SHA" ]; then
-            # git_sha was null or absent — normalize to unknown for the gate.
-            REPORTED_SHA="unknown"
-          fi
-          echo "Reported git_sha: $REPORTED_SHA"
-          echo "Expected git_sha: $EXPECTED_SHA"
-
-          # ── Capture image IDs ───────────────────────────────────
-          APP_IMAGE=$(docker images gitwire-gitwire-app --format '{{.ID}}' | head -1)
-          DASH_IMAGE=$(docker images gitwire-dashboard --format '{{.ID}}' | head -1)
-
-          # ── Capture container status ────────────────────────────
-          CONTAINER_STATUS=$(docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E 'gitwire|NAMES')
-
-          # ── Determine SHA match status for summary ──────────────
-          if [ "$REPORTED_SHA" = "$EXPECTED_SHA" ]; then
-            SHA_STATUS="MATCH"
-          else
-            SHA_STATUS="MISMATCH"
-          fi
-
-          # ── Write GitHub step summary ───────────────────────────
-          echo "## GitWire Deploy Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit (built) | \`${{ steps.ctx.outputs.sha_short }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Expected SHA | \`${EXPECTED_SHA}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Reported /health.git_sha | \`${REPORTED_SHA}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| SHA match | \`${SHA_STATUS}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Actor | \`${{ steps.ctx.outputs.actor }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deployed at | \`${{ steps.ctx.outputs.timestamp }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| App image | \`${APP_IMAGE:-unknown}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Dashboard image | \`${DASH_IMAGE:-unknown}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| API health | \`$(echo $APP_HEALTH | grep -q ok && echo 'OK' || echo 'FAILED')\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Dashboard health | \`$(echo $DASH_HEALTH | grep -q OK && echo 'OK' || echo 'FAILED')\` |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Containers" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "$CONTAINER_STATUS" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-          # ── Final gate: health ──────────────────────────────────
-          if echo "$APP_HEALTH" | grep -q "FAILED"; then
-            echo "::error::gitwire-app health check failed"
-            echo "--- Last 20 lines of app logs ---"
-            docker logs --tail 20 gitwire-gitwire-app-1 2>&1 || true
-            exit 1
-          fi
-          if echo "$DASH_HEALTH" | grep -q "FAILED"; then
-            echo "::error::dashboard health check failed"
-            echo "--- Last 20 lines of dashboard logs ---"
-            docker logs --tail 20 gitwire-dashboard-1 2>&1 || true
-            exit 1
-          fi
-
-          # ── Final gate: git_sha identity ────────────────────────
-          # The deployment runbook (docs/installation/deployment-runbook.md
-          # lines 184-187) treats git_sha="unknown" as a release verification
-          # failure. Enforce the same contract here: the reported SHA must be
-          # non-empty, non-"unknown", and equal to the commit we just built.
-          if [ "$REPORTED_SHA" = "unknown" ]; then
-            echo "::error::/health.git_sha is \"unknown\" — GITWIRE_COMMIT_SHA was not propagated into the build"
-            echo "   Expected: $EXPECTED_SHA"
-            echo "   This means the image was built without the commit identity baked in."
-            exit 1
-          fi
-          if [ "$REPORTED_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::error::/health.git_sha mismatch — deployed image does not match the built commit"
-            echo "   Expected: $EXPECTED_SHA"
-            echo "   Reported: $REPORTED_SHA"
-            echo "   The running container may be on a stale image. Check --force-recreate and image IDs."
-            exit 1
-          fi
-
-          echo "All services healthy and git_sha matches expected commit"
+        run: docker logout ghcr.io || true

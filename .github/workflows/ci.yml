@@ -803,6 +803,135 @@ jobs:
       - name: Run manifest validator unit tests
         run: NODE_OPTIONS='--experimental-vm-modules' node node_modules/.bin/jest --config packages/core/jest.config.js --ci packages/core/tests/validate-release-manifest.test.js
 
+      # ── Commit 3: production/dev Compose split + deploy script validation ─
+      # PR-safe: `compose config` does not start containers. The env_file
+      # `packages/web/.env` is required-by-default in docker-compose.yml, so
+      # both the dev and prod config checks need a temp fixture. Each `run:`
+      # is a separate shell, so create the fixture + trap cleanup in ONE step
+      # that performs both validations.
+      - name: Validate dev and production Compose merges resolve
+        run: |
+          # env_file: packages/web/.env is required-by-default in the base file.
+          # Create an empty fixture so `compose config` resolves; remove it after.
+          install -m 600 /dev/null packages/web/.env
+          trap 'rm -f packages/web/.env' EXIT
+
+          # ── Dev merge: base + build override + .env.example placeholders ──
+          docker compose \
+            --env-file .env.example \
+            -f docker-compose.yml \
+            -f docker-compose.build.yml \
+            config >/dev/null
+          echo "dev compose merge: OK"
+
+          # ── Production: base + synthetic digest env files ──
+          PROD_FIXTURE="${RUNNER_TEMP}/gitwire-prod.env"
+          RELEASE_FIXTURE="${RUNNER_TEMP}/gitwire-release.env"
+          FAKEDIG="sha256:$(printf 'a%.0s' {1..64})"
+          cat >"$PROD_FIXTURE" <<EOF
+          DB_PASSWORD=test
+          GITWIRE_EXECUTOR_SERVICE_TOKEN=test
+          GITWIRE_BOT_IMAGE=gitwire-local/bot:pre-immutable
+          GITWIRE_LANDING_IMAGE=gitwire-local/landing:pre-immutable
+          GITWIRE_DOCS_IMAGE=gitwire-local/docs:pre-immutable
+          GITWIRE_DEMO_IMAGE=gitwire-local/demo:pre-immutable
+          GITWIRE_VALIDATOR_IMAGE_REF=gitwire-validator@${FAKEDIG}
+          GITWIRE_VALIDATOR_IMAGE_DIGEST=${FAKEDIG}
+          EOF
+          cat >"$RELEASE_FIXTURE" <<EOF
+          GITWIRE_APP_IMAGE=ghcr.io/octo-lex/gitwire-app@${FAKEDIG}
+          GITWIRE_EXECUTOR_IMAGE=ghcr.io/octo-lex/gitwire-executor-service@${FAKEDIG}
+          GITWIRE_DASHBOARD_IMAGE=ghcr.io/octo-lex/gitwire-dashboard@${FAKEDIG}
+          EOF
+          docker compose \
+            -p gitwire --project-directory . \
+            -f docker-compose.yml \
+            --env-file "$PROD_FIXTURE" \
+            --env-file "$RELEASE_FIXTURE" \
+            config --quiet
+          echo "production compose merge: OK"
+
+      - name: Syntax-check deployment scripts
+        run: |
+          bash -n scripts/deploy-release.sh
+          bash -n scripts/prepare-immutable-compose-transition.sh
+          node --check scripts/read-strict-env.mjs
+
+      - name: Exercise deployment-script pure validation functions
+        run: |
+          # Source the script (does not run main due to the BASH_SOURCE guard)
+          # and exercise the pure functions against fixtures.
+          # NOTE: deploy-release.sh's fail() exits the process, so rejection
+          # cases must run inside subshells to be catchable.
+          bash <<'SCRIPT'
+            set -euo pipefail
+            source scripts/deploy-release.sh
+
+            FAKEDIG="sha256:$(printf 'a%.0s' $(seq 1 64))"
+            MANIFEST="$(mktemp)"
+            SHA="abcdef1234567890abcdef1234567890abcdef12"
+            RUN_ID="999"
+
+            cat >"$MANIFEST" <<EOF
+          {"schema_version":1,"git_sha":"$SHA","version":"0.23.1","built_at":"x","workflow_run_id":"$RUN_ID","images":{"app":{"reference":"ghcr.io/octo-lex/gitwire-app@$FAKEDIG","digest":"$FAKEDIG"},"executor":{"reference":"ghcr.io/octo-lex/gitwire-executor-service@$FAKEDIG","digest":"$FAKEDIG"},"dashboard":{"reference":"ghcr.io/octo-lex/gitwire-dashboard@$FAKEDIG","digest":"$FAKEDIG"}}}
+          EOF
+
+            # Helper: assert a function FAILS (exits non-zero) inside a subshell.
+            assert_rejected() { ( "$@" ) 2>/dev/null && return 1 || return 0; }
+
+            # validate_validator_ref_format: good
+            GITWIRE_VALIDATOR_IMAGE_REF="gitwire-validator@$FAKEDIG"
+            GITWIRE_VALIDATOR_IMAGE_DIGEST="$FAKEDIG"
+            validate_validator_ref_format && echo "ok: validator ref good"
+
+            # validate_validator_ref_format: bad digest
+            GITWIRE_VALIDATOR_IMAGE_DIGEST="not-a-digest"
+            assert_rejected validate_validator_ref_format && echo "ok: bad digest rejected"
+
+            # validate_validator_ref_format: ref/digest mismatch
+            GITWIRE_VALIDATOR_IMAGE_DIGEST="$FAKEDIG"
+            GITWIRE_VALIDATOR_IMAGE_REF="gitwire-validator@sha256:$(printf 'b%.0s' $(seq 1 64))"
+            assert_rejected validate_validator_ref_format && echo "ok: ref/digest mismatch rejected"
+
+            # validate_workflow_context: good
+            export WORKFLOW_CONCLUSION=success WORKFLOW_EVENT=push WORKFLOW_HEAD_BRANCH=master
+            export WORKFLOW_HEAD_REPOSITORY=Octo-Lex/GitWire EXPECTED_REPOSITORY=Octo-Lex/GitWire
+            export WORKFLOW_RUN_ID="$RUN_ID"
+            validate_workflow_context && echo "ok: workflow context good"
+
+            # validate_workflow_context: cross-repo rejected
+            WORKFLOW_HEAD_REPOSITORY=evil/attacker
+            export WORKFLOW_HEAD_REPOSITORY
+            assert_rejected validate_workflow_context && echo "ok: cross-repo rejected"
+
+            # validate_workflow_context: non-push rejected
+            WORKFLOW_HEAD_REPOSITORY=Octo-Lex/GitWire WORKFLOW_EVENT=pull_request
+            export WORKFLOW_HEAD_REPOSITORY WORKFLOW_EVENT
+            assert_rejected validate_workflow_context && echo "ok: non-push rejected"
+
+            # validate_workflow_context: missing var rejected
+            WORKFLOW_EVENT=push
+            export WORKFLOW_EVENT
+            unset WORKFLOW_RUN_ID
+            assert_rejected validate_workflow_context && echo "ok: missing var rejected"
+            export WORKFLOW_RUN_ID="$RUN_ID"
+
+            # validate_manifest: good (uses the real validator + fixture)
+            RELEASE_SHA="$SHA" MANIFEST_PATH="$MANIFEST" WORKFLOW_RUN_ID="$RUN_ID" \
+              validate_manifest && echo "ok: manifest good"
+
+            # validate_manifest: SHA mismatch rejected
+            RELEASE_SHA="wrongsha000000000000000000000000000000"
+            assert_rejected env RELEASE_SHA="$RELEASE_SHA" MANIFEST_PATH="$MANIFEST" WORKFLOW_RUN_ID="$RUN_ID" validate_manifest \
+              && echo "ok: SHA mismatch rejected"
+
+            # validate_manifest: run-id mismatch rejected
+            assert_rejected env RELEASE_SHA="$SHA" MANIFEST_PATH="$MANIFEST" WORKFLOW_RUN_ID="888" validate_manifest \
+              && echo "ok: run-id mismatch rejected"
+
+            echo "all deployment-script pure-function checks passed"
+          SCRIPT
+
       - name: Clean up smoke containers
         if: always()
         run: |

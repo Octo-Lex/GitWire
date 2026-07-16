@@ -2,6 +2,14 @@
 
 Deploy GitWire with a single `docker compose up -d`.
 
+> **v0.23.0+:** `docker-compose.yml` is the **production base** — every
+> application service references a digest-pinned image via a mandatory
+> `${VAR:?}` variable (no `build:` blocks). `docker-compose.build.yml` is the
+> **dev/CI override** that adds local build definitions. See the
+> [Deployment Runbook](/installation/deployment-runbook) ("Immutable
+> (pull-based) Deployment") for the production pull-based flow. The quick-start
+> below is for **local development**.
+
 ## Architecture
 
 GitWire runs 9 containers:
@@ -59,8 +67,11 @@ The PEM key is mounted as a read-only Docker volume and survives container rebui
 ## Step 4: Start the Stack
 
 ```bash
-cd packages/web
-docker compose -f docker-compose.prod.yml up -d
+# Create your local .env from the template (provides ${VAR:?} placeholders)
+cp .env.example .env
+
+# Start using the dev build override (builds images locally)
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
 ```
 
 PostgreSQL automatically runs all migrations from `db/migrations/` on **first
@@ -97,14 +108,17 @@ The health endpoint returns:
 }
 ```
 
-## Updating
+## Updating (local development)
 
 ```bash
 git pull origin master
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
 The app container is rebuilt from source. Database and Redis data persist in named volumes.
+
+> **Production** does not build. It pulls digest-pinned images published by CI.
+> See the [Deployment Runbook](/installation/deployment-runbook).
 
 ## Troubleshooting
 
