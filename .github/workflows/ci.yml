@@ -641,3 +641,171 @@ jobs:
           path: release-manifest.json
           retention-days: 90
           if-no-files-found: error
+
+  # ── PR-safe release tooling validation ──────────────────────────────────
+  # Exercises the non-publishing release path: builds images with local tags,
+  # verifies OCI labels, smoke-tests with fail-closed loops, generates a
+  # fixture-digest manifest, and validates it. No GHCR login or push.
+  # This ensures the release tooling logic is exercised on every PR, not
+  # only on the first master push after merge.
+
+  release-tooling-validation:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    timeout-minutes: 20
+    env:
+      SMOKE_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Build release metadata
+        id: meta
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          RELEASE_SHA="$(git rev-parse HEAD)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "built_at=$BUILT_AT" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build images with local tags (no GHCR)
+        run: |
+          docker build \
+            --build-arg GITWIRE_COMMIT_SHA="${{ steps.meta.outputs.release_sha }}" \
+            --build-arg GITWIRE_BUILT_AT="${{ steps.meta.outputs.built_at }}" \
+            --build-arg GITWIRE_VERSION="${{ steps.meta.outputs.version }}" \
+            -t gitwire-app:release-test \
+            -f Dockerfile .
+          docker build \
+            --build-arg GITWIRE_COMMIT_SHA="${{ steps.meta.outputs.release_sha }}" \
+            --build-arg GITWIRE_BUILT_AT="${{ steps.meta.outputs.built_at }}" \
+            --build-arg GITWIRE_VERSION="${{ steps.meta.outputs.version }}" \
+            -t gitwire-executor:release-test \
+            packages/executor-service
+          docker build \
+            --build-arg GITWIRE_COMMIT_SHA="${{ steps.meta.outputs.release_sha }}" \
+            --build-arg GITWIRE_BUILT_AT="${{ steps.meta.outputs.built_at }}" \
+            --build-arg GITWIRE_VERSION="${{ steps.meta.outputs.version }}" \
+            -t gitwire-dashboard:release-test \
+            packages/web-dashboard
+
+      - name: Verify OCI revision labels
+        run: |
+          EXPECTED="${{ steps.meta.outputs.release_sha }}"
+          for img in gitwire-app:release-test gitwire-executor:release-test gitwire-dashboard:release-test; do
+            ACTUAL="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$img")"
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::OCI revision for $img is '$ACTUAL', expected '$EXPECTED'"
+              exit 1
+            fi
+          done
+
+      - name: Smoke-test app (fail-closed)
+        env:
+          EXPECTED_SHA: ${{ steps.meta.outputs.release_sha }}
+        run: |
+          SMOKE_NET="release-tooling-${SMOKE_SUFFIX}"
+          PG="rt-pg-${SMOKE_SUFFIX}"
+          REDIS="rt-redis-${SMOKE_SUFFIX}"
+          APP="rt-app-${SMOKE_SUFFIX}"
+          docker network create "$SMOKE_NET"
+          docker run -d --name "$PG" --network "$SMOKE_NET" \
+            -e POSTGRES_USER=gitwire -e POSTGRES_PASSWORD=test -e POSTGRES_DB=gitops_hub postgres:16-alpine
+          docker run -d --name "$REDIS" --network "$SMOKE_NET" redis:7-alpine
+          for i in $(seq 1 30); do docker exec "$PG" pg_isready -U gitwire -d gitops_hub 2>/dev/null && break; sleep 1; done
+          docker exec "$PG" pg_isready -U gitwire -d gitops_hub 2>/dev/null || { echo "::error::PG not ready"; exit 1; }
+          CI_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+          docker run -d --name "$APP" --network "$SMOKE_NET" \
+            -e DATABASE_URL="postgresql://gitwire:test@${PG}:5432/gitops_hub" \
+            -e REDIS_URL="redis://${REDIS}:6379" -e NODE_ENV=production -e API_KEY="$CI_KEY" \
+            gitwire-app:release-test
+          APP_HEALTH=""
+          for i in $(seq 1 90); do APP_HEALTH="$(docker exec "$APP" wget -qO- http://localhost:3000/health 2>/dev/null)" && break; sleep 2; done
+          [ -z "$APP_HEALTH" ] && { echo "::error::App unhealthy"; docker logs "$APP" || true; exit 1; }
+          printf '%s' "$APP_HEALTH" > /tmp/app-health.json
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const h = JSON.parse(fs.readFileSync("/tmp/app-health.json","utf8"));
+          if (h.status !== "ok") throw new Error(`status=${h.status}`);
+          if (h.db_migration_status !== "current") throw new Error(`migrations=${h.db_migration_status}`);
+          if (h.git_sha !== process.env.EXPECTED_SHA) throw new Error(`git_sha=${h.git_sha}`);
+          console.log("✓ app verified");
+          NODE
+
+      - name: Smoke-test executor (fail-closed)
+        env:
+          EXPECTED_SHA: ${{ steps.meta.outputs.release_sha }}
+          EXPECTED_BUILT_AT: ${{ steps.meta.outputs.built_at }}
+        run: |
+          EXEC="rt-exec-${SMOKE_SUFFIX}"
+          docker run -d --name "$EXEC" -p 3006:3003 gitwire-executor:release-test
+          EH=""
+          for i in $(seq 1 30); do EH="$(curl -fsS http://127.0.0.1:3006/health 2>/dev/null)" && break; sleep 1; done
+          [ -z "$EH" ] && { echo "::error::Executor unhealthy"; docker logs "$EXEC" || true; exit 1; }
+          printf '%s' "$EH" > /tmp/exec-health.json
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const h = JSON.parse(fs.readFileSync("/tmp/exec-health.json","utf8"));
+          if (h.status !== "ok") throw new Error(`status=${h.status}`);
+          if (h.ready !== false) throw new Error(`ready=${h.ready}, expected false`);
+          if (h.git_sha !== process.env.EXPECTED_SHA) throw new Error(`git_sha=${h.git_sha}`);
+          if (h.built_at !== process.env.EXPECTED_BUILT_AT) throw new Error(`built_at=${h.built_at}`);
+          console.log("✓ executor verified");
+          NODE
+
+      - name: Smoke-test dashboard (fail-closed)
+        run: |
+          DASH="rt-dash-${SMOKE_SUFFIX}"
+          docker run -d --name "$DASH" -p 3007:3001 -e HOSTNAME="0.0.0.0" gitwire-dashboard:release-test
+          OK=false
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3007/dashboard >/dev/null 2>&1 && { OK=true; break; }; sleep 2; done
+          [ "$OK" = "true" ] || { echo "::error::Dashboard did not respond"; docker logs "$DASH" || true; exit 1; }
+
+      - name: Generate and validate fixture manifest
+        env:
+          EXPECTED_SHA: ${{ steps.meta.outputs.release_sha }}
+        run: |
+          FIXTURE_DIGEST="sha256:$(printf 'f%.0s' {1..64})"
+          cat > /tmp/fixture-manifest.json << ENDJSON
+          {
+            "schema_version": 1,
+            "git_sha": "${EXPECTED_SHA}",
+            "version": "${{ steps.meta.outputs.version }}",
+            "built_at": "${{ steps.meta.outputs.built_at }}",
+            "workflow_run_id": "${{ github.run_id }}",
+            "images": {
+              "app": {
+                "reference": "ghcr.io/octo-lex/gitwire-app@${FIXTURE_DIGEST}",
+                "digest": "${FIXTURE_DIGEST}"
+              },
+              "executor": {
+                "reference": "ghcr.io/octo-lex/gitwire-executor-service@${FIXTURE_DIGEST}",
+                "digest": "${FIXTURE_DIGEST}"
+              },
+              "dashboard": {
+                "reference": "ghcr.io/octo-lex/gitwire-dashboard@${FIXTURE_DIGEST}",
+                "digest": "${FIXTURE_DIGEST}"
+              }
+            }
+          }
+          ENDJSON
+
+          node scripts/validate-release-manifest.js \
+            /tmp/fixture-manifest.json \
+            "$EXPECTED_SHA" \
+            "${{ github.run_id }}"
+
+      - name: Run manifest validator unit tests
+        run: cd packages/core && NODE_OPTIONS='--experimental-vm-modules' npx --no-install jest --config jest.config.js --ci --testPathPattern='validate-release-manifest'
+
+      - name: Clean up smoke containers
+        if: always()
+        run: |
+          docker rm -f \
+            "rt-app-${SMOKE_SUFFIX}" "rt-exec-${SMOKE_SUFFIX}" "rt-dash-${SMOKE_SUFFIX}" \
+            "rt-pg-${SMOKE_SUFFIX}" "rt-redis-${SMOKE_SUFFIX}" 2>/dev/null || true
+          docker network rm "release-tooling-${SMOKE_SUFFIX}" 2>/dev/null || true

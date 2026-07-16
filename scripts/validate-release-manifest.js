@@ -22,6 +22,14 @@ import path from "node:path";
 
 const DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
 
+// Approved GHCR repositories for GitWire release images.
+// A digest-qualified reference to any other repository must be rejected.
+const APPROVED_REPOS = Object.freeze({
+  app: "ghcr.io/octo-lex/gitwire-app",
+  executor: "ghcr.io/octo-lex/gitwire-executor-service",
+  dashboard: "ghcr.io/octo-lex/gitwire-dashboard",
+});
+
 function fail(msg) {
   console.error(`::error::release-manifest validation failed: ${msg}`);
   process.exit(1);
@@ -71,6 +79,13 @@ function main() {
     // reference must be digest-qualified
     if (!img.reference || !img.reference.includes("@sha256:")) {
       fail(`images.${svc}.reference '${img.reference}' is not digest-qualified`);
+    }
+
+    // reference must use the approved GHCR repository for this service
+    const expectedRepo = APPROVED_REPOS[svc];
+    const refRepo = img.reference.split("@")[0];
+    if (refRepo !== expectedRepo) {
+      fail(`images.${svc}.reference repository '${refRepo}' does not match approved '${expectedRepo}'`);
     }
 
     // no :latest
