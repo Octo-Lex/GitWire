@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "exceptions": [
+    {
+      "advisory": "https://github.com/advisories/GHSA-hmw2-7cc7-3qxx",
+      "package": "form-data",
+      "range": ">=4.0.0 <4.0.6",
+      "expires": "2026-10-14T23:59:59Z",
+      "justification": "Transitive dependency via @anthropic-ai/sdk -> @types/node-fetch -> form-data@4.0.5. fixAvailable requires an upstream SDK bump or npm override. The affected code path (multipart field names/filenames CRLF injection) is not exercised by GitWire's server-side use of the Anthropic SDK. Time-bounded to force re-evaluation.",
+      "owner": "Alajmah",
+      "tracking_issue": "https://github.com/Octo-Lex/GitWire/issues/47"
+    }
+  ]
+}

@@ -357,6 +357,63 @@ jobs:
   # Captures registry repository digests and generates a validated release
   # manifest uploaded as a workflow artifact for the deployment workflow.
 
+  # ── Production dependency audit (exception-aware) ─────────────────────────
+  # Runs on PRs and master pushes. Generates a real `npm audit --omit=dev`
+  # report, then passes it through scripts/enforce-production-audit.mjs,
+  # which fails on unexcepted high/critical findings, expired/stale/duplicate/
+  # malformed exceptions, and unknown audit schemas. The exception registry
+  # (audit-exceptions.json) is version-controlled and requires exact, active,
+  # time-bounded entries — no wildcards, no indefinite expirations.
+  production-dependency-audit:
+    needs: syntax-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+
+      - name: Generate production audit report
+        id: audit
+        run: |
+          # Capture the JSON report AND preserve npm audit's exit code.
+          #   0 = clean, 1 = vulnerabilities found (evaluator decides),
+          #   2+ = operational error (fail directly below).
+          set +e
+          npm audit --omit=dev --json > /tmp/production-audit.json 2>/tmp/audit-stderr.log
+          AUDIT_EXIT=$?
+          set -e
+          echo "exit=$AUDIT_EXIT" >> "$GITHUB_OUTPUT"
+
+          # Operational errors (npm/registry/network) fail directly — the
+          # evaluator cannot diagnose npm internals and must not be invoked.
+          if [ "$AUDIT_EXIT" -ge 2 ]; then
+            echo "::error::npm audit operational error (exit $AUDIT_EXIT)"
+            cat /tmp/audit-stderr.log >&2
+            exit 1
+          fi
+
+          # exit 0 (clean) or 1 (vulns found) both proceed to the evaluator,
+          # which makes the final exception-aware decision.
+          test -s /tmp/production-audit.json || { echo "::error::audit report is empty"; exit 1; }
+
+      - name: Evaluate audit against exception registry
+        run: |
+          AUDIT_EXIT=${{ steps.audit.outputs.exit }}
+          if [ "$AUDIT_EXIT" -eq 0 ]; then
+            echo "npm audit exit 0 (no vulnerabilities) — still running the"
+            echo "evaluator to enforce that no stale exceptions remain."
+          fi
+          node scripts/enforce-production-audit.mjs \
+            /tmp/production-audit.json \
+            audit-exceptions.json
+
+      - name: Run evaluator unit + negative tests
+        run: NODE_OPTIONS='--experimental-vm-modules' node node_modules/.bin/jest --config packages/core/jest.config.js --ci packages/core/tests/enforce-production-audit.test.js
+
   publish-release-images:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
@@ -373,6 +430,7 @@ jobs:
       - docker-build-dashboard
       - docker-build-executor-service
       - docker-build-validator-image
+      - production-dependency-audit
     timeout-minutes: 20
     permissions:
       contents: read

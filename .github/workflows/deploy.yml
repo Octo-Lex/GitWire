@@ -77,14 +77,33 @@ jobs:
           fi
           echo "No secrets detected (full history + working tree scanned)"
 
-      # NOTE: the dependency audit gate is intentionally permissive here.
-      # Commit 4 ("security: enforce exception-aware production dependency
-      # audit") replaces this with a fail-closed, exception-aware gate. Do not
-      # add audit-exception handling in commit 3.
-      - name: Dependency audit (placeholder — replaced by commit 4)
+      # Production dependency audit — fail-closed, exception-aware. Generates a
+      # fresh report from the exact tested SHA (checked out above) and evaluates
+      # it against the version-controlled exception registry. No || true, no
+      # continue-on-error, no unconditional success path. The evaluator decides
+      # whether all high/critical findings are actively excepted.
+      - name: Generate production audit report
+        id: audit
         run: |
           cd /opt/gitwire
-          npm audit --omit=dev --audit-level=high 2>&1 | tail -10 || true
+          set +e
+          npm audit --omit=dev --json > /tmp/production-audit.json 2>/tmp/audit-stderr.log
+          AUDIT_EXIT=$?
+          set -e
+          echo "exit=$AUDIT_EXIT" >> "$GITHUB_OUTPUT"
+          if [ "$AUDIT_EXIT" -ge 2 ]; then
+            echo "::error::npm audit operational error (exit $AUDIT_EXIT)"
+            cat /tmp/audit-stderr.log >&2
+            exit 1
+          fi
+          test -s /tmp/production-audit.json || { echo "::error::audit report is empty"; exit 1; }
+
+      - name: Evaluate audit against exception registry
+        run: |
+          cd /opt/gitwire
+          node scripts/enforce-production-audit.mjs \
+            /tmp/production-audit.json \
+            audit-exceptions.json
 
   # ── Job 2: Deploy ─────────────────────────────────────────────
   # The ONLY job with `environment: production`. Production-scoped secrets and
