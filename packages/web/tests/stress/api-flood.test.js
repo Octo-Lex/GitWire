@@ -50,7 +50,7 @@ describe(`API Flood: ${CONCURRENT} concurrent × ${ROUNDS} rounds`, () => {
 
   test('GET /health survives flood (no auth required)', async () => {
     const tasks = Array.from({ length: CONCURRENT }, () => () =>
-      fetch(`${process.env.GITWIRE_BASE_URL || 'https://gitwire.erlab.uk'}/health`)
+      fetch(`${process.env.GITWIRE_BASE_URL || (() => { throw new Error("GITWIRE_BASE_URL is required"); })()}/health`)
         .then(r => ({ status: r.status }))
     );
     const result = await boundedBurst(tasks);

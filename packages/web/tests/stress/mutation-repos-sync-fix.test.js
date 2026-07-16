@@ -3,8 +3,8 @@
 import { get, post, del } from '../helpers.js';
 import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
 
-const REPO = 'Elephant-Rock-Lab/GitWire';
-const REPO2 = 'xjeddah/MyShell';
+const REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
+const REPO2 = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
 
 describe('Stress: Repo Sync + Fix + Heal Mutations', () => {
 

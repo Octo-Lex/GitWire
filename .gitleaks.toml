@@ -12,7 +12,7 @@ useDefault = true
 # These patterns are ignored across ALL rules.
 
 [allowlist]
-  description = "Global allowlist for templates, tests, docs, and UI assets"
+  description = "Global allowlist for known-fake fixture strings and non-source assets"
   regexTarget = "match"
   regexes = [
     '''YOUR[_-]KEY''',
@@ -27,12 +27,11 @@ useDefault = true
     '''-----BEGIN RSA PRIVATE KEY-----\\nMIIEow\.\.\.''',
     '''gw_sec_live_''',
   ]
+  # NOTE: tests/**, helpers/**, *.test.*, and *.spec.* were previously
+  # excluded here. Removed because test code is a common place for real
+  # credentials to be accidentally committed. Only specific fixture
+  # paths with known-fake values should be allowlisted.
   paths = [
-    '''tests/.*''',
-    '''\.test\.''',
-    '''\.spec\.''',
-    '''mocks\.''',
-    '''helpers/.*''',
     '''docs/.*''',
     '''README\.md''',
     '''DEVELOPMENT\.md''',
@@ -43,5 +42,4 @@ useDefault = true
     '''index2\.html''',
     '''index\.html''',
     '''MediaPackage.*''',
-    '''scripts/secret-leak-stress-test\.sh''',
   ]

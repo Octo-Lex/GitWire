@@ -42,7 +42,7 @@ describe('Core API', () => {
   });
 
   test('GET without API key returns 401', async () => {
-    const res = await fetch(`${process.env.GITWIRE_BASE_URL || 'https://gitwire.erlab.uk'}/api/repos`);
+    const res = await fetch(`${process.env.GITWIRE_BASE_URL || (() => { throw new Error("GITWIRE_BASE_URL is required"); })()}/api/repos`);
     expect(res.status).toBe(401);
   });
 });

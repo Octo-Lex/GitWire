@@ -104,11 +104,14 @@ jobs:
         run: docker build -t gitwire-app:ci -f Dockerfile .
       - name: Boot the app against the service DB + Redis
         run: |
+          # Generate a disposable CI-only API key (not committed, not reused).
+          CI_API_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
           docker run -d --name gitwire-app-ci \
             --network host \
             -e DATABASE_URL="postgresql://gitwire:test@127.0.0.1:5432/gitops_hub" \
             -e REDIS_URL="redis://127.0.0.1:6379" \
             -e NODE_ENV=production \
+            -e API_KEY="$CI_API_KEY" \
             -e APP_BASE_URL="http://localhost:3000" \
             gitwire-app:ci
       - name: Wait for health (entrypoint migrations + app boot)
