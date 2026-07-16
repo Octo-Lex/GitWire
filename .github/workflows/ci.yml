@@ -377,6 +377,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      SMOKE_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -435,98 +437,164 @@ jobs:
             echo "✓ $img OCI revision: $ACTUAL"
           done
 
-      - name: Smoke-test app image
+      - name: Smoke-test app image (fail-closed)
+        env:
+          EXPECTED_SHA: ${{ steps.meta.outputs.release_sha }}
         run: |
-          docker network create gitwire-release-smoke || true
-          docker run -d --name release-smoke-pg --network gitwire-release-smoke \
+          SMOKE_NET="gitwire-release-smoke-${SMOKE_SUFFIX}"
+          PG_CONTAINER="release-pg-${SMOKE_SUFFIX}"
+          REDIS_CONTAINER="release-redis-${SMOKE_SUFFIX}"
+          APP_CONTAINER="release-app-${SMOKE_SUFFIX}"
+
+          docker network create "$SMOKE_NET"
+          docker run -d --name "$PG_CONTAINER" --network "$SMOKE_NET" \
             -e POSTGRES_USER=gitwire -e POSTGRES_PASSWORD=test -e POSTGRES_DB=gitops_hub \
             postgres:16-alpine
-          docker run -d --name release-smoke-redis --network gitwire-release-smoke \
+          docker run -d --name "$REDIS_CONTAINER" --network "$SMOKE_NET" \
             redis:7-alpine
-          # Wait for services
+
+          # Fail-closed PostgreSQL readiness
           for i in $(seq 1 30); do
-            docker exec release-smoke-pg pg_isready -U gitwire -d gitops_hub 2>/dev/null && break
+            docker exec "$PG_CONTAINER" pg_isready -U gitwire -d gitops_hub 2>/dev/null && break
             sleep 1
           done
+          if ! docker exec "$PG_CONTAINER" pg_isready -U gitwire -d gitops_hub 2>/dev/null; then
+            echo "::error::PostgreSQL did not become ready"
+            exit 1
+          fi
+
           CI_API_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
-          docker run -d --name release-smoke-app --network gitwire-release-smoke \
-            -e DATABASE_URL="postgresql://gitwire:test@release-smoke-pg:5432/gitops_hub" \
-            -e REDIS_URL="redis://release-smoke-redis:6379" \
+          docker run -d --name "$APP_CONTAINER" --network "$SMOKE_NET" \
+            -e DATABASE_URL="postgresql://gitwire:test@${PG_CONTAINER}:5432/gitops_hub" \
+            -e REDIS_URL="redis://${REDIS_CONTAINER}:6379" \
             -e NODE_ENV=production \
             -e API_KEY="$CI_API_KEY" \
             "${{ steps.meta.outputs.app_tag }}"
+
+          # Fail-closed app health check
+          APP_HEALTH=""
           for i in $(seq 1 90); do
-            if docker exec release-smoke-app wget -qO- http://localhost:3000/health 2>/dev/null; then
-              HEALTH="$(docker exec release-smoke-app wget -qO- http://localhost:3000/health 2>/dev/null)"
-              SHA="$(echo "$HEALTH" | grep -oE '"git_sha"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"git_sha"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
-              if [ "$SHA" != "${{ steps.meta.outputs.release_sha }}" ]; then
-                echo "::error::app git_sha is '$SHA', expected '${{ steps.meta.outputs.release_sha }}'"
-                exit 1
-              fi
-              echo "✓ app /health OK, git_sha=$SHA"
+            if APP_HEALTH="$(docker exec "$APP_CONTAINER" wget -qO- http://localhost:3000/health 2>/dev/null)"; then
               break
             fi
             sleep 2
           done
+          if [ -z "$APP_HEALTH" ]; then
+            echo "::error::App did not become healthy"
+            docker logs "$APP_CONTAINER" || true
+            exit 1
+          fi
 
-      - name: Smoke-test executor image
+          # Verify app health fields via Node (not grep)
+          printf '%s' "$APP_HEALTH" > /tmp/release-app-health.json
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const health = JSON.parse(fs.readFileSync("/tmp/release-app-health.json", "utf8"));
+          const expectedSha = process.env.EXPECTED_SHA;
+          if (health.status !== "ok") throw new Error(`app status=${health.status}, expected ok`);
+          if (health.db_migration_status !== "current") throw new Error(`db_migration_status=${health.db_migration_status}, expected current`);
+          if (health.git_sha !== expectedSha) throw new Error(`git_sha=${health.git_sha}, expected ${expectedSha}`);
+          console.log("✓ app /health verified: status=ok, migrations=current, git_sha=" + health.git_sha.slice(0, 12));
+          NODE
+
+      - name: Smoke-test executor image (fail-closed)
+        env:
+          EXPECTED_SHA: ${{ steps.meta.outputs.release_sha }}
+          EXPECTED_BUILT_AT: ${{ steps.meta.outputs.built_at }}
         run: |
-          docker run -d --name release-smoke-executor -p 3004:3003 \
+          EXECUTOR_CONTAINER="release-executor-${SMOKE_SUFFIX}"
+          docker run -d --name "$EXECUTOR_CONTAINER" -p 3004:3003 \
             "${{ steps.meta.outputs.executor_tag }}"
+
+          # Fail-closed executor health check
+          EXECUTOR_HEALTH=""
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3004/health 2>/dev/null; then
-              HEALTH="$(curl -fsS http://127.0.0.1:3004/health)"
-              SHA="$(echo "$HEALTH" | grep -oE '"git_sha"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"git_sha"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
-              if [ "$SHA" != "${{ steps.meta.outputs.release_sha }}" ]; then
-                echo "::error::executor git_sha is '$SHA', expected '${{ steps.meta.outputs.release_sha }}'"
-                exit 1
-              fi
-              echo "✓ executor /health OK, git_sha=$SHA"
+            if EXECUTOR_HEALTH="$(curl -fsS http://127.0.0.1:3004/health 2>/dev/null)"; then
               break
             fi
             sleep 1
           done
+          if [ -z "$EXECUTOR_HEALTH" ]; then
+            echo "::error::Executor did not become healthy"
+            docker logs "$EXECUTOR_CONTAINER" || true
+            exit 1
+          fi
 
-      - name: Smoke-test dashboard image
+          # Verify executor health fields via Node
+          printf '%s' "$EXECUTOR_HEALTH" > /tmp/release-executor-health.json
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const health = JSON.parse(fs.readFileSync("/tmp/release-executor-health.json", "utf8"));
+          const expectedSha = process.env.EXPECTED_SHA;
+          const expectedBuiltAt = process.env.EXPECTED_BUILT_AT;
+          if (health.status !== "ok") throw new Error(`executor status=${health.status}, expected ok`);
+          if (health.ready !== false) throw new Error(`executor ready=${health.ready}, expected false (no socket/validator in CI)`);
+          if (health.git_sha !== expectedSha) throw new Error(`executor git_sha=${health.git_sha}, expected ${expectedSha}`);
+          if (health.built_at !== expectedBuiltAt) throw new Error(`executor built_at=${health.built_at}, expected ${expectedBuiltAt}`);
+          console.log("✓ executor /health verified: status=ok, ready=false, git_sha=" + health.git_sha.slice(0, 12));
+          NODE
+
+      - name: Smoke-test dashboard image (fail-closed)
         run: |
-          docker run -d --name release-smoke-dashboard -p 3005:3001 \
+          DASHBOARD_CONTAINER="release-dashboard-${SMOKE_SUFFIX}"
+          docker run -d --name "$DASHBOARD_CONTAINER" -p 3005:3001 \
             -e HOSTNAME="0.0.0.0" \
             "${{ steps.meta.outputs.dashboard_tag }}"
+
+          # Fail-closed dashboard check
+          DASH_OK=false
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:3005/dashboard >/dev/null 2>&1; then
-              echo "✓ dashboard /dashboard responded"
+              DASH_OK=true
               break
             fi
             sleep 2
           done
+          if [ "$DASH_OK" != "true" ]; then
+            echo "::error::Dashboard did not respond"
+            docker logs "$DASHBOARD_CONTAINER" || true
+            exit 1
+          fi
+          echo "✓ dashboard /dashboard responded"
 
-      - name: Push release images
+      - name: Push release images and capture digests
         run: |
-          docker push "${{ steps.meta.outputs.app_tag }}"
-          docker push "${{ steps.meta.outputs.executor_tag }}"
-          docker push "${{ steps.meta.outputs.dashboard_tag }}"
+          push_and_capture() {
+            local tag="$1"
+            local outfile="$2"
+            docker push "$tag" 2>&1 | tee "$outfile"
+            local digest
+            digest="$(sed -nE 's/.*digest: (sha256:[a-f0-9]{64}).*/\1/p' "$outfile" | tail -1)"
+            if ! [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "::error::Could not capture registry digest for $tag from push output"
+              cat "$outfile"
+              return 1
+            fi
+            printf '%s\n' "$digest"
+          }
 
-      - name: Capture registry digests and generate manifest
+          APP_DIGEST="$(push_and_capture "${{ steps.meta.outputs.app_tag }}" /tmp/app-push.log)"
+          EXECUTOR_DIGEST="$(push_and_capture "${{ steps.meta.outputs.executor_tag }}" /tmp/executor-push.log)"
+          DASHBOARD_DIGEST="$(push_and_capture "${{ steps.meta.outputs.dashboard_tag }}" /tmp/dashboard-push.log)"
+
+          echo "APP_DIGEST=$APP_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "EXECUTOR_DIGEST=$EXECUTOR_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "DASHBOARD_DIGEST=$DASHBOARD_DIGEST" >> "$GITHUB_OUTPUT"
+        id: digests
+
+      - name: Generate release manifest
+        env:
+          APP_DIGEST: ${{ steps.digests.outputs.APP_DIGEST }}
+          EXECUTOR_DIGEST: ${{ steps.digests.outputs.EXECUTOR_DIGEST }}
+          DASHBOARD_DIGEST: ${{ steps.digests.outputs.DASHBOARD_DIGEST }}
         run: |
-          APP_DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${{ steps.meta.outputs.app_tag }}" | grep "ghcr.io" | sed 's/.*@//')"
-          EXECUTOR_DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${{ steps.meta.outputs.executor_tag }}" | grep "ghcr.io" | sed 's/.*@//')"
-          DASHBOARD_DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${{ steps.meta.outputs.dashboard_tag }}" | grep "ghcr.io" | sed 's/.*@//')"
-
-          # Verify digests are sha256
-          for d in "$APP_DIGEST" "$EXECUTOR_DIGEST" "$DASHBOARD_DIGEST"; do
-            echo "$d" | grep -qE '^sha256:[a-f0-9]{64}$' || {
-              echo "::error::Invalid digest format: $d"
-              exit 1
-            }
-          done
-
-          cat > release-manifest.json << EOF
+          cat > release-manifest.json << 'ENDJSON'
           {
             "schema_version": 1,
             "git_sha": "${{ steps.meta.outputs.release_sha }}",
             "version": "${{ steps.meta.outputs.version }}",
             "built_at": "${{ steps.meta.outputs.built_at }}",
-            "workflow_run_id": "$GITHUB_RUN_ID",
+            "workflow_run_id": "${{ github.run_id }}",
             "images": {
               "app": {
                 "reference": "ghcr.io/octo-lex/gitwire-app@${APP_DIGEST}",
@@ -542,7 +610,7 @@ jobs:
               }
             }
           }
-          EOF
+          ENDJSON
 
           echo "=== release-manifest.json ==="
           cat release-manifest.json
@@ -552,13 +620,19 @@ jobs:
           node scripts/validate-release-manifest.js \
             release-manifest.json \
             "${{ steps.meta.outputs.release_sha }}" \
-            "$GITHUB_RUN_ID"
+            "${{ github.run_id }}"
 
       - name: Clean up smoke containers
         if: always()
         run: |
-          docker rm -f release-smoke-app release-smoke-executor release-smoke-dashboard release-smoke-pg release-smoke-redis 2>/dev/null || true
-          docker network rm gitwire-release-smoke 2>/dev/null || true
+          SMOKE_NET="gitwire-release-smoke-${SMOKE_SUFFIX}"
+          docker rm -f \
+            "release-app-${SMOKE_SUFFIX}" \
+            "release-executor-${SMOKE_SUFFIX}" \
+            "release-dashboard-${SMOKE_SUFFIX}" \
+            "release-pg-${SMOKE_SUFFIX}" \
+            "release-redis-${SMOKE_SUFFIX}" 2>/dev/null || true
+          docker network rm "$SMOKE_NET" 2>/dev/null || true
 
       - name: Upload release manifest
         uses: actions/upload-artifact@v4
