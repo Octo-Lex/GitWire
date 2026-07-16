@@ -18,6 +18,8 @@ function baseConfig(overrides = {}) {
     service_token: null,
     validator_image_ref: null,
     validator_image_digest: null,
+    git_sha: "unknown",
+    built_at: "unknown",
     validatorIdentityComplete: () => Boolean(overrides.validator_image_ref) && Boolean(overrides.validator_image_digest),
     ...overrides,
   };
@@ -36,6 +38,8 @@ describe("buildHealthResponse — required fields present", () => {
   // The 10 fields from the v0.23.0 design doc's GET /health contract:
   for (const field of [
     "status",
+    "git_sha",
+    "built_at",
     "executor_service_id",
     "executor_service_version",
     "executor_service_instance_id",
@@ -129,5 +133,51 @@ describe("buildHealthResponse — instance id stability", () => {
     const a = buildHealthResponse({ config: baseConfig(), probeResult: runtimeReachable });
     const b = buildHealthResponse({ config: baseConfig(), probeResult: runtimeReachable });
     expect(a.executor_service_instance_id).toBe(b.executor_service_instance_id);
+  });
+});
+
+// ── release identity (build metadata) ───────────────────────────────────────
+describe("buildHealthResponse — release identity", () => {
+  it("git_sha mirrors config", () => {
+    const r = buildHealthResponse({ config: baseConfig({ git_sha: "abc123def456" }), probeResult: runtimeReachable });
+    expect(r.git_sha).toBe("abc123def456");
+  });
+
+  it("built_at mirrors config", () => {
+    const r = buildHealthResponse({ config: baseConfig({ built_at: "2026-07-16T01:00:00Z" }), probeResult: runtimeReachable });
+    expect(r.built_at).toBe("2026-07-16T01:00:00Z");
+  });
+
+  it("missing git_sha normalizes to 'unknown'", () => {
+    const r = buildHealthResponse({ config: baseConfig({ git_sha: undefined }), probeResult: runtimeReachable });
+    expect(r.git_sha).toBe("unknown");
+  });
+
+  it("missing built_at normalizes to 'unknown'", () => {
+    const r = buildHealthResponse({ config: baseConfig({ built_at: undefined }), probeResult: runtimeReachable });
+    expect(r.built_at).toBe("unknown");
+  });
+
+  it("release identity fields do not affect readiness", () => {
+    const withIdentity = buildHealthResponse({
+      config: baseConfig({
+        git_sha: "abc123",
+        built_at: "2026-07-16",
+        validator_image_ref: "r@sha256:" + "a".repeat(64),
+        validator_image_digest: "sha256:" + "a".repeat(64),
+      }),
+      probeResult: runtimeReachable,
+    });
+    const withoutIdentity = buildHealthResponse({
+      config: baseConfig({
+        git_sha: "unknown",
+        built_at: "unknown",
+        validator_image_ref: "r@sha256:" + "a".repeat(64),
+        validator_image_digest: "sha256:" + "a".repeat(64),
+      }),
+      probeResult: runtimeReachable,
+    });
+    expect(withIdentity.ready).toBe(withoutIdentity.ready);
+    expect(withIdentity.ready).toBe(true);
   });
 });

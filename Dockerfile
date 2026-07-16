@@ -20,8 +20,17 @@ COPY . .
 
 # Generate build-info from root package.json + git SHA (v0.20.2)
 ARG GITWIRE_COMMIT_SHA=unknown
-ENV GITWIRE_COMMIT_SHA=$GITWIRE_COMMIT_SHA
+ARG GITWIRE_BUILT_AT=unknown
+ARG GITWIRE_VERSION=unknown
+ENV GITWIRE_COMMIT_SHA=$GITWIRE_COMMIT_SHA \
+    GITWIRE_BUILT_AT=$GITWIRE_BUILT_AT \
+    GITWIRE_VERSION=$GITWIRE_VERSION
 RUN node scripts/generate-build-info.js
+
+LABEL org.opencontainers.image.revision=$GITWIRE_COMMIT_SHA
+LABEL org.opencontainers.image.created=$GITWIRE_BUILT_AT
+LABEL org.opencontainers.image.version=$GITWIRE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/Octo-Lex/GitWire"
 
 # Expose the Express port
 EXPOSE 3000

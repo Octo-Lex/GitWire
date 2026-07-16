@@ -14,6 +14,11 @@ ENV NEXT_PUBLIC_GITWIRE_VERSION=$GITWIRE_VERSION
 ENV NEXT_PUBLIC_GITWIRE_COMMIT_SHA=$GITWIRE_COMMIT_SHA
 ENV NEXT_PUBLIC_GITWIRE_BUILT_AT=$GITWIRE_BUILT_AT
 
+LABEL org.opencontainers.image.revision=$GITWIRE_COMMIT_SHA
+LABEL org.opencontainers.image.created=$GITWIRE_BUILT_AT
+LABEL org.opencontainers.image.version=$GITWIRE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/Octo-Lex/GitWire"
+
 RUN npm run build
 
 FROM node:20-alpine AS runner

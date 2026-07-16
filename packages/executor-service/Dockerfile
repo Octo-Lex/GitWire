@@ -49,6 +49,11 @@ ENV GITWIRE_VERSION=$GITWIRE_VERSION \
     GITWIRE_COMMIT_SHA=$GITWIRE_COMMIT_SHA \
     GITWIRE_BUILT_AT=$GITWIRE_BUILT_AT
 
+LABEL org.opencontainers.image.revision=$GITWIRE_COMMIT_SHA
+LABEL org.opencontainers.image.created=$GITWIRE_BUILT_AT
+LABEL org.opencontainers.image.version=$GITWIRE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/Octo-Lex/GitWire"
+
 EXPOSE 3003
 ENV PORT=3003 \
     NODE_ENV=production
