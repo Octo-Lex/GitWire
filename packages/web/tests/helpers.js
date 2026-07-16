@@ -2,23 +2,14 @@
 // Shared test utilities for GitWire API integration tests.
 //
 // SECURITY: No production URL or credential defaults. All configuration
-// must be provided via environment variables. The harness refuses to run
+// must be provided via environment variables. The harness refuses to load
 // unless GITWIRE_STRESS_ENV=isolated is set, and rejects known production
 // hostnames regardless of configuration.
 
-// Production hostnames that must NEVER be targeted by tests.
+// Known production hostnames that must NEVER be targeted by tests.
+// This is a denylist of known production targets, not a full identity verification.
 const PRODUCTION_HOSTS = new Set([
   'gitwire.erlab.uk',
-  'localhost',
-  '127.0.0.1',
-]);
-
-// Allowed test hostnames (explicit allowlist).
-const ALLOWED_TEST_HOSTS = new Set([
-  'localhost',
-  '127.0.0.1',
-  'gitwire-app-test',
-  'host.docker.internal',
 ]);
 
 function requireEnv(name) {
@@ -38,9 +29,9 @@ function validateBaseUrl(url) {
   } catch {
     throw new Error(`GITWIRE_BASE_URL is not a valid URL: ${url}`);
   }
-  if (PRODUCTION_HOSTS.has(hostname) && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+  if (PRODUCTION_HOSTS.has(hostname)) {
     throw new Error(
-      `GITWIRE_BASE_URL hostname '${hostname}' is a production target. ` +
+      `GITWIRE_BASE_URL hostname '${hostname}' is a known production target. ` +
       `Tests must target an isolated environment.`
     );
   }
@@ -61,8 +52,8 @@ if (STRESS_ENV !== 'isolated') {
 }
 
 // Mutation tests require an explicit opt-in.
-export const ALLOW_MUTATIONS = process.env.GITWIRE_STRESS_ALLOW_MUTATIONS === 'true';
-export const FIXTURE_REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || null;
+const ALLOW_MUTATIONS = process.env.GITWIRE_STRESS_ALLOW_MUTATIONS === 'true';
+const FIXTURE_REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || null;
 
 if (ALLOW_MUTATIONS && !FIXTURE_REPO) {
   throw new Error(
@@ -72,9 +63,36 @@ if (ALLOW_MUTATIONS && !FIXTURE_REPO) {
 }
 
 /**
+ * Block mutating requests unless the mutation opt-in is configured.
+ * This is enforced centrally in the api() helper so individual test
+ * suites cannot accidentally bypass the gate.
+ */
+function assertMutationAllowed(method) {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(method)) return;
+
+  if (!ALLOW_MUTATIONS) {
+    throw new Error(
+      `${method} requests require GITWIRE_STRESS_ALLOW_MUTATIONS=true`
+    );
+  }
+  if (!FIXTURE_REPO) {
+    throw new Error(
+      "Mutation requests require GITWIRE_STRESS_FIXTURE_REPO to be set to a disposable owner/repo."
+    );
+  }
+}
+
+export { ALLOW_MUTATIONS, FIXTURE_REPO };
+
+/**
  * Fetch wrapper with API key auth. Returns parsed JSON + status.
+ * Mutating methods (POST/PUT/PATCH/DELETE) are blocked unless
+ * GITWIRE_STRESS_ALLOW_MUTATIONS=true and GITWIRE_STRESS_FIXTURE_REPO are set.
  */
 export async function api(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  assertMutationAllowed(method);
+
   const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
   const headers = {
     'Authorization': `Bearer ${API_KEY}`,

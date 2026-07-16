@@ -3,7 +3,7 @@
 import { get, post, put, del } from '../helpers.js';
 import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
 
-const REPO = 'Elephant-Rock-Lab/GitWire';
+const REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
 
 describe('Stress: Phase 3 Mutations', () => {
 

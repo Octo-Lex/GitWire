@@ -3,7 +3,7 @@
 import { get, post, put, del, patch } from '../helpers.js';
 import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
 
-const REPO = 'xjeddah/MyShell';
+const REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
 
 describe('Stress: Maintainer Mutations', () => {
 
