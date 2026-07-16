@@ -350,3 +350,220 @@ jobs:
       - name: Verify lint script exists in the baseline
         run: |
           docker run --rm --entrypoint node gitwire-validator:ci -e "const p=require('/opt/gitwire-base/package.json');if(!p.scripts||!p.scripts.lint){console.error('lint script missing');process.exit(1)}console.log('lint script OK')"
+
+  # ── Release image publication ────────────────────────────────────────────
+  # Runs ONLY for successful master pushes. Builds the three release images
+  # once, smoke-tests them locally, then pushes the exact same images to GHCR.
+  # Captures registry repository digests and generates a validated release
+  # manifest uploaded as a workflow artifact for the deployment workflow.
+
+  publish-release-images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    needs:
+      - syntax-check
+      - core-tests
+      - rules-tests
+      - runtime-tests
+      - executor-service-tests
+      - web-unit-tests
+      - web-receipt-integration-tests
+      - dashboard-tests
+      - docker-build-app
+      - docker-build-dashboard
+      - docker-build-executor-service
+      - docker-build-validator-image
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Authenticate to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build release metadata
+        id: meta
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          RELEASE_SHA="$GITHUB_SHA"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "built_at=$BUILT_AT" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "app_tag=ghcr.io/octo-lex/gitwire-app:sha-$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "executor_tag=ghcr.io/octo-lex/gitwire-executor-service:sha-$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "dashboard_tag=ghcr.io/octo-lex/gitwire-dashboard:sha-$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build release images (build once)
+        run: |
+          docker build \
+            --build-arg GITWIRE_COMMIT_SHA="${{ steps.meta.outputs.release_sha }}" \
+            --build-arg GITWIRE_BUILT_AT="${{ steps.meta.outputs.built_at }}" \
+            --build-arg GITWIRE_VERSION="${{ steps.meta.outputs.version }}" \
+            -t "${{ steps.meta.outputs.app_tag }}" \
+            -f Dockerfile .
+
+          docker build \
+            --build-arg GITWIRE_COMMIT_SHA="${{ steps.meta.outputs.release_sha }}" \
+            --build-arg GITWIRE_BUILT_AT="${{ steps.meta.outputs.built_at }}" \
+            --build-arg GITWIRE_VERSION="${{ steps.meta.outputs.version }}" \
+            -t "${{ steps.meta.outputs.executor_tag }}" \
+            packages/executor-service
+
+          docker build \
+            --build-arg GITWIRE_COMMIT_SHA="${{ steps.meta.outputs.release_sha }}" \
+            --build-arg GITWIRE_BUILT_AT="${{ steps.meta.outputs.built_at }}" \
+            --build-arg GITWIRE_VERSION="${{ steps.meta.outputs.version }}" \
+            -t "${{ steps.meta.outputs.dashboard_tag }}" \
+            packages/web-dashboard
+
+      - name: Verify OCI revision labels
+        run: |
+          EXPECTED="${{ steps.meta.outputs.release_sha }}"
+          for img in "${{ steps.meta.outputs.app_tag }}" "${{ steps.meta.outputs.executor_tag }}" "${{ steps.meta.outputs.dashboard_tag }}"; do
+            ACTUAL="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$img")"
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::OCI revision label for $img is '$ACTUAL', expected '$EXPECTED'"
+              exit 1
+            fi
+            echo "✓ $img OCI revision: $ACTUAL"
+          done
+
+      - name: Smoke-test app image
+        run: |
+          docker network create gitwire-release-smoke || true
+          docker run -d --name release-smoke-pg --network gitwire-release-smoke \
+            -e POSTGRES_USER=gitwire -e POSTGRES_PASSWORD=test -e POSTGRES_DB=gitops_hub \
+            postgres:16-alpine
+          docker run -d --name release-smoke-redis --network gitwire-release-smoke \
+            redis:7-alpine
+          # Wait for services
+          for i in $(seq 1 30); do
+            docker exec release-smoke-pg pg_isready -U gitwire -d gitops_hub 2>/dev/null && break
+            sleep 1
+          done
+          CI_API_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+          docker run -d --name release-smoke-app --network gitwire-release-smoke \
+            -e DATABASE_URL="postgresql://gitwire:test@release-smoke-pg:5432/gitops_hub" \
+            -e REDIS_URL="redis://release-smoke-redis:6379" \
+            -e NODE_ENV=production \
+            -e API_KEY="$CI_API_KEY" \
+            "${{ steps.meta.outputs.app_tag }}"
+          for i in $(seq 1 90); do
+            if docker exec release-smoke-app wget -qO- http://localhost:3000/health 2>/dev/null; then
+              HEALTH="$(docker exec release-smoke-app wget -qO- http://localhost:3000/health 2>/dev/null)"
+              SHA="$(echo "$HEALTH" | grep -oE '"git_sha"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"git_sha"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
+              if [ "$SHA" != "${{ steps.meta.outputs.release_sha }}" ]; then
+                echo "::error::app git_sha is '$SHA', expected '${{ steps.meta.outputs.release_sha }}'"
+                exit 1
+              fi
+              echo "✓ app /health OK, git_sha=$SHA"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Smoke-test executor image
+        run: |
+          docker run -d --name release-smoke-executor -p 3004:3003 \
+            "${{ steps.meta.outputs.executor_tag }}"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3004/health 2>/dev/null; then
+              HEALTH="$(curl -fsS http://127.0.0.1:3004/health)"
+              SHA="$(echo "$HEALTH" | grep -oE '"git_sha"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"git_sha"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
+              if [ "$SHA" != "${{ steps.meta.outputs.release_sha }}" ]; then
+                echo "::error::executor git_sha is '$SHA', expected '${{ steps.meta.outputs.release_sha }}'"
+                exit 1
+              fi
+              echo "✓ executor /health OK, git_sha=$SHA"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Smoke-test dashboard image
+        run: |
+          docker run -d --name release-smoke-dashboard -p 3005:3001 \
+            -e HOSTNAME="0.0.0.0" \
+            "${{ steps.meta.outputs.dashboard_tag }}"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3005/dashboard >/dev/null 2>&1; then
+              echo "✓ dashboard /dashboard responded"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Push release images
+        run: |
+          docker push "${{ steps.meta.outputs.app_tag }}"
+          docker push "${{ steps.meta.outputs.executor_tag }}"
+          docker push "${{ steps.meta.outputs.dashboard_tag }}"
+
+      - name: Capture registry digests and generate manifest
+        run: |
+          APP_DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${{ steps.meta.outputs.app_tag }}" | grep "ghcr.io" | sed 's/.*@//')"
+          EXECUTOR_DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${{ steps.meta.outputs.executor_tag }}" | grep "ghcr.io" | sed 's/.*@//')"
+          DASHBOARD_DIGEST="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${{ steps.meta.outputs.dashboard_tag }}" | grep "ghcr.io" | sed 's/.*@//')"
+
+          # Verify digests are sha256
+          for d in "$APP_DIGEST" "$EXECUTOR_DIGEST" "$DASHBOARD_DIGEST"; do
+            echo "$d" | grep -qE '^sha256:[a-f0-9]{64}$' || {
+              echo "::error::Invalid digest format: $d"
+              exit 1
+            }
+          done
+
+          cat > release-manifest.json << EOF
+          {
+            "schema_version": 1,
+            "git_sha": "${{ steps.meta.outputs.release_sha }}",
+            "version": "${{ steps.meta.outputs.version }}",
+            "built_at": "${{ steps.meta.outputs.built_at }}",
+            "workflow_run_id": "$GITHUB_RUN_ID",
+            "images": {
+              "app": {
+                "reference": "ghcr.io/octo-lex/gitwire-app@${APP_DIGEST}",
+                "digest": "${APP_DIGEST}"
+              },
+              "executor": {
+                "reference": "ghcr.io/octo-lex/gitwire-executor-service@${EXECUTOR_DIGEST}",
+                "digest": "${EXECUTOR_DIGEST}"
+              },
+              "dashboard": {
+                "reference": "ghcr.io/octo-lex/gitwire-dashboard@${DASHBOARD_DIGEST}",
+                "digest": "${DASHBOARD_DIGEST}"
+              }
+            }
+          }
+          EOF
+
+          echo "=== release-manifest.json ==="
+          cat release-manifest.json
+
+      - name: Validate release manifest
+        run: |
+          node scripts/validate-release-manifest.js \
+            release-manifest.json \
+            "${{ steps.meta.outputs.release_sha }}" \
+            "$GITHUB_RUN_ID"
+
+      - name: Clean up smoke containers
+        if: always()
+        run: |
+          docker rm -f release-smoke-app release-smoke-executor release-smoke-dashboard release-smoke-pg release-smoke-redis 2>/dev/null || true
+          docker network rm gitwire-release-smoke 2>/dev/null || true
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-release-manifest
+          path: release-manifest.json
+          retention-days: 90
+          if-no-files-found: error
