@@ -186,6 +186,8 @@ describe("runValidatorJob — inconclusive paths", () => {
     expect(r.overall).toBe("inconclusive");
     expect(r.inconclusive_reason).toBe("image_inspection_failed");
   });
+
+  it("returns inconclusive + execution_incomplete when cmdRunner fails", async () => {
     const r = await runValidatorJob({
       request: makeRequest(),
       config: makeConfig(),

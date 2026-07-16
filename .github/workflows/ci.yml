@@ -29,12 +29,38 @@ jobs:
         run: node scripts/check-version-drift.js
       - name: Install dependencies
         run: npm ci --ignore-scripts
-      - name: Syntax check all source files
+      - name: Syntax check all source, test, and compat files
         run: |
-          find packages/web/src packages/core/src packages/rules/src packages/runtime/src \
-            packages/executor-service/src \
-            -name '*.js' -not -path '*/node_modules/*' \
-            -exec node --check {} \;
+          find packages \
+            -type f \
+            -name '*.js' \
+            \( \
+              -path '*/src/*' -o \
+              -path '*/tests/*' -o \
+              -path '*/compat/*' \
+            \) \
+            -not -path '*/node_modules/*' \
+            -exec node --check {} +
+
+  # ── Package test jobs ─────────────────────────────────────────────────────
+  # Each package gets its own job so failures are attributed clearly.
+  # No --passWithNoTests: a suite with zero tests is a CI failure.
+  # No --if-present: every required workspace must have a test script.
+
+  core-tests:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Run core tests
+        run: cd packages/core && NODE_OPTIONS='--experimental-vm-modules' npx --no-install jest --config jest.config.js --ci --detectOpenHandles
+        env:
+          NODE_ENV: test
 
   rules-tests:
     runs-on: ubuntu-latest
@@ -47,11 +73,41 @@ jobs:
           cache: 'npm'
       - run: npm ci --ignore-scripts
       - name: Run rules tests
-        run: cd packages/rules && NODE_OPTIONS='--experimental-vm-modules' npx jest --passWithNoTests --forceExit
+        run: cd packages/rules && NODE_OPTIONS='--experimental-vm-modules' npx --no-install jest --config jest.config.js --ci --detectOpenHandles
         env:
           NODE_ENV: test
 
-  web-tests:
+  runtime-tests:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Run runtime tests
+        run: cd packages/runtime && NODE_OPTIONS='--experimental-vm-modules' npx --no-install jest --config jest.config.js --ci --detectOpenHandles
+        env:
+          NODE_ENV: test
+
+  executor-service-tests:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Run executor-service tests
+        run: cd packages/executor-service && NODE_OPTIONS='--experimental-vm-modules' npx --no-install jest --config jest.config.js --ci --detectOpenHandles
+        env:
+          NODE_ENV: test
+
+  web-unit-tests:
     runs-on: ubuntu-latest
     needs: syntax-check
     steps:
@@ -62,15 +118,56 @@ jobs:
           cache: 'npm'
       - run: npm ci --ignore-scripts
       - name: Run web unit tests
-        run: cd packages/web && NODE_OPTIONS='--experimental-vm-modules' npx jest --roots='tests/unit' --passWithNoTests --forceExit
+        # --roots tests/unit scopes discovery to unit tests only.
+        # forceExit is set in jest.config.js (documented temporary exception —
+        # web has known handle leaks from Redis/DB imports in unit tests).
+        # Do not add --detectOpenHandles here; combined with forceExit it
+        # produces unclear semantics. See TEST_CLASSIFICATION.md.
+        run: cd packages/web && NODE_OPTIONS='--experimental-vm-modules' npx --no-install jest --config jest.config.js --ci --roots tests/unit
         env:
           NODE_ENV: test
 
+  web-receipt-integration-tests:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Run receipt-integrity integration tests
+        # Only runs repository-local integration tests (no live server needed).
+        # quality-gate-provenance.test.js requires a live API — excluded until PR 4.
+        # --runInBand for deterministic receipt and module-state behavior.
+        # No GITWIRE_BASE_URL, API_KEY, or stress env vars injected.
+        run: |
+          cd packages/web && \
+          NODE_OPTIONS='--experimental-vm-modules' \
+          npx --no-install jest \
+            --config jest.config.js \
+            --ci \
+            --runInBand \
+            tests/integration \
+            --testPathIgnorePatterns='quality-gate-provenance\.test\.js$'
+        env:
+          NODE_ENV: test
+
+  dashboard-tests:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Run dashboard tests
+        run: cd packages/web-dashboard && npx --no-install jest --config jest.config.ts --ci --detectOpenHandles
+
   # ── Docker build + smoke gate ───────────────────────────────────────────
-  # Catches the "merged but never rebuilt" failure class: syntax errors,
-  # missing imports, JSX parse errors, and runtime crashes that only surface
-  # when the production image actually builds and boots. This would have
-  # caught all six latent build/runtime bugs in v0.16–v0.20.
   docker-build-app:
     runs-on: ubuntu-latest
     needs: syntax-check
@@ -116,15 +213,12 @@ jobs:
             gitwire-app:ci
       - name: Wait for health (entrypoint migrations + app boot)
         run: |
-          # Up to 180s: the app applies all migrations from a fresh DB on first
-          # start, which takes longer than a warm restart against an existing DB.
           for i in $(seq 1 90); do
             if curl -fsS http://127.0.0.1:3000/health >/tmp/health.json 2>/dev/null; then
               echo "::notice::/health responded:"
               cat /tmp/health.json
               exit 0
             fi
-            # Surface the container logs if it has already exited (crash).
             STATUS=$(docker inspect -f '{{.State.Status}}' gitwire-app-ci 2>/dev/null || echo "gone")
             if [ "$STATUS" = "exited" ]; then
               echo "::error::Container exited before /health responded. Logs:"
@@ -138,8 +232,6 @@ jobs:
           exit 1
       - name: Verify health status and migration state
         run: |
-          # /health must report status=ok AND db_migration_status=current.
-          # A "degraded" status or "behind"/"unknown" migration state fails CI.
           APP_STATUS=$(node -pe "require('/tmp/health.json').status")
           MIG_STATUS=$(node -pe "require('/tmp/health.json').db_migration_status")
           echo "status: $APP_STATUS, db_migration_status: $MIG_STATUS"
@@ -151,7 +243,7 @@ jobs:
             echo "::error::db_migration_status is '$MIG_STATUS', expected 'current'"
             exit 1
           fi
-          echo "::notice::healthy: status=ok, migrations current (applied == available)"
+          echo "::notice::healthy: status=ok, migrations current"
       - name: Dump container logs on failure
         if: failure()
         run: docker logs gitwire-app-ci || true
@@ -171,7 +263,6 @@ jobs:
             -e HOSTNAME="0.0.0.0" \
             gitwire-dashboard:ci
           for i in $(seq 1 60); do
-            # Probe /dashboard (the basePath), matching the production healthcheck.
             if curl -fsS http://127.0.0.1:3001/dashboard >/dev/null 2>&1; then
               echo "::notice::dashboard responded on :3001/dashboard"
               exit 0
@@ -192,12 +283,6 @@ jobs:
         run: docker logs gitwire-dashboard-ci || true
 
   docker-build-executor-service:
-    # v0.23.0: smoke-build the executor-service image. Mirrors the dashboard
-    # job shape. The service has zero npm deps + docker-cli in the image, so
-    # the build is fast. We boot it WITHOUT a mounted Docker socket on
-    # purpose: /health must return status=ok + ready=false in that state
-    # (runtime unreachable, validator identity unset). That proves the image
-    # boots, serves, and the readiness logic doesn't crash on missing env.
     runs-on: ubuntu-latest
     needs: syntax-check
     timeout-minutes: 10
@@ -229,9 +314,6 @@ jobs:
           exit 1
       - name: Verify status=ok and ready=false (no socket, no validator env)
         run: |
-          # Without a mounted Docker socket AND without validator env, the
-          # service must still serve (status=ok) but report ready=false.
-          # A non-ok status or a crash here means the image is broken.
           SVC_STATUS=$(node -pe "require('/tmp/health.json').status")
           READY=$(node -pe "require('/tmp/health.json').ready")
           echo "status: $SVC_STATUS, ready: $READY"
@@ -249,10 +331,6 @@ jobs:
         run: docker logs gitwire-executor-service-ci || true
 
   docker-build-validator-image:
-    # v0.23.0: smoke-build the validator image. Verifies the Dockerfile builds,
-    # the entrypoint is present + executable, and npm ci succeeds against the
-    # repo's dependencies. Does NOT run validation (no patched workspace); this
-    # is a build-time check only.
     runs-on: ubuntu-latest
     needs: syntax-check
     timeout-minutes: 10
@@ -266,13 +344,9 @@ jobs:
       - name: Verify npm is available
         run: |
           docker run --rm --entrypoint npm gitwire-validator:ci --version
-      - name: Verify devDependencies are installed (P1 fix — lint/test need them)
+      - name: Verify devDependencies are installed
         run: |
-          # If NODE_ENV=production was set at build time, eslint/jest would be
-          # missing. This check fails the build if devDeps were omitted.
           docker run --rm --entrypoint node gitwire-validator:ci -e "require.resolve('eslint'); require.resolve('jest'); console.log('devDeps OK')"
       - name: Verify lint script exists in the baseline
         run: |
-          # No || true — this MUST pass. The lint script must exist for proof.
           docker run --rm --entrypoint node gitwire-validator:ci -e "const p=require('/opt/gitwire-base/package.json');if(!p.scripts||!p.scripts.lint){console.error('lint script missing');process.exit(1)}console.log('lint script OK')"
-
