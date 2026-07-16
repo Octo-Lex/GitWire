@@ -661,6 +661,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+      - run: npm ci --ignore-scripts
 
       - name: Build release metadata
         id: meta
