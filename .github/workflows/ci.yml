@@ -800,7 +800,7 @@ jobs:
             "${{ github.run_id }}"
 
       - name: Run manifest validator unit tests
-        run: cd packages/core && NODE_OPTIONS='--experimental-vm-modules' npx jest --config jest.config.js --ci --testPathPattern='validate-release-manifest'
+        run: NODE_OPTIONS='--experimental-vm-modules' npx --no-install jest --config packages/core/jest.config.js --ci packages/core/tests/validate-release-manifest.test.js
 
       - name: Clean up smoke containers
         if: always()
