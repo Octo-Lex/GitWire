@@ -5,7 +5,6 @@
 // tag-only references, :latest, malformed digests, reference/digest
 // mismatch, and unapproved GHCR repositories.
 
-import { describe, it, expect } from "@jest/globals";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -48,6 +47,25 @@ function runValidator(manifest) {
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
+}
+
+function describe(name, fn) {
+  fn();
+}
+
+function it(name, fn) {
+  fn();
+}
+
+function expect(actual) {
+  return {
+    toBe(expected) {
+      if (actual !== expected) throw new Error(`Expected ${actual} to be ${expected}`);
+    },
+    toContain(expected) {
+      if (!String(actual).includes(expected)) throw new Error(`Expected '${actual}' to contain '${expected}'`);
+    }
+  };
 }
 
 describe("validate-release-manifest", () => {
