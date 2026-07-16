@@ -77,6 +77,30 @@ NON_INTERFERENCE_GATE="not-run"
 # Lines: "<state>" or "<container-id> <image-id>"
 NON_RELEASE_BASELINE=""
 
+# ── Deployment transaction state ──────────────────────────────────────────
+# MUTATION_STARTED is set true immediately before the first container
+# recreation (executor). Failures before that point are pre-mutation and do
+# NOT trigger rollback (nothing was changed). Failures after it trigger
+# coherent restoration of the previously-validated release.
+MUTATION_STARTED=false
+ROLLBACK_REQUIRED=false
+ROLLBACK_ATTEMPTED=false
+ROLLBACK_STATUS="not-required"
+ROLLBACK_FAILURE_STAGE=""
+
+# Previous release (the rollback target). Resolved + validated BEFORE mutation.
+PREVIOUS_RELEASE_DIR=""
+PREVIOUS_RELEASE_ENV=""
+PREVIOUS_RELEASE_ID=""
+PREVIOUS_RELEASE_KIND=""   # "immutable" or "bootstrap"
+PREVIOUS_APP_IMAGE=""
+PREVIOUS_EXECUTOR_IMAGE=""
+PREVIOUS_DASHBOARD_IMAGE=""
+
+# Database migration list captured before deploy; compared after to warn about
+# schema changes on rollback (service-image rollback only, never reverse SQL).
+MIGRATION_LIST_BEFORE=""
+
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────
@@ -493,31 +517,290 @@ verify_non_interference() {
   NON_INTERFERENCE_GATE="passed"
 }
 
-# Atomically persist releases/<sha>/images.env and advance current symlink.
+# ────────────────────────────────────────────────────────────────────────────
+# Release records (release.json) — atomic persistence
+# ────────────────────────────────────────────────────────────────────────────
+
+# Write a release.json record for the incoming release.
+write_release_json() {
+  local dir="$1" kind="$2" rel_id="$3"
+  local sha="null" run_id="null"
+  if [[ "$kind" == "immutable" ]]; then
+    sha="\"$RELEASE_SHA\""
+    run_id="\"$WORKFLOW_RUN_ID\""
+  fi
+  cat >"$dir/release.json" <<EOF
+{
+  "schema_version": 1,
+  "kind": "$kind",
+  "release_id": "$rel_id",
+  "git_sha": $sha,
+  "workflow_run_id": $run_id,
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "images": {
+    "app": "$GITWIRE_APP_IMAGE",
+    "executor": "$GITWIRE_EXECUTOR_IMAGE",
+    "dashboard": "$GITWIRE_DASHBOARD_IMAGE"
+  }
+}
+EOF
+}
+
+# Atomically persist the incoming release: write to a temp dir, validate, then
+# rename to releases/<sha>. Finally advance current via temp-symlink + mv -Tf.
+# The whole release record (images.env + release.json) is transactional, not
+# just the symlink.
 persist_release_refs() {
   FAILURE_STAGE="persist_release_refs"
-  local release_dir tmp_env final_env current_link tmp_link
+  local staging_dir release_dir current_link tmp_link
+  staging_dir="$REPO_ROOT/releases/.release-${RELEASE_SHA}.$$"
   release_dir="$REPO_ROOT/releases/$RELEASE_SHA"
-  tmp_env="$release_dir/images.env.tmp"
-  final_env="$release_dir/images.env"
-  mkdir -p "$release_dir"
+
+  rm -rf "$staging_dir"
+  mkdir -p "$staging_dir"
   umask 022
+
+  # images.env
   {
     printf 'GITWIRE_APP_IMAGE=%s\n' "$GITWIRE_APP_IMAGE"
     printf 'GITWIRE_EXECUTOR_IMAGE=%s\n' "$GITWIRE_EXECUTOR_IMAGE"
     printf 'GITWIRE_DASHBOARD_IMAGE=%s\n' "$GITWIRE_DASHBOARD_IMAGE"
-  } >"$tmp_env"
-  mv "$tmp_env" "$final_env"
+  } >"$staging_dir/images.env"
 
-  # Atomic symlink replacement: temp link + mv -Tf. If deploy fails after
-  # this point, current has already advanced to a verified-good release.
+  # release.json
+  write_release_json "$staging_dir" immutable "$RELEASE_SHA"
+
+  # Validate the staged record before committing.
+  validate_release_dir "$staging_dir" immutable "$RELEASE_SHA" \
+    || { rm -rf "$staging_dir"; fail "staged release record failed validation"; }
+
+  # Atomic rename: temp dir → final dir.
+  rm -rf "$release_dir"
+  mv "$staging_dir" "$release_dir"
+
+  # Atomic symlink replacement: temp link + mv -Tf.
   current_link="$REPO_ROOT/releases/current"
   tmp_link="$REPO_ROOT/releases/.current.${RELEASE_SHA}.$$"
   CURRENT_TMP_LINK="$tmp_link"
   ln -s "$release_dir" "$tmp_link"
   mv -Tf "$tmp_link" "$current_link"
   CURRENT_TMP_LINK=""  # success — clear so EXIT trap won't remove the live link
-  log "release references persisted; current -> $RELEASE_SHA"
+  log "release record persisted; current -> $RELEASE_SHA"
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# Previous-release validation (rollback target)
+# ────────────────────────────────────────────────────────────────────────────
+
+# Validate a release directory has a coherent three-service record.
+# $1 = dir, $2 = expected kind (immutable|bootstrap, empty=any), $3 = expected id (empty=any)
+validate_release_dir() {
+  local dir="$1" exp_kind="${2:-}" exp_id="${3:-}"
+  [[ -d "$dir" ]] || { log "validate_release_dir: not a directory: $dir"; return 1; }
+  [[ -f "$dir/images.env" ]] || { log "validate_release_dir: missing images.env in $dir"; return 1; }
+  [[ -f "$dir/release.json" ]] || { log "validate_release_dir: missing release.json in $dir"; return 1; }
+
+  local img_env="$dir/images.env"
+  local app exec dash
+  app="$(grep -E '^GITWIRE_APP_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
+  exec="$(grep -E '^GITWIRE_EXECUTOR_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
+  dash="$(grep -E '^GITWIRE_DASHBOARD_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
+  [[ -n "$app" && -n "$exec" && -n "$dash" ]] || { log "validate_release_dir: incomplete image set in $dir"; return 1; }
+
+  # Validate release.json via Node.
+  local rj="$dir/release.json"
+  node --input-type=module -e '
+    import fs from "node:fs";
+    const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (r.schema_version !== 1) throw new Error("schema_version");
+    if (!["immutable","bootstrap"].includes(r.kind)) throw new Error("kind");
+    if (!r.release_id) throw new Error("release_id");
+    if (r.kind === "immutable" && !r.git_sha) throw new Error("git_sha required for immutable");
+    for (const k of ["app","executor","dashboard"]) if (!r.images?.[k]) throw new Error("images."+k);
+    const expKind = process.argv[2] || "";
+    const expId = process.argv[3] || "";
+    if (expKind && r.kind !== expKind) throw new Error("kind mismatch: "+r.kind+" != "+expKind);
+    if (expId && r.release_id !== expId) throw new Error("id mismatch: "+r.release_id+" != "+expId);
+  ' "$rj" "${exp_kind}" "${exp_id}" || { log "validate_release_dir: release.json invalid in $dir"; return 1; }
+
+  return 0
+}
+
+# Resolve and validate releases/current as the rollback target. Must run BEFORE
+# any container mutation. Sets PREVIOUS_* globals. Fails closed if there is no
+# coherent rollback target (the first immutable deploy relies on bootstrap).
+validate_previous_release() {
+  FAILURE_STAGE="validate_previous_release"
+  local current_link="$REPO_ROOT/releases/current"
+
+  # Missing current → no rollback target. This is fatal: every immutable
+  # deploy must have a bootstrap or prior immutable target.
+  [[ -L "$current_link" ]] || fail "no releases/current symlink — run the bootstrap transition first"
+
+  # Resolve the target, guarding against path traversal / out-of-tree symlinks.
+  local target
+  target="$(readlink -f "$current_link" 2>/dev/null || true)"
+  [[ -n "$target" ]] || fail "releases/current is a dangling symlink"
+  [[ "$target" == "$REPO_ROOT/releases/"* ]] || fail "releases/current points outside /opt/gitwire/releases: $target"
+
+  PREVIOUS_RELEASE_DIR="$target"
+
+  # Validate the record.
+  validate_release_dir "$target" "" "" \
+    || fail "rollback target at $target is incomplete or malformed"
+
+  # Read the previous release metadata.
+  local rj="$target/release.json"
+  PREVIOUS_RELEASE_KIND="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).kind)")"
+  PREVIOUS_RELEASE_ID="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).kind === 'bootstrap' ? JSON.parse(require('fs').readFileSync('$rj','utf8')).release_id : JSON.parse(require('fs').readFileSync('$rj','utf8')).git_sha)")"
+
+  # Read the previous image references.
+  local img_env="$target/images.env"
+  PREVIOUS_APP_IMAGE="$(grep -E '^GITWIRE_APP_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
+  PREVIOUS_EXECUTOR_IMAGE="$(grep -E '^GITWIRE_EXECUTOR_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
+  PREVIOUS_DASHBOARD_IMAGE="$(grep -E '^GITWIRE_DASHBOARD_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
+
+  # Reject: rollback target equals the incoming release (no-op / re-deploy of same).
+  if [[ "$PREVIOUS_RELEASE_ID" == "$RELEASE_SHA" ]]; then
+    fail "rollback target is the same as the incoming release ($RELEASE_SHA)"
+  fi
+
+  # Write a release env for the previous release (used by rollback).
+  PREVIOUS_RELEASE_ENV="$(mktemp "${RUNNER_TEMP:-/tmp}/gitwire-prev.XXXXXX.env")"
+  chmod 600 "$PREVIOUS_RELEASE_ENV"
+  {
+    printf 'GITWIRE_APP_IMAGE=%s\n' "$PREVIOUS_APP_IMAGE"
+    printf 'GITWIRE_EXECUTOR_IMAGE=%s\n' "$PREVIOUS_EXECUTOR_IMAGE"
+    printf 'GITWIRE_DASHBOARD_IMAGE=%s\n' "$PREVIOUS_DASHBOARD_IMAGE"
+  } >"$PREVIOUS_RELEASE_ENV"
+
+  # Pull/verify previous images BEFORE mutation. For immutable releases these
+  # are digest-qualified GHCR refs; for bootstrap they are local tags.
+  local ref
+  for ref in "$PREVIOUS_APP_IMAGE" "$PREVIOUS_EXECUTOR_IMAGE" "$PREVIOUS_DASHBOARD_IMAGE"; do
+    if [[ "$PREVIOUS_RELEASE_KIND" == "immutable" ]]; then
+      docker pull "$ref" >/dev/null 2>&1 \
+        || fail "could not pull previous release image $ref (rollback prerequisite)"
+    else
+      docker image inspect "$ref" >/dev/null 2>&1 \
+        || fail "bootstrap rollback image $ref does not resolve locally"
+    fi
+  done
+
+  log "rollback target validated: $PREVIOUS_RELEASE_KIND/$PREVIOUS_RELEASE_ID ($target)"
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# Migration list capture (schema-change detection on rollback)
+# ────────────────────────────────────────────────────────────────────────────
+capture_migration_list() {
+  MIGRATION_LIST_BEFORE="$(docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub -t -A \
+    -c "SELECT version FROM schema_migrations ORDER BY version;" 2>/dev/null || true)"
+}
+
+migration_list_changed() {
+  local after
+  after="$(docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub -t -A \
+    -c "SELECT version FROM schema_migrations ORDER BY version;" 2>/dev/null || true)"
+  [[ "$after" != "$MIGRATION_LIST_BEFORE" ]]
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# Rollback — coherent restoration of the previously-validated release.
+# NON-RECURSIVE: must NOT call fail() or trigger a second rollback. Runs under
+# set +e so it always reaches its own conclusion.
+# ────────────────────────────────────────────────────────────────────────────
+compose_rollback() {
+  docker compose \
+    --project-directory "$REPO_ROOT" \
+    -f "$COMPOSE_FILE" \
+    -p gitwire \
+    --env-file "$PROD_ENV" \
+    --env-file "$PREVIOUS_RELEASE_ENV" \
+    "$@"
+}
+
+rollback_verify_executor() {
+  local body
+  body="$(docker exec gitwire-gitwire-executor-service-1 wget -qO- http://localhost:3003/health 2>/dev/null || true)"
+  [[ -n "$body" ]] || return 1
+  printf '%s' "$body" >/tmp/rollback-exec-health.json
+  EXPECTED_REF="$GITWIRE_VALIDATOR_IMAGE_REF" EXPECTED_DIGEST="$GITWIRE_VALIDATOR_IMAGE_DIGEST" \
+  node --input-type=module -e '
+    import fs from "node:fs";
+    const h = JSON.parse(fs.readFileSync("/tmp/rollback-exec-health.json", "utf8"));
+    if (h.status !== "ok") process.exit(1);
+    if (h.ready !== true) process.exit(1);
+    if (h.container_runtime && h.container_runtime.length === 0) process.exit(1);
+    // Validator identity must match stable production config.
+    if (process.env.EXPECTED_REF && h.validator_image_ref !== process.env.EXPECTED_REF) process.exit(1);
+    if (process.env.EXPECTED_DIGEST && h.validator_image_digest !== process.env.EXPECTED_DIGEST) process.exit(1);
+  ' || return 1
+  return 0
+}
+
+rollback_verify_app() {
+  local body
+  body="$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || true)"
+  [[ -n "$body" ]] || return 1
+  printf '%s' "$body" >/tmp/rollback-app-health.json
+  node --input-type=module -e '
+    import fs from "node:fs";
+    const h = JSON.parse(fs.readFileSync("/tmp/rollback-app-health.json", "utf8"));
+    if (h.status !== "ok") process.exit(1);
+    if (h.db_migration_status !== "current") process.exit(1);
+  ' || return 1
+  return 0
+}
+
+# Restore all three release services to the previous release. Returns 0 on
+# success, 1 on any failure. Does NOT call fail() — caller records the result.
+rollback_release() {
+  local stage="rollback:start"
+  ROLLBACK_FAILURE_STAGE=""
+
+  # Restore in the same controlled order: executor → app → dashboard.
+  stage="rollback:executor-recreate"
+  compose_rollback up -d --no-build --no-deps --force-recreate gitwire-executor-service >/dev/null 2>&1 || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
+
+  stage="rollback:executor-verify"
+  local i
+  for ((i = 1; i <= 30; i++)); do rollback_verify_executor && break; sleep 2; done
+  rollback_verify_executor || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
+
+  stage="rollback:app-recreate"
+  compose_rollback up -d --no-build --no-deps --force-recreate gitwire-app >/dev/null 2>&1 || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
+
+  stage="rollback:app-verify"
+  for ((i = 1; i <= 45; i++)); do rollback_verify_app && break; sleep 2; done
+  rollback_verify_app || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
+
+  stage="rollback:dashboard-recreate"
+  compose_rollback up -d --no-build --no-deps --force-recreate dashboard >/dev/null 2>&1 || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
+
+  stage="rollback:dashboard-verify"
+  for ((i = 1; i <= 30; i++)); do
+    docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" >/dev/null 2>&1 && break
+    sleep 2
+  done
+  docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" >/dev/null 2>&1 || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
+
+  # Verify rollback image identities.
+  stage="rollback:image-identity"
+  local svc ref exp cid
+  for svc in gitwire-app:"$PREVIOUS_APP_IMAGE" gitwire-executor-service:"$PREVIOUS_EXECUTOR_IMAGE" dashboard:"$PREVIOUS_DASHBOARD_IMAGE"; do
+    local service="${svc%%:*}"
+    ref="${svc#*:}"
+    exp="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)"
+    cid="$(docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" -p gitwire ps -q "$service" 2>/dev/null || true)"
+    [[ -n "$exp" && -n "$cid" ]] || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
+    local running
+    running="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
+    [[ "$running" == "$exp" ]] || { ROLLBACK_FAILURE_STAGE="$stage:$service"; return 1; }
+  done
+
+  log "rollback completed: restored $PREVIOUS_RELEASE_KIND/$PREVIOUS_RELEASE_ID"
+  return 0
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -541,6 +824,12 @@ render_summary() {
 | Dashboard gate | \`${DASHBOARD_GATE}\` |
 | Image identity gate | \`${IMAGE_GATE}\` |
 | Non-interference gate | \`${NON_INTERFERENCE_GATE}\` |
+| Rollback required | \`${ROLLBACK_REQUIRED}\` |
+| Rollback attempted | \`${ROLLBACK_ATTEMPTED}\` |
+| Rollback status | \`${ROLLBACK_STATUS}\` |
+| Rollback target | \`${PREVIOUS_RELEASE_ID:-none}\` |
+| Rollback failure stage | \`${ROLLBACK_FAILURE_STAGE:-none}\` |
+| Current symlink | \`$(readlink "$REPO_ROOT/releases/current" 2>/dev/null || echo 'none')\` |
 
 ### Non-release services (must be unchanged)
 \`\`\`
@@ -561,13 +850,47 @@ write_summary() {
 
 # ────────────────────────────────────────────────────────────────────────────
 # EXIT trap — installed after all globals are initialized. Preserves the
-# original exit status even when summary generation or cleanup fails.
+# original exit status. On a post-mutation failure (MUTATION_STARTED && rc!=0),
+# attempts coherent rollback using set +e so rollback always reaches its own
+# conclusion without recursing.
 # ────────────────────────────────────────────────────────────────────────────
 on_exit() {
   local rc=$?
   trap - EXIT
+
+  # Attempt rollback only if containers were mutated AND the deploy failed.
+  if [[ "$MUTATION_STARTED" == "true" && "$rc" -ne 0 && -n "$PREVIOUS_RELEASE_ENV" ]]; then
+    ROLLBACK_REQUIRED=true
+    ROLLBACK_ATTEMPTED=true
+    log "post-mutation failure (stage: $FAILURE_STAGE) — attempting coherent rollback to $PREVIOUS_RELEASE_ID"
+    set +e
+    rollback_release
+    rollback_rc=$?
+    set -e
+    if [[ "$rollback_rc" -eq 0 ]]; then
+      ROLLBACK_STATUS="succeeded"
+      log "rollback succeeded — service restored to $PREVIOUS_RELEASE_ID (deployment still FAILED)"
+    else
+      ROLLBACK_STATUS="failed"
+      log "rollback FAILED (stage: $ROLLBACK_FAILURE_STAGE) — manual intervention required"
+    fi
+  fi
+
+  # Warn if the migration list changed during the failed deploy (service-image
+  # rollback does NOT reverse migrations).
+  if [[ "$rc" -ne 0 && -n "$MIGRATION_LIST_BEFORE" ]] && migration_list_changed; then
+    log "WARNING: database migrations changed during the failed deployment."
+    log "         Automated rollback restored images but did NOT reverse migrations."
+    log "         Production migrations must remain backward-compatible with the"
+    log "         previous release. Destructive schema recovery requires a separately"
+    log "         tested database restore procedure."
+  fi
+
+  # Cleanup temp files.
   [[ -n "$STAGED_RELEASE_ENV" ]] && rm -f "$STAGED_RELEASE_ENV" || true
+  [[ -n "$PREVIOUS_RELEASE_ENV" ]] && rm -f "$PREVIOUS_RELEASE_ENV" || true
   [[ -n "$CURRENT_TMP_LINK" ]] && rm -f "$CURRENT_TMP_LINK" || true
+
   write_summary "$rc" || true
   exit "$rc"
 }
@@ -595,8 +918,13 @@ main() {
   validate_validator_ref_format
   pull_validator_image
   require_secondary_preflight
+  # ── Pre-mutation: validate the rollback target BEFORE changing anything ──
+  validate_previous_release
   capture_non_release_state
+  capture_migration_list
   pull_release_images
+  # ── Mutation boundary: everything below this point triggers rollback on failure
+  MUTATION_STARTED=true
   deploy_executor
   verify_executor
   deploy_app

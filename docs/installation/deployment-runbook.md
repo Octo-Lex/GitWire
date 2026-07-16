@@ -136,8 +136,33 @@ which requires both Docker socket reachability AND complete validator identity.
   RepoDigests carry manifest digests.
 - **Non-interference**: all seven non-release services unchanged.
 
-A failed deploy does NOT advance `releases/current`. Coherent rollback is
-added in a later commit.
+### Coherent rollback (post-mutation failures)
+
+If any gate fails **after** container mutation begins (executor recreate),
+`deploy-release.sh` automatically rolls back all three release services to the
+previously-validated release (`releases/current` at deploy start). Rollback
+restores the same controlled set in the same order (executor → app →
+dashboard), re-verifies health and image identity, and asserts non-release
+services are unchanged. A successful rollback still reports the deployment as
+**failed** — rollback restores service, it does not make the deploy succeed.
+
+`releases/current` is **not** advanced on failure; it remains pointing at the
+prior release. The incoming release record persists atomically (temp dir →
+rename → symlink) **only** after every gate passes.
+
+The first immutable deployment has a **bootstrap** rollback target, created by
+`scripts/prepare-immutable-compose-transition.sh`, which snapshots the
+currently-running release services into `releases/bootstrap-<timestamp>/`.
+
+#### Database rollback limitations
+
+> Automated rollback restores app, executor, and dashboard images. It does
+> **not** reverse PostgreSQL migrations. Production migrations must remain
+> backward-compatible with the immediately previous app release. Destructive
+> schema recovery requires a separately tested database restore procedure.
+
+The deploy script captures the migration list before mutation and warns in the
+summary if it changed during a failed deploy. It never runs reverse SQL.
 
 ---
 

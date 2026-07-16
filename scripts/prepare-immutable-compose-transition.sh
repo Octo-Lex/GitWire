@@ -85,16 +85,130 @@ for svc in "${SERVICES[@]}"; do
     || die "post-tag verify failed: ${TAGS[$svc]} does not resolve"
 done
 
-# Write the transition marker.
+# ── Snapshot the three release services into a bootstrap release record ────
+# This gives the FIRST immutable deployment a coherent rollback target. Without
+# it, a failed first deploy would have nothing to roll back to.
+log "snapshotting release services into a bootstrap release record"
+
+RELEASE_SERVICES=(gitwire-app gitwire-executor-service dashboard)
+declare -A RELEASE_TAGS
+BOOTSTRAP_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+BOOTSTRAP_DIR="$REPO_ROOT/releases/bootstrap-$BOOTSTRAP_TS"
+BOOTSTRAP_STAGING="$REPO_ROOT/releases/.bootstrap-$BOOTSTRAP_TS.$$"
+
+for svc in "${RELEASE_SERVICES[@]}"; do
+  cid="$(docker ps \
+    --filter "label=com.docker.compose.project=$PROJECT" \
+    --filter "label=com.docker.compose.service=$svc" \
+    --format '{{.ID}}' | head -1 || true)"
+  [[ -n "$cid" ]] || die "no running container for release service '$svc'"
+
+  image_id="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
+  [[ -n "$image_id" ]] || die "could not resolve image ID for $svc"
+
+  # Tag with an image-ID-derived reference.
+  prefix="${image_id#sha256:}"
+  prefix="${prefix:0:12}"
+  case "$svc" in
+    gitwire-app)              tag="gitwire-local/gitwire-app:bootstrap-$prefix" ;;
+    gitwire-executor-service) tag="gitwire-local/gitwire-executor-service:bootstrap-$prefix" ;;
+    dashboard)                tag="gitwire-local/gitwire-dashboard:bootstrap-$prefix" ;;
+  esac
+  RELEASE_TAGS[$svc]="$tag"
+
+  docker tag "$image_id" "$tag"
+  log "  $svc: container $cid (image $image_id) -> $tag"
+done
+
+# Verify all three bootstrap tags resolve and record their image IDs.
+declare -A BOOTSTRAP_IMAGE_IDS
+for svc in "${RELEASE_SERVICES[@]}"; do
+  tag="${RELEASE_TAGS[$svc]}"
+  docker image inspect "$tag" >/dev/null \
+    || die "bootstrap tag verify failed: $tag does not resolve"
+  BOOTSTRAP_IMAGE_IDS[$svc]="$(docker image inspect --format '{{.Id}}' "$tag")"
+done
+
+# ── Verify the currently-running services are healthy before committing ───
+log "verifying running services are healthy before committing bootstrap"
+# App: status=ok, migrations current.
+app_health="$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || true)"
+[[ -n "$app_health" ]] || die "app /health not responding — cannot bootstrap from an unhealthy stack"
+printf '%s' "$app_health" >/tmp/bootstrap-app-health.json
+node --input-type=module -e '
+  import fs from "node:fs";
+  const h = JSON.parse(fs.readFileSync("/tmp/bootstrap-app-health.json", "utf8"));
+  if (h.status !== "ok") { console.error("app status="+h.status); process.exit(1); }
+  if (h.db_migration_status !== "current") { console.error("migrations="+h.db_migration_status); process.exit(1); }
+' || die "app health check failed — fix the running stack before bootstrapping"
+
+# Executor: status=ok.
+exec_health="$(docker exec gitwire-gitwire-executor-service-1 wget -qO- http://localhost:3003/health 2>/dev/null || true)"
+[[ -n "$exec_health" ]] || die "executor /health not responding"
+printf '%s' "$exec_health" >/tmp/bootstrap-exec-health.json
+node --input-type=module -e '
+  import fs from "node:fs";
+  const h = JSON.parse(fs.readFileSync("/tmp/bootstrap-exec-health.json", "utf8"));
+  if (h.status !== "ok") { console.error("executor status="+h.status); process.exit(1); }
+' || die "executor health check failed"
+
+# Dashboard responds.
+docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" >/dev/null 2>&1 \
+  || die "dashboard /dashboard not responding"
+
+# ── Create the bootstrap release record atomically ────────────────────────
+rm -rf "$BOOTSTRAP_STAGING"
+mkdir -p "$BOOTSTRAP_STAGING"
+
+cat >"$BOOTSTRAP_STAGING/images.env" <<EOF
+GITWIRE_APP_IMAGE=${RELEASE_TAGS[gitwire-app]}
+GITWIRE_EXECUTOR_IMAGE=${RELEASE_TAGS[gitwire-executor-service]}
+GITWIRE_DASHBOARD_IMAGE=${RELEASE_TAGS[dashboard]}
+EOF
+
+cat >"$BOOTSTRAP_STAGING/release.json" <<EOF
+{
+  "schema_version": 1,
+  "kind": "bootstrap",
+  "release_id": "bootstrap-$BOOTSTRAP_TS",
+  "git_sha": null,
+  "workflow_run_id": null,
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "images": {
+    "app": "${RELEASE_TAGS[gitwire-app]}",
+    "executor": "${RELEASE_TAGS[gitwire-executor-service]}",
+    "dashboard": "${RELEASE_TAGS[dashboard]}"
+  },
+  "bootstrap_image_ids": {
+    "app": "${BOOTSTRAP_IMAGE_IDS[gitwire-app]}",
+    "executor": "${BOOTSTRAP_IMAGE_IDS[gitwire-executor-service]}",
+    "dashboard": "${BOOTSTRAP_IMAGE_IDS[dashboard]}"
+  }
+}
+EOF
+
+# Atomic rename staging → final.
+rm -rf "$BOOTSTRAP_DIR"
+mv "$BOOTSTRAP_STAGING" "$BOOTSTRAP_DIR"
+
+# Point current at the bootstrap release (atomic temp-symlink + mv -Tf).
+current_link="$REPO_ROOT/releases/current"
+tmp_link="$REPO_ROOT/releases/.current.bootstrap.$$"
+ln -s "$BOOTSTRAP_DIR" "$tmp_link"
+mv -Tf "$tmp_link" "$current_link"
+log "bootstrap release record created; current -> bootstrap-$BOOTSTRAP_TS"
+
+# ── Write the transition marker (only after everything above succeeded) ───
 mkdir -p "$(dirname "$MARKER")"
 printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$MARKER"
 
 log "transition complete. Marker written: $MARKER"
 log ""
-log "Next: ensure production.env references these four tags:"
+log "Bootstrap release: $BOOTSTRAP_DIR"
+log "Secondary tags:"
 log "  GITWIRE_BOT_IMAGE=${TAGS[bot]}"
 log "  GITWIRE_LANDING_IMAGE=${TAGS[landing]}"
 log "  GITWIRE_DOCS_IMAGE=${TAGS[docs]}"
 log "  GITWIRE_DEMO_IMAGE=${TAGS[demo]}"
 log ""
-log "Then the automated workflow_run deployment can proceed."
+log "The first immutable deployment can now proceed (and has a rollback target)."

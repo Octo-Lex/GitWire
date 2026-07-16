@@ -913,7 +913,11 @@ jobs:
         run: |
           bash -n scripts/deploy-release.sh
           bash -n scripts/prepare-immutable-compose-transition.sh
+          bash -n scripts/test-rollback-logic.sh
           node --check scripts/read-strict-env.mjs
+
+      - name: Exercise rollback/release-record logic (mocked Docker)
+        run: bash scripts/test-rollback-logic.sh
 
       - name: Exercise deployment-script pure validation functions
         run: |
