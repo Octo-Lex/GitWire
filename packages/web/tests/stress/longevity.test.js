@@ -73,7 +73,7 @@ describe(`Longevity: ${ROUNDS} rounds × ${REQUESTS_PER_ROUND} requests`, () => 
     const times = [];
     for (let i = 0; i < 20; i++) {
       const start = Date.now();
-      const res = await fetch(`${process.env.GITWIRE_BASE_URL || 'https://gitwire.erlab.uk'}/health`);
+      const res = await fetch(`${process.env.GITWIRE_BASE_URL || (() => { throw new Error("GITWIRE_BASE_URL is required"); })()}/health`);
       times.push(Date.now() - start);
       expect(res.status).toBe(200);
     }

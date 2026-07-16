@@ -1,11 +1,11 @@
 // tests/integration/quality-gate-provenance.test.js
 // Integration test: validates that unconfigured repos get no quality gate check run.
-// Runs against production at https://gitwire.erlab.uk
+// Requires GITWIRE_API_URL and GITWIRE_API_KEY environment variables (no defaults).
 
 import { jest } from "@jest/globals";
 
-const API_BASE = process.env.GITWIRE_API_URL || "https://gitwire.erlab.uk";
-const API_KEY = process.env.GITWIRE_API_KEY || "5339e850a33c40f292e9e7ef6a70240fa566b21f38544b6d";
+const API_BASE = process.env.GITWIRE_API_URL || (() => { throw new Error("GITWIRE_API_URL is required"); })();
+const API_KEY = process.env.GITWIRE_API_KEY || (() => { throw new Error("GITWIRE_API_KEY is required"); })();
 
 async function apiFetch(path) {
   const res = await fetch(API_BASE + path, {

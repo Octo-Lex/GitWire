@@ -36,8 +36,17 @@ if (process.env.API_KEYS) {
   }
 }
 
-// If no keys configured, generate a random one and log it once
+// SECURITY: If no keys are configured in production, fail closed.
+// Previously this auto-generated a random UUID and logged it — that behavior
+// is unsafe because it creates an unmanaged credential visible in logs.
 if (keys.size === 0) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "No API_KEY or API_KEYS configured in production. " +
+      "Set API_KEY in the environment before starting the application."
+    );
+  }
+  // In non-production (development, test), auto-generate is still acceptable.
   const generated = crypto.randomUUID();
   keys.add(generated);
   logger.warn(

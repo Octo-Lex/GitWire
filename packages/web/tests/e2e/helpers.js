@@ -3,8 +3,8 @@
 
 import { execSync } from "child_process";
 
-export const API_BASE = process.env.GITWIRE_API_URL || "https://gitwire.erlab.uk";
-export const API_KEY = process.env.GITWIRE_API_KEY || "5339e850a33c40f292e9e7ef6a70240fa566b21f38544b6d";
+export const API_BASE = process.env.GITWIRE_API_URL || (() => { throw new Error("GITWIRE_API_URL is required for E2E tests"); })();
+export const API_KEY = process.env.GITWIRE_API_KEY || (() => { throw new Error("GITWIRE_API_KEY is required for E2E tests"); })();
 
 export async function apiFetch(path, opts = {}) {
   const res = await fetch(API_BASE + path, {
