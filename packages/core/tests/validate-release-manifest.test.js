@@ -10,8 +10,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 
-const VALIDATOR = path.resolve("scripts/validate-release-manifest.js");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const VALIDATOR = path.resolve(__dirname, "../../../scripts/validate-release-manifest.js");
 const VALID_SHA = "abc123def456789";
 const VALID_RUN_ID = "9876543210";
 const VALID_DIGEST = "sha256:" + "a".repeat(64);

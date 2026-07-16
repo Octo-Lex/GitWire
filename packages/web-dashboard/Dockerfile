@@ -24,6 +24,17 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+
+# Re-declare build args so labels in the runner stage carry the metadata.
+ARG GITWIRE_COMMIT_SHA=unknown
+ARG GITWIRE_BUILT_AT=unknown
+ARG GITWIRE_VERSION=unknown
+
+LABEL org.opencontainers.image.revision=$GITWIRE_COMMIT_SHA
+LABEL org.opencontainers.image.created=$GITWIRE_BUILT_AT
+LABEL org.opencontainers.image.version=$GITWIRE_VERSION
+LABEL org.opencontainers.image.source="https://github.com/Octo-Lex/GitWire"
+
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
