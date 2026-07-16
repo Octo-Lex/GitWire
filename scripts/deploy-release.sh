@@ -93,6 +93,7 @@ PREVIOUS_RELEASE_DIR=""
 PREVIOUS_RELEASE_ENV=""
 PREVIOUS_RELEASE_ID=""
 PREVIOUS_RELEASE_KIND=""   # "immutable" or "bootstrap"
+PREVIOUS_GIT_SHA=""        # git_sha for immutable; empty for bootstrap
 PREVIOUS_APP_IMAGE=""
 PREVIOUS_EXECUTOR_IMAGE=""
 PREVIOUS_DASHBOARD_IMAGE=""
@@ -592,22 +593,37 @@ persist_release_refs() {
 # Previous-release validation (rollback target)
 # ────────────────────────────────────────────────────────────────────────────
 
-# Validate a release directory has a coherent three-service record.
-# $1 = dir, $2 = expected kind (immutable|bootstrap, empty=any), $3 = expected id (empty=any)
+# Validate a release directory has a coherent, internally-consistent record.
+# Cross-validates that images.env and release.json describe the SAME image set,
+# and applies kind-specific checks:
+#   immutable: release_id==git_sha consistency, digest-qualified refs
+#   bootstrap: bootstrap_image_ids present + each local tag resolves to the
+#              exact recorded image ID (checked when $4 = "verify-local")
+# $1 = dir, $2 = expected kind (immutable|bootstrap|""), $3 = expected id (""),
+# $4 = "verify-local" to run docker image inspect checks (skipped in mocked tests)
 validate_release_dir() {
-  local dir="$1" exp_kind="${2:-}" exp_id="${3:-}"
+  local dir="$1" exp_kind="${2:-}" exp_id="${3:-}" verify_local="${4:-}"
   [[ -d "$dir" ]] || { log "validate_release_dir: not a directory: $dir"; return 1; }
   [[ -f "$dir/images.env" ]] || { log "validate_release_dir: missing images.env in $dir"; return 1; }
   [[ -f "$dir/release.json" ]] || { log "validate_release_dir: missing release.json in $dir"; return 1; }
 
   local img_env="$dir/images.env"
+  # Parse images.env strictly (KEY=value lines only, reject duplicates/malformed).
   local app exec dash
   app="$(grep -E '^GITWIRE_APP_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
   exec="$(grep -E '^GITWIRE_EXECUTOR_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
   dash="$(grep -E '^GITWIRE_DASHBOARD_IMAGE=' "$img_env" | head -1 | cut -d= -f2-)"
   [[ -n "$app" && -n "$exec" && -n "$dash" ]] || { log "validate_release_dir: incomplete image set in $dir"; return 1; }
+  # Reject duplicate keys (two lines with the same KEY=).
+  local dup
+  dup="$(grep -cE '^GITWIRE_APP_IMAGE=' "$img_env")"
+  [[ "$dup" -eq 1 ]] || { log "validate_release_dir: duplicate GITWIRE_APP_IMAGE in $dir"; return 1; }
+  dup="$(grep -cE '^GITWIRE_EXECUTOR_IMAGE=' "$img_env")"
+  [[ "$dup" -eq 1 ]] || { log "validate_release_dir: duplicate GITWIRE_EXECUTOR_IMAGE in $dir"; return 1; }
+  dup="$(grep -cE '^GITWIRE_DASHBOARD_IMAGE=' "$img_env")"
+  [[ "$dup" -eq 1 ]] || { log "validate_release_dir: duplicate GITWIRE_DASHBOARD_IMAGE in $dir"; return 1; }
 
-  # Validate release.json via Node.
+  # Validate release.json via Node AND cross-check images.env == release.json.images.
   local rj="$dir/release.json"
   node --input-type=module -e '
     import fs from "node:fs";
@@ -616,12 +632,59 @@ validate_release_dir() {
     if (!["immutable","bootstrap"].includes(r.kind)) throw new Error("kind");
     if (!r.release_id) throw new Error("release_id");
     if (r.kind === "immutable" && !r.git_sha) throw new Error("git_sha required for immutable");
+    // release_id must equal git_sha for immutable (they are the same SHA).
+    if (r.kind === "immutable" && r.release_id !== r.git_sha)
+      throw new Error("release_id/git_sha mismatch: "+r.release_id+" != "+r.git_sha);
     for (const k of ["app","executor","dashboard"]) if (!r.images?.[k]) throw new Error("images."+k);
-    const expKind = process.argv[2] || "";
-    const expId = process.argv[3] || "";
+
+    // Cross-check: images.env values must EXACTLY equal release.json.images.
+    // argv: [1]=rj, [2]=app, [3]=exec, [4]=dash, [5]=exp_kind, [6]=exp_id
+    const envApp = process.argv[2], envExec = process.argv[3], envDash = process.argv[4];
+    if (r.images.app !== envApp) throw new Error("app: release.json="+r.images.app+" != images.env="+envApp);
+    if (r.images.executor !== envExec) throw new Error("executor: release.json="+r.images.executor+" != images.env="+envExec);
+    if (r.images.dashboard !== envDash) throw new Error("dashboard: release.json="+r.images.dashboard+" != images.env="+envDash);
+
+    // Kind-specific checks.
+    if (r.kind === "immutable") {
+      // Immutable refs must be digest-qualified (contain @sha256:).
+      for (const k of ["app","executor","dashboard"]) {
+        if (!r.images[k].includes("@sha256:")) throw new Error("images."+k+" not digest-qualified: "+r.images[k]);
+      }
+    }
+    if (r.kind === "bootstrap") {
+      // Bootstrap records MUST record all three local image IDs.
+      const bids = r.bootstrap_image_ids || {};
+      for (const k of ["app","executor","dashboard"]) {
+        if (!bids[k]) throw new Error("bootstrap_image_ids."+k+" missing");
+      }
+    }
+
+    const expKind = process.argv[5] || "";
+    const expId = process.argv[6] || "";
     if (expKind && r.kind !== expKind) throw new Error("kind mismatch: "+r.kind+" != "+expKind);
     if (expId && r.release_id !== expId) throw new Error("id mismatch: "+r.release_id+" != "+expId);
-  ' "$rj" "${exp_kind}" "${exp_id}" || { log "validate_release_dir: release.json invalid in $dir"; return 1; }
+  ' "$rj" "$app" "$exec" "$dash" "${exp_kind}" "${exp_id}" \
+    || { log "validate_release_dir: release.json invalid or image-set mismatch in $dir"; return 1; }
+
+  # For bootstrap records with verify-local: check each local tag resolves to the
+  # exact recorded image ID. This catches a retargeted bootstrap tag.
+  if [[ "$verify_local" == "verify-local" ]]; then
+    local kind
+    kind="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).kind)")"
+    if [[ "$kind" == "bootstrap" ]]; then
+      local svc tag recorded_id actual_id
+      for svc in app executor dashboard; do
+        tag="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).images['$svc'])")"
+        recorded_id="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).bootstrap_image_ids['$svc'])")"
+        actual_id="$(docker image inspect --format '{{.Id}}' "$tag" 2>/dev/null || true)"
+        [[ -n "$actual_id" ]] || { log "validate_release_dir: bootstrap tag $tag does not resolve"; return 1; }
+        [[ "$actual_id" == "$recorded_id" ]] || {
+          log "validate_release_dir: bootstrap $svc image ID mismatch: tag $tag resolves to $actual_id, recorded $recorded_id"
+          return 1
+        }
+      done
+    fi
+  fi
 
   return 0
 }
@@ -645,14 +708,20 @@ validate_previous_release() {
 
   PREVIOUS_RELEASE_DIR="$target"
 
-  # Validate the record.
-  validate_release_dir "$target" "" "" \
+  # Validate the record (with verify-local so bootstrap tags are checked).
+  validate_release_dir "$target" "" "" verify-local \
     || fail "rollback target at $target is incomplete or malformed"
 
   # Read the previous release metadata.
   local rj="$target/release.json"
   PREVIOUS_RELEASE_KIND="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).kind)")"
   PREVIOUS_RELEASE_ID="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).kind === 'bootstrap' ? JSON.parse(require('fs').readFileSync('$rj','utf8')).release_id : JSON.parse(require('fs').readFileSync('$rj','utf8')).git_sha)")"
+  # git_sha is nullable for bootstrap; capture it for immutable rollback checks.
+  if [[ "$PREVIOUS_RELEASE_KIND" == "immutable" ]]; then
+    PREVIOUS_GIT_SHA="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).git_sha || '')")"
+  else
+    PREVIOUS_GIT_SHA=""
+  fi
 
   # Read the previous image references.
   local img_env="$target/images.env"
@@ -726,15 +795,19 @@ rollback_verify_executor() {
   [[ -n "$body" ]] || return 1
   printf '%s' "$body" >/tmp/rollback-exec-health.json
   EXPECTED_REF="$GITWIRE_VALIDATOR_IMAGE_REF" EXPECTED_DIGEST="$GITWIRE_VALIDATOR_IMAGE_DIGEST" \
+  EXPECTED_SHA="$PREVIOUS_GIT_SHA" \
   node --input-type=module -e '
     import fs from "node:fs";
     const h = JSON.parse(fs.readFileSync("/tmp/rollback-exec-health.json", "utf8"));
     if (h.status !== "ok") process.exit(1);
     if (h.ready !== true) process.exit(1);
-    if (h.container_runtime && h.container_runtime.length === 0) process.exit(1);
+    // container_runtime MUST be present and nonempty (not just present-but-empty).
+    if (!h.container_runtime || h.container_runtime.length === 0) process.exit(1);
     // Validator identity must match stable production config.
     if (process.env.EXPECTED_REF && h.validator_image_ref !== process.env.EXPECTED_REF) process.exit(1);
     if (process.env.EXPECTED_DIGEST && h.validator_image_digest !== process.env.EXPECTED_DIGEST) process.exit(1);
+    // For immutable rollback targets, git_sha must match the previous release SHA.
+    if (process.env.EXPECTED_SHA && h.git_sha !== process.env.EXPECTED_SHA) process.exit(1);
   ' || return 1
   return 0
 }
@@ -744,12 +817,36 @@ rollback_verify_app() {
   body="$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || true)"
   [[ -n "$body" ]] || return 1
   printf '%s' "$body" >/tmp/rollback-app-health.json
+  EXPECTED_SHA="$PREVIOUS_GIT_SHA" \
   node --input-type=module -e '
     import fs from "node:fs";
     const h = JSON.parse(fs.readFileSync("/tmp/rollback-app-health.json", "utf8"));
     if (h.status !== "ok") process.exit(1);
     if (h.db_migration_status !== "current") process.exit(1);
+    // For immutable rollback targets, git_sha must match the previous release SHA.
+    if (process.env.EXPECTED_SHA && h.git_sha !== process.env.EXPECTED_SHA) process.exit(1);
   ' || return 1
+  return 0
+}
+
+# Non-interference check for rollback. Returns 1 (does NOT call fail()) if any
+# non-release service changed state. Uses the captured baseline.
+rollback_check_non_interference() {
+  local svc cid img now=""
+  for svc in bot landing docs demo postgres redis tunnel; do
+    cid="$(docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" -p gitwire ps -q "$svc" 2>/dev/null || true)"
+    if [[ -z "$cid" ]]; then
+      now+="${svc}:absent"$'\n'
+    else
+      img="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || echo unknown)"
+      now+="${svc}:${cid}:${img}"$'\n'
+    fi
+  done
+  if [[ "$now" != "$NON_RELEASE_BASELINE" ]]; then
+    printf '[rollback] non-interference violation:\n--- expected ---\n%s\n--- actual ---\n%s\n' \
+      "$NON_RELEASE_BASELINE" "$now" >&2
+    return 1
+  fi
   return 0
 }
 
@@ -785,19 +882,52 @@ rollback_release() {
   done
   docker exec gitwire-dashboard-1 wget -qO- "http://0.0.0.0:3001/dashboard" >/dev/null 2>&1 || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
 
-  # Verify rollback image identities.
+  # Verify rollback image identities. For immutable refs, also verify RepoDigests
+  # carry the manifest digest. For bootstrap refs, verify the local tag resolves
+  # to the recorded bootstrap_image_id.
   stage="rollback:image-identity"
-  local svc ref exp cid
+  local svc ref exp cid running
+  local rj="$PREVIOUS_RELEASE_DIR/release.json"
+  local kind="$PREVIOUS_RELEASE_KIND"
   for svc in gitwire-app:"$PREVIOUS_APP_IMAGE" gitwire-executor-service:"$PREVIOUS_EXECUTOR_IMAGE" dashboard:"$PREVIOUS_DASHBOARD_IMAGE"; do
     local service="${svc%%:*}"
     ref="${svc#*:}"
     exp="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)"
     cid="$(docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" -p gitwire ps -q "$service" 2>/dev/null || true)"
     [[ -n "$exp" && -n "$cid" ]] || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
-    local running
     running="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
     [[ "$running" == "$exp" ]] || { ROLLBACK_FAILURE_STAGE="$stage:$service"; return 1; }
+    # Kind-specific identity verification.
+    if [[ "$kind" == "immutable" ]]; then
+      # RepoDigests must carry the manifest registry digest (part after @).
+      local reg_digest="${ref##*@}"
+      docker image inspect --format '{{json .RepoDigests}}' "$ref" 2>/dev/null \
+        | grep -q "$reg_digest" || { ROLLBACK_FAILURE_STAGE="$stage:$service:repodigests"; return 1; }
+    elif [[ "$kind" == "bootstrap" ]]; then
+      # Local tag must resolve to the recorded bootstrap_image_id.
+      local img_key
+      case "$service" in
+        gitwire-app)              img_key="app" ;;
+        gitwire-executor-service) img_key="executor" ;;
+        dashboard)                img_key="dashboard" ;;
+      esac
+      local recorded_id
+      recorded_id="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).bootstrap_image_ids['$img_key'] || '')")"
+      [[ -n "$recorded_id" && "$exp" == "$recorded_id" ]] \
+        || { ROLLBACK_FAILURE_STAGE="$stage:$service:bootstrap-id"; return 1; }
+    fi
   done
+
+  # Non-interference: all 7 non-release services must be unchanged.
+  stage="rollback:non-interference"
+  rollback_check_non_interference || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
+
+  # releases/current must still point to the previous release dir.
+  stage="rollback:current-symlink"
+  local current_target
+  current_target="$(readlink -f "$REPO_ROOT/releases/current" 2>/dev/null || true)"
+  [[ "$current_target" == "$PREVIOUS_RELEASE_DIR" ]] \
+    || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
 
   log "rollback completed: restored $PREVIOUS_RELEASE_KIND/$PREVIOUS_RELEASE_ID"
   return 0

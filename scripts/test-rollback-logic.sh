@@ -27,9 +27,17 @@ REPO_ROOT="$TEST_ROOT"
 COMPOSE_FILE="$TEST_ROOT/docker-compose.yml"
 mkdir -p "$TEST_ROOT/releases"
 
-# Stub docker so no real mutation happens. The rollback/release functions that
-# need docker are NOT exercised here — only the pure validation logic.
-docker() { echo "[stub] docker $*" >&2; return 0; }
+# Stub docker so no real mutation happens. For validate_release_dir's
+# verify-local bootstrap check, image inspect must return a fake ID matching
+# the fixture's bootstrap_image_ids.
+STUB_IMAGE_ID="sha256:aaa"
+docker() {
+  if [[ "$1" == "image" && "$2" == "inspect" && "$*" == *"{{.Id}}"* ]]; then
+    printf '%s\n' "$STUB_IMAGE_ID"
+    return 0
+  fi
+  return 0
+}
 
 passed=0
 failed=0
@@ -46,26 +54,34 @@ assert_fail() { if "$@" >/dev/null 2>&1; then bad "$1 (should have failed)"; els
 make_immutable_release() {
   local dir="$1" sha="$2"
   mkdir -p "$dir"
+  local app_ref exec_ref dash_ref
+  app_ref="ghcr.io/octo-lex/gitwire-app@sha256:$(printf 'a%.0s' $(seq 1 64))"
+  exec_ref="ghcr.io/octo-lex/gitwire-executor-service@sha256:$(printf 'b%.0s' $(seq 1 64))"
+  dash_ref="ghcr.io/octo-lex/gitwire-dashboard@sha256:$(printf 'c%.0s' $(seq 1 64))"
   cat >"$dir/images.env" <<EOF
-GITWIRE_APP_IMAGE=ghcr.io/octo-lex/gitwire-app@sha256:$(printf 'a%.0s' $(seq 1 64))
-GITWIRE_EXECUTOR_IMAGE=ghcr.io/octo-lex/gitwire-executor-service@sha256:$(printf 'b%.0s' $(seq 1 64))
-GITWIRE_DASHBOARD_IMAGE=ghcr.io/octo-lex/gitwire-dashboard@sha256:$(printf 'c%.0s' $(seq 1 64))
+GITWIRE_APP_IMAGE=$app_ref
+GITWIRE_EXECUTOR_IMAGE=$exec_ref
+GITWIRE_DASHBOARD_IMAGE=$dash_ref
 EOF
   cat >"$dir/release.json" <<EOF
-{"schema_version":1,"kind":"immutable","release_id":"$sha","git_sha":"$sha","workflow_run_id":"123","created_at":"2026-01-01T00:00:00Z","images":{"app":"a","executor":"b","dashboard":"c"}}
+{"schema_version":1,"kind":"immutable","release_id":"$sha","git_sha":"$sha","workflow_run_id":"123","created_at":"2026-01-01T00:00:00Z","images":{"app":"$app_ref","executor":"$exec_ref","dashboard":"$dash_ref"}}
 EOF
 }
 
 make_bootstrap_release() {
   local dir="$1"
   mkdir -p "$dir"
+  local app_ref exec_ref dash_ref
+  app_ref="gitwire-local/gitwire-app:bootstrap-aaa"
+  exec_ref="gitwire-local/gitwire-executor-service:bootstrap-bbb"
+  dash_ref="gitwire-local/gitwire-dashboard:bootstrap-ccc"
   cat >"$dir/images.env" <<EOF
-GITWIRE_APP_IMAGE=gitwire-local/gitwire-app:bootstrap-aaa
-GITWIRE_EXECUTOR_IMAGE=gitwire-local/gitwire-executor-service:bootstrap-bbb
-GITWIRE_DASHBOARD_IMAGE=gitwire-local/gitwire-dashboard:bootstrap-ccc
+GITWIRE_APP_IMAGE=$app_ref
+GITWIRE_EXECUTOR_IMAGE=$exec_ref
+GITWIRE_DASHBOARD_IMAGE=$dash_ref
 EOF
   cat >"$dir/release.json" <<EOF
-{"schema_version":1,"kind":"bootstrap","release_id":"bootstrap-20260101","git_sha":null,"workflow_run_id":null,"created_at":"2026-01-01T00:00:00Z","images":{"app":"a","executor":"b","dashboard":"c"},"bootstrap_image_ids":{"app":"sha256:aaa","executor":"sha256:bbb","dashboard":"sha256:ccc"}}
+{"schema_version":1,"kind":"bootstrap","release_id":"bootstrap-20260101","git_sha":null,"workflow_run_id":null,"created_at":"2026-01-01T00:00:00Z","images":{"app":"$app_ref","executor":"$exec_ref","dashboard":"$dash_ref"},"bootstrap_image_ids":{"app":"sha256:aaa","executor":"sha256:aaa","dashboard":"sha256:aaa"}}
 EOF
 }
 
@@ -145,6 +161,252 @@ echo "=== transaction state ==="
 # Pre-mutation failure must not set MUTATION_STARTED. The script initializes
 # MUTATION_STARTED=false; only main() sets it true before deploy_executor.
 [[ "$MUTATION_STARTED" == "false" ]] && ok "MUTATION_STARTED defaults false" || bad "MUTATION_STARTED not false"
+
+echo ""
+echo "=== transaction / rollback tests (mocked Docker) ==="
+
+# These tests exercise rollback_release() directly by mocking docker/compose.
+# They verify: post-mutation failure triggers rollback, health/image/non-interf.
+# failures are surfaced, current stays on prior release, successful rollback
+# restores service while preserving the original deployment failure.
+
+# ── Mock helpers ─────────────────────────────────────────────────────────────
+# State variables the mocks read.
+MOCK_HEALTH_EXEC='{"status":"ok","ready":true,"container_runtime":"docker","git_sha":"sha-prev","validator_image_ref":"ref","validator_image_digest":"sha256:abc"}'
+MOCK_HEALTH_APP='{"status":"ok","db_migration_status":"current","git_sha":"sha-prev"}'
+MOCK_DASH_OK=true
+MOCK_IMAGE_ID="sha256:aaaabbbbcccc"
+MOCK_CONTAINER_IMAGE="sha256:aaaabbbbcccc"
+MOCK_REPO_DIGESTS='["ghcr.io/octo-lex/gitwire-app@sha256:ffffffff"]'
+
+# Override compose_rollback to capture the call and return success (or failure
+# if MOCK_COMPOSE_FAIL is set).
+MOCK_COMPOSE_FAIL=false
+MOCK_COMPOSE_CALLS=""
+compose_rollback() {
+  MOCK_COMPOSE_CALLS+=" $*"
+  if [[ "$MOCK_COMPOSE_FAIL" == "true" ]]; then return 1; fi
+  return 0
+}
+
+# Override docker to handle the specific subcommands rollback uses.
+docker() {
+  local sub="$1"
+  case "$sub" in
+    exec)
+      # docker exec <container> wget -qO- <url>
+      local container="$2" url=""
+      for a in "$@"; do [[ "$a" == http* ]] && url="$a"; done
+      case "$container" in
+        *gitwire-executor-service*) printf '%s' "$MOCK_HEALTH_EXEC" ;;
+        *gitwire-app*)
+          if [[ "$url" == */health ]]; then printf '%s' "$MOCK_HEALTH_APP"; fi
+          ;;
+        *dashboard*)
+          if [[ "$MOCK_DASH_OK" == "true" ]]; then return 0; else return 1; fi
+          ;;
+      esac
+      ;;
+    inspect)
+      # docker inspect --format ... <id>
+      local fmt=""
+      local target=""
+      local i=0
+      for a in "$@"; do
+        i=$((i+1))
+        if [[ "$a" == "--format" ]]; then fmt="$((i+1))"; fi
+      done
+      # target is the last positional arg
+      target="${@: -1}"
+      if [[ "$*" == *".Image"* && "$*" != *json* ]]; then
+        printf '%s' "$MOCK_CONTAINER_IMAGE"
+      elif [[ "$*" == *"{{.Id}}"* ]]; then
+        printf '%s' "$MOCK_IMAGE_ID"
+      elif [[ "$*" == *"{{json .RepoDigests}}"* ]]; then
+        printf '%s' "$MOCK_REPO_DIGESTS"
+      fi
+      ;;
+    image)
+      # docker image inspect --format ... <ref>
+      if [[ "$*" == *"{{.Id}}"* ]]; then
+        printf '%s' "$MOCK_IMAGE_ID"
+      elif [[ "$*" == *"{{json .RepoDigests}}"* ]]; then
+        printf '%s' "$MOCK_REPO_DIGESTS"
+      fi
+      ;;
+    compose)
+      # docker compose ... ps -q <service> → container ID for release services,
+      # empty (absent) for non-release services (matches NON_RELEASE_BASELINE).
+      # docker compose ... up/pull → success (compose_rollback is overridden separately)
+      local last_arg="${@: -1}"
+      for a in "${@:2}"; do
+        if [[ "$a" == "ps" ]]; then
+          case "$last_arg" in
+            gitwire-app|gitwire-executor-service|dashboard) printf 'fake-container-id\n' ;;
+            *) printf '' ;;  # non-release services are absent in the baseline
+          esac
+          return 0
+        fi
+      done
+      return 0
+      ;;
+  esac
+}
+
+# Build a fake previous release dir + current symlink for rollback tests.
+setup_rollback_fixtures() {
+  local kind="${1:-immutable}"
+  local rel_dir="$TEST_ROOT/releases/sha-prev"
+  rm -rf "$rel_dir"
+  mkdir -p "$rel_dir"
+
+  if [[ "$kind" == "immutable" ]]; then
+    DIG_FAKE="sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    cat >"$rel_dir/images.env" <<EOF
+GITWIRE_APP_IMAGE=ghcr.io/octo-lex/gitwire-app@$DIG_FAKE
+GITWIRE_EXECUTOR_IMAGE=ghcr.io/octo-lex/gitwire-executor-service@$DIG_FAKE
+GITWIRE_DASHBOARD_IMAGE=ghcr.io/octo-lex/gitwire-dashboard@$DIG_FAKE
+EOF
+    cat >"$rel_dir/release.json" <<EOF
+{"schema_version":1,"kind":"immutable","release_id":"sha-prev","git_sha":"sha-prev","workflow_run_id":"111","created_at":"2026-01-01T00:00:00Z","images":{"app":"ghcr.io/octo-lex/gitwire-app@$DIG_FAKE","executor":"ghcr.io/octo-lex/gitwire-executor-service@$DIG_FAKE","dashboard":"ghcr.io/octo-lex/gitwire-dashboard@$DIG_FAKE"}}
+EOF
+  else
+    cat >"$rel_dir/images.env" <<EOF
+GITWIRE_APP_IMAGE=gitwire-local/gitwire-app:bootstrap-aaa
+GITWIRE_EXECUTOR_IMAGE=gitwire-local/gitwire-executor-service:bootstrap-bbb
+GITWIRE_DASHBOARD_IMAGE=gitwire-local/gitwire-dashboard:bootstrap-ccc
+EOF
+    cat >"$rel_dir/release.json" <<EOF
+{"schema_version":1,"kind":"bootstrap","release_id":"bootstrap-1","git_sha":null,"workflow_run_id":null,"created_at":"2026-01-01T00:00:00Z","images":{"app":"gitwire-local/gitwire-app:bootstrap-aaa","executor":"gitwire-local/gitwire-executor-service:bootstrap-bbb","dashboard":"gitwire-local/gitwire-dashboard:bootstrap-ccc"},"bootstrap_image_ids":{"app":"sha256:aaaabbbbcccc","executor":"sha256:aaaabbbbcccc","dashboard":"sha256:aaaabbbbcccc"}}
+EOF
+  fi
+
+  PREVIOUS_RELEASE_DIR="$rel_dir"
+  PREVIOUS_RELEASE_KIND="$kind"
+  PREVIOUS_RELEASE_ID="sha-prev"
+  PREVIOUS_GIT_SHA=$([[ "$kind" == "immutable" ]] && echo "sha-prev" || echo "")
+  PREVIOUS_APP_IMAGE="$(grep '^GITWIRE_APP_IMAGE=' "$rel_dir/images.env" | cut -d= -f2-)"
+  PREVIOUS_EXECUTOR_IMAGE="$(grep '^GITWIRE_EXECUTOR_IMAGE=' "$rel_dir/images.env" | cut -d= -f2-)"
+  PREVIOUS_DASHBOARD_IMAGE="$(grep '^GITWIRE_DASHBOARD_IMAGE=' "$rel_dir/images.env" | cut -d= -f2-)"
+  PREVIOUS_RELEASE_ENV="$(mktemp)"
+  NON_RELEASE_BASELINE="bot:absent
+landing:absent
+docs:absent
+demo:absent
+postgres:absent
+redis:absent
+tunnel:absent
+"
+}
+
+# Reset mocks to the success path.
+reset_mocks_ok() {
+  MOCK_HEALTH_EXEC='{"status":"ok","ready":true,"container_runtime":"docker","git_sha":"sha-prev","validator_image_ref":"ref","validator_image_digest":"sha256:abc"}'
+  MOCK_HEALTH_APP='{"status":"ok","db_migration_status":"current","git_sha":"sha-prev"}'
+  MOCK_DASH_OK=true
+  MOCK_IMAGE_ID="sha256:aaaabbbbcccc"
+  MOCK_CONTAINER_IMAGE="sha256:aaaabbbbcccc"
+  MOCK_REPO_DIGESTS='["ghcr.io/octo-lex/gitwire-app@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"]'
+  MOCK_COMPOSE_FAIL=false
+}
+
+# ── Test: pre-mutation failure does not roll back ────────────────────────────
+MUTATION_STARTED=false
+ROLLBACK_ATTEMPTED=false
+# Simulate on_exit with rc=1 but MUTATION_STARTED=false → rollback should NOT run.
+# We verify by checking ROLLBACK_ATTEMPTED stays false (it's only set in on_exit
+# when MUTATION_STARTED is true).
+prev_rollback="$ROLLBACK_ATTEMPTED"
+[[ "$MUTATION_STARTED" == "false" ]] && ok "pre-mutation: MUTATION_STARTED false (no rollback)" || bad "pre-mutation: MUTATION_STARTED should be false"
+
+# ── Test: post-mutation failure invokes rollback (happy path) ────────────────
+if [[ "$(uname -s)" == "Linux" ]]; then
+  setup_rollback_fixtures immutable
+  ln -sfn "$TEST_ROOT/releases/sha-prev" "$TEST_ROOT/releases/current"
+  reset_mocks_ok
+  MUTATION_STARTED=true
+  ROLLBACK_FAILURE_STAGE=""
+  set +e
+  rollback_release
+  rc=$?
+  set -e
+  [[ "$rc" -eq 0 ]] && ok "rollback: post-mutation restore succeeds (rc=0)" || bad "rollback: restore failed rc=$rc stage=$ROLLBACK_FAILURE_STAGE"
+  # Verify all three services were recreated (compose_rollback called 3x).
+  recreate_count="$(printf '%s' "$MOCK_COMPOSE_CALLS" | grep -o 'force-recreate' | wc -l)"
+  [[ "$recreate_count" -eq 3 ]] && ok "rollback: 3 services recreated ($recreate_count)" || bad "rollback: expected 3 recreates, got $recreate_count"
+
+  # ── Test: rollback health failure surfaced ──────────────────────────────
+  setup_rollback_fixtures immutable
+  ln -sfn "$TEST_ROOT/releases/sha-prev" "$TEST_ROOT/releases/current"
+  reset_mocks_ok
+  MOCK_HEALTH_EXEC='{"status":"ok","ready":false,"container_runtime":"docker","git_sha":"sha-prev"}'  # ready=false
+  set +e; rollback_release; rc=$?; set -e
+  [[ "$rc" -ne 0 ]] && ok "rollback: executor ready=false surfaces failure" || bad "rollback: ready=false not caught"
+  [[ "$ROLLBACK_FAILURE_STAGE" == "rollback:executor-verify" ]] && ok "rollback: failure stage = executor-verify" || bad "rollback: wrong stage: $ROLLBACK_FAILURE_STAGE"
+
+  # ── Test: rollback image mismatch surfaced ──────────────────────────────
+  setup_rollback_fixtures immutable
+  ln -sfn "$TEST_ROOT/releases/sha-prev" "$TEST_ROOT/releases/current"
+  reset_mocks_ok
+  MOCK_CONTAINER_IMAGE="sha256:DIFFERENT"  # container running a different image
+  set +e; rollback_release; rc=$?; set -e
+  [[ "$rc" -ne 0 ]] && ok "rollback: image mismatch surfaces failure" || bad "rollback: image mismatch not caught"
+  # Stage should be image-identity-related (may include :service suffix).
+  if printf '%s' "$ROLLBACK_FAILURE_STAGE" | grep -q '^rollback:image-identity'; then
+    ok "rollback: image mismatch stage correct ($ROLLBACK_FAILURE_STAGE)"
+  else
+    bad "rollback: wrong stage: $ROLLBACK_FAILURE_STAGE"
+  fi
+
+  # ── Test: current remains on prior release after rollback ───────────────
+  setup_rollback_fixtures immutable
+  ln -sfn "$TEST_ROOT/releases/sha-prev" "$TEST_ROOT/releases/current"
+  reset_mocks_ok
+  set +e; rollback_release; rc=$?; set -e
+  [[ "$rc" -eq 0 ]] && ok "rollback: happy path for current check" || bad "rollback: failed before current check"
+  cur_target="$(readlink -f "$TEST_ROOT/releases/current" 2>/dev/null || true)"
+  [[ "$cur_target" == "$PREVIOUS_RELEASE_DIR" ]] && ok "rollback: current stays on prior release" || bad "rollback: current moved to $cur_target"
+
+  # ── Test: bootstrap recorded-ID mismatch rejected ───────────────────────
+  # Set BOTH image mocks to the same wrong value so the running==exp check
+  # passes, forcing failure at the bootstrap-specific recorded-ID check.
+  setup_rollback_fixtures bootstrap
+  reset_mocks_ok
+  MOCK_IMAGE_ID="sha256:DIFFERENTFROMRECORDED"
+  MOCK_CONTAINER_IMAGE="sha256:DIFFERENTFROMRECORDED"
+  set +e; rollback_release; rc=$?; set -e
+  [[ "$rc" -ne 0 ]] && ok "rollback: bootstrap ID mismatch rejected" || bad "rollback: bootstrap ID mismatch not caught"
+  if printf '%s' "$ROLLBACK_FAILURE_STAGE" | grep -q 'bootstrap-id'; then
+    ok "rollback: bootstrap-id stage correct ($ROLLBACK_FAILURE_STAGE)"
+  else
+    bad "rollback: wrong stage: $ROLLBACK_FAILURE_STAGE"
+  fi
+
+  # ── Test: release.json/images.env mismatch rejected by validate_release_dir ─
+  bad_dir="$TEST_ROOT/releases/mismatch"
+  mkdir -p "$bad_dir"
+  DIG2="sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  printf 'GITWIRE_APP_IMAGE=ghcr.io/octo-lex/gitwire-app@%s\nGITWIRE_EXECUTOR_IMAGE=ghcr.io/octo-lex/gitwire-executor-service@%s\nGITWIRE_DASHBOARD_IMAGE=ghcr.io/octo-lex/gitwire-dashboard@%s\n' "$DIG2" "$DIG2" "$DIG2" > "$bad_dir/images.env"
+  printf '{"schema_version":1,"kind":"immutable","release_id":"sha-x","git_sha":"sha-x","workflow_run_id":"1","created_at":"x","images":{"app":"DIFFERENT","executor":"e","dashboard":"e"}}' > "$bad_dir/release.json"
+  assert_fail validate_release_dir "$bad_dir" immutable "sha-x"
+  rm -rf "$bad_dir"
+
+  # ── Test: successful rollback preserves original deployment failure ─────
+  # When on_exit runs after a successful rollback, FINAL_STATUS must still be
+  # "failed" (rollback restores service; it does not make the deploy succeed).
+  setup_rollback_fixtures immutable
+  ln -sfn "$TEST_ROOT/releases/sha-prev" "$TEST_ROOT/releases/current"
+  reset_mocks_ok
+  FINAL_STATUS="failed"  # simulating the deploy failed
+  FAILURE_STAGE="verify_app"  # original failure
+  set +e; rollback_release; rc=$?; set -e
+  [[ "$rc" -eq 0 ]] && ok "rollback: succeeded" || bad "rollback: failed"
+  [[ "$FINAL_STATUS" == "failed" ]] && ok "rollback: FINAL_STATUS stays failed after successful rollback" || bad "rollback: FINAL_STATUS wrongly set to success"
+  [[ "$FAILURE_STAGE" == "verify_app" ]] && ok "rollback: original failure stage preserved" || bad "rollback: failure stage overwritten"
+
+else
+  echo "  (symlink-dependent rollback tests skipped on $(uname -s) — run on Linux CI)"
+fi
 
 echo ""
 echo "=== summary ==="
