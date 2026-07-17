@@ -338,6 +338,14 @@ verify_infra_health() {
 
 pull_validator_image() {
   FAILURE_STAGE="pull_validator_image"
+  # The validator image may already be present locally (e.g. deployed before
+  # GHCR auth was configured, or tagged locally during transition). If it
+  # resolves locally, skip the pull — GHCR auth may not be available for
+  # the validator repository.
+  if docker image inspect "$GITWIRE_VALIDATOR_IMAGE_REF" >/dev/null 2>&1; then
+    log "validator image already present locally: $GITWIRE_VALIDATOR_IMAGE_REF"
+    return 0
+  fi
   docker pull "$GITWIRE_VALIDATOR_IMAGE_REF" \
     || fail "could not pull validator image $GITWIRE_VALIDATOR_IMAGE_REF (independently published dependency)"
   log "validator image pulled"
