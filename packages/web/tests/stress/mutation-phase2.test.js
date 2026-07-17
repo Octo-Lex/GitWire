@@ -1,9 +1,9 @@
 // tests/stress/mutation-phase2.test.js
 // Stress Test: Phase 2 mutation routes — merge queue config, feedback rules, queue operations
-import { get, post, put, del } from '../helpers.js';
+import { get, post, put, del, FIXTURE_REPO } from '../helpers.js';
 import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
 
-const REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
+const REPO = FIXTURE_REPO;
 const uid = Date.now().toString(36);
 
 describe('Stress: Phase 2 Mutations', () => {

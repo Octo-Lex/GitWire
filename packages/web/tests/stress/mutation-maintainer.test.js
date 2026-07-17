@@ -1,9 +1,11 @@
 // tests/stress/mutation-maintainer.test.js
 // Stress Test: Maintainer mutation routes — settings, stale-scan, branch-cleanup, sync, collaborators
-import { get, post, put, del, patch } from '../helpers.js';
+import { get, post, put, del, patch, FIXTURE_REPO } from '../helpers.js';
 import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
 
-const REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
+const REPO = FIXTURE_REPO;
+// Org is the owner segment of the fixture repo (owner/repo).
+const ORG = REPO.split('/')[0];
 
 describe('Stress: Maintainer Mutations', () => {
 
@@ -33,7 +35,7 @@ describe('Stress: Maintainer Mutations', () => {
   });
 
   test('POST /maintainer/members/sync — trigger member sync', async () => {
-    const res = await post('/api/maintainer/members/sync', { org: 'Elephant-Rock-Lab' });
+    const res = await post('/api/maintainer/members/sync', { org: ORG });
     expect([200, 201, 202, 204]).toContain(res.status);
   });
 

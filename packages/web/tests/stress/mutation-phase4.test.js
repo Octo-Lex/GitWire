@@ -1,9 +1,9 @@
 // tests/stress/mutation-phase4.test.js
 // Stress Test: Phase 4 mutation routes — AI review config, triggers, audit reports, exports
-import { get, post, put, del } from '../helpers.js';
+import { get, post, put, del, FIXTURE_REPO } from '../helpers.js';
 import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
 
-const REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
+const REPO = FIXTURE_REPO;
 
 describe('Stress: Phase 4 Mutations', () => {
 

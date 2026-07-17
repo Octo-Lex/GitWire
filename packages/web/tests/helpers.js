@@ -4,102 +4,98 @@
 // SECURITY: No production URL or credential defaults. All configuration
 // must be provided via environment variables. The harness refuses to load
 // unless GITWIRE_STRESS_ENV=isolated is set, and rejects known production
-// hostnames regardless of configuration.
+// hostnames, repositories, and installation IDs regardless of configuration.
+//
+// This module delegates URL resolution, the production denylist, mutation
+// gating, and the mutation budget to tests/target-policy.js — the same module
+// scripts/benchmark.js uses. The contract is therefore identical across the
+// Jest stress suite and the benchmark harness.
 
-// Known production hostnames that must NEVER be targeted by tests.
-// This is a denylist of known production targets, not a full identity verification.
-const PRODUCTION_HOSTS = new Set([
-  'gitwire.erlab.uk',
-]);
+import { loadPolicy } from './target-policy.js';
 
-function requireEnv(name) {
-  const val = process.env[name];
-  if (!val || val.length === 0) {
-    throw new Error(
-      `${name} environment variable is required. Tests will not run without explicit configuration.`
-    );
-  }
-  return val;
-}
+// Load once at module import. Any missing env var or denylisted target
+// throws here, so a misconfigured run fails before any request is attempted.
+const POLICY = loadPolicy({ requireStressGate: true });
 
-function validateBaseUrl(url) {
-  let hostname;
-  try {
-    hostname = new URL(url).hostname;
-  } catch {
-    throw new Error(`GITWIRE_BASE_URL is not a valid URL: ${url}`);
-  }
-  if (PRODUCTION_HOSTS.has(hostname)) {
-    throw new Error(
-      `GITWIRE_BASE_URL hostname '${hostname}' is a known production target. ` +
-      `Tests must target an isolated environment.`
-    );
-  }
-  return url;
-}
+// Re-export the base URL and API key for tests that construct raw requests
+// (e.g. webhook tests that must NOT send the bearer token). These come from
+// the validated policy, not directly from env.
+const BASE_URL = POLICY.baseUrlRaw;
+const API_KEY = POLICY.apiKey;
 
-// Require explicit environment — no defaults.
-const BASE_URL = validateBaseUrl(requireEnv('GITWIRE_BASE_URL'));
-const API_KEY  = requireEnv('API_KEY');
+// Mutation opt-in state (read by some stress files).
+const ALLOW_MUTATIONS = POLICY.allowMutations;
+const FIXTURE_REPO = POLICY.fixtureRepo;
+const FIXTURE_INSTALLATION_ID = POLICY.fixtureInstallationId;
 
-// Stress tests require an additional safety gate.
-const STRESS_ENV = process.env.GITWIRE_STRESS_ENV;
-if (STRESS_ENV !== 'isolated') {
-  throw new Error(
-    'Stress and integration tests require GITWIRE_STRESS_ENV=isolated. ' +
-    'This prevents accidental execution against non-isolated environments.'
-  );
-}
-
-// Mutation tests require an explicit opt-in.
-const ALLOW_MUTATIONS = process.env.GITWIRE_STRESS_ALLOW_MUTATIONS === 'true';
-const FIXTURE_REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || null;
-
-if (ALLOW_MUTATIONS && !FIXTURE_REPO) {
-  throw new Error(
-    'GITWIRE_STRESS_ALLOW_MUTATIONS=true requires GITWIRE_STRESS_FIXTURE_REPO ' +
-    'to be set to a disposable owner/repo.'
-  );
-}
-
-/**
- * Block mutating requests unless the mutation opt-in is configured.
- * This is enforced centrally in the api() helper so individual test
- * suites cannot accidentally bypass the gate.
- */
-function assertMutationAllowed(method) {
-  if (!["POST", "PUT", "PATCH", "DELETE"].includes(method)) return;
-
-  if (!ALLOW_MUTATIONS) {
-    throw new Error(
-      `${method} requests require GITWIRE_STRESS_ALLOW_MUTATIONS=true`
-    );
-  }
-  if (!FIXTURE_REPO) {
-    throw new Error(
-      "Mutation requests require GITWIRE_STRESS_FIXTURE_REPO to be set to a disposable owner/repo."
-    );
-  }
-}
-
-export { ALLOW_MUTATIONS, FIXTURE_REPO };
+export { BASE_URL, API_KEY, ALLOW_MUTATIONS, FIXTURE_REPO, FIXTURE_INSTALLATION_ID };
 
 /**
  * Fetch wrapper with API key auth. Returns parsed JSON + status.
- * Mutating methods (POST/PUT/PATCH/DELETE) are blocked unless
- * GITWIRE_STRESS_ALLOW_MUTATIONS=true and GITWIRE_STRESS_FIXTURE_REPO are set.
+ *
+ * URL resolution and mutation gating are delegated to the shared target
+ * policy:
+ *   - Relative paths resolve against the validated base URL.
+ *   - Absolute URLs must be same-origin with the base URL; cross-origin
+ *     requests throw BEFORE any header is constructed or fetch is called.
+ *   - Mutating methods (POST/PUT/PATCH/DELETE) require
+ *     GITWIRE_STRESS_ALLOW_MUTATIONS=true plus a configured fixture repo
+ *     and installation ID, and consume the mutation budget.
+ *
+ * @param {string} path relative path or same-origin absolute URL
+ * @param {Object} [options]
+ * @param {string} [options.method] default GET
+ * @param {Object} [options.body] parsed JSON body; when provided as an
+ *   object it is JSON.stringified and the policy inspects it for denylisted
+ *   identities. When provided as a string it is sent as-is (the policy
+ *   cannot inspect it; callers using string bodies are responsible for not
+ *   embedding production identities).
+ * @param {Object} [options.headers] merged on top of the auth + content-type
+ *   headers. Pass `{ Authorization: '' }` to suppress the bearer token for
+ *   endpoints that must not receive it (e.g. /webhooks/github).
+ * @param {Object} [options.contract] declared mutation target contract
+ *   (see target-policy.js MutationTargetContract).
+ * @param {string} [options.operationName] label for budget consumption.
  */
 export async function api(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
-  assertMutationAllowed(method);
+  let parsedBody = null;
+  if (options.body && typeof options.body === 'object') {
+    parsedBody = options.body;
+  }
 
-  const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
+  // Resolve + same-origin check + production-host check. Throws before any
+  // header is built if the target is disallowed.
+  const url = POLICY.resolveRequest(path);
+
+  // Mutation gate (also throws on budget exhaustion / denylisted identity
+  // anywhere in path/query/body).
+  POLICY.assertMutationAllowed({
+    method,
+    url,
+    body: parsedBody,
+    contract: options.contract,
+    operationName: options.operationName,
+  });
+
+  // Construct headers ONLY after all policy checks pass. This is what makes
+  // the absolute-URL bypass safe: a rejected request never produces a
+  // credential string.
+  const authHeader = options.headers && Object.keys(options.headers).some(
+    h => h.toLowerCase() === 'authorization'
+  ) ? {} : (POLICY.authHeader() ? { Authorization: POLICY.authHeader() } : {});
+
   const headers = {
-    'Authorization': `Bearer ${API_KEY}`,
     'Content-Type': 'application/json',
+    ...authHeader,
     ...options.headers,
   };
-  const res = await fetch(url, { ...options, headers });
+
+  const res = await fetch(url.href, {
+    method,
+    headers,
+    body: parsedBody ? JSON.stringify(parsedBody) : options.body,
+  });
   const text = await res.text();
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
@@ -112,25 +108,27 @@ export async function get(path) {
 }
 
 /** POST request */
-export async function post(path, data) {
+export function post(path, data, opts = {}) {
   return api(path, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: data,
+    contract: opts.contract,
+    operationName: opts.operationName,
   });
 }
 
 /** PUT request */
-export async function put(path, data) {
-  return api(path, { method: 'PUT', body: data ? JSON.stringify(data) : undefined });
+export function put(path, data) {
+  return api(path, { method: 'PUT', body: data });
 }
 
 /** PATCH request */
-export async function patch(path, data) {
-  return api(path, { method: 'PATCH', body: data ? JSON.stringify(data) : undefined });
+export function patch(path, data) {
+  return api(path, { method: 'PATCH', body: data });
 }
 
 /** DELETE request */
-export async function del(path) {
+export function del(path) {
   return api(path, { method: 'DELETE' });
 }
 
@@ -159,5 +157,3 @@ export function expectShape(body, requiredKeys) {
   }
   return body;
 }
-
-export { BASE_URL, API_KEY };

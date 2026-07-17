@@ -1,20 +1,20 @@
 // tests/stress/mutation-phase3.test.js
 // Stress Test: Phase 3 mutation routes — reconciler, dependency scanning, flaky tests
-import { get, post, put, del } from '../helpers.js';
+import { get, post, put, del, FIXTURE_REPO, FIXTURE_INSTALLATION_ID } from '../helpers.js';
 import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
 
-const REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
+const REPO = FIXTURE_REPO;
 
 describe('Stress: Phase 3 Mutations', () => {
 
   test('POST /phase3/reconciler/run — trigger reconciliation', async () => {
-    const res = await post('/api/phase3/reconciler/run', { installation_id: 133349719 });
+    const res = await post('/api/phase3/reconciler/run', { installation_id: FIXTURE_INSTALLATION_ID });
     expect([200, 201, 202]).toContain(res.status);
   });
 
   test('POST /phase3/reconciler/run — 3 concurrent runs idempotent', async () => {
     const tasks = Array.from({ length: 3 }, () => () =>
-      post('/api/phase3/reconciler/run', { installation_id: 133349719 })
+      post('/api/phase3/reconciler/run', { installation_id: FIXTURE_INSTALLATION_ID })
     );
     const { succeeded, statuses } = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
     const ok = statuses.filter(s => [200, 201, 202].includes(s)).length;

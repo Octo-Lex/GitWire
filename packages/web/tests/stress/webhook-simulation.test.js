@@ -3,7 +3,7 @@
 //
 // Run: NODE_OPTIONS="--experimental-vm-modules" npx jest tests/stress/webhook-simulation.test.js --testTimeout=120000 --runInBand
 
-import { get, post } from '../helpers.js';
+import { get, post, FIXTURE_REPO } from '../helpers.js';
 import { boundedBurst, sleep } from './stress-helpers.js';
 
 const CONCURRENT = 8;
@@ -73,7 +73,7 @@ describe('Webhook Simulation: rapid event-style API calls', () => {
 
   describe('Stale scan storm', () => {
     test('Trigger stale scan on same repo concurrently', async () => {
-      const REPO = 'Elephant-Rock-Lab/GitWire';
+      const REPO = FIXTURE_REPO;
       const tasks = Array.from({ length: 5 }, () => () =>
         post(`/api/maintainer/${REPO}/stale-scan`, {})
       );

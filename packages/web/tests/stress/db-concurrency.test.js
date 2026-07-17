@@ -3,7 +3,7 @@
 //
 // Run: NODE_OPTIONS="--experimental-vm-modules" npx jest tests/stress/db-concurrency.test.js --testTimeout=120000 --runInBand
 
-import { get, post, del } from '../helpers.js';
+import { get, post, del, FIXTURE_REPO } from '../helpers.js';
 import { boundedBurst, sleep } from './stress-helpers.js';
 
 const CONCURRENT = 8;
@@ -50,7 +50,7 @@ describe('DB Concurrency: parallel writes + reads', () => {
   });
 
   describe('Merge queue config under load', () => {
-    const REPO = 'Elephant-Rock-Lab/GitWire';
+    const REPO = FIXTURE_REPO;
 
     test('Set queue config while reading queue status concurrently', async () => {
       const tasks = [];
@@ -105,7 +105,7 @@ describe('DB Concurrency: parallel writes + reads', () => {
 
   describe('Maintainer settings concurrent updates', () => {
     test('Update same repo settings concurrently (no deadlocks)', async () => {
-      const REPO = 'Elephant-Rock-Lab/GitWire';
+      const REPO = FIXTURE_REPO;
       const tasks = Array.from({ length: CONCURRENT }, (_, i) => () =>
         post(`/api/maintainer/${REPO}/settings`, {
           stale_issue_days: 30 + i,

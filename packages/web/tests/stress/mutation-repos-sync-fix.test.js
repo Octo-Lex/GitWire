@@ -1,10 +1,10 @@
 // tests/stress/mutation-repos-sync-fix.test.js
 // Stress Test: Repo sync, fix attempts, CI heal retries, duplicate operations
-import { get, post, del } from '../helpers.js';
+import { get, post, del, FIXTURE_REPO, FIXTURE_INSTALLATION_ID } from '../helpers.js';
 import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
 
-const REPO = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
-const REPO2 = process.env.GITWIRE_STRESS_FIXTURE_REPO || (() => { throw new Error('GITWIRE_STRESS_FIXTURE_REPO is required for mutation tests'); })();;
+const REPO = FIXTURE_REPO;
+const REPO2 = FIXTURE_REPO;
 
 describe('Stress: Repo Sync + Fix + Heal Mutations', () => {
 
@@ -23,7 +23,7 @@ describe('Stress: Repo Sync + Fix + Heal Mutations', () => {
   });
 
   test('POST /fix/:owner/:repo/issues/:number — fix attempt on non-existent issue', async () => {
-    const res = await post(`/api/fix/${REPO}/issues/99999?installation_id=133349719`, {});
+    const res = await post(`/api/fix/${REPO}/issues/99999?installation_id=${FIXTURE_INSTALLATION_ID}`, {});
     expect([200, 202, 400, 404, 429, 500]).toContain(res.status);
   });
 
@@ -50,7 +50,7 @@ describe('Stress: Repo Sync + Fix + Heal Mutations', () => {
   test('POST /fix/:owner/:repo/issues/:number — 3 concurrent fix triggers rate-limited', async () => {
     // Fix attempts are rate-limited: 1 per issue per day, 3 per repo per day
     const tasks = Array.from({ length: 3 }, () => () =>
-      post(`/api/fix/${REPO}/issues/99999?installation_id=133349719`, {})
+      post(`/api/fix/${REPO}/issues/99999?installation_id=${FIXTURE_INSTALLATION_ID}`, {})
     );
     const { succeeded, statuses } = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
     // At least first should succeed or fail gracefully
