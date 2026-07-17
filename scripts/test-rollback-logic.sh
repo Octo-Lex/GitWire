@@ -367,20 +367,20 @@ if [[ "$(uname -s)" == "Linux" ]]; then
   cur_target="$(readlink -f "$TEST_ROOT/releases/current" 2>/dev/null || true)"
   [[ "$cur_target" == "$PREVIOUS_RELEASE_DIR" ]] && ok "rollback: current stays on prior release" || bad "rollback: current moved to $cur_target"
 
-  # ── Test: bootstrap recorded-ID mismatch rejected ───────────────────────
-  # Set BOTH image mocks to the same wrong value so the running==exp check
-  # passes, forcing failure at the bootstrap-specific recorded-ID check.
+  # ── Test: bootstrap rollback uses basic identity (running==exp) ─────────
+  # Bootstrap images are local tags; rollback verifies container image matches
+  # the local tag image (running==exp). No bootstrap-id or RepoDigests check.
   setup_rollback_fixtures bootstrap
   reset_mocks_ok
-  MOCK_IMAGE_ID="sha256:DIFFERENTFROMRECORDED"
-  MOCK_CONTAINER_IMAGE="sha256:DIFFERENTFROMRECORDED"
   set +e; rollback_release; rc=$?; set -e
-  [[ "$rc" -ne 0 ]] && ok "rollback: bootstrap ID mismatch rejected" || bad "rollback: bootstrap ID mismatch not caught"
-  if printf '%s' "$ROLLBACK_FAILURE_STAGE" | grep -q 'bootstrap-id'; then
-    ok "rollback: bootstrap-id stage correct ($ROLLBACK_FAILURE_STAGE)"
-  else
-    bad "rollback: wrong stage: $ROLLBACK_FAILURE_STAGE"
-  fi
+  [[ "$rc" -eq 0 ]] && ok "rollback: bootstrap happy path (basic identity)" || bad "rollback: bootstrap failed at $ROLLBACK_FAILURE_STAGE"
+
+  # Bootstrap rollback with image mismatch (running != exp) IS caught.
+  setup_rollback_fixtures bootstrap
+  reset_mocks_ok
+  MOCK_CONTAINER_IMAGE="sha256:DIFFERENT"
+  set +e; rollback_release; rc=$?; set -e
+  [[ "$rc" -ne 0 ]] && ok "rollback: bootstrap image mismatch rejected" || bad "rollback: bootstrap image mismatch not caught"
 
   # ── Test: release.json/images.env mismatch rejected by validate_release_dir ─
   bad_dir="$TEST_ROOT/releases/mismatch"
