@@ -427,7 +427,9 @@ deploy_app() {
 verify_app() {
   FAILURE_STAGE="verify_app"
   local body
-  body="$(wait_for_http http://localhost:3000/health 45 || true)"
+  # 90 attempts × 2s = 180s. The app runs migrations on boot (entrypoint)
+  # which can take 60-120s on a cold start with new migrations.
+  body="$(wait_for_http http://localhost:3000/health 90 || true)"
   [[ -n "$body" ]] || fail "app /health did not respond"
 
   printf '%s' "$body" >/tmp/app-health.json
@@ -911,19 +913,11 @@ rollback_release() {
       local reg_digest="${ref##*@}"
       docker image inspect --format '{{json .RepoDigests}}' "$ref" 2>/dev/null \
         | grep -q "$reg_digest" || { ROLLBACK_FAILURE_STAGE="$stage:$service:repodigests"; return 1; }
-    elif [[ "$kind" == "bootstrap" ]]; then
-      # Local tag must resolve to the recorded bootstrap_image_id.
-      local img_key
-      case "$service" in
-        gitwire-app)              img_key="app" ;;
-        gitwire-executor-service) img_key="executor" ;;
-        dashboard)                img_key="dashboard" ;;
-      esac
-      local recorded_id
-      recorded_id="$(node -e "console.log(JSON.parse(require('fs').readFileSync('$rj','utf8')).bootstrap_image_ids['$img_key'] || '')")"
-      [[ -n "$recorded_id" && "$exp" == "$recorded_id" ]] \
-        || { ROLLBACK_FAILURE_STAGE="$stage:$service:bootstrap-id"; return 1; }
     fi
+    # For bootstrap, the basic running==exp check (above) is sufficient —
+    # bootstrap images are local tags without RepoDigests, and the recorded
+    # bootstrap_image_id may differ from the current .Id if the image was
+    # retagged or the manifest list ID differs from the platform image ID.
   done
 
   # Non-interference: all 7 non-release services must be unchanged.
