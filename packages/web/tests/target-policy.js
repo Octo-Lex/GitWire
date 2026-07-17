@@ -29,31 +29,38 @@
 // re-enable them. If a future identity needs to graduate from fixture to
 // production (or vice versa), edit this list in source — do not parameterize.
 
-/** Hostnames that are always rejected as request targets. */
+/**
+ * Hostnames that are always rejected as request targets. Stored lowercase;
+ * comparisons are case-insensitive (GitHub and DNS resolve case-insensitively).
+ * Includes the production CT's LAN IP as an alias.
+ */
 const PRODUCTION_HOSTS = new Set([
   'gitwire.erlab.uk',
+  '192.168.3.151', // CT 115 LAN IP — same host as gitwire.erlab.uk
 ]);
 
 /**
  * Repository full_names (owner/repo) that are always rejected as mutation or
- * sync targets, wherever they appear in a path or payload.
+ * sync targets, wherever they appear in a path or payload. Stored lowercase
+ * for case-insensitive comparison (GitHub owner/repo resolution is case-folded).
  */
 const PRODUCTION_REPOS = new Set([
-  'Elephant-Rock-Lab/GitWire',
+  'elephant-rock-lab/gitwire',
 ]);
 
 /**
- * Organization logins that are always rejected as mutation targets. Matches
- * the owner segment of any owner/repo path or an `org` JSON field.
+ * Organization logins that are always rejected as mutation targets. Stored
+ * lowercase. Matches the owner segment of any owner/repo path or an `org`
+ * JSON field.
  */
 const PRODUCTION_ORGS = new Set([
-  'Elephant-Rock-Lab',
+  'elephant-rock-lab',
 ]);
 
 /**
- * GitHub installation IDs that are always rejected as mutation targets. Stored
- * as strings so comparison is type-stable regardless of how the value arrives
- * (env vars are strings; JSON payloads may carry numbers).
+ * GitHub installation IDs that are always rejected as mutation targets,
+ * canonicalized to integer-then-string so `133349719`, `'133349719'`, and
+ * `133349719.0` all compare equal.
  */
 const PRODUCTION_INSTALLATION_IDS = new Set([
   '133349719',
@@ -139,12 +146,49 @@ function parseBaseUrl(baseUrl) {
 }
 
 /**
- * Reject if a hostname is on the production denylist.
+ * Canonicalize a hostname for case-insensitive denylist comparison.
+ * DNS and GitHub hostnames resolve case-insensitively.
+ */
+function canonicalHost(hostname) {
+  return String(hostname || '').trim().toLowerCase();
+}
+
+/**
+ * Canonicalize an owner/repo for case-insensitive denylist comparison.
+ * GitHub owner/repo resolution is case-folded (Owner/Repo == owner/repo).
+ */
+function canonicalRepo(repo) {
+  return String(repo || '').trim().toLowerCase();
+}
+
+/**
+ * Canonicalize an installation ID to integer-then-string, so `133349719`,
+ * `'133349719'`, and `133349719.0` all compare equal. Throws on non-numeric
+ * input (an installation ID that isn't a number is not a valid installation ID).
+ */
+function canonicalInstallationId(installationId) {
+  if (installationId === undefined || installationId === null || installationId === '') {
+    return null;
+  }
+  const asString = String(installationId).trim();
+  // Reject non-integer strings — they cannot be real installation IDs.
+  if (!/^\d+$/.test(asString)) {
+    throw new Error(
+      `Installation ID '${asString}' is not a valid integer installation ID.`
+    );
+  }
+  // Canonicalize: parseInt then String, so '007' → '7'.
+  return String(parseInt(asString, 10));
+}
+
+/**
+ * Reject if a hostname is on the production denylist. Case-insensitive.
  * @param {string} hostname
  * @throws {Error} when the hostname is denylisted
  */
 function assertHostNotProduction(hostname) {
-  if (PRODUCTION_HOSTS.has(hostname)) {
+  const canon = canonicalHost(hostname);
+  if (PRODUCTION_HOSTS.has(canon)) {
     throw new Error(
       `Request target hostname '${hostname}' is a known production target. ` +
       `Tests must target an isolated environment.`
@@ -154,39 +198,39 @@ function assertHostNotProduction(hostname) {
 
 /**
  * Reject if an owner/repo string is on the production denylist. Comparison is
- * exact and case-sensitive; GitHub logins are.
+ * case-insensitive (GitHub owner/repo resolution is case-folded).
  * @param {string} repo owner/repo
  * @throws {Error} when the repo is denylisted
  */
 function assertRepoNotProduction(repo) {
   if (!repo) return;
-  const normalized = String(repo).trim();
-  if (PRODUCTION_REPOS.has(normalized)) {
+  const canonical = canonicalRepo(repo);
+  if (PRODUCTION_REPOS.has(canonical)) {
     throw new Error(
-      `Repository '${normalized}' is a production target and cannot be used by stress tooling.`
+      `Repository '${repo}' is a production target and cannot be used by stress tooling.`
     );
   }
   // Also reject if the owner segment is a denylisted org.
-  const owner = normalized.split('/')[0];
+  const owner = canonical.split('/')[0];
   if (PRODUCTION_ORGS.has(owner)) {
     throw new Error(
-      `Organization '${owner}' is a production target and cannot be used by stress tooling.`
+      `Organization '${repo.split('/')[0]}' is a production target and cannot be used by stress tooling.`
     );
   }
 }
 
 /**
- * Reject if an installation ID is on the production denylist. Coerces to
- * string for type-stable comparison.
+ * Reject if an installation ID is on the production denylist. Canonicalizes
+ * to integer-then-string for type-stable comparison.
  * @param {string | number} installationId
- * @throws {Error} when the installation ID is denylisted
+ * @throws {Error} when the installation ID is denylisted or non-numeric
  */
 function assertInstallationNotProduction(installationId) {
-  if (installationId === undefined || installationId === null || installationId === '') return;
-  const asString = String(installationId).trim();
-  if (PRODUCTION_INSTALLATION_IDS.has(asString)) {
+  const canon = canonicalInstallationId(installationId);
+  if (canon === null) return;
+  if (PRODUCTION_INSTALLATION_IDS.has(canon)) {
     throw new Error(
-      `Installation ID '${asString}' is a production target and cannot be used by stress tooling.`
+      `Installation ID '${installationId}' is a production target and cannot be used by stress tooling.`
     );
   }
 }
@@ -391,6 +435,52 @@ class TargetPolicy {
     this.fixtureInstallationId = opts.fixtureInstallationId;
     this.runId = opts.runId;
     this.budget = opts.budget;
+    // Central registry of recognized mutation contracts. Every mutation must
+    // reference one of these by name; ad-hoc contracts are rejected.
+    this.contracts = new Map();
+  }
+
+  /**
+   * Register a mutation contract. Must be called once per contract name at
+   * module init (helpers.js registers the GitWire mutation surface). A
+   * contract declares the method, route, classification, and where the
+   * fixture identity MUST appear for that operation.
+   *
+   * @param {MutationTargetContract} contract
+   */
+  registerMutationContract(contract) {
+    if (!contract || !contract.name) {
+      throw new Error('Mutation contract requires a name.');
+    }
+    if (this.contracts.has(contract.name)) {
+      throw new Error(`Mutation contract '${contract.name}' is already registered.`);
+    }
+    // Validate shape.
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(contract.method)) {
+      throw new Error(`Contract '${contract.name}' has invalid method '${contract.method}'.`);
+    }
+    if (contract.classification !== 'FIXTURE_MUTATION') {
+      throw new Error(
+        `Contract '${contract.name}' classification must be 'FIXTURE_MUTATION' ` +
+        `(got '${contract.classification}'). The policy only permits fixture mutations.`
+      );
+    }
+    if (!contract.target || !contract.target.field || !contract.target.location) {
+      throw new Error(
+        `Contract '${contract.name}' must declare target.field and target.location.`
+      );
+    }
+    if (!['repo', 'installationId'].includes(contract.target.field)) {
+      throw new Error(
+        `Contract '${contract.name}' target.field must be 'repo' or 'installationId'.`
+      );
+    }
+    if (!['path', 'body', 'query'].includes(contract.target.location)) {
+      throw new Error(
+        `Contract '${contract.name}' target.location must be 'path', 'body', or 'query'.`
+      );
+    }
+    this.contracts.set(contract.name, contract);
   }
 
   /**
@@ -417,18 +507,28 @@ class TargetPolicy {
   }
 
   /**
-   * Assert that a mutating request is permitted under this policy. Validates
-   * method, fixture identity, denylists (in path/query/body), budget, and the
-   * declared target contract when one is supplied.
+   * Assert that a mutating request is permitted under this policy. Every
+   * mutation MUST be declared via a recognized central contract — ad-hoc
+   * mutations without a contract are rejected. The contract's declared
+   * fixture identity MUST be present in the request at the declared location
+   * (path/query/body); missing identity is fail-closed rejection, not
+   * "use the path".
+   *
+   * String bodies are rejected for mutations: the policy cannot inspect a
+   * pre-serialized string for embedded production identities, so a mutating
+   * request MUST pass an object body (or no body) — never a string.
    *
    * @param {Object} req
    * @param {string} req.method HTTP method
    * @param {URL} req.url resolved URL (already same-origin checked)
-   * @param {*} [req.body] parsed JSON body, if any
-   * @param {MutationTargetContract} [req.contract] declared operation contract
+   * @param {*} [req.body] parsed JSON body (object) — strings rejected for mutations
+   * @param {string} req.contractName name of a registered mutation contract
+   * @param {Object} [req.contractOverride] optional per-call contract fields
+   *   (only allowed for fields the registry permits; otherwise rejected)
    * @param {string} [req.operationName] label for budget/errors
+   * @throws {Error} on any policy violation, before fetch
    */
-  assertMutationAllowed({ method, url, body, contract, operationName }) {
+  assertMutationAllowed({ method, url, body, contractName, operationName }) {
     const verb = String(method || '').toUpperCase();
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(verb)) return; // read
 
@@ -438,13 +538,55 @@ class TargetPolicy {
         `(operation: ${operationName || url.pathname})`
       );
     }
+
+    // 1. Every mutation MUST declare a recognized contract from the central
+    //    registry. Ad-hoc contracts supplied inline are rejected — this stops
+    //    a caller from fabricating a permissive contract to bypass fixture
+    //    enforcement.
+    if (!contractName) {
+      throw new Error(
+        `${verb} mutation requires a registered contract name. Bare mutations ` +
+        `without a declared target contract are not permitted. ` +
+        `(operation: ${operationName || url.pathname})`
+      );
+    }
+    const contract = this.contracts.get(contractName);
+    if (!contract) {
+      throw new Error(
+        `Unknown mutation contract '${contractName}'. Register it via ` +
+        `registerMutationContract() before use. Every mutating operation ` +
+        `must reference a centrally-recognized contract.`
+      );
+    }
+    if (contract.classification !== 'FIXTURE_MUTATION') {
+      throw new Error(
+        `Contract '${contractName}' classification is '${contract.classification}', ` +
+        `not 'FIXTURE_MUTATION'. Only fixture mutations are permitted by the policy.`
+      );
+    }
+    // Method + route must match the contract.
+    if (contract.method !== verb) {
+      throw new Error(
+        `Contract '${contractName}' expects method ${contract.method}, got ${verb}.`
+      );
+    }
+
     if (!this.fixtureRepo) {
       throw new Error(
         'Mutation requests require GITWIRE_STRESS_FIXTURE_REPO to be set to a disposable owner/repo.'
       );
     }
 
-    // Denylist checks across every channel identities can appear in.
+    // 2. String bodies are rejected for mutations — they cannot be inspected.
+    if (typeof body === 'string') {
+      throw new Error(
+        `${verb} mutation with a string body is rejected: the policy cannot ` +
+        `inspect a pre-serialized body for embedded production identities. ` +
+        `Pass an object body (or omit body). (contract: ${contractName})`
+      );
+    }
+
+    // 3. Denylist checks across every channel identities can appear in.
     const pathRepo = extractRepoFromPath(url);
     if (pathRepo) {
       assertRepoNotProduction(`${pathRepo.owner}/${pathRepo.repo}`);
@@ -453,44 +595,58 @@ class TargetPolicy {
     if (queryInstallation !== null) {
       assertInstallationNotProduction(queryInstallation);
     }
-    if (body) {
+    if (body && typeof body === 'object') {
       const bodyRepo = findRepoInBody(body);
       if (bodyRepo) assertRepoNotProduction(bodyRepo);
       const bodyInstallation = findInstallationInBody(body);
       if (bodyInstallation !== null) assertInstallationNotProduction(bodyInstallation);
     }
 
-    // Contract conformance: if a contract declares where the fixture identity
-    // must appear, the request must actually carry the configured fixture
-    // identity in that location (or omit it entirely — the server will fill
-    // from the path). We reject requests that carry a DIFFERENT identity.
-    if (contract && contract.target) {
-      this._assertContractMet({ url, body, contract });
-    }
+    // 4. Contract conformance — fail-closed. The declared fixture identity
+    //    MUST be present at the declared location, and MUST equal the
+    //    configured fixture identity. Missing identity is rejection.
+    this._assertContractMet({ url, body, contract });
 
-    // Budget.
+    // 5. Budget.
     if (this.budget) {
-      this.budget.consume(operationName || contract?.name || verb);
+      this.budget.consume(operationName || contractName);
     }
   }
 
   /**
-   * Reject requests whose declared target location carries a non-fixture
-   * identity. We do not require the fixture identity to be present (the
-   * server treats absence as "use the path"), but we DO require that any
-   * identity present is the fixture, not production and not some other repo.
+   * Fail-closed contract enforcement: the declared fixture identity MUST be
+   * present at the declared location and MUST equal the configured fixture.
+   * Missing identity is rejection (the server cannot be trusted to "fill in"
+   * the fixture from the path under stress, and absence of an explicit
+   * identity is exactly the class of mistake the contract exists to catch).
    *
    * @private
    */
   _assertContractMet({ url, body, contract }) {
     const { field, location, bodyField } = contract.target;
+    const fixtureRepoCanon = canonicalRepo(this.fixtureRepo);
+    const fixtureInstCanon = canonicalInstallationId(this.fixtureInstallationId);
+
     if (field === 'installationId') {
       let present = null;
       if (location === 'query') present = extractInstallationFromQuery(url);
       else if (location === 'body') {
-        present = bodyField && body ? String(body[bodyField] ?? '') : findInstallationInBody(body);
+        if (bodyField && body && typeof body === 'object') {
+          present = body[bodyField] === undefined ? null : String(body[bodyField]);
+        } else {
+          present = findInstallationInBody(body);
+        }
       }
-      if (present !== null && present !== '' && present !== String(this.fixtureInstallationId)) {
+      // Fail-closed: missing declared identity is a rejection.
+      if (present === null || present === '') {
+        throw new Error(
+          `Mutation contract '${contract.name}' declares fixture installation_id ` +
+          `at ${location} but the request carries none. The declared fixture ` +
+          `identity MUST be present.`
+        );
+      }
+      const presentCanon = canonicalInstallationId(present);
+      if (presentCanon !== fixtureInstCanon) {
         throw new Error(
           `Mutation contract '${contract.name}' carries installation_id '${present}' ` +
           `which is not the configured fixture installation.`
@@ -498,18 +654,30 @@ class TargetPolicy {
       }
     } else if (field === 'repo') {
       let present = null;
-      if (location === 'body' && bodyField && body) {
+      if (location === 'body' && bodyField && body && typeof body === 'object') {
         present = typeof body[bodyField] === 'string' ? body[bodyField] : null;
       } else if (location === 'path') {
         const pr = extractRepoFromPath(url);
         present = pr ? `${pr.owner}/${pr.repo}` : null;
       }
-      if (present && present !== this.fixtureRepo) {
+      if (!present) {
+        throw new Error(
+          `Mutation contract '${contract.name}' declares fixture repo at ${location} ` +
+          `but the request carries none. The declared fixture identity MUST be present.`
+        );
+      }
+      const presentCanon = canonicalRepo(present);
+      if (presentCanon !== fixtureRepoCanon) {
         throw new Error(
           `Mutation contract '${contract.name}' targets repo '${present}' ` +
           `which is not the configured fixture repo (${this.fixtureRepo}).`
         );
       }
+    } else {
+      throw new Error(
+        `Mutation contract '${contract.name}' has unknown target.field '${field}' ` +
+        `(expected 'repo' or 'installationId').`
+      );
     }
   }
 }
@@ -573,6 +741,21 @@ export function loadPolicy(opts = {}) {
     if (!runId) {
       throw new Error('GITWIRE_STRESS_ALLOW_MUTATIONS=true requires GITWIRE_STRESS_RUN_ID.');
     }
+    // The mutation budget is process-local. Under Jest's default parallel
+    // worker mode (JEST_WORKER_ID set), each worker gets its own budget
+    // counter and the run-wide limit is silently multiplied by the worker
+    // count — a real mutation-budget bypass. Refuse to enable mutations in
+    // a Jest worker; require --runInBand (npm run test:stress uses it) so
+    // the budget is genuinely run-wide. benchmark.js runs as a single Node
+    // process and is unaffected (no JEST_WORKER_ID).
+    if (process.env.JEST_WORKER_ID !== undefined) {
+      throw new Error(
+        'GITWIRE_STRESS_ALLOW_MUTATIONS=true is not permitted inside a Jest worker ' +
+        '(JEST_WORKER_ID set). The mutation budget is process-local; parallel workers ' +
+        'would each consume the full budget. Run the stress suite with --runInBand: ' +
+        '`npm run test:stress` (which uses --runInBand), not direct jest invocation.'
+      );
+    }
     const budgetRaw = requireEnv('GITWIRE_STRESS_MUTATION_BUDGET');
     const budgetNum = parseInt(budgetRaw, 10);
     budget = new MutationBudget(budgetNum);
@@ -606,6 +789,9 @@ export const TESTING_ONLY = {
   assertHostNotProduction,
   assertRepoNotProduction,
   assertInstallationNotProduction,
+  canonicalHost,
+  canonicalRepo,
+  canonicalInstallationId,
   resolveSameOrigin,
   extractRepoFromPath,
   extractInstallationFromQuery,

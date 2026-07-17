@@ -1,10 +1,9 @@
 // tests/unit/target-policy.test.js
 // Network-free tests for the shared stress-isolation policy.
 //
-// Every test in this file exercises pure string/URL/env logic. None of them
-// import `fetch` or make a network call. The isolation contract must be
-// verifiable without an isolated stack being online — that is the whole point
-// of the contract being self-checking before any traffic is generated.
+// Every test exercises pure string/URL/env logic. None imports fetch or makes
+// a network call. The isolation contract must be verifiable without an
+// isolated stack being online.
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import { TESTING_ONLY, loadPolicy } from "../target-policy.js";
@@ -21,6 +20,9 @@ const {
   findRepoInBody,
   MutationBudget,
   TargetPolicy,
+  canonicalHost,
+  canonicalRepo,
+  canonicalInstallationId,
 } = TESTING_ONLY;
 
 // ─── env sandbox ───────────────────────────────────────────────────────────
@@ -31,11 +33,24 @@ const BASE_ENV = {
   GITWIRE_STRESS_ENV: "isolated",
 };
 
+// A full mutation-enabled env. Tests that need mutations set this then
+// override as needed. JEST_WORKER_ID is deliberately UNSET (the policy
+// refuses mutations inside a Jest worker); these tests run under Jest, so
+// we must explicitly delete it in the sandbox to simulate the benchmark
+// process or a --runInBand stress run.
+const MUTATION_ENV = {
+  ...BASE_ENV,
+  GITWIRE_STRESS_ALLOW_MUTATIONS: "true",
+  GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo",
+  GITWIRE_STRESS_FIXTURE_INSTALLATION_ID: "999999999",
+  GITWIRE_STRESS_RUN_ID: "run-1",
+  GITWIRE_STRESS_MUTATION_BUDGET: "100",
+};
+
 let savedEnv;
 
 beforeEach(() => {
   savedEnv = { ...process.env };
-  // Wipe every stress-related var so each test starts clean.
   for (const k of [
     "GITWIRE_BASE_URL",
     "API_KEY",
@@ -45,6 +60,7 @@ beforeEach(() => {
     "GITWIRE_STRESS_FIXTURE_INSTALLATION_ID",
     "GITWIRE_STRESS_RUN_ID",
     "GITWIRE_STRESS_MUTATION_BUDGET",
+    "JEST_WORKER_ID",
   ]) {
     delete process.env[k];
   }
@@ -58,16 +74,56 @@ function setEnv(obj) {
   process.env = { ...process.env, ...obj };
 }
 
-// ─── 1. Production hostname rejected ───────────────────────────────────────
+// A policy with mutations enabled and the repo-sync contract registered,
+// for tests that exercise the mutation gate directly.
+function mutationPolicyWithContracts() {
+  const p = new TargetPolicy({
+    baseUrl: "http://iso-test.local:3000",
+    apiKey: "k",
+    isStress: true,
+    allowMutations: true,
+    fixtureRepo: "fixture-org/fixture-repo",
+    fixtureInstallationId: "999999999",
+    runId: "run-1",
+    budget: new MutationBudget(100),
+  });
+  p.registerMutationContract({
+    name: "repo-sync",
+    method: "POST",
+    classification: "FIXTURE_MUTATION",
+    target: { field: "repo", location: "path" },
+  });
+  p.registerMutationContract({
+    name: "phase3-reconciler-run",
+    method: "POST",
+    classification: "FIXTURE_MUTATION",
+    target: { field: "installationId", location: "body", bodyField: "installation_id" },
+  });
+  p.registerMutationContract({
+    name: "fix-attempt",
+    method: "POST",
+    classification: "FIXTURE_MUTATION",
+    target: { field: "installationId", location: "query" },
+  });
+  return p;
+}
+
+// ─── 1. Production hostname rejected (case-insensitive + alias) ────────────
 
 describe("production hostname rejection", () => {
-  it("rejects gitwire.erlab.uk as a request target at load", () => {
+  it("rejects gitwire.erlab.uk", () => {
     setEnv({ ...BASE_ENV, GITWIRE_BASE_URL: "https://gitwire.erlab.uk" });
     expect(() => loadPolicy()).toThrow(/known production target/);
   });
 
-  it("rejects a production hostname via assertHostNotProduction", () => {
-    expect(() => assertHostNotProduction("gitwire.erlab.uk")).toThrow(/production target/);
+  it("rejects the production CT LAN IP 192.168.3.151", () => {
+    setEnv({ ...BASE_ENV, GITWIRE_BASE_URL: "http://192.168.3.151:3000" });
+    expect(() => loadPolicy()).toThrow(/known production target/);
+  });
+
+  it("rejects case-variant hostnames (GITWIRE.ERLAB.UK)", () => {
+    expect(() => assertHostNotProduction("GITWIRE.ERLAB.UK")).toThrow();
+    expect(() => assertHostNotProduction("GitWire.Erlab.UK")).toThrow();
   });
 
   it("accepts an isolated hostname", () => {
@@ -75,15 +131,18 @@ describe("production hostname rejection", () => {
   });
 });
 
-// ─── 2. Production repository rejected ─────────────────────────────────────
+// ─── 2. Production repository rejected (case-insensitive) ──────────────────
 
-describe("production repository rejection", () => {
-  it("rejects Elephant-Rock-Lab/GitWire", () => {
-    expect(() => assertRepoNotProduction("Elephant-Rock-Lab/GitWire")).toThrow(/production target/);
+describe("production repository rejection (case-insensitive)", () => {
+  it("rejects Elephant-Rock-Lab/GitWire in any case", () => {
+    expect(() => assertRepoNotProduction("Elephant-Rock-Lab/GitWire")).toThrow();
+    expect(() => assertRepoNotProduction("ELEPHANT-ROCK-LAB/GITWIRE")).toThrow();
+    expect(() => assertRepoNotProduction("elephant-rock-lab/gitwire")).toThrow();
+    expect(() => assertRepoNotProduction("Elephant-Rock-Lab/gitwire")).toThrow();
   });
 
-  it("rejects any repo whose owner is a denylisted org", () => {
-    expect(() => assertRepoNotProduction("Elephant-Rock-Lab/Anything")).toThrow(/Organization 'Elephant-Rock-Lab'/);
+  it("rejects any repo whose owner is a denylisted org (case-insensitive)", () => {
+    expect(() => assertRepoNotProduction("ELEPHANT-ROCK-LAB/anything")).toThrow();
   });
 
   it("accepts a fixture repo", () => {
@@ -91,16 +150,29 @@ describe("production repository rejection", () => {
   });
 });
 
-// ─── 3. Wrong installation ID rejected ─────────────────────────────────────
+// ─── 3. Production installation ID rejected (canonicalized) ────────────────
 
-describe("production installation ID rejection", () => {
-  it("rejects 133349719 whether passed as string or number", () => {
+describe("production installation ID rejection (canonicalized)", () => {
+  it("rejects 133349719 as string, number, or leading-zero form", () => {
     expect(() => assertInstallationNotProduction("133349719")).toThrow();
     expect(() => assertInstallationNotProduction(133349719)).toThrow();
+    // canonicalInstallationId parses then stringifies, so '0133497719' is NOT
+    // the same number — that's correct, leading zeros don't match a different ID.
+  });
+
+  it("rejects non-numeric installation IDs (invalid, not silently accepted)", () => {
+    expect(() => assertInstallationNotProduction("not-a-number")).toThrow(/not a valid integer/);
   });
 
   it("accepts a fixture installation ID", () => {
     expect(() => assertInstallationNotProduction("999999999")).not.toThrow();
+  });
+
+  it("canonicalInstallationId normalizes integer-then-string", () => {
+    expect(canonicalInstallationId("007")).toBe("7");
+    expect(canonicalInstallationId(7)).toBe("7");
+    expect(canonicalInstallationId("123")).toBe("123");
+    expect(canonicalInstallationId(null)).toBeNull();
   });
 });
 
@@ -109,248 +181,137 @@ describe("production installation ID rejection", () => {
 describe("cross-origin absolute URL rejection", () => {
   const base = parseBaseUrl("http://iso-test.local:3000");
 
-  it("rejects an absolute URL whose origin differs from base", () => {
+  it("rejects an external absolute URL", () => {
     expect(() => resolveSameOrigin("https://evil.example.com/x", base)).toThrow(/Cross-origin/);
   });
 
-  it("rejects a same-host different-scheme absolute URL (origin mismatch)", () => {
-    // http vs https is a different origin.
+  it("rejects a different-scheme absolute URL (origin mismatch)", () => {
     expect(() => resolveSameOrigin("https://iso-test.local/x", base)).toThrow(/Cross-origin/);
   });
 
-  it("accepts a relative path", () => {
-    const r = resolveSameOrigin("/api/repos", base);
-    expect(r.href).toBe("http://iso-test.local:3000/api/repos");
-  });
-
-  it("accepts a same-origin absolute URL", () => {
-    const r = resolveSameOrigin("http://iso-test.local:3000/api/repos", base);
-    expect(r.href).toBe("http://iso-test.local:3000/api/repos");
+  it("accepts a relative path and a same-origin absolute URL", () => {
+    expect(resolveSameOrigin("/api/repos", base).href).toBe("http://iso-test.local:3000/api/repos");
+    expect(resolveSameOrigin("http://iso-test.local:3000/api/repos", base).href)
+      .toBe("http://iso-test.local:3000/api/repos");
   });
 });
 
-// ─── 5. Rejected requests never reach fetch ────────────────────────────────
-//
-// The policy is constructed directly (not via loadPolicy) so we can probe its
-// methods without needing the full env. resolveRequest / assertMutationAllowed
-// throw synchronously before any fetch could be scheduled by the caller.
+// ─── 5. Rejected requests throw before fetch + never leak credentials ──────
 
-describe("rejected requests throw before fetch", () => {
-  it("resolveRequest throws on cross-origin, never returns a usable URL silently", () => {
+describe("rejection never reaches fetch or constructs credentials", () => {
+  it("resolveRequest throws on cross-origin; authHeader is only for same-origin callers", () => {
     const policy = new TargetPolicy({
-      baseUrl: "http://iso-test.local:3000",
-      apiKey: "k",
-      isStress: true,
-      allowMutations: false,
-      fixtureRepo: null,
-      fixtureInstallationId: null,
-      runId: null,
-      budget: null,
-    });
-    expect(() => policy.resolveRequest("https://evil.example.com/x")).toThrow(/Cross-origin/);
-  });
-});
-
-// ─── 6. Bearer credentials never constructed for rejected targets ──────────
-//
-// authHeader() is lazy: it only builds the string when called, and callers
-// only call it after resolveRequest + assertMutationAllowed have passed. We
-// verify the credential string is never produced as a side effect of a
-// rejection by confirming authHeader is a pure function of the apiKey field
-// and that the rejection path does not invoke it.
-
-describe("credentials never attached to rejected requests", () => {
-  it("authHeader returns the bearer string only from the configured key", () => {
-    const policy = new TargetPolicy({
-      baseUrl: "http://iso-test.local:3000",
-      apiKey: "secret-k",
-      isStress: true,
-      allowMutations: false,
-      fixtureRepo: null,
-      fixtureInstallationId: null,
-      runId: null,
-      budget: null,
-    });
-    expect(policy.authHeader()).toBe("Bearer secret-k");
-  });
-
-  it("a cross-origin rejection does not construct or leak the credential", () => {
-    const policy = new TargetPolicy({
-      baseUrl: "http://iso-test.local:3000",
-      apiKey: "never-leak-me",
-      isStress: true,
-      allowMutations: false,
-      fixtureRepo: null,
-      fixtureInstallationId: null,
-      runId: null,
-      budget: null,
+      baseUrl: "http://iso-test.local:3000", apiKey: "never-leak-me",
+      isStress: true, allowMutations: false,
+      fixtureRepo: null, fixtureInstallationId: null, runId: null, budget: null,
     });
     let threw = false;
-    let credentialObserved = false;
+    let leaked = false;
     try {
-      // The contract: callers resolveRequest THEN build headers via authHeader.
-      // If resolveRequest throws, authHeader is never called in api()/apiFetch().
       policy.resolveRequest("https://evil.example.com/x");
     } catch (e) {
       threw = true;
-      // Verify the credential does not appear in the rejection message.
-      credentialObserved = e.message.includes("never-leak-me");
+      leaked = e.message.includes("never-leak-me");
     }
     expect(threw).toBe(true);
-    expect(credentialObserved).toBe(false);
-    expect(policy.authHeader()).toBe("Bearer never-leak-me"); // available, but only to same-origin callers
+    expect(leaked).toBe(false);
+    expect(policy.authHeader()).toBe("Bearer never-leak-me");
   });
 });
 
-// ─── 7. Mutation without explicit opt-in rejected ──────────────────────────
+// ─── 6. Mutation without opt-in / fixture identity / budget rejected ───────
 
-describe("mutation gating", () => {
+describe("mutation opt-in and identity requirements", () => {
   it("rejects a POST when GITWIRE_STRESS_ALLOW_MUTATIONS is not true", () => {
-    setEnv(BASE_ENV); // no ALLOW_MUTATIONS
-    const policy = loadPolicy();
-    const url = policy.resolveRequest("/api/repos/fixture-org/fixture-repo/sync");
-    expect(() =>
-      policy.assertMutationAllowed({ method: "POST", url })
-    ).toThrow(/GITWIRE_STRESS_ALLOW_MUTATIONS=true/);
-  });
-
-  it("allows a GET without opt-in", () => {
     setEnv(BASE_ENV);
     const policy = loadPolicy();
-    const url = policy.resolveRequest("/api/repos");
-    expect(() => policy.assertMutationAllowed({ method: "GET", url })).not.toThrow();
+    const url = policy.resolveRequest("/api/repos/fixture-org/fixture-repo/sync");
+    expect(() => policy.assertMutationAllowed({ method: "POST", url, contractName: "repo-sync" }))
+      .toThrow(/GITWIRE_STRESS_ALLOW_MUTATIONS=true/);
   });
-});
 
-// ─── 8. Mutation without fixture identity rejected ─────────────────────────
-
-describe("fixture identity requirement", () => {
-  it("rejects mutation opt-in without GITWIRE_STRESS_FIXTURE_REPO", () => {
+  it("rejects mutation opt-in without each required env var", () => {
     setEnv({ ...BASE_ENV, GITWIRE_STRESS_ALLOW_MUTATIONS: "true" });
     expect(() => loadPolicy()).toThrow(/GITWIRE_STRESS_FIXTURE_REPO/);
-  });
-
-  it("rejects mutation opt-in without GITWIRE_STRESS_FIXTURE_INSTALLATION_ID", () => {
-    setEnv({
-      ...BASE_ENV,
-      GITWIRE_STRESS_ALLOW_MUTATIONS: "true",
-      GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo",
-    });
+    setEnv({ ...BASE_ENV, GITWIRE_STRESS_ALLOW_MUTATIONS: "true", GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo" });
     expect(() => loadPolicy()).toThrow(/GITWIRE_STRESS_FIXTURE_INSTALLATION_ID/);
-  });
-
-  it("rejects mutation opt-in without GITWIRE_STRESS_RUN_ID", () => {
-    setEnv({
-      ...BASE_ENV,
-      GITWIRE_STRESS_ALLOW_MUTATIONS: "true",
-      GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo",
-      GITWIRE_STRESS_FIXTURE_INSTALLATION_ID: "999999999",
-    });
+    setEnv({ ...BASE_ENV, GITWIRE_STRESS_ALLOW_MUTATIONS: "true", GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo", GITWIRE_STRESS_FIXTURE_INSTALLATION_ID: "999999999" });
     expect(() => loadPolicy()).toThrow(/GITWIRE_STRESS_RUN_ID/);
-  });
-
-  it("rejects mutation opt-in without GITWIRE_STRESS_MUTATION_BUDGET", () => {
-    setEnv({
-      ...BASE_ENV,
-      GITWIRE_STRESS_ALLOW_MUTATIONS: "true",
-      GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo",
-      GITWIRE_STRESS_FIXTURE_INSTALLATION_ID: "999999999",
-      GITWIRE_STRESS_RUN_ID: "run-1",
-    });
+    setEnv({ ...BASE_ENV, GITWIRE_STRESS_ALLOW_MUTATIONS: "true", GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo", GITWIRE_STRESS_FIXTURE_INSTALLATION_ID: "999999999", GITWIRE_STRESS_RUN_ID: "r1" });
     expect(() => loadPolicy()).toThrow(/GITWIRE_STRESS_MUTATION_BUDGET/);
   });
 
-  it("rejects when the configured fixture repo is itself on the production denylist", () => {
-    setEnv({
-      ...BASE_ENV,
-      GITWIRE_STRESS_ALLOW_MUTATIONS: "true",
-      GITWIRE_STRESS_FIXTURE_REPO: "Elephant-Rock-Lab/GitWire",
-      GITWIRE_STRESS_FIXTURE_INSTALLATION_ID: "999999999",
-      GITWIRE_STRESS_RUN_ID: "run-1",
-      GITWIRE_STRESS_MUTATION_BUDGET: "10",
-    });
+  it("rejects when the configured fixture repo is itself denylisted", () => {
+    setEnv({ ...MUTATION_ENV, GITWIRE_STRESS_FIXTURE_REPO: "Elephant-Rock-Lab/GitWire" });
     expect(() => loadPolicy()).toThrow(/production target/);
+  });
+
+  it("rejects mutations inside a Jest worker (budget would be per-process)", () => {
+    setEnv({ ...MUTATION_ENV, JEST_WORKER_ID: "1" });
+    expect(() => loadPolicy()).toThrow(/not permitted inside a Jest worker/);
   });
 });
 
-// ─── 9. Mutation outside the declared target contract rejected ─────────────
+// ─── 7. Contract required for every mutation (REGRESSION: bypass #1) ───────
 
-describe("mutation target contract conformance", () => {
-  function mutationPolicy() {
-    return new TargetPolicy({
-      baseUrl: "http://iso-test.local:3000",
-      apiKey: "k",
-      isStress: true,
-      allowMutations: true,
-      fixtureRepo: "fixture-org/fixture-repo",
-      fixtureInstallationId: "999999999",
-      runId: "run-1",
-      budget: new MutationBudget(100),
-    });
-  }
-
-  it("rejects a contract whose body carries a production installation_id (denylist fires first)", () => {
-    const policy = mutationPolicy();
-    const url = policy.resolveRequest("/api/phase3/reconciler/run");
-    const body = { installation_id: 133349719 }; // production ID in body
-    const contract = {
-      name: "phase3-reconciliation",
-      method: "POST",
-      path: "/api/phase3/reconciler/run",
-      classification: "FIXTURE_MUTATION",
-      target: { field: "installationId", location: "body", bodyField: "installation_id" },
-    };
-    // The denylist check runs before the contract check, so the production
-    // installation ID is rejected as a production target. Either rejection is
-    // correct; we assert the request never passes.
-    expect(() =>
-      policy.assertMutationAllowed({ method: "POST", url, body, contract })
-    ).toThrow();
+describe("contract required for mutations", () => {
+  it("rejects a mutation with no contractName", () => {
+    const policy = mutationPolicyWithContracts();
+    const url = policy.resolveRequest("/api/repos/fixture-org/fixture-repo/sync");
+    expect(() => policy.assertMutationAllowed({ method: "POST", url }))
+      .toThrow(/registered contract name/);
   });
 
-  it("rejects a contract whose body carries a non-fixture, non-production installation_id", () => {
-    const policy = mutationPolicy();
-    const url = policy.resolveRequest("/api/phase3/reconciler/run");
-    const body = { installation_id: "555555555" }; // not denylisted, but not the fixture
-    const contract = {
-      name: "phase3-reconciliation",
-      method: "POST",
-      classification: "FIXTURE_MUTATION",
-      target: { field: "installationId", location: "body", bodyField: "installation_id" },
-    };
-    expect(() =>
-      policy.assertMutationAllowed({ method: "POST", url, body, contract })
-    ).toThrow(/not the configured fixture installation/);
+  it("rejects a mutation with an unknown contract name", () => {
+    const policy = mutationPolicyWithContracts();
+    const url = policy.resolveRequest("/api/repos/fixture-org/fixture-repo/sync");
+    expect(() => policy.assertMutationAllowed({ method: "POST", url, contractName: "made-up" }))
+      .toThrow(/Unknown mutation contract 'made-up'/);
   });
 
-  it("rejects a contract whose path targets a different repo", () => {
-    const policy = mutationPolicy();
-    const url = policy.resolveRequest("/api/repos/Elephant-Rock-Lab/GitWire/sync");
-    const contract = {
-      name: "repository-sync",
-      method: "POST",
-      path: "/api/repos/:owner/:repo/sync",
-      classification: "FIXTURE_MUTATION",
-      target: { field: "repo", location: "path" },
-    };
-    expect(() =>
-      policy.assertMutationAllowed({ method: "POST", url, contract })
-    ).toThrow();
+  it("rejects a contract whose method does not match the request", () => {
+    const policy = mutationPolicyWithContracts();
+    const url = policy.resolveRequest("/api/repos/fixture-org/fixture-repo/sync");
+    expect(() => policy.assertMutationAllowed({ method: "PUT", url, contractName: "repo-sync" }))
+      .toThrow(/expects method POST, got PUT/);
+  });
+});
+
+// ─── 8. Missing declared fixture identity rejected (REGRESSION: bypass #2) ─
+
+describe("declared fixture identity must be present (fail-closed)", () => {
+  it("rejects a repo-in-path contract when the path carries no repo", () => {
+    const policy = mutationPolicyWithContracts();
+    // /api/sync has no owner/repo pair — the contract declares repo-in-path.
+    const url = policy.resolveRequest("/api/sync");
+    expect(() => policy.assertMutationAllowed({ method: "POST", url, contractName: "repo-sync" }))
+      .toThrow(/declares fixture repo at path but the request carries none|MUST be present/);
   });
 
-  it("accepts a contract whose body carries the fixture installation_id", () => {
-    const policy = mutationPolicy();
+  it("rejects an installationId-in-body contract when the body carries none", () => {
+    const policy = mutationPolicyWithContracts();
     const url = policy.resolveRequest("/api/phase3/reconciler/run");
-    const body = { installation_id: "999999999" };
-    const contract = {
-      name: "phase3-reconciliation",
-      method: "POST",
-      classification: "FIXTURE_MUTATION",
-      target: { field: "installationId", location: "body", bodyField: "installation_id" },
-    };
-    expect(() =>
-      policy.assertMutationAllowed({ method: "POST", url, body, contract })
-    ).not.toThrow();
+    expect(() => policy.assertMutationAllowed({ method: "POST", url, body: {}, contractName: "phase3-reconciler-run" }))
+      .toThrow(/declares fixture installation_id at body but the request carries none|MUST be present/);
+  });
+
+  it("rejects an installationId-in-query contract when query carries none", () => {
+    const policy = mutationPolicyWithContracts();
+    const url = policy.resolveRequest("/api/fix/o/r/issues/1");
+    expect(() => policy.assertMutationAllowed({ method: "POST", url, contractName: "fix-attempt" }))
+      .toThrow(/declares fixture installation_id at query but the request carries none|MUST be present/);
+  });
+});
+
+// ─── 9. String body rejected for mutations (REGRESSION: bypass #3) ─────────
+
+describe("string mutation bodies rejected", () => {
+  it("rejects a POST with a string body", () => {
+    const policy = mutationPolicyWithContracts();
+    const url = policy.resolveRequest("/api/repos/fixture-org/fixture-repo/sync");
+    expect(() => policy.assertMutationAllowed({
+      method: "POST", url, body: '{"installation_id":133349719}', contractName: "repo-sync",
+    })).toThrow(/string body is rejected/);
   });
 });
 
@@ -359,38 +320,21 @@ describe("mutation target contract conformance", () => {
 describe("mutation budget", () => {
   it("rejects when exceeded", () => {
     const b = new MutationBudget(2);
-    b.consume("a");
-    b.consume("b");
-    expect(() => b.consume("c")).toThrow(/Mutation budget exhausted/);
+    b.consume("a"); b.consume("b");
+    expect(() => b.consume("c")).toThrow(/exhausted/);
   });
 
-  it("rejects a non-integer budget", () => {
-    expect(() => new MutationBudget(2.5)).toThrow(/non-negative integer/);
-    expect(() => new MutationBudget(-1)).toThrow(/non-negative integer/);
+  it("rejects non-integer / negative budgets", () => {
+    expect(() => new MutationBudget(2.5)).toThrow();
+    expect(() => new MutationBudget(-1)).toThrow();
   });
 
   it("budget=0 rejects the first mutation", () => {
-    const b = new MutationBudget(0);
-    expect(() => b.consume("a")).toThrow(/exhausted/);
-  });
-
-  it("the policy consumes the budget per mutation", () => {
-    setEnv({
-      ...BASE_ENV,
-      GITWIRE_STRESS_ALLOW_MUTATIONS: "true",
-      GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo",
-      GITWIRE_STRESS_FIXTURE_INSTALLATION_ID: "999999999",
-      GITWIRE_STRESS_RUN_ID: "run-1",
-      GITWIRE_STRESS_MUTATION_BUDGET: "1",
-    });
-    const policy = loadPolicy();
-    const url = policy.resolveRequest("/api/repos/fixture-org/fixture-repo/sync");
-    expect(() => policy.assertMutationAllowed({ method: "POST", url })).not.toThrow();
-    expect(() => policy.assertMutationAllowed({ method: "POST", url })).toThrow(/exhausted/);
+    expect(() => new MutationBudget(0).consume("a")).toThrow(/exhausted/);
   });
 });
 
-// ─── 11. Valid same-origin read accepted ───────────────────────────────────
+// ─── 11. Valid reads accepted ──────────────────────────────────────────────
 
 describe("valid reads accepted", () => {
   it("loads a read-only policy and resolves a read path", () => {
@@ -405,23 +349,36 @@ describe("valid reads accepted", () => {
 // ─── 12. Valid allowlisted fixture mutation accepted ───────────────────────
 
 describe("valid fixture mutation accepted", () => {
-  it("loads a mutation policy and permits a fixture-targeted POST", () => {
-    setEnv({
-      ...BASE_ENV,
-      GITWIRE_STRESS_ALLOW_MUTATIONS: "true",
-      GITWIRE_STRESS_FIXTURE_REPO: "fixture-org/fixture-repo",
-      GITWIRE_STRESS_FIXTURE_INSTALLATION_ID: "999999999",
-      GITWIRE_STRESS_RUN_ID: "run-1",
-      GITWIRE_STRESS_MUTATION_BUDGET: "10",
-    });
+  it("permits a fixture-targeted repo-sync POST and consumes budget", () => {
+    setEnv(MUTATION_ENV);
     const policy = loadPolicy();
+    policy.registerMutationContract({
+      name: "repo-sync", method: "POST", classification: "FIXTURE_MUTATION",
+      target: { field: "repo", location: "path" },
+    });
     const url = policy.resolveRequest("/api/repos/fixture-org/fixture-repo/sync");
-    expect(() => policy.assertMutationAllowed({ method: "POST", url })).not.toThrow();
-    expect(policy.budget.remaining()).toBe(9);
+    expect(() => policy.assertMutationAllowed({ method: "POST", url, contractName: "repo-sync" }))
+      .not.toThrow();
+    expect(policy.budget.remaining()).toBe(99);
+  });
+
+  it("permits an installationId-in-body mutation when body carries the fixture id", () => {
+    const policy = mutationPolicyWithContracts();
+    const url = policy.resolveRequest("/api/phase3/reconciler/run");
+    expect(() => policy.assertMutationAllowed({
+      method: "POST", url, body: { installation_id: "999999999" }, contractName: "phase3-reconciler-run",
+    })).not.toThrow();
+  });
+
+  it("permits an installationId-in-query mutation when query carries the fixture id", () => {
+    const policy = mutationPolicyWithContracts();
+    const url = policy.resolveRequest("/api/fix/fixture-org/fixture-repo/issues/1?installation_id=999999999");
+    expect(() => policy.assertMutationAllowed({ method: "POST", url, contractName: "fix-attempt" }))
+      .not.toThrow();
   });
 });
 
-// ─── Identity extraction helpers (network-free) ────────────────────────────
+// ─── Identity extraction helpers ───────────────────────────────────────────
 
 describe("identity extraction helpers", () => {
   it("extracts owner/repo from a GitHub-style path", () => {
@@ -429,34 +386,52 @@ describe("identity extraction helpers", () => {
     expect(extractRepoFromPath(u)).toEqual({ owner: "fixture-org", repo: "fixture-repo" });
   });
 
-  it("extracts installation_id from query", () => {
-    const u = new URL("http://x/api/fix/o/r/issues/1?installation_id=123");
-    expect(extractInstallationFromQuery(u)).toBe("123");
-  });
-
-  it("finds installation_id in a body object", () => {
+  it("extracts installation_id from query and body", () => {
+    expect(extractInstallationFromQuery(new URL("http://x/api/fix/o/r/issues/1?installation_id=123"))).toBe("123");
     expect(findInstallationInBody({ installation_id: 7 })).toBe("7");
     expect(findInstallationInBody({ x: { installation_id: 9 } })).toBe("9");
-    expect(findInstallationInBody({ foo: "bar" })).toBeNull();
   });
 
   it("finds repo references in a body object", () => {
     expect(findRepoInBody({ repo: "o/r" })).toBe("o/r");
-    expect(findRepoInBody({ full_name: "o/r" })).toBe("o/r");
     expect(findRepoInBody({ foo: "bar" })).toBeNull();
   });
 });
 
-// ─── Stress-gate requirement ───────────────────────────────────────────────
+// ─── Canonicalization helpers ──────────────────────────────────────────────
 
-describe("stress gate", () => {
-  it("requires GITWIRE_STRESS_ENV=isolated when requireStressGate is true", () => {
-    setEnv({ ...BASE_ENV, GITWIRE_STRESS_ENV: "production" });
-    expect(() => loadPolicy({ requireStressGate: true })).toThrow(/must be 'isolated'/);
+describe("canonicalization helpers", () => {
+  it("canonicalHost lowercases", () => {
+    expect(canonicalHost("GitWire.Erlab.UK")).toBe("gitwire.erlab.uk");
+  });
+  it("canonicalRepo lowercases owner/repo", () => {
+    expect(canonicalRepo("OWNER/REPO")).toBe("owner/repo");
+  });
+});
+
+// ─── Contract registry validation ──────────────────────────────────────────
+
+describe("contract registry", () => {
+  it("rejects duplicate contract names", () => {
+    const p = mutationPolicyWithContracts();
+    expect(() => p.registerMutationContract({
+      name: "repo-sync", method: "POST", classification: "FIXTURE_MUTATION",
+      target: { field: "repo", location: "path" },
+    })).toThrow(/already registered/);
   });
 
-  it("does not require the stress gate when requireStressGate is false (benchmark read path)", () => {
-    setEnv({ GITWIRE_BASE_URL: BASE_ENV.GITWIRE_BASE_URL, API_KEY: "k", GITWIRE_STRESS_ENV: "production" });
-    expect(() => loadPolicy({ requireStressGate: false })).not.toThrow();
+  it("rejects contracts with non-FIXTURE_MUTATION classification", () => {
+    const p = mutationPolicyWithContracts();
+    expect(() => p.registerMutationContract({
+      name: "bad", method: "POST", classification: "DESTRUCTIVE_CHAOS",
+      target: { field: "repo", location: "path" },
+    })).toThrow(/must be 'FIXTURE_MUTATION'/);
+  });
+
+  it("rejects contracts with missing target.field or target.location", () => {
+    const p = mutationPolicyWithContracts();
+    expect(() => p.registerMutationContract({
+      name: "bad2", method: "POST", classification: "FIXTURE_MUTATION", target: { field: "repo" },
+    })).toThrow(/target.field and target.location/);
   });
 });

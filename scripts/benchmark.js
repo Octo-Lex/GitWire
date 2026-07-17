@@ -31,11 +31,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const POLICY_PATH = resolve(__dirname, "../packages/web/tests/target-policy.js");
 const { loadPolicy } = await import(pathToFileURL(POLICY_PATH).href);
 
-// benchmark.js defaults to requireStressGate=false so read-only benchmarks
-// against an isolated stack don't need the full mutation gate. Mutating
-// benchmarks (queue, mixed-write) still require the full gate and will skip
-// cleanly when it isn't configured.
-const POLICY = loadPolicy({ requireStressGate: false });
+// benchmark.js requires the full isolated stress gate for ALL modes, including
+// read-only benchmarks. The previous requireStressGate=false was inconsistent
+// with the header's claim that GITWIRE_STRESS_ENV=isolated is required, and
+// allowed read benchmarks to target production. Mutations additionally
+// require the fixture opt-in, fixture identities, run ID, and budget.
+const POLICY = loadPolicy({ requireStressGate: true });
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -43,11 +44,6 @@ const BASE_URL = POLICY.baseUrlRaw;
 const API_KEY = POLICY.apiKey;
 const ITERATIONS = parseInt(process.argv.find((a, i) => process.argv[i - 1] === "--iterations")) || 200;
 const CONCURRENCY = parseInt(process.argv.find((a, i) => process.argv[i - 1] === "--concurrency")) || 10;
-
-// A deliberately-impossible resource ID for write benchmarks that should
-// exercise the rejection path (404) without ever mutating a real resource.
-// 9000000000 is outside GitHub's 32-bit ID space.
-const NONEXISTENT_ID = 9000000000;
 
 const FLAGS = {
   webhook: process.argv.includes("--webhook"),
@@ -88,7 +84,8 @@ async function apiFetch(path, opts = {}) {
   POLICY.assertMutationAllowed({
     method,
     url,
-    body: opts.body && typeof opts.body === "object" ? opts.body : null,
+    body: opts.body,
+    contractName: opts.contractName,
     operationName: `benchmark:${method}:${url.pathname}`,
   });
 
@@ -223,38 +220,54 @@ async function benchmarkMixed() {
   console.log("\n━━━ Mixed Workload Benchmark ━━━");
   console.log(`  ${ITERATIONS} ops × ${CONCURRENCY} concurrency`);
 
-  // Each operation is tagged with its kind at dispatch time. We do NOT infer
-  // kind from the response status code — that was the previous behavior and
-  // it conflated transport success with application semantics. Full
-  // expected/unexpected-result accounting arrives with the boundedBurst
-  // redesign (separate P0); this PR only stops misclassifying by status.
+  // Each operation carries its kind, and the kind is attached DIRECTLY to the
+  // result object the promise resolves with (not tracked in a parallel array
+  // keyed by invocation order — that misclassified under out-of-order
+  // completion or rejected promises). The benchmark must still register
+  // mutation contracts via the policy before any write runs; benchmark.js
+  // does not register the full surface (it measures, it doesn't exhaustively
+  // mutate), so only the fixture sync mutation is exercised here.
+  if (POLICY.allowMutations && POLICY.fixtureRepo && !POLICY.contracts?.has("repo-sync")) {
+    POLICY.registerMutationContract({
+      name: "repo-sync",
+      method: "POST",
+      classification: "FIXTURE_MUTATION",
+      target: { field: "repo", location: "path" },
+    });
+  }
+
   const readOps = [
-    { kind: "read", run: () => apiFetch("/api/repos") },
-    { kind: "read", run: () => apiFetch("/api/issues?limit=20") },
-    { kind: "read", run: () => apiFetch("/api/ci/stats") },
-    { kind: "read", run: () => apiFetch("/api/actions/summary") },
-    { kind: "read", run: () => apiFetch("/api/activity/summary") },
-    { kind: "read", run: () => apiFetch("/health") },
-    { kind: "read", run: () => apiFetch("/api/webhooks/deliveries?limit=10") },
+    { kind: "read", run: () => apiFetch("/api/repos").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/issues?limit=20").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/ci/stats").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/actions/summary").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/activity/summary").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/health").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/webhooks/deliveries?limit=10").then(r => ({ ...r, kind: "read" })) },
   ];
+  // Only the fixture-targeted sync mutation. The previous NONEXISTENT_ID
+  // ci/actions retry writes targeted guessed IDs that were not fixture-owned
+  // records — that is not a safety boundary (the reviewer is correct), and
+  // under the fail-closed contract model a guessed ID cannot be validated.
   const writeOps = POLICY.allowMutations && POLICY.fixtureRepo ? [
-    { kind: "write", run: () => apiFetch(`/api/repos/${POLICY.fixtureRepo}/sync`, { method: "POST" }) },
-    { kind: "write", run: () => apiFetch(`/api/ci/${NONEXISTENT_ID}/retry`, { method: "POST" }) },
-    { kind: "write", run: () => apiFetch(`/api/actions/${NONEXISTENT_ID}/retry`, { method: "POST" }) },
+    { kind: "write", run: () => apiFetch(
+      `/api/repos/${POLICY.fixtureRepo}/sync`,
+      { method: "POST", contractName: "repo-sync" }
+    ).then(r => ({ ...r, kind: "write" })) },
   ] : [];
 
   if (writeOps.length === 0) {
     console.log("  Mutations disabled — running read-only mixed workload.");
   }
   const operations = [...readOps, ...writeOps];
-  const writeKinds = new Set(writeOps.map(o => o.kind));
 
-  // Track each result with its dispatched kind so read/write split is exact.
-  const dispatched = [];
   const res = await burst(
     () => {
       const op = operations[Math.floor(Math.random() * operations.length)];
-      return op.run().then(r => { dispatched.push(op.kind); return r; });
+      // Attach kind on both resolve and reject so a failed write isn't
+      // misclassified as a read. burst() catches rejections into its results
+      // array as { error }; we synthesize a kind-tagged failure object.
+      return op.run().catch(err => ({ kind: op.kind, error: err.message, elapsed: -1 }));
     },
     ITERATIONS,
     CONCURRENCY,
@@ -262,18 +275,16 @@ async function benchmarkMixed() {
 
   const readDurations = [];
   const writeDurations = [];
-  for (let i = 0; i < res.length; i++) {
-    const r = res[i];
-    if (r.elapsed < 0) continue;
-    const kind = dispatched[i] || (writeKinds.has("write") ? "write" : "read");
-    if (kind === "write") writeDurations.push(r.elapsed);
+  for (const r of res) {
+    if (!r || r.elapsed < 0) continue;
+    if (r.kind === "write") writeDurations.push(r.elapsed);
     else readDurations.push(r.elapsed);
   }
 
   if (readDurations.length > 0) printStats("Read operations", stats(readDurations));
   if (writeDurations.length > 0) printStats("Write operations", stats(writeDurations));
 
-  const allDurations = res.filter((r) => r.elapsed > 0).map((r) => r.elapsed);
+  const allDurations = res.filter((r) => r && r.elapsed > 0).map((r) => r.elapsed);
   printStats("All operations", stats(allDurations));
 
   return stats(allDurations);

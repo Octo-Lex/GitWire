@@ -10,6 +10,11 @@
 // gating, and the mutation budget to tests/target-policy.js — the same module
 // scripts/benchmark.js uses. The contract is therefore identical across the
 // Jest stress suite and the benchmark harness.
+//
+// MUTATIONS: every mutating request MUST reference a registered mutation
+// contract by name. The policy rejects bare mutations with no contract, and
+// verifies the declared fixture identity is present and correct at the
+// declared location. See registerMutationContracts() below for the surface.
 
 import { loadPolicy } from './target-policy.js';
 
@@ -30,6 +35,65 @@ const FIXTURE_INSTALLATION_ID = POLICY.fixtureInstallationId;
 
 export { BASE_URL, API_KEY, ALLOW_MUTATIONS, FIXTURE_REPO, FIXTURE_INSTALLATION_ID };
 
+// ─── Mutation contract registry ────────────────────────────────────────────
+//
+// Every mutating route used by the stress suite is registered here with a
+// declaration of where the fixture identity MUST appear. The policy uses these
+// contracts to verify, per request, that the fixture repo / installation is
+// present and correct — fail-closed. Adding a new mutation route means
+// registering a contract here; unregistered mutations are rejected.
+
+function registerMutationContracts() {
+  // The contract registers ONLY when mutations are opted in — otherwise the
+  // gate rejects all mutations at the opt-in check before contract lookup,
+  // and these registrations are inert (the routes are never called).
+  if (!POLICY.allowMutations) return;
+
+  // Helper to build a repo-in-path contract for routes like
+  // /api/repos/:owner/:repo/<suffix> or /api/fix/:owner/:repo/...
+  const repoInPath = (name, method = 'POST', suffix = '') => ({
+    name,
+    method,
+    classification: 'FIXTURE_MUTATION',
+    target: { field: 'repo', location: 'path' },
+    // suffix is informational only; the policy does not match full routes,
+    // it only checks that the path's owner/repo == fixture.
+    suffix,
+  });
+
+  const instInBody = (name, method = 'POST', bodyField = 'installation_id') => ({
+    name,
+    method,
+    classification: 'FIXTURE_MUTATION',
+    target: { field: 'installationId', location: 'body', bodyField },
+  });
+
+  const instInQuery = (name) => ({
+    name,
+    method: 'POST',
+    classification: 'FIXTURE_MUTATION',
+    target: { field: 'installationId', location: 'query' },
+  });
+
+  // Repository-in-path mutations (sync, settings, scan, config, etc.)
+  POLICY.registerMutationContract(repoInPath('repo-sync'));
+  POLICY.registerMutationContract(repoInPath('maintainer-settings'));
+  POLICY.registerMutationContract(repoInPath('maintainer-stale-scan'));
+  POLICY.registerMutationContract(repoInPath('maintainer-branch-cleanup'));
+  POLICY.registerMutationContract(repoInPath('phase2-queue-config'));
+  POLICY.registerMutationContract(repoInPath('phase3-dependencies-scan'));
+  POLICY.registerMutationContract(repoInPath('phase3-dependencies-batch-pr'));
+  POLICY.registerMutationContract(repoInPath('phase3-reconciler-repos-config', 'PUT'));
+  POLICY.registerMutationContract(repoInPath('review-config'));
+  POLICY.registerMutationContract(repoInPath('duplicates-backfill'));
+  // fix-attempt carries installation_id in query (?installation_id=...)
+  POLICY.registerMutationContract(instInQuery('fix-attempt'));
+  // Routes whose mutation target is an installation_id in the body.
+  POLICY.registerMutationContract(instInBody('enforcement-run'));
+  POLICY.registerMutationContract(instInBody('phase3-reconciler-run'));
+}
+registerMutationContracts();
+
 /**
  * Fetch wrapper with API key auth. Returns parsed JSON + status.
  *
@@ -40,41 +104,39 @@ export { BASE_URL, API_KEY, ALLOW_MUTATIONS, FIXTURE_REPO, FIXTURE_INSTALLATION_
  *     requests throw BEFORE any header is constructed or fetch is called.
  *   - Mutating methods (POST/PUT/PATCH/DELETE) require
  *     GITWIRE_STRESS_ALLOW_MUTATIONS=true plus a configured fixture repo
- *     and installation ID, and consume the mutation budget.
+ *     and installation ID, a REGISTERED mutation contract, and consume the
+ *     mutation budget.
  *
  * @param {string} path relative path or same-origin absolute URL
  * @param {Object} [options]
  * @param {string} [options.method] default GET
- * @param {Object} [options.body] parsed JSON body; when provided as an
- *   object it is JSON.stringified and the policy inspects it for denylisted
- *   identities. When provided as a string it is sent as-is (the policy
- *   cannot inspect it; callers using string bodies are responsible for not
- *   embedding production identities).
+ * @param {Object} [options.body] request body. For mutations this MUST be an
+ *   object (string bodies are rejected — the policy cannot inspect them).
  * @param {Object} [options.headers] merged on top of the auth + content-type
  *   headers. Pass `{ Authorization: '' }` to suppress the bearer token for
  *   endpoints that must not receive it (e.g. /webhooks/github).
- * @param {Object} [options.contract] declared mutation target contract
- *   (see target-policy.js MutationTargetContract).
+ * @param {string} [options.contractName] REQUIRED for mutations. Name of a
+ *   registered mutation contract (see registerMutationContracts above).
  * @param {string} [options.operationName] label for budget consumption.
  */
 export async function api(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
-  let parsedBody = null;
-  if (options.body && typeof options.body === 'object') {
-    parsedBody = options.body;
-  }
+  // The body is passed to the policy for inspection. Object bodies are
+  // inspected for embedded production identities; string bodies are rejected
+  // for mutations (the policy throws). For reads, body shape is irrelevant.
+  const bodyForPolicy = options.body;
 
   // Resolve + same-origin check + production-host check. Throws before any
   // header is built if the target is disallowed.
   const url = POLICY.resolveRequest(path);
 
-  // Mutation gate (also throws on budget exhaustion / denylisted identity
-  // anywhere in path/query/body).
+  // Mutation gate (also throws on budget exhaustion / denylisted identity /
+  // missing contract / string body / missing declared fixture identity).
   POLICY.assertMutationAllowed({
     method,
     url,
-    body: parsedBody,
-    contract: options.contract,
+    body: bodyForPolicy,
+    contractName: options.contractName,
     operationName: options.operationName,
   });
 
@@ -91,11 +153,14 @@ export async function api(path, options = {}) {
     ...options.headers,
   };
 
-  const res = await fetch(url.href, {
-    method,
-    headers,
-    body: parsedBody ? JSON.stringify(parsedBody) : options.body,
-  });
+  // Stringify object bodies. (String bodies for mutations were already
+  // rejected above; string bodies for reads are passed through unchanged,
+  // which is fine since reads carry no fixture identity to inspect.)
+  const bodyToSend = options.body && typeof options.body === 'object'
+    ? JSON.stringify(options.body)
+    : options.body;
+
+  const res = await fetch(url.href, { method, headers, body: bodyToSend });
   const text = await res.text();
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
@@ -107,29 +172,46 @@ export async function get(path) {
   return api(path, { method: 'GET' });
 }
 
-/** POST request */
+/**
+ * POST request. `contractName` is required for mutations — pass the name of
+ * a registered mutation contract.
+ */
 export function post(path, data, opts = {}) {
   return api(path, {
     method: 'POST',
     body: data,
-    contract: opts.contract,
+    contractName: opts.contractName,
     operationName: opts.operationName,
   });
 }
 
-/** PUT request */
-export function put(path, data) {
-  return api(path, { method: 'PUT', body: data });
+/** PUT request. `contractName` required for mutations. */
+export function put(path, data, opts = {}) {
+  return api(path, {
+    method: 'PUT',
+    body: data,
+    contractName: opts.contractName,
+    operationName: opts.operationName,
+  });
 }
 
-/** PATCH request */
-export function patch(path, data) {
-  return api(path, { method: 'PATCH', body: data });
+/** PATCH request. `contractName` required for mutations. */
+export function patch(path, data, opts = {}) {
+  return api(path, {
+    method: 'PATCH',
+    body: data,
+    contractName: opts.contractName,
+    operationName: opts.operationName,
+  });
 }
 
-/** DELETE request */
-export function del(path) {
-  return api(path, { method: 'DELETE' });
+/** DELETE request. `contractName` required for mutations. */
+export function del(path, opts = {}) {
+  return api(path, {
+    method: 'DELETE',
+    contractName: opts.contractName,
+    operationName: opts.operationName,
+  });
 }
 
 /** Assert status is 200 */
