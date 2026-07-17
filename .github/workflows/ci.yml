@@ -620,14 +620,23 @@ jobs:
           push_and_capture() {
             local tag="$1"
             local outfile="$2"
-            docker push "$tag" 2>&1 | tee "$outfile"
+
+            docker push "$tag" 2>&1 \
+              | tr '\r' '\n' \
+              | tee "$outfile" >&2
+
             local digest
-            digest="$(sed -nE 's/.*digest: (sha256:[a-f0-9]{64}).*/\1/p' "$outfile" | tail -1)"
+            digest="$(
+              sed -nE 's/.*digest: (sha256:[a-f0-9]{64}).*/\1/p' "$outfile" |
+                tail -1
+            )"
+
             if ! [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
               echo "::error::Could not capture registry digest for $tag from push output"
-              cat "$outfile"
+              cat "$outfile" >&2
               return 1
             fi
+
             printf '%s\n' "$digest"
           }
 
@@ -635,9 +644,9 @@ jobs:
           EXECUTOR_DIGEST="$(push_and_capture "${{ steps.meta.outputs.executor_tag }}" /tmp/executor-push.log)"
           DASHBOARD_DIGEST="$(push_and_capture "${{ steps.meta.outputs.dashboard_tag }}" /tmp/dashboard-push.log)"
 
-          echo "APP_DIGEST=$APP_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "EXECUTOR_DIGEST=$EXECUTOR_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "DASHBOARD_DIGEST=$DASHBOARD_DIGEST" >> "$GITHUB_OUTPUT"
+          printf 'APP_DIGEST=%s\n' "$APP_DIGEST" >>"$GITHUB_OUTPUT"
+          printf 'EXECUTOR_DIGEST=%s\n' "$EXECUTOR_DIGEST" >>"$GITHUB_OUTPUT"
+          printf 'DASHBOARD_DIGEST=%s\n' "$DASHBOARD_DIGEST" >>"$GITHUB_OUTPUT"
         id: digests
 
       - name: Generate release manifest
@@ -915,6 +924,53 @@ jobs:
           bash -n scripts/prepare-immutable-compose-transition.sh
           bash -n scripts/test-rollback-logic.sh
           node --check scripts/read-strict-env.mjs
+
+      - name: Verify push_and_capture isolates digest from CR-delimited progress
+        run: |
+          # Simulates the fixed push_and_capture function against Docker push
+          # output containing carriage-return-delimited progress lines.
+          # Proves: stdout captures exactly one digest, no progress fragments.
+          CAPTURED="$(bash <<'SCRIPT'
+            push_and_capture() {
+              local tag="$1"
+              local outfile="$2"
+
+              # Simulated docker push output with CR-delimited progress.
+              printf '%s\r%s\r%s\r%s' \
+                '5f70bf18a086: Preparing' \
+                '5f70bf18a086: Pushed' \
+                'digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+                '' \
+              | tr '\r' '\n' \
+              | tee "$outfile" >&2
+
+              local digest
+              digest="$(
+                sed -nE 's/.*digest: (sha256:[a-f0-9]{64}).*/\1/p' "$outfile" | tail -1
+              )"
+
+              if ! [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+                echo "::error::Could not capture registry digest for $tag from push output"
+                cat "$outfile" >&2
+                return 1
+              fi
+
+              printf '%s\n' "$digest"
+            }
+            push_and_capture "test-image:latest" /tmp/test-push.log
+          SCRIPT
+          )"
+
+          echo "captured: $CAPTURED"
+          # Must be exactly one line matching sha256:<64 hex>.
+          LINE_COUNT="$(printf '%s\n' "$CAPTURED" | wc -l)"
+          [[ "$LINE_COUNT" -eq 1 ]] || { echo "FAIL: expected 1 line, got $LINE_COUNT"; exit 1; }
+          [[ "$CAPTURED" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "FAIL: not a valid digest"; exit 1; }
+          # Must NOT contain progress fragments.
+          case "$CAPTURED" in
+            *Preparing*|*Pushed*) echo "FAIL: progress fragment in captured output"; exit 1 ;;
+          esac
+          echo "OK: push_and_capture isolates digest correctly"
 
       - name: Exercise rollback/release-record logic (mocked Docker)
         run: bash scripts/test-rollback-logic.sh
