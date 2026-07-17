@@ -181,6 +181,12 @@ jobs:
           EXPECTED_REPOSITORY: ${{ github.repository }}
           WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
+          # The self-hosted runner does not have node in PATH. The runner's
+          # bundled externals npm is broken, so use the app container's node
+          # by adding its directory to PATH via a wrapper.
+          NODE_BIN="$(find /opt/actions-runner/externals*/node20/bin -name node -type f 2>/dev/null | head -1)"
+          [[ -n "$NODE_BIN" ]] || { echo "::error::node not found on runner"; exit 1; }
+          export PATH="$(dirname "$NODE_BIN"):$PATH"
           bash "$REPO_ROOT/scripts/deploy-release.sh" \
             "${{ github.event.workflow_run.head_sha }}" \
             "${{ runner.temp }}/production-release/release-manifest.json" \
