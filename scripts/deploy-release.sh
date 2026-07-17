@@ -132,6 +132,32 @@ compose_release() {
     "$@"
 }
 
+# Rollback Compose wrapper. Uses the PREVIOUS release env.
+compose_rollback() {
+  docker compose \
+    --project-directory "$REPO_ROOT" \
+    -f "$COMPOSE_FILE" \
+    -p gitwire \
+    --env-file "$PROD_ENV" \
+    --env-file "$PREVIOUS_RELEASE_ENV" \
+    "$@"
+}
+
+# Read-only Compose wrapper for ps/inspect commands during any phase.
+# Provides the env files needed for ${VAR:?} interpolation. Uses whichever
+# release env is available (staged during deploy, previous during rollback).
+compose_ps() {
+  local release_env="$STAGED_RELEASE_ENV"
+  [[ -n "$release_env" ]] || release_env="$PREVIOUS_RELEASE_ENV"
+  docker compose \
+    --project-directory "$REPO_ROOT" \
+    -f "$COMPOSE_FILE" \
+    -p gitwire \
+    --env-file "$PROD_ENV" \
+    --env-file "$release_env" \
+    "$@"
+}
+
 # Post-deploy operator Compose wrapper. Uses releases/current. Documented in
 # the runbook for operator commands (ps, logs, manual inspection). NOT used
 # during deployment.
@@ -358,7 +384,7 @@ capture_non_release_state() {
   local svc cid img
   NON_RELEASE_BASELINE=""
   for svc in bot landing docs demo postgres redis tunnel; do
-    cid="$(docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" -p gitwire ps -q "$svc" 2>/dev/null || true)"
+    cid="$(compose_ps ps -q "$svc" 2>/dev/null || true)"
     if [[ -z "$cid" ]]; then
       NON_RELEASE_BASELINE+="${svc}:absent"$'\n'
     else
@@ -487,7 +513,7 @@ verify_image_identity() {
     local service="$1" ref="$2"
     expected_id="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)"
     [[ -n "$expected_id" ]] || fail "could not inspect pulled image $ref"
-    cid="$(docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" -p gitwire ps -q "$service" 2>/dev/null || true)"
+    cid="$(compose_ps ps -q "$service" 2>/dev/null || true)"
     [[ -n "$cid" ]] || fail "no running container for $service"
     running_id="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
     [[ "$running_id" == "$expected_id" ]] \
@@ -512,7 +538,7 @@ verify_non_interference() {
   local svc cid img now line
   now=""
   for svc in bot landing docs demo postgres redis tunnel; do
-    cid="$(docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" -p gitwire ps -q "$svc" 2>/dev/null || true)"
+    cid="$(compose_ps ps -q "$svc" 2>/dev/null || true)"
     if [[ -z "$cid" ]]; then
       now+="${svc}:absent"$'\n'
     else
@@ -844,7 +870,7 @@ rollback_verify_app() {
 rollback_check_non_interference() {
   local svc cid img now=""
   for svc in bot landing docs demo postgres redis tunnel; do
-    cid="$(docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" -p gitwire ps -q "$svc" 2>/dev/null || true)"
+    cid="$(compose_ps ps -q "$svc" 2>/dev/null || true)"
     if [[ -z "$cid" ]]; then
       now+="${svc}:absent"$'\n'
     else
@@ -903,7 +929,7 @@ rollback_release() {
     local service="${svc%%:*}"
     ref="${svc#*:}"
     exp="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)"
-    cid="$(docker compose --project-directory "$REPO_ROOT" -f "$COMPOSE_FILE" -p gitwire ps -q "$service" 2>/dev/null || true)"
+    cid="$(compose_ps ps -q "$service" 2>/dev/null || true)"
     [[ -n "$exp" && -n "$cid" ]] || { ROLLBACK_FAILURE_STAGE="$stage"; return 1; }
     running="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
     [[ "$running" == "$exp" ]] || { ROLLBACK_FAILURE_STAGE="$stage:$service"; return 1; }
