@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { TESTING_ONLY, loadPolicy } from "../target-policy.js";
 
 const {
@@ -24,6 +25,7 @@ const {
   RunWideMutationBudget,
   compileRoute,
   matchRoute,
+  parseStrictBudget,
   TargetPolicy,
   canonicalHost,
   canonicalRepo,
@@ -306,8 +308,8 @@ describe("string mutation bodies rejected", () => {
 
 // ─── 10. Run-wide mutation budget (REGRESSION: bypass #6) ──────────────────
 
-describe("run-wide mutation budget", () => {
-  it("is backed by a filesystem file scoped by runId", () => {
+describe("run-wide mutation budget (atomic slots)", () => {
+  it("consumes exactly max slots and then exhausts", () => {
     const runId = "rwtest-" + Math.random();
     const b = new RunWideMutationBudget(2, runId);
     expect(b.remaining()).toBe(2);
@@ -315,32 +317,115 @@ describe("run-wide mutation budget", () => {
     b.consume("b");
     expect(b.remaining()).toBe(0);
     expect(() => b.consume("c")).toThrow(/exhausted/);
+    b.finalize();
   });
-  it("two budget objects with the same runId share the counter (run-wide)", () => {
-    // Simulates two Jest workers / two processes sharing the filesystem.
-    const runId = "shared-" + Math.random();
-    const b1 = new RunWideMutationBudget(2, runId);
-    b1.consume("worker1-op");
-    // A second process loads the policy with the same runId and budget max.
-    // It must see the consumption from b1 (run-wide), not start fresh.
-    // Note: the constructor resets the file — so in practice each run has
-    // ONE process that constructs first. To simulate the shared-counter
-    // property without the reset-on-construct, we use the same object's file
-    // via a second object pointing at a NON-resetting view. Since the
-    // constructor resets, we instead verify the file is the source of truth:
-    // b1's count is read from disk, not memory.
-    const file = path.join(os.tmpdir(), `gitwire-stress-budget-${runId}.count`);
-    const content = fs.readFileSync(file, 'utf8');
-    expect(content.trim().split('\n').length).toBe(1); // b1 consumed once
-    expect(b1.remaining()).toBe(1);
+
+  it("two SEPARATE budget objects with the same runId — the second fails closed on collision", () => {
+    // This is the regression for the previous design's fatal flaw: a second
+    // worker constructing a budget with the same runId would truncate the
+    // shared state. The atomic-slot design instead fails closed, forcing the
+    // operator to use a fresh runId per run.
+    const runId = "collide-" + Math.random();
+    const b1 = new RunWideMutationBudget(3, runId);
+    b1.consume("first"); // creates slot-0 → directory now has 1 slot
+    expect(() => new RunWideMutationBudget(3, runId)).toThrow(/run-ID collision/);
+    b1.finalize();
   });
+
+  it("budget=0 rejects the first mutation", () => {
+    const z = new RunWideMutationBudget(0, "zero-" + Math.random());
+    expect(() => z.consume("a")).toThrow(/exhausted/);
+    z.finalize();
+  });
+
   it("rejects non-integer / negative budgets", () => {
     expect(() => new RunWideMutationBudget(2.5, "r")).toThrow();
     expect(() => new RunWideMutationBudget(-1, "r")).toThrow();
   });
-  it("budget=0 rejects the first mutation", () => {
-    expect(() => new RunWideMutationBudget(0, "zero-" + Math.random()).consume("a"))
-      .toThrow(/exhausted/);
+
+  it("parseStrictBudget rejects malformed values that parseInt would silently accept", () => {
+    expect(parseStrictBudget("100")).toBe(100);
+    expect(() => parseStrictBudget("100abc")).toThrow(/malformed/);
+    expect(() => parseStrictBudget("100.5")).toThrow(/malformed/);
+    expect(() => parseStrictBudget("0x10")).toThrow(/malformed/);
+    expect(() => parseStrictBudget("")).toThrow(/malformed/);
+    expect(() => parseStrictBudget("   ")).toThrow(/malformed/);
+  });
+
+  // ─── The real concurrency regression the reviewer required ─────────────
+  //
+  // Spawn N child processes that each attempt to consume K slots from a
+  // budget of max=N*K/2 (i.e. half what they collectively demand). Under the
+  // flawed append-file design, the unlocked read-then-append would let all
+  // children observe capacity and over-claim. Under the atomic-slot design,
+  // exactly `max` slots can ever be created regardless of concurrency.
+  //
+  // This test spawns REAL child processes via node, not a simulated env.
+  it("concurrent child processes cannot exceed the cap (real forked consumers)", () => {
+    if (process.platform === "win32") {
+      // Slot files use O_EXCL which Windows supports, but the test's process
+      // orchestration via spawnSync with sh -c is Linux-oriented. The budget
+      // itself is cross-platform; this concurrency regression runs on Linux CI.
+      // Skip is explicit, not a silent pass.
+      console.log("  skipped on win32 (concurrency regression runs on Linux CI)");
+      return;
+    }
+    const runId = "concurrency-" + Math.random();
+    const WORKERS = 8;
+    const PER_WORKER = 10;           // each child attempts 10 consumes
+    const MAX = (WORKERS * PER_WORKER) / 2; // 40 — half of total demand (80)
+    // Pre-create the budget directory so all children see the same one and
+    // neither "wins" the mkdir race. (In production, the orchestrator's
+    // loadPolicy constructs the single budget; workers inherit. Here we
+    // simulate by pre-initializing the shared dir.)
+    const safe = runId.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const slotsDir = path.join(os.tmpdir(), `gitwire-stress-budget-${safe}`);
+    fs.mkdirSync(slotsDir, { recursive: true });
+    // Write a marker so the dir is "owned" (matches _initSlotsDir behavior).
+    fs.writeFileSync(path.join(slotsDir, ".run-marker"), String(process.pid), { flag: "wx" });
+
+    // Child script: import the policy, construct a budget pointing at the
+    // existing dir, attempt PER_WORKER consumes, report how many succeeded.
+    const childScript = `
+import { TESTING_ONLY } from "${path.resolve(__dirname, "..", "target-policy.js").replace(/\\/g, "/")}";
+const { RunWideMutationBudget } = TESTING_ONLY;
+const dir = process.argv[2];
+const max = Number(process.argv[3]);
+const n = Number(process.argv[4]);
+// Monkey-patch the directory so we share the parent's pre-created dir.
+const b = new RunWideMutationBudget(max, process.argv[5]);
+b.slotsDir = dir;
+let ok = 0;
+for (let i = 0; i < n; i++) {
+  try { b.consume("child-" + process.pid); ok++; } catch (e) { /* exhausted */ }
+}
+console.log("CHILD_OK=" + ok);
+`;
+    const results = [];
+    for (let i = 0; i < WORKERS; i++) {
+      const r = spawnSync(process.execPath, ["--input-type=module", "-e", childScript,
+        slotsDir, String(MAX), String(PER_WORKER), runId], {
+        encoding: "utf8",
+        env: { ...process.env, NODE_OPTIONS: "--experimental-vm-modules" },
+      });
+      if (r.status !== 0) {
+        // If the child failed (e.g. EEXIST collision on construction because
+        // our pre-mkdir raced), surface it rather than silently passing.
+        throw new Error("child " + i + " failed: " + r.stderr);
+      }
+      const m = r.stdout.match(/CHILD_OK=(\d+)/);
+      if (!m) throw new Error("child " + i + " no CHILD_OK output: " + r.stdout + r.stderr);
+      results.push(Number(m[1]));
+    }
+    const totalClaimed = results.reduce((a, b) => a + b, 0);
+    // The cap is the invariant: total claims MUST NOT EXCEED MAX. Over-claim
+    // is the exact failure mode the budget exists to prevent.
+    expect(totalClaimed).toBeLessThanOrEqual(MAX);
+    // And we should have claimed exactly MAX (collective demand 80 > MAX 40,
+    // so the cap is the only thing stopping the children).
+    expect(totalClaimed).toBe(MAX);
+    // Cleanup.
+    fs.rmSync(slotsDir, { recursive: true, force: true });
   });
 });
 

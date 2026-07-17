@@ -278,24 +278,60 @@ import os from 'node:os';
 import path from 'node:path';
 
 /**
- * A run-wide mutation counter backed by a filesystem file. The counter is
- * shared across all processes (Jest workers, benchmark forks) in the same run
- * because they share the filesystem and the same GITWIRE_STRESS_RUN_ID. This
- * closes the per-process budget bypass: under Jest's parallel worker mode,
- * each worker previously got its own in-memory budget, silently multiplying
- * the configured cap by the worker count.
+ * Strict-parse a mutation budget string. Rejects malformed suffixes that
+ * parseInt would silently accept (e.g. '100abc' → 100, '100.5' → 100).
+ * @param {string} raw
+ * @returns {number}
+ */
+function parseStrictBudget(raw) {
+  if (typeof raw !== 'string') {
+    throw new Error(`Mutation budget must be a string of decimal digits, got ${typeof raw}.`);
+  }
+  const trimmed = raw.trim();
+  // Exactly one or more decimal digits, nothing else.
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(
+      `GITWIRE_STRESS_MUTATION_BUDGET='${raw}' is malformed: must be a non-negative ` +
+      `decimal integer with no trailing units, decimals, or whitespace. ` +
+      `(parseInt would silently accept e.g. '100abc'; this parser rejects it.)`
+    );
+  }
+  // Trim leading zeros for a canonical numeric comparison, but reject values
+  // that exceed Number.MAX_SAFE_INTEGER since slot indices are integers.
+  const n = Number(trimmed);
+  if (!Number.isInteger(n) || n > Number.MAX_SAFE_INTEGER) {
+    throw new Error(`GITWIRE_STRESS_MUTATION_BUDGET='${raw}' is out of integer range.`);
+  }
+  return n;
+}
+
+/**
+ * A run-wide mutation budget backed by atomic slot files.
  *
- * Each consume() appends one line to <budgetFile>; the count is the line
- * count. The check-then-append is not atomically locked, so a small over-count
- * near the boundary is possible under heavy parallelism — this is acceptable
- * for a safety CAP (slightly under-allowing is safe; over-allowing is the
- * failure mode, and a few extra near the limit is far better than the previous
- * silent Nx multiplication). For truly atomic accounting, an O_EXCL lockfile
- * loop could be added; it is not needed at stress-test scales.
+ * Each unit of budget is represented by a file `slot-<N>` inside a per-run
+ * directory. Consumption is a loop that attempts to create `slot-0`,
+ * `slot-1`, ... with `fs.openSync(p, 'wx')` — the 'wx' flag maps to
+ * O_CREAT|O_EXCL, which the kernel guarantees is atomic across processes:
+ * exactly one process wins each slot, the others get EEXIST and try the next.
  *
- * The budget file lives in the OS temp dir, scoped by runId, and is removed
- * when the budget object is finalized (or left for the OS to clean up if the
- * process crashes — it is keyed by runId so a future run does not see it).
+ * This design satisfies the safety-cap requirements that a naive append-file
+ * counter does not:
+ *
+ *   1. **Joining processes never truncate existing state.** No file is opened
+ *      with O_TRUNC or 'w'; slots are only created exclusively.
+ *   2. **Worker exit never deletes state still used by the run.** No process
+ *      unlinks the slot directory or its contents on exit. The orchestrator
+ *      may optionally call finalize() once the run is definitively over.
+ *   3. **Exactly `max` claims can succeed under concurrency.** Slots 0..max-1
+ *      are the only ones that can ever be created; consume() refuses to look
+ *      beyond index max-1.
+ *   4. **Run-ID reuse/collisions fail closed.** The constructor refuses to
+ *      initialize if the per-run directory already exists with slots in it —
+ *      the operator must use a fresh runId per run.
+ *
+ * The check-and-create is a single kernel-atomic syscall, not a read-then-
+ * write, so there is no TOCTOU window: N concurrent processes all attempting
+ * slot K produce exactly one winner.
  */
 class RunWideMutationBudget {
   /**
@@ -305,7 +341,7 @@ class RunWideMutationBudget {
   constructor(max, runId) {
     if (!Number.isInteger(max) || max < 0) {
       throw new Error(
-        `GITWIRE_STRESS_MUTATION_BUDGET must be a non-negative integer, got: ${max}`
+        `Mutation budget max must be a non-negative integer, got: ${max}`
       );
     }
     if (!runId || typeof runId !== 'string') {
@@ -313,67 +349,133 @@ class RunWideMutationBudget {
     }
     this.max = max;
     this.runId = runId;
-    // Sanitize runId into a filename-safe token.
     const safe = runId.replace(/[^a-zA-Z0-9._-]/g, '_');
-    this.budgetFile = path.join(os.tmpdir(), `gitwire-stress-budget-${safe}.count`);
-    // Start from a clean state for this runId. If a stale file from a previous
-    // crashed run with the same runId exists, it is reset — the operator is
-    // expected to use a fresh runId per run (the policy requires RUN_ID env).
+    this.slotsDir = path.join(os.tmpdir(), `gitwire-stress-budget-${safe}`);
+    this._markerFile = path.join(this.slotsDir, '.run-marker');
+
+    // Fail-closed on run-ID reuse: if the slots directory already exists AND
+    // contains any slot files, refuse. A crash-then-reuse with the same runId
+    // would otherwise silently inherit stale consumption state. The operator
+    // must use a fresh runId per run (the policy requires RUN_ID env, and the
+    // runbook documents this).
+    this._initSlotsDir();
+  }
+
+  _initSlotsDir() {
+    let dirExists = false;
     try {
-      fs.writeFileSync(this.budgetFile, '', { flag: 'w' });
+      fs.mkdirSync(this.slotsDir, { recursive: false });
     } catch (err) {
-      throw new Error(
-        `Could not initialize mutation budget file at ${this.budgetFile}: ${err.message}`
-      );
+      if (err.code === 'EEXIST') {
+        dirExists = true;
+      } else {
+        throw new Error(
+          `Could not create mutation budget directory at ${this.slotsDir}: ${err.message}`
+        );
+      }
     }
-    // Register cleanup on process exit so the file does not linger.
-    process.once('exit', () => this._cleanup());
+    if (dirExists) {
+      // Directory already exists — fail closed unless it is genuinely empty
+      // (no slot files from a prior run with the same runId).
+      const existing = this._listSlots();
+      if (existing.length > 0) {
+        throw new Error(
+          `Mutation budget run-ID collision: directory ${this.slotsDir} already ` +
+          `contains ${existing.length} slot(s) from a prior run. ` +
+          `Reuse of GITWIRE_STRESS_RUN_ID='${this.runId}' is not permitted; ` +
+          `use a fresh runId per run. If the prior run crashed, remove the ` +
+          `directory manually before reusing the runId.`
+        );
+      }
+      // Empty dir (perhaps a concurrent constructor beat us to mkdir and has
+      // not yet written slots). Claim the marker exclusively; if we lose the
+      // marker race, the other constructor is the owner.
+      try {
+        fs.writeFileSync(this._markerFile, String(process.pid), { flag: 'wx' });
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+      }
+    }
   }
 
-  _cleanup() {
-    try { fs.unlinkSync(this.budgetFile); } catch { /* already gone */ }
-  }
-
-  /** @returns {number} lines currently in the budget file */
-  _count() {
+  /** @returns {string[]} absolute paths of slot-N files that currently exist */
+  _listSlots() {
+    let entries;
     try {
-      const content = fs.readFileSync(this.budgetFile, 'utf8');
-      // Count non-empty lines (trailing newline should not count as a line).
-      const trimmed = content.replace(/\n+$/, '');
-      if (trimmed === '') return 0;
-      return trimmed.split('\n').length;
+      entries = fs.readdirSync(this.slotsDir);
     } catch (err) {
-      if (err.code === 'ENOENT') return 0;
+      if (err.code === 'ENOENT') return [];
       throw err;
     }
+    return entries
+      .filter((name) => name.startsWith('slot-'))
+      .map((name) => path.join(this.slotsDir, name));
   }
 
   /**
-   * Consume one unit of budget. Throws when doing so would exceed the max.
-   * @param {string} [operation] for error clarity
+   * Try to exclusively create a single slot file. Returns true if this caller
+   * won the slot (created it), false if another caller already owns it.
+   * @param {number} index
+   * @param {string} label
+   * @returns {boolean}
    */
-  consume(operation) {
-    const consumed = this._count();
-    if (consumed >= this.max) {
-      throw new Error(
-        `Mutation budget exhausted: ${consumed}/${this.max} consumed ` +
-        `(run-wide counter at ${this.budgetFile})` +
-        (operation ? ` (rejected operation: ${operation})` : '') +
-        `. Increase GITWIRE_STRESS_MUTATION_BUDGET or reduce the scenario.`
-      );
+  _tryCreateSlot(index, label) {
+    const slotPath = path.join(this.slotsDir, `slot-${index}`);
+    let fd;
+    try {
+      // 'wx' = O_CREAT | O_EXCL | O_WRONLY. Atomic across processes.
+      fd = fs.openSync(slotPath, 'wx');
+    } catch (err) {
+      if (err.code === 'EEXIST') return false; // another process owns this slot
+      throw err;
     }
     try {
-      fs.appendFileSync(this.budgetFile, `${operation || 'mutation'}\n`);
-    } catch (err) {
-      throw new Error(
-        `Could not record mutation budget consumption at ${this.budgetFile}: ${err.message}`
-      );
+      fs.writeFileSync(fd, `${label || 'mutation'}\n`);
+    } finally {
+      fs.closeSync(fd);
     }
+    return true;
   }
 
-  /** @returns {number} remaining budget (may be slightly stale under parallelism) */
+  /**
+   * Consume one unit of budget. Attempts slots 0..max-1 in order until one is
+   * exclusively created; if all are already owned, the budget is exhausted.
+   * Atomic across processes via O_EXCL — no TOCTOU window.
+   * @param {string} [operation] for error clarity
+   * @throws {Error} when all max slots are already owned (budget exhausted)
+   */
+  consume(operation) {
+    const label = operation || 'mutation';
+    for (let i = 0; i < this.max; i++) {
+      if (this._tryCreateSlot(i, label)) {
+        return; // we won this slot
+      }
+    }
+    // All slots 0..max-1 are owned. Exhausted.
+    const owned = this._listSlots().length;
+    throw new Error(
+      `Mutation budget exhausted: ${owned}/${this.max} slots claimed ` +
+      `(run-wide atomic counter at ${this.slotsDir})` +
+      (operation ? ` (rejected operation: ${operation})` : '') +
+      `. Increase GITWIRE_STRESS_MUTATION_BUDGET or reduce the scenario.`
+    );
+  }
+
+  /** @returns {number} remaining slots (exact, computed from existing files) */
   remaining() {
-    return Math.max(0, this.max - this._count());
+    return Math.max(0, this.max - this._listSlots().length);
+  }
+
+  /**
+   * Remove the slot directory. Intended for the run orchestrator ONLY, after
+   * the run is definitively over (e.g. a test-runner `globalTeardown`). Not
+   * registered as an exit handler because workers exit before the run is over
+   * and must not delete shared state.
+   */
+  finalize() {
+    try {
+      fs.rmSync(this.slotsDir, { recursive: true, force: true });
+    } catch { /* best-effort cleanup */ }
   }
 }
 
@@ -922,10 +1024,14 @@ export function loadPolicy(opts = {}) {
       throw new Error('GITWIRE_STRESS_ALLOW_MUTATIONS=true requires GITWIRE_STRESS_RUN_ID.');
     }
     const budgetRaw = requireEnv('GITWIRE_STRESS_MUTATION_BUDGET');
-    const budgetNum = parseInt(budgetRaw, 10);
-    // Run-wide budget: shared across Jest workers and benchmark forks via a
-    // filesystem counter scoped by runId. The previous in-memory counter was
-    // per-process, which silently multiplied the cap by the worker count.
+    // Strict parse: parseInt would silently accept '100abc', '100.5', etc.
+    // A malformed budget must fail closed, not coerce to a partial integer.
+    const budgetNum = parseStrictBudget(budgetRaw);
+    // Run-wide atomic-slot budget: shared across Jest workers and benchmark
+    // forks via O_EXCL slot files scoped by runId. The previous in-memory
+    // counter was per-process (silently multiplied the cap by worker count);
+    // the intervening append-file version had a TOCTOU window and truncated
+    // shared state on each worker's construction/exit.
     budget = new RunWideMutationBudget(budgetNum, runId);
   }
 
@@ -968,5 +1074,6 @@ export const TESTING_ONLY = {
   RunWideMutationBudget,
   compileRoute,
   matchRoute,
+  parseStrictBudget,
   TargetPolicy,
 };
