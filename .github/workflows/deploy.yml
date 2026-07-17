@@ -181,7 +181,7 @@ jobs:
           EXPECTED_REPOSITORY: ${{ github.repository }}
           WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
-          bash scripts/deploy-release.sh \
+          bash "$REPO_ROOT/scripts/deploy-release.sh" \
             "${{ github.event.workflow_run.head_sha }}" \
             "${{ runner.temp }}/production-release/release-manifest.json" \
             "/opt/gitwire/config/production.env"
