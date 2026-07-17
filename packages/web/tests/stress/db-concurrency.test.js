@@ -5,7 +5,7 @@
 // CRUD-creation routes (enforcement/policies, phase2/feedback) are removed:
 // they create new resources without a fixture identity and don't fit the
 // fail-closed fixture contract.
-import { get, post, FIXTURE_REPO } from '../helpers.js';
+import { get, post, patch, FIXTURE_REPO } from '../helpers.js';
 import { boundedBurst, sleep } from './stress-helpers.js';
 
 const CONCURRENT = 8;
@@ -39,7 +39,7 @@ describe('DB Concurrency: parallel fixture writes + reads', () => {
     test('Update same fixture repo settings concurrently (no deadlocks)', async () => {
       const REPO = FIXTURE_REPO;
       const tasks = Array.from({ length: CONCURRENT }, (_, i) => () =>
-        post(
+        patch(
           `/api/maintainer/${REPO}/settings`,
           { stale_issue_days: 30 + i, stale_pr_days: 14 + i },
           { contractName: 'maintainer-settings' }

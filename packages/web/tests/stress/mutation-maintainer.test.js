@@ -33,13 +33,14 @@ describe('Stress: Maintainer Mutations', () => {
     expect([200, 201, 202, 204]).toContain(res.status);
   });
 
-  test('POST /maintainer/members/sync — trigger member sync', async () => {
-    // members/sync targets an org (the fixture repo's owner). The current
-    // contract model covers repo-in-path and installationId-in-body/query;
-    // an org-targeted contract is a clean extension but out of scope here.
-    // The org IS the fixture owner, so it is safe, but we skip the mutation
-    // until an org-target contract exists rather than force-fit it.
-    expect(true).toBe(true);
+  // SKIPPED: members/sync targets an org (the fixture repo's owner). The
+  // current contract model covers repo-in-path and installationId-in-body/
+  // query; an org-targeted contract is a clean extension but out of scope
+  // for this isolation PR. Tracked for a later 'org-target' contract.
+  // Using test.skip so this does NOT count as passing coverage.
+  test.skip('POST /maintainer/members/sync — needs org-target contract', async () => {
+    const res = await post('/api/maintainer/members/sync', { org: ORG });
+    expect([200, 201, 202, 204]).toContain(res.status);
   });
 
   test('POST /maintainer/:owner/:repo/stale-scan — 3 concurrent scans idempotent', async () => {

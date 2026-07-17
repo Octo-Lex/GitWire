@@ -49,48 +49,69 @@ function registerMutationContracts() {
   // and these registrations are inert (the routes are never called).
   if (!POLICY.allowMutations) return;
 
-  // Helper to build a repo-in-path contract for routes like
-  // /api/repos/:owner/:repo/<suffix> or /api/fix/:owner/:repo/...
-  const repoInPath = (name, method = 'POST', suffix = '') => ({
+  // Each contract declares an anchored route template and the list of
+  // fixture identities the route carries. The policy matches the route
+  // exactly (rejecting mismatches before budget consumption) and validates
+  // EVERY declared identity against the configured fixture.
+
+  // repo-in-path routes: :owner/:repo segment pair, repo identity in path.
+  const repoInPath = (name, routeSuffix, method = 'POST') => ({
     name,
     method,
     classification: 'FIXTURE_MUTATION',
-    target: { field: 'repo', location: 'path' },
-    // suffix is informational only; the policy does not match full routes,
-    // it only checks that the path's owner/repo == fixture.
-    suffix,
+    route: `/api/repos/:owner/:repo${routeSuffix}`,
+    identities: [{ field: 'repo', location: 'path', param: 'owner' }],
   });
-
-  const instInBody = (name, method = 'POST', bodyField = 'installation_id') => ({
+  // The maintainer/phase2-queue/phase3-deps/review-config routes share the
+  // :owner/:repo shape but under different route prefixes.
+  const ownerRepoUnder = (name, prefix, routeSuffix, method = 'POST') => ({
     name,
     method,
     classification: 'FIXTURE_MUTATION',
-    target: { field: 'installationId', location: 'body', bodyField },
+    route: `${prefix}/:owner/:repo${routeSuffix}`,
+    identities: [{ field: 'repo', location: 'path', param: 'owner' }],
   });
 
-  const instInQuery = (name) => ({
-    name,
+  POLICY.registerMutationContract(repoInPath('repo-sync', '/sync'));
+  POLICY.registerMutationContract(ownerRepoUnder('maintainer-settings', '/api/maintainer', '/settings', 'PATCH'));
+  POLICY.registerMutationContract(ownerRepoUnder('maintainer-stale-scan', '/api/maintainer', '/stale-scan'));
+  POLICY.registerMutationContract(ownerRepoUnder('maintainer-branch-cleanup', '/api/maintainer', '/branch-cleanup'));
+  POLICY.registerMutationContract(ownerRepoUnder('phase2-queue-config', '/api/phase2/queue', '/config'));
+  POLICY.registerMutationContract(ownerRepoUnder('phase3-dependencies-scan', '/api/phase3/dependencies', '/scan'));
+  POLICY.registerMutationContract(ownerRepoUnder('phase3-dependencies-batch-pr', '/api/phase3/dependencies', '/batch-pr'));
+  POLICY.registerMutationContract(ownerRepoUnder('phase3-reconciler-repos-config', '/api/phase3/reconciler/repos', '', 'PUT'));
+  POLICY.registerMutationContract(ownerRepoUnder('review-config', '/api/review/config', ''));
+  POLICY.registerMutationContract(ownerRepoUnder('duplicates-backfill', '/api/duplicates/backfill', ''));
+
+  // fix-attempt: repo in path AND installation_id in query. Both identities
+  // are declared and both are validated — this closes the bypass where an
+  // undeclared repo in the path could target a non-fixture resource.
+  POLICY.registerMutationContract({
+    name: 'fix-attempt',
     method: 'POST',
     classification: 'FIXTURE_MUTATION',
-    target: { field: 'installationId', location: 'query' },
+    route: '/api/fix/:owner/:repo/issues/:number',
+    identities: [
+      { field: 'repo', location: 'path', param: 'owner' },
+      { field: 'installationId', location: 'query' },
+    ],
   });
 
-  // Repository-in-path mutations (sync, settings, scan, config, etc.)
-  POLICY.registerMutationContract(repoInPath('repo-sync'));
-  POLICY.registerMutationContract(repoInPath('maintainer-settings'));
-  POLICY.registerMutationContract(repoInPath('maintainer-stale-scan'));
-  POLICY.registerMutationContract(repoInPath('maintainer-branch-cleanup'));
-  POLICY.registerMutationContract(repoInPath('phase2-queue-config'));
-  POLICY.registerMutationContract(repoInPath('phase3-dependencies-scan'));
-  POLICY.registerMutationContract(repoInPath('phase3-dependencies-batch-pr'));
-  POLICY.registerMutationContract(repoInPath('phase3-reconciler-repos-config', 'PUT'));
-  POLICY.registerMutationContract(repoInPath('review-config'));
-  POLICY.registerMutationContract(repoInPath('duplicates-backfill'));
-  // fix-attempt carries installation_id in query (?installation_id=...)
-  POLICY.registerMutationContract(instInQuery('fix-attempt'));
-  // Routes whose mutation target is an installation_id in the body.
-  POLICY.registerMutationContract(instInBody('enforcement-run'));
-  POLICY.registerMutationContract(instInBody('phase3-reconciler-run'));
+  // installation_id-in-body routes (no repo in path).
+  POLICY.registerMutationContract({
+    name: 'enforcement-run',
+    method: 'POST',
+    classification: 'FIXTURE_MUTATION',
+    route: '/api/enforcement/run',
+    identities: [{ field: 'installationId', location: 'body', bodyField: 'installation_id' }],
+  });
+  POLICY.registerMutationContract({
+    name: 'phase3-reconciler-run',
+    method: 'POST',
+    classification: 'FIXTURE_MUTATION',
+    route: '/api/phase3/reconciler/run',
+    identities: [{ field: 'installationId', location: 'body', bodyField: 'installation_id' }],
+  });
 }
 registerMutationContracts();
 

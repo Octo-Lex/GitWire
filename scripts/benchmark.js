@@ -38,6 +38,21 @@ const { loadPolicy } = await import(pathToFileURL(POLICY_PATH).href);
 // require the fixture opt-in, fixture identities, run ID, and budget.
 const POLICY = loadPolicy({ requireStressGate: true });
 
+// Register benchmark mutation contracts at init (not inside a benchmark
+// function). Previously repo-sync was registered inside benchmarkMixed(),
+// which meant --queue (which runs first and never invokes mixed) failed at
+// the contract check. Registering here makes every benchmark mode that
+// mutates work regardless of invocation order.
+if (POLICY.allowMutations) {
+  POLICY.registerMutationContract({
+    name: "repo-sync",
+    method: "POST",
+    classification: "FIXTURE_MUTATION",
+    route: "/api/repos/:owner/:repo/sync",
+    identities: [{ field: "repo", location: "path", param: "owner" }],
+  });
+}
+
 // ── Configuration ──────────────────────────────────────────────────────────
 
 const BASE_URL = POLICY.baseUrlRaw;
@@ -194,7 +209,7 @@ async function benchmarkQueue() {
   // configured fixture repository only. The policy's mutation gate + budget
   // bound how many may fire.
   const res = await burst(
-    () => apiFetch(`/api/repos/${fixtureRepo}/sync`, { method: "POST" }),
+    () => apiFetch(`/api/repos/${fixtureRepo}/sync`, { method: "POST", contractName: "repo-sync" }),
     Math.min(ITERATIONS, 20),
     Math.min(CONCURRENCY, 3),
   );
@@ -223,19 +238,8 @@ async function benchmarkMixed() {
   // Each operation carries its kind, and the kind is attached DIRECTLY to the
   // result object the promise resolves with (not tracked in a parallel array
   // keyed by invocation order — that misclassified under out-of-order
-  // completion or rejected promises). The benchmark must still register
-  // mutation contracts via the policy before any write runs; benchmark.js
-  // does not register the full surface (it measures, it doesn't exhaustively
-  // mutate), so only the fixture sync mutation is exercised here.
-  if (POLICY.allowMutations && POLICY.fixtureRepo && !POLICY.contracts?.has("repo-sync")) {
-    POLICY.registerMutationContract({
-      name: "repo-sync",
-      method: "POST",
-      classification: "FIXTURE_MUTATION",
-      target: { field: "repo", location: "path" },
-    });
-  }
-
+  // completion or rejected promises). The repo-sync contract is registered
+  // at module init (above), so both --queue and --mixed can use it.
   const readOps = [
     { kind: "read", run: () => apiFetch("/api/repos").then(r => ({ ...r, kind: "read" })) },
     { kind: "read", run: () => apiFetch("/api/issues?limit=20").then(r => ({ ...r, kind: "read" })) },

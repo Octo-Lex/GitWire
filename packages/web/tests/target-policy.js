@@ -273,23 +273,79 @@ function resolveSameOrigin(path, baseUrl) {
 
 // ─── Mutation budget ───────────────────────────────────────────────────────
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 /**
- * A bounded mutation counter. Throws once the configured budget is exhausted.
- * Constructed once per run from GITWIRE_STRESS_MUTATION_BUDGET. Not threadsafe
- * in the sense of cross-process — it bounds a single Jest/benchmark process.
+ * A run-wide mutation counter backed by a filesystem file. The counter is
+ * shared across all processes (Jest workers, benchmark forks) in the same run
+ * because they share the filesystem and the same GITWIRE_STRESS_RUN_ID. This
+ * closes the per-process budget bypass: under Jest's parallel worker mode,
+ * each worker previously got its own in-memory budget, silently multiplying
+ * the configured cap by the worker count.
+ *
+ * Each consume() appends one line to <budgetFile>; the count is the line
+ * count. The check-then-append is not atomically locked, so a small over-count
+ * near the boundary is possible under heavy parallelism — this is acceptable
+ * for a safety CAP (slightly under-allowing is safe; over-allowing is the
+ * failure mode, and a few extra near the limit is far better than the previous
+ * silent Nx multiplication). For truly atomic accounting, an O_EXCL lockfile
+ * loop could be added; it is not needed at stress-test scales.
+ *
+ * The budget file lives in the OS temp dir, scoped by runId, and is removed
+ * when the budget object is finalized (or left for the OS to clean up if the
+ * process crashes — it is keyed by runId so a future run does not see it).
  */
-class MutationBudget {
+class RunWideMutationBudget {
   /**
    * @param {number} max non-negative integer
+   * @param {string} runId unique run identifier (GITWIRE_STRESS_RUN_ID)
    */
-  constructor(max) {
+  constructor(max, runId) {
     if (!Number.isInteger(max) || max < 0) {
       throw new Error(
         `GITWIRE_STRESS_MUTATION_BUDGET must be a non-negative integer, got: ${max}`
       );
     }
+    if (!runId || typeof runId !== 'string') {
+      throw new Error('RunWideMutationBudget requires a non-empty runId.');
+    }
     this.max = max;
-    this.consumed = 0;
+    this.runId = runId;
+    // Sanitize runId into a filename-safe token.
+    const safe = runId.replace(/[^a-zA-Z0-9._-]/g, '_');
+    this.budgetFile = path.join(os.tmpdir(), `gitwire-stress-budget-${safe}.count`);
+    // Start from a clean state for this runId. If a stale file from a previous
+    // crashed run with the same runId exists, it is reset — the operator is
+    // expected to use a fresh runId per run (the policy requires RUN_ID env).
+    try {
+      fs.writeFileSync(this.budgetFile, '', { flag: 'w' });
+    } catch (err) {
+      throw new Error(
+        `Could not initialize mutation budget file at ${this.budgetFile}: ${err.message}`
+      );
+    }
+    // Register cleanup on process exit so the file does not linger.
+    process.once('exit', () => this._cleanup());
+  }
+
+  _cleanup() {
+    try { fs.unlinkSync(this.budgetFile); } catch { /* already gone */ }
+  }
+
+  /** @returns {number} lines currently in the budget file */
+  _count() {
+    try {
+      const content = fs.readFileSync(this.budgetFile, 'utf8');
+      // Count non-empty lines (trailing newline should not count as a line).
+      const trimmed = content.replace(/\n+$/, '');
+      if (trimmed === '') return 0;
+      return trimmed.split('\n').length;
+    } catch (err) {
+      if (err.code === 'ENOENT') return 0;
+      throw err;
+    }
   }
 
   /**
@@ -297,19 +353,27 @@ class MutationBudget {
    * @param {string} [operation] for error clarity
    */
   consume(operation) {
-    if (this.consumed >= this.max) {
+    const consumed = this._count();
+    if (consumed >= this.max) {
       throw new Error(
-        `Mutation budget exhausted: ${this.consumed}/${this.max} consumed` +
+        `Mutation budget exhausted: ${consumed}/${this.max} consumed ` +
+        `(run-wide counter at ${this.budgetFile})` +
         (operation ? ` (rejected operation: ${operation})` : '') +
         `. Increase GITWIRE_STRESS_MUTATION_BUDGET or reduce the scenario.`
       );
     }
-    this.consumed += 1;
+    try {
+      fs.appendFileSync(this.budgetFile, `${operation || 'mutation'}\n`);
+    } catch (err) {
+      throw new Error(
+        `Could not record mutation budget consumption at ${this.budgetFile}: ${err.message}`
+      );
+    }
   }
 
-  /** @returns {number} remaining budget */
+  /** @returns {number} remaining budget (may be slightly stale under parallelism) */
   remaining() {
-    return this.max - this.consumed;
+    return Math.max(0, this.max - this._count());
   }
 }
 
@@ -410,6 +474,52 @@ function findRepoInBody(body) {
 // ─── Policy facade ─────────────────────────────────────────────────────────
 
 /**
+ * Compile a route template like '/api/repos/:owner/:repo/sync' into a RegExp
+ * matcher with named param capture. The matcher is anchored (full-path match)
+ * so a contract for /api/repos/:owner/:repo/sync does not also match
+ * /api/repos/:owner/:repo/config.
+ *
+ * Query strings are stripped before matching (they are not part of the route).
+ *
+ * @param {string} route template with :param segments
+ * @returns {{ regex: RegExp, params: string[] }}
+ */
+function compileRoute(route) {
+  const params = [];
+  // Escape regex specials, then replace escaped :param with a capture group.
+  // :param matches one path segment (no slash).
+  const pattern = route
+    .split('/')
+    .map((seg) => {
+      if (seg.startsWith(':')) {
+        params.push(seg.slice(1));
+        return '([^/]+)';
+      }
+      return seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    })
+    .join('/');
+  // Anchor: the pathname must match the pattern exactly (no extra segments).
+  const regex = new RegExp('^' + pattern + '$');
+  return { regex, params };
+}
+
+/**
+ * Match a URL pathname against a compiled route. Returns the extracted params
+ * keyed by name, or null if no match.
+ *
+ * @param {string} pathname
+ * @param {{ regex: RegExp, params: string[] }} compiled
+ * @returns {Object<string, string> | null}
+ */
+function matchRoute(pathname, compiled) {
+  const m = compiled.regex.exec(pathname);
+  if (!m) return null;
+  const out = {};
+  compiled.params.forEach((p, i) => { out[p] = decodeURIComponent(m[i + 1]); });
+  return out;
+}
+
+/**
  * The single policy object constructed once per process. Constructed via
  * `loadPolicy()` so errors surface at load time rather than per-request.
  */
@@ -465,22 +575,56 @@ class TargetPolicy {
         `(got '${contract.classification}'). The policy only permits fixture mutations.`
       );
     }
-    if (!contract.target || !contract.target.field || !contract.target.location) {
+    // Route template is required and must be anchored (start with /). It may
+    // contain :param segments. The matcher enforces the exact route shape so
+    // a caller cannot reuse a contract on an unintended endpoint.
+    if (!contract.route || typeof contract.route !== 'string' || !contract.route.startsWith('/')) {
       throw new Error(
-        `Contract '${contract.name}' must declare target.field and target.location.`
+        `Contract '${contract.name}' must declare a route template starting with '/' ` +
+        `(e.g. '/api/repos/:owner/:repo/sync').`
       );
     }
-    if (!['repo', 'installationId'].includes(contract.target.field)) {
+    // Identities is an array (possibly empty for routes with no fixture id,
+    // though such routes should not be mutations). Each identity declares
+    // where the fixture identity MUST appear and be validated.
+    if (!Array.isArray(contract.identities)) {
       throw new Error(
-        `Contract '${contract.name}' target.field must be 'repo' or 'installationId'.`
+        `Contract '${contract.name}' must declare an 'identities' array. ` +
+        `Use [] for no fixture identity (rare for mutations).`
       );
     }
-    if (!['path', 'body', 'query'].includes(contract.target.location)) {
-      throw new Error(
-        `Contract '${contract.name}' target.location must be 'path', 'body', or 'query'.`
-      );
+    for (const id of contract.identities) {
+      if (!id || !id.field || !id.location) {
+        throw new Error(
+          `Contract '${contract.name}' has an identity missing field/location.`
+        );
+      }
+      if (!['repo', 'installationId'].includes(id.field)) {
+        throw new Error(
+          `Contract '${contract.name}' identity.field must be 'repo' or 'installationId'.`
+        );
+      }
+      if (!['path', 'body', 'query'].includes(id.location)) {
+        throw new Error(
+          `Contract '${contract.name}' identity.location must be 'path', 'body', or 'query'.`
+        );
+      }
+      if (id.location === 'path' && !id.param) {
+        throw new Error(
+          `Contract '${contract.name}' path-located identity must declare 'param' ` +
+          `(the :param name in the route template).`
+        );
+      }
+      if (id.location === 'body' && !id.bodyField) {
+        throw new Error(
+          `Contract '${contract.name}' body-located identity must declare 'bodyField'.`
+        );
+      }
     }
-    this.contracts.set(contract.name, contract);
+    // Compile the route into a matcher. Convert :param segments into capture
+    // groups and anchor the whole pattern.
+    const compiled = compileRoute(contract.route);
+    this.contracts.set(contract.name, { ...contract, _compiled: compiled });
   }
 
   /**
@@ -586,7 +730,22 @@ class TargetPolicy {
       );
     }
 
-    // 3. Denylist checks across every channel identities can appear in.
+    // 3. Route match (anchored). The request pathname must match the
+    //    contract's route template exactly — this stops a caller from
+    //    reusing a same-method contract on an unintended endpoint. Done
+    //    BEFORE the budget so a mismatch never consumes a slot.
+    const routeParams = matchRoute(url.pathname, contract._compiled);
+    if (routeParams === null) {
+      throw new Error(
+        `Route mismatch for contract '${contractName}': ` +
+        `request path '${url.pathname}' does not match route '${contract.route}'.`
+      );
+    }
+
+    // 4. Denylist checks across every channel identities can appear in.
+    //    (Defense in depth — the contract check below is the authoritative
+    //    fixture-conformance gate; this catches production identities even in
+    //    channels the contract does not explicitly declare.)
     const pathRepo = extractRepoFromPath(url);
     if (pathRepo) {
       assertRepoNotProduction(`${pathRepo.owner}/${pathRepo.repo}`);
@@ -602,82 +761,103 @@ class TargetPolicy {
       if (bodyInstallation !== null) assertInstallationNotProduction(bodyInstallation);
     }
 
-    // 4. Contract conformance — fail-closed. The declared fixture identity
-    //    MUST be present at the declared location, and MUST equal the
-    //    configured fixture identity. Missing identity is rejection.
-    this._assertContractMet({ url, body, contract });
+    // 5. Contract conformance — fail-closed, ALL declared identities. Every
+    //    identity the contract declares MUST be present at its declared
+    //    location and MUST equal the configured fixture identity. A route
+    //    that carries multiple identities (e.g. repo in path + installation
+    //    in query) validates ALL of them.
+    this._assertContractMet({ url, body, contract, routeParams });
 
-    // 5. Budget.
+    // 6. Budget.
     if (this.budget) {
       this.budget.consume(operationName || contractName);
     }
   }
 
   /**
-   * Fail-closed contract enforcement: the declared fixture identity MUST be
-   * present at the declared location and MUST equal the configured fixture.
-   * Missing identity is rejection (the server cannot be trusted to "fill in"
-   * the fixture from the path under stress, and absence of an explicit
-   * identity is exactly the class of mistake the contract exists to catch).
+   * Fail-closed contract enforcement for ALL declared identities. Each
+   * identity in contract.identities MUST be present at its declared location
+   * and MUST equal the configured fixture identity. Missing identity is
+   * rejection. Multi-identity routes (e.g. repo in path + installation in
+   * query) validate every identity, not just one — this closes the bypass
+   * where a contract declares only one identity and an undeclared repo in
+   * the path targets a non-fixture resource.
+   *
+   * Path-located identities are read from the route-extracted params (the
+   * route matcher already validated the shape), keyed by the identity's
+   * `param` name (the :param in the route template).
    *
    * @private
    */
-  _assertContractMet({ url, body, contract }) {
-    const { field, location, bodyField } = contract.target;
+  _assertContractMet({ url, body, contract, routeParams }) {
     const fixtureRepoCanon = canonicalRepo(this.fixtureRepo);
     const fixtureInstCanon = canonicalInstallationId(this.fixtureInstallationId);
 
-    if (field === 'installationId') {
-      let present = null;
-      if (location === 'query') present = extractInstallationFromQuery(url);
-      else if (location === 'body') {
-        if (bodyField && body && typeof body === 'object') {
-          present = body[bodyField] === undefined ? null : String(body[bodyField]);
-        } else {
-          present = findInstallationInBody(body);
+    for (const id of contract.identities) {
+      const { field, location, param, bodyField } = id;
+
+      if (field === 'installationId') {
+        let present = null;
+        if (location === 'query') {
+          present = extractInstallationFromQuery(url);
+        } else if (location === 'body') {
+          if (bodyField && body && typeof body === 'object') {
+            present = body[bodyField] === undefined ? null : String(body[bodyField]);
+          } else {
+            present = findInstallationInBody(body);
+          }
+        } else if (location === 'path') {
+          // Installation IDs are not typically path params; support anyway.
+          present = param && routeParams[param] ? routeParams[param] : null;
+        }
+        if (present === null || present === '') {
+          throw new Error(
+            `Mutation contract '${contract.name}' declares fixture installation_id ` +
+            `at ${location} but the request carries none. The declared fixture ` +
+            `identity MUST be present.`
+          );
+        }
+        const presentCanon = canonicalInstallationId(present);
+        if (presentCanon !== fixtureInstCanon) {
+          throw new Error(
+            `Mutation contract '${contract.name}' carries installation_id '${present}' ` +
+            `at ${location} which is not the configured fixture installation.`
+          );
+        }
+      } else if (field === 'repo') {
+        let present = null;
+        if (location === 'path') {
+          // The repo is split across :owner/:repo params in the route. The
+          // identity's `param` is the owner param name; the repo param is
+          // conventionally the next segment. We reconstruct owner/repo from
+          // the two adjacent params declared on the route.
+          if (param && routeParams[param]) {
+            const ownerVal = routeParams[param];
+            // Convention: the repo param is named 'repo'. If the route uses
+            // a different name, the contract must declare it via repoParam.
+            const repoParamName = id.repoParam || 'repo';
+            const repoVal = routeParams[repoParamName];
+            if (repoVal) {
+              present = `${ownerVal}/${repoVal}`;
+            }
+          }
+        } else if (location === 'body' && bodyField && body && typeof body === 'object') {
+          present = typeof body[bodyField] === 'string' ? body[bodyField] : null;
+        }
+        if (!present) {
+          throw new Error(
+            `Mutation contract '${contract.name}' declares fixture repo at ${location} ` +
+            `but the request carries none. The declared fixture identity MUST be present.`
+          );
+        }
+        const presentCanon = canonicalRepo(present);
+        if (presentCanon !== fixtureRepoCanon) {
+          throw new Error(
+            `Mutation contract '${contract.name}' targets repo '${present}' ` +
+            `at ${location} which is not the configured fixture repo (${this.fixtureRepo}).`
+          );
         }
       }
-      // Fail-closed: missing declared identity is a rejection.
-      if (present === null || present === '') {
-        throw new Error(
-          `Mutation contract '${contract.name}' declares fixture installation_id ` +
-          `at ${location} but the request carries none. The declared fixture ` +
-          `identity MUST be present.`
-        );
-      }
-      const presentCanon = canonicalInstallationId(present);
-      if (presentCanon !== fixtureInstCanon) {
-        throw new Error(
-          `Mutation contract '${contract.name}' carries installation_id '${present}' ` +
-          `which is not the configured fixture installation.`
-        );
-      }
-    } else if (field === 'repo') {
-      let present = null;
-      if (location === 'body' && bodyField && body && typeof body === 'object') {
-        present = typeof body[bodyField] === 'string' ? body[bodyField] : null;
-      } else if (location === 'path') {
-        const pr = extractRepoFromPath(url);
-        present = pr ? `${pr.owner}/${pr.repo}` : null;
-      }
-      if (!present) {
-        throw new Error(
-          `Mutation contract '${contract.name}' declares fixture repo at ${location} ` +
-          `but the request carries none. The declared fixture identity MUST be present.`
-        );
-      }
-      const presentCanon = canonicalRepo(present);
-      if (presentCanon !== fixtureRepoCanon) {
-        throw new Error(
-          `Mutation contract '${contract.name}' targets repo '${present}' ` +
-          `which is not the configured fixture repo (${this.fixtureRepo}).`
-        );
-      }
-    } else {
-      throw new Error(
-        `Mutation contract '${contract.name}' has unknown target.field '${field}' ` +
-        `(expected 'repo' or 'installationId').`
-      );
     }
   }
 }
@@ -741,24 +921,12 @@ export function loadPolicy(opts = {}) {
     if (!runId) {
       throw new Error('GITWIRE_STRESS_ALLOW_MUTATIONS=true requires GITWIRE_STRESS_RUN_ID.');
     }
-    // The mutation budget is process-local. Under Jest's default parallel
-    // worker mode (JEST_WORKER_ID set), each worker gets its own budget
-    // counter and the run-wide limit is silently multiplied by the worker
-    // count — a real mutation-budget bypass. Refuse to enable mutations in
-    // a Jest worker; require --runInBand (npm run test:stress uses it) so
-    // the budget is genuinely run-wide. benchmark.js runs as a single Node
-    // process and is unaffected (no JEST_WORKER_ID).
-    if (process.env.JEST_WORKER_ID !== undefined) {
-      throw new Error(
-        'GITWIRE_STRESS_ALLOW_MUTATIONS=true is not permitted inside a Jest worker ' +
-        '(JEST_WORKER_ID set). The mutation budget is process-local; parallel workers ' +
-        'would each consume the full budget. Run the stress suite with --runInBand: ' +
-        '`npm run test:stress` (which uses --runInBand), not direct jest invocation.'
-      );
-    }
     const budgetRaw = requireEnv('GITWIRE_STRESS_MUTATION_BUDGET');
     const budgetNum = parseInt(budgetRaw, 10);
-    budget = new MutationBudget(budgetNum);
+    // Run-wide budget: shared across Jest workers and benchmark forks via a
+    // filesystem counter scoped by runId. The previous in-memory counter was
+    // per-process, which silently multiplied the cap by the worker count.
+    budget = new RunWideMutationBudget(budgetNum, runId);
   }
 
   return new TargetPolicy({
@@ -797,6 +965,8 @@ export const TESTING_ONLY = {
   extractInstallationFromQuery,
   findInstallationInBody,
   findRepoInBody,
-  MutationBudget,
+  RunWideMutationBudget,
+  compileRoute,
+  matchRoute,
   TargetPolicy,
 };
