@@ -111,8 +111,6 @@ jobs:
           docker exec -w /app gitwire-gitwire-app-1 node /tmp/enforce-production-audit.mjs \
             /tmp/production-audit.json \
             /tmp/audit-exceptions.json
-            /tmp/production-audit.json \
-            audit-exceptions.json
 
   # ── Job 2: Deploy ─────────────────────────────────────────────
   # The ONLY job with `environment: production`. Production-scoped secrets and
