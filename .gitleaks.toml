@@ -42,8 +42,9 @@ useDefault = true
     '''index2\.html''',
     '''index\.html''',
     '''MediaPackage.*''',
-    # scripts/secret-leak-stress-test.sh contains deliberately fake private
-    # keys, tokens, and other high-entropy strings used to verify gitleaks
-    # detection. These are NOT real credentials.
+    # The following files contain deliberately fake private keys, tokens, and
+    # high-entropy strings used to test secret detection or as known-fake
+    # fixtures. These are NOT real credentials.
     '''scripts/secret-leak-stress-test\.sh''',
+    '''packages/runtime/tests/runtime\.test\.js''',
   ]
