@@ -86,15 +86,11 @@ jobs:
         id: audit
         run: |
           cd /opt/gitwire
-          # The self-hosted runner (user: runner) does not have npm in PATH.
-          # Locate the runner's bundled Node.js. The externals directories are
-          # named externals, externals.2.334.0, externals.2.335.1, etc. — all at
-          # the same level under /opt/actions-runner/ (not nested inside externals/).
-          NODE_BIN="$(dirname "$(find /opt/actions-runner/externals*/node20/bin/npm -type f 2>/dev/null | head -1)")"
-          export PATH="$NODE_BIN:$PATH"
-          command -v npm >/dev/null 2>&1 || { echo "::error::npm not found on runner"; exit 1; }
+          # The self-hosted runner does not have a working npm/node installation
+          # (the runner's bundled externals npm is missing lib/cli.js). Run the
+          # audit inside the app container, which has a complete Node.js.
           set +e
-          npm audit --omit=dev --json > /tmp/production-audit.json 2>/tmp/audit-stderr.log
+          docker exec -w /app gitwire-gitwire-app-1 npm audit --omit=dev --json > /tmp/production-audit.json 2>/tmp/audit-stderr.log
           AUDIT_EXIT=$?
           set -e
           echo "exit=$AUDIT_EXIT" >> "$GITHUB_OUTPUT"
@@ -103,15 +99,18 @@ jobs:
             cat /tmp/audit-stderr.log >&2
             exit 1
           fi
-          test -s /tmp/production-audit.json || { echo "::error::audit report is empty"; exit 1; }
+          test -s /tmp/production-audit.json || { echo "::error::audit report is empty"; cat /tmp/audit-stderr.log >&2; exit 1; }
 
       - name: Evaluate audit against exception registry
         run: |
           cd /opt/gitwire
-          NODE_BIN="$(dirname "$(find /opt/actions-runner/externals*/node20/bin/node -type f 2>/dev/null | head -1)")"
-          export PATH="$NODE_BIN:$PATH"
-          command -v node >/dev/null 2>&1 || { echo "::error::node not found on runner"; exit 1; }
-          node scripts/enforce-production-audit.mjs \
+          # Run the evaluator inside the app container (has working node).
+          docker cp scripts/enforce-production-audit.mjs gitwire-gitwire-app-1:/tmp/enforce-production-audit.mjs
+          docker cp audit-exceptions.json gitwire-gitwire-app-1:/tmp/audit-exceptions.json
+          docker cp /tmp/production-audit.json gitwire-gitwire-app-1:/tmp/production-audit.json
+          docker exec -w /app gitwire-gitwire-app-1 node /tmp/enforce-production-audit.mjs \
+            /tmp/production-audit.json \
+            /tmp/audit-exceptions.json
             /tmp/production-audit.json \
             audit-exceptions.json
 
