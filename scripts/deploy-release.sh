@@ -427,9 +427,9 @@ deploy_app() {
 verify_app() {
   FAILURE_STAGE="verify_app"
   local body
-  # 90 attempts × 2s = 180s. The app runs migrations on boot (entrypoint)
-  # which can take 60-120s on a cold start with new migrations.
-  body="$(wait_for_http http://localhost:3000/health 90 || true)"
+  # 150 attempts × 2s = 300s. The app runs migrations + worker startup + initial
+  # sync on boot, which can take 3-4 minutes on the production CT.
+  body="$(wait_for_http http://localhost:3000/health 150 || true)"
   [[ -n "$body" ]] || fail "app /health did not respond"
 
   printf '%s' "$body" >/tmp/app-health.json
