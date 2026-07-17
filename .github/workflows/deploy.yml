@@ -86,6 +86,15 @@ jobs:
         id: audit
         run: |
           cd /opt/gitwire
+          # The self-hosted runner (user: runner) does not have npm in PATH.
+          # Use the runner's bundled Node.js (Actions sets RUNNER_TOOL_CACHE).
+          export PATH="$RUNNER_TOOL_CACHE/node/20.*/*/bin:$PATH"
+          command -v npm >/dev/null 2>&1 || {
+            # Fallback: find npm in the runner's externals directory.
+            NODE_BIN="$(dirname "$(find /opt/actions-runner/externals/*/node20/bin/npm -type f 2>/dev/null | head -1)")"
+            export PATH="$NODE_BIN:$PATH"
+          }
+          command -v npm >/dev/null 2>&1 || { echo "::error::npm not found on runner"; exit 1; }
           set +e
           npm audit --omit=dev --json > /tmp/production-audit.json 2>/tmp/audit-stderr.log
           AUDIT_EXIT=$?
@@ -101,6 +110,11 @@ jobs:
       - name: Evaluate audit against exception registry
         run: |
           cd /opt/gitwire
+          export PATH="$RUNNER_TOOL_CACHE/node/20.*/*/bin:$PATH"
+          command -v node >/dev/null 2>&1 || {
+            NODE_BIN="$(dirname "$(find /opt/actions-runner/externals/*/node20/bin/node -type f 2>/dev/null | head -1)")"
+            export PATH="$NODE_BIN:$PATH"
+          }
           node scripts/enforce-production-audit.mjs \
             /tmp/production-audit.json \
             audit-exceptions.json
