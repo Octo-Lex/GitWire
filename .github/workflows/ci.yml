@@ -655,7 +655,7 @@ jobs:
           EXECUTOR_DIGEST: ${{ steps.digests.outputs.EXECUTOR_DIGEST }}
           DASHBOARD_DIGEST: ${{ steps.digests.outputs.DASHBOARD_DIGEST }}
         run: |
-          cat > release-manifest.json << 'ENDJSON'
+          cat > release-manifest.json <<ENDJSON
           {
             "schema_version": 1,
             "git_sha": "${{ steps.meta.outputs.release_sha }}",
