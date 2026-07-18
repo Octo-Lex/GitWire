@@ -2,7 +2,7 @@
 // Stress Test: Pagination edge cases — boundary values, deep pagination, invalid inputs.
 //
 // Semantics preserved from the original test:
-// - Reads accept [200, 429] (429 after retries is expected, not unexpected)
+// - Reads accept READ_OK_OR_RATE_LIMITED (429 after retries is expected)
 // - Body assertions run only on HTTP 200 (assertOnStatuses: [200])
 // - Deep pagination counts only HTTP 200 as a pass; 429 is expected but
 //   assertion=not_run (status_not_applicable); 500 is unexpected
@@ -124,6 +124,9 @@ describe("Pagination Boundary Tests", () => {
             : { passed: false, code: "UNEXPECTED_500", message: "Deep pagination returned 500" },
         },
       });
+      // A semantic assertion failure is an ordinary result — must be checked
+      // explicitly, otherwise a 500 passes silently alongside a 200.
+      expect(result.assertion).toBe("passed");
       if (result.status === 200) pass200++;
       if (result.status === 429) { await sleep(2000); continue; }
     }

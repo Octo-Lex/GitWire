@@ -237,6 +237,51 @@ describe("gate RC-6: callback fail-closed", () => {
     await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
       .rejects.toMatchObject({ code: "BURST_OPERATION_REJECTED" });
   });
+
+  it("boolean return carries full {id, kind, method} attribution + sanitized reason", async () => {
+    // This exercises validateCallbackReturn (not the catch branch for throws).
+    const ops = [{
+      kind: "malformed", method: "POST",
+      run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => true },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({
+        code: "BURST_OPERATION_REJECTED",
+        operation: { id: 0, kind: "malformed", method: "POST" },
+      });
+  });
+
+  it("undefined return carries full attribution + sanitized reason", async () => {
+    const ops = [{
+      kind: "undef-op", method: "GET",
+      run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => undefined },
+    }];
+    let caught;
+    try { await runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }); }
+    catch (e) { caught = e; }
+    expect(caught.code).toBe("BURST_OPERATION_REJECTED");
+    expect(caught.operation.id).toBe(0);
+    expect(caught.operation.kind).toBe("undef-op");
+    expect(caught.operation.method).toBe("GET");
+    expect(typeof caught.reason).toBe("string");
+  });
+
+  it("custom thenable return → BURST_OPERATION_REJECTED", async () => {
+    // A custom thenable (not a native Promise) must also be rejected.
+    const thenable = { then: (resolve) => resolve({ passed: true }) };
+    const ops = [{
+      kind: "thenable", method: "GET",
+      run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => thenable },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({
+        code: "BURST_OPERATION_REJECTED",
+        operation: { id: 0, kind: "thenable", method: "GET" },
+      });
+  });
 });
 
 // ─── 7. Correlation under reverse completion ──────────────────────────────

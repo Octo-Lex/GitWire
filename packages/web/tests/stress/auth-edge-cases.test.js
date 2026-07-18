@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
 import { httpOperation, runContractedOperation } from "./burst-runner.js";
 import { BASE_URL, API_KEY } from "../helpers.js";
+import { STATUS_SETS } from "./response-contracts.js";
 import { sleep } from "./stress-helpers.js";
 
 /**
@@ -84,7 +85,7 @@ describe("Auth Edge Cases", () => {
         method: "GET", bodyMode: "none",
         execute: () => fetch(`${BASE_URL}/health`),
       }),
-      responseContract: { expectedStatuses: [200] },
+      responseContract: { expectedStatuses: STATUS_SETS.READ_OK },
     });
     expect(healthResult.http).toBe("expected");
   });
@@ -101,7 +102,7 @@ describe("Auth Edge Cases", () => {
             method: "GET", bodyMode: "auto",
             execute: () => fetch(`${BASE_URL}/api/repos`, { headers: { Authorization: `Bearer ${API_KEY}` } }),
           }),
-          responseContract: { expectedStatuses: [200, 429] },
+          responseContract: { expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED },
         });
         results.push({ authed, http: r.http });
       } else {

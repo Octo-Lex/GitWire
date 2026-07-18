@@ -41,6 +41,8 @@ jobs:
             \) \
             -not -path '*/node_modules/*' \
             -exec node --check {} +
+      - name: Stress isolation static gate
+        run: node scripts/check-stress-isolation.mjs
 
   # ── Package test jobs ─────────────────────────────────────────────────────
   # Each package gets its own job so failures are attributed clearly.

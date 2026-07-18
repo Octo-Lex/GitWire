@@ -32,8 +32,10 @@ const RAW_MUTATING_FETCH = /fetch\s*\(\s*[^)]*?method:\s*["'](?:POST|PUT|PATCH|D
 const LEGACY_PATTERNS = [
   { regex: /apiBurstOperation\s*\(/, msg: "use apiContractedOperation instead of apiBurstOperation" },
   { regex: /boundedBurst\s*\(/, msg: "use runContractedBurst instead of boundedBurst" },
-  { regex: /\bawait\s+(get|post|put|patch|del)\s*\(/, msg: "legacy helper used for semantic check — use runContractedOperation instead" },
-  { regex: /\b\[200,\s*(201|429|404|400)/, msg: "inline status array — use STATUS_SETS constant instead" },
+  { regex: /await\s+(get|post|put|patch|del)\s*\(/, msg: "legacy helper used for semantic check — use runContractedOperation instead" },
+  // Inline status arrays like [200, 429] or [200, 201, 202] that should use STATUS_SETS.
+  // Matches literal array brackets with status numbers inside (not STATUS_SETS refs).
+  { regex: /\[\s*200\s*,\s*\d{3}/, msg: "inline status array — use STATUS_SETS constant instead" },
 ];
 
 let violations = 0;
