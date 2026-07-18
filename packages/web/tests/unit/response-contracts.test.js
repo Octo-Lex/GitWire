@@ -517,3 +517,46 @@ describe("gate RC-15: pagination status-only descriptor", () => {
     expect(r.results[0].assertionNotRunReason).toBe("not_declared");
   });
 });
+
+// ─── Round-4: sanitized malformed-return reasons + static gate tests ──────
+
+// Fix 1: malformed-return reasons must be sanitized and bounded
+describe("gate RC-16: sanitized malformed-return reasons", () => {
+  it("long secret-bearing passed value → reason does not contain secret, is bounded", async () => {
+    const secret = "Bearer sk-ant-" + "x".repeat(300);
+    const ops = [{
+      kind: "leak-test", method: "POST",
+      run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => secret },
+    }];
+    let caught;
+    try { await runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }); }
+    catch (e) { caught = e; }
+    expect(caught.code).toBe("BURST_OPERATION_REJECTED");
+    expect(caught.operation.id).toBe(0);
+    expect(caught.operation.kind).toBe("leak-test");
+    expect(caught.operation.method).toBe("POST");
+    // The secret must NOT appear in the reason.
+    expect(caught.reason).not.toContain("sk-ant");
+    expect(caught.reason).not.toContain("Bearer");
+    // The reason must be bounded.
+    expect(caught.reason.length).toBeLessThanOrEqual(200);
+    // The reason should describe the type (string), not the value.
+    expect(caught.reason).toContain("string");
+  });
+
+  it("secret-bearing code in passed:false return → reason sanitized", async () => {
+    const secretCode = "Bearer sk-ant-secret123";
+    const ops = [{
+      kind: "code-leak", method: "GET",
+      run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => ({ passed: false, code: secretCode, message: "x" }) },
+    }];
+    let caught;
+    try { await runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }); }
+    catch (e) { caught = e; }
+    expect(caught.code).toBe("BURST_OPERATION_REJECTED");
+    // The secret code must not appear in the reason.
+    expect(caught.reason).not.toContain("sk-ant-secret123");
+  });
+});

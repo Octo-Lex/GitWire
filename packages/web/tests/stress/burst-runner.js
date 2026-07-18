@@ -768,11 +768,13 @@ function validateCallbackReturn(ret, desc) {
   }
   if (ret === null || typeof ret !== "object") {
     throw makeFatalError(desc, "assertion callback returned non-object",
-      `got ${typeof ret}`);
+      `received type: ${typeof ret}`);
   }
   if (ret.passed !== true && ret.passed !== false) {
+    // Never interpolate ret.passed directly — it could contain secrets or be
+    // excessively long. Use typeof (a fixed, bounded string) instead.
     throw makeFatalError(desc, "assertion callback returned unknown passed value",
-      `got ${String(ret.passed)}`);
+      `passed must be exactly true or false; received ${typeof ret.passed}`);
   }
   if (ret.passed === true && ("code" in ret || "message" in ret)) {
     throw makeFatalError(desc, "assertion callback returned passed:true with error data",
@@ -785,8 +787,9 @@ function validateCallbackReturn(ret, desc) {
         `code must be a non-empty string ≤100 chars, got ${typeof ret.code}`);
     }
     if (!/^[A-Z][A-Z0-9_]*$/.test(ret.code)) {
+      // Do not interpolate ret.code directly — sanitize it first.
       throw makeFatalError(desc, "assertion callback returned invalid code format",
-        `code must match UPPER_SNAKE_CASE, got '${ret.code}'`);
+        `code must match UPPER_SNAKE_CASE, got ${sanitizeMessage(ret.code)}`);
     }
     if (typeof ret.message !== "string" || ret.message.length === 0) {
       throw makeFatalError(desc, "assertion callback returned invalid message",
