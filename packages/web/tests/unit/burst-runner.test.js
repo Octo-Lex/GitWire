@@ -13,7 +13,13 @@
 // barriers, and an injected deterministic clock. No real HTTP.
 
 import { describe, it, expect, jest } from "@jest/globals";
-import { runBurst, httpOperation, classifyTransportError } from "../stress/burst-runner.js";
+import {
+  runBurst, httpOperation, classifyTransportError,
+  detectJsonContentType,
+  TESTING_ONLY,
+} from "../stress/burst-runner.js";
+
+const { validateOutcome, INVALID_OUTCOME } = TESTING_ONLY;
 
 // ─── Test helpers: deterministic primitives ────────────────────────────────
 
@@ -55,22 +61,23 @@ describe("gate 1: fulfilled HTTP 500 ≠ success", () => {
 // ─── 2. Rejected promises (inside httpOperation) → transportFailed ─────────
 
 describe("gate 2: transport failures classified", () => {
-  it("five DNS rejections → 5 transportFailed", async () => {
+  it("five DNS rejections via httpOperation → 5 transportFailed", async () => {
+    // Transport failures must come THROUGH httpOperation (amendment 10): only
+    // recognized fetch failures become classified transport outcomes. A bare
+    // throw from run() is BURST_OPERATION_REJECTED (tested in gate 17).
     const ops = Array.from({ length: 5 }, () => ({
       kind: "read", method: "GET",
-      run: async () => {
-        throw fetchError("ENOTFOUND");
-      },
+      run: async () => httpOperation({
+        method: "GET",
+        bodyMode: "none",
+        execute: async () => { throw fetchError("ENOTFOUND"); },
+      }),
     }));
-    // NOTE: against the real implementation, these rejections escape operation.run
-    // and become BURST_OPERATION_REJECTED (gate for that below). For testing the
-    // httpOperation transport-failure path, see the httpOperation-specific gates.
-    // This gate asserts that a workload of transport failures is reported factually
-    // when they come through httpOperation.
-    // We'll test the httpOperation path directly in the classification gates.
-    // For runBurst, we test that escaped rejections become BURST_OPERATION_REJECTED.
-    await expect(runBurst(ops, { concurrency: 5, pacing: { mode: "none" } }))
-      .rejects.toThrow(/BURST_OPERATION_REJECTED/);
+    const r = await runBurst(ops, { concurrency: 5, pacing: { mode: "none" } });
+    expect(r.transportFailed).toBe(5);
+    expect(r.transportCompleted).toBe(0);
+    // Each result's error category should be dns.
+    expect(r.results.every(x => x.error && x.error.category === "dns")).toBe(true);
   });
 });
 
@@ -124,21 +131,50 @@ describe("gate 3: classifyTransportError taxonomy (real error.cause)", () => {
   });
 });
 
+// Fake Response for testing httpOperation without network.
+function fakeResponse(status, bodyText, contentType = "application/json") {
+  return {
+    status,
+    text: async () => bodyText,
+    headers: {
+      get: (name) => name.toLowerCase() === "content-type" ? contentType : null,
+    },
+  };
+}
+
 // ─── 4. Body parse failure ≠ transport failure ─────────────────────────────
 
 describe("gate 4: body parse failure classification", () => {
-  it("200 with invalid JSON → transport completed, status 200, body.state=parse_failed", () => {
-    // Tested via httpOperation with a fake Response; see httpOperation gates below.
-    // This gate is asserted there. Placeholder to keep the gate numbered.
-    expect(true).toBe(true);
+  it("200 with invalid JSON → transport completed, status 200, body.state=parse_failed", async () => {
+    const outcome = await httpOperation({
+      method: "GET", bodyMode: "auto",
+      execute: async () => fakeResponse(200, "{ not valid json", "application/json"),
+    });
+    expect(outcome.transport).toBe("completed");
+    expect(outcome.status).toBe(200);
+    expect(outcome.body.state).toBe("parse_failed");
+    expect(outcome.body.error.category).toBe("body_parse");
+    // NOT a transport failure
+    expect(outcome.error).toBeNull();
   });
 });
 
 // ─── 5. Body read failure (text() rejects) ─────────────────────────────────
 
 describe("gate 5: body read failure", () => {
-  it("200 where text() rejects → transport completed, status 200, body.state=read_failed", () => {
-    expect(true).toBe(true); // asserted in httpOperation gates
+  it("200 where text() rejects → transport completed, status 200, body.state=read_failed", async () => {
+    const outcome = await httpOperation({
+      method: "GET", bodyMode: "auto",
+      execute: async () => ({
+        status: 200,
+        text: async () => { throw new Error("stream aborted"); },
+        headers: { get: () => "application/json" },
+      }),
+    });
+    expect(outcome.transport).toBe("completed");
+    expect(outcome.status).toBe(200);
+    expect(outcome.body.state).toBe("read_failed");
+    expect(outcome.body.error.category).toBe("body_read");
   });
 });
 
@@ -291,7 +327,7 @@ describe("gate 11: latency population = transport_completed", () => {
 describe("gate 12: empty workloads and samples", () => {
   it("zero operations → EMPTY_WORKLOAD", async () => {
     await expect(runBurst([], { concurrency: 1, pacing: { mode: "none" } }))
-      .rejects.toThrow(/EMPTY_WORKLOAD/);
+      .rejects.toMatchObject({ code: "EMPTY_WORKLOAD" });
   });
 });
 
@@ -347,12 +383,9 @@ describe("gate 16: auto body-mode JSON detection", () => {
     { ct: "", expected: "text" },
     { ct: null, expected: "text" },
   ];
-  // The actual JSON-detection helper will be exported from burst-runner.
-  // This gate will test it once implemented. For the red phase, it fails on import.
   for (const { ct, expected } of cases) {
     it(`"${ct}" → ${expected}`, () => {
-      // Placeholder until the helper is exported; real assertion added post-extraction.
-      expect(true).toBe(true);
+      expect(detectJsonContentType(ct)).toBe(expected);
     });
   }
 });
@@ -384,12 +417,44 @@ describe("constraint 3: INVALID_ELAPSED_TIME on zero/negative elapsed", () => {
 // ─── Constraint 2: outcome validators ──────────────────────────────────────
 
 describe("constraint 2: outcome validators fail closed", () => {
-  // These test the validator directly once exported. For the red phase,
-  // the validator doesn't exist; these will fail at import. That's acceptable
-  // because the validator is a NEW type not present in old code (per amendment 1,
-  // import-error is only acceptable for genuinely-new types, not for gates that
-  // could run against old output).
   it("transport=completed + status=null → invalid", () => {
-    expect(true).toBe(true); // post-extraction
+    expect(() => validateOutcome({
+      transport: "completed", status: null,
+      body: { state: "parsed", value: {}, error: null }, error: null,
+    })).toThrow();
+  });
+  it("transport=failed + non-null status → invalid", () => {
+    expect(() => validateOutcome({
+      transport: "failed", status: 500,
+      body: { state: "not_read", value: null, error: null },
+      error: { category: "dns", name: "t", code: "ENOTFOUND", message: "x" },
+    })).toThrow();
+  });
+  it("transport=failed + body state other than not_read → invalid", () => {
+    expect(() => validateOutcome({
+      transport: "failed", status: null,
+      body: { state: "parsed", value: {}, error: null },
+      error: { category: "dns", name: "t", code: "ENOTFOUND", message: "x" },
+    })).toThrow();
+  });
+  it("transport=completed + transport error present → invalid", () => {
+    expect(() => validateOutcome({
+      transport: "completed", status: 200,
+      body: { state: "parsed", value: {}, error: null },
+      error: { category: "dns", name: "t", code: "ENOTFOUND", message: "x" },
+    })).toThrow();
+  });
+  it("unknown body state → invalid", () => {
+    expect(() => validateOutcome({
+      transport: "completed", status: 200,
+      body: { state: "garbage", value: null, error: null }, error: null,
+    })).toThrow();
+  });
+  it("unknown error category → invalid", () => {
+    expect(() => validateOutcome({
+      transport: "failed", status: null,
+      body: { state: "not_read", value: null, error: null },
+      error: { category: "nonexistent", name: null, code: null, message: "x" },
+    })).toThrow();
   });
 });
