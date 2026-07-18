@@ -527,7 +527,7 @@ describe("gate RC-16: sanitized malformed-return reasons", () => {
     const ops = [{
       kind: "leak-test", method: "POST",
       run: async () => outcome("completed", 200),
-      responseContract: { expectedStatuses: [200], assert: () => secret },
+      responseContract: { expectedStatuses: [200], assert: () => ({ passed: secret }) },
     }];
     let caught;
     try { await runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }); }

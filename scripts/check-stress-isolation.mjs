@@ -12,9 +12,9 @@ import path from "node:path";
 
 const STRESS_DIR_DEFAULT = path.resolve("packages/web/tests/stress");
 
-const ALLOWLIST_DEFAULT = new Set([
-  "mutation-webhook-ingest.test.js", // describe.skip, ST-04
-]);
+// No default allowlist. Every stress file is scanned. The ST-04 webhook
+// file contains only describe.skip with no executable prohibited constructs,
+// so it passes the gate naturally without special treatment.
 
 const RAW_MUTATING_FETCH = /fetch\s*\(\s*[^)]*?method:\s*["'](?:POST|PUT|PATCH|DELETE)["']/s;
 
@@ -28,6 +28,7 @@ const LEGACY_PATTERNS = [
 /**
  * Scan stress test files for prohibited constructs.
  * Pure function — takes a directory and allowlist, returns violations.
+ * Fails closed: a missing or unreadable directory is a structural violation.
  *
  * @param {Object} opts
  * @param {string} [opts.dir] stress test directory
@@ -36,14 +37,21 @@ const LEGACY_PATTERNS = [
  */
 export function scanStressIsolation(opts = {}) {
   const dir = opts.dir || STRESS_DIR_DEFAULT;
-  const allowlist = opts.allowlist || ALLOWLIST_DEFAULT;
+  const allowlist = opts.allowlist || new Set();
   const violations = [];
 
+  // Fail closed: if the stress directory cannot be read, that is a structural
+  // violation, not a clean result.
   let files;
   try {
     files = fs.readdirSync(dir).filter(f => f.endsWith(".test.js"));
-  } catch {
-    return []; // directory doesn't exist (test fixtures)
+  } catch (err) {
+    return [{ file: "(directory)", msg: `cannot read stress directory ${dir}: ${err.message}` }];
+  }
+
+  // If the directory exists but contains no test files, that is also suspicious.
+  if (files.length === 0) {
+    return [{ file: "(directory)", msg: `stress directory ${dir} contains no .test.js files` }];
   }
 
   for (const file of files) {
