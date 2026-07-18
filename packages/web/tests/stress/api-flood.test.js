@@ -49,21 +49,13 @@ describe(`API Flood: ${CONCURRENT} concurrent × ${ROUNDS} rounds`, () => {
   });
 
   test('GET /health survives flood (no auth required)', async () => {
-    const tasks = Array.from({ length: CONCURRENT }, () => ({
-      kind: 'health',
-      method: 'GET',
-      run: async () => {
-        // /health does not require auth; use raw fetch via the base URL.
-        const { BASE_URL } = await import('../helpers.js');
-        const res = await fetch(`${BASE_URL}/health`);
-        return {
-          transport: 'completed',
-          status: res.status,
-          body: { state: 'not_read', value: null, error: null },
-          error: null,
-        };
-      },
-    }));
+    // /health does not require auth. Use apiBurstOperation with bodyMode:none
+    // so fetch failures are classified by httpOperation (not escaped as
+    // BURST_OPERATION_REJECTED). The policy still resolves the URL and
+    // attaches the API key, which /health ignores.
+    const tasks = Array.from({ length: CONCURRENT }, () =>
+      apiBurstOperation('/health', { kind: 'health', method: 'GET', bodyMode: 'none' })
+    );
     const result = await boundedBurst(tasks);
     console.log(`  Health: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
     expect(result.transportCompleted).toBe(result.attempted);

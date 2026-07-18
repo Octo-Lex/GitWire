@@ -458,3 +458,166 @@ describe("constraint 2: outcome validators fail closed", () => {
     })).toThrow();
   });
 });
+
+// ─── Round-1 review fixes: defect-sensitive scheduler tests ────────────────
+
+// Fix 8a: Semaphore fatal stop-and-drain with MULTIPLE operations.
+// The old test used one op; it couldn't prove queued work stops or active
+// work drains.
+describe("fix 8a: semaphore fatal stop-and-drain", () => {
+  it("fatal rejection in op 0 stops op 2 from starting; op 1 drains", async () => {
+    const started = [];
+    const blocker = deferred();
+    const ops = [
+      // Op 0: active, blocks (will be drained)
+      { kind: "block", method: "GET", run: () => { started.push(0); return blocker.promise.then(() => classifiedOutcome("completed", 200)); } },
+      // Op 1: active, completes normally (must drain)
+      { kind: "quick", method: "GET", run: () => { started.push(1); return Promise.resolve(classifiedOutcome("completed", 200)); } },
+      // Op 2: queued, must NOT start after op 0 goes fatal
+      { kind: "queued", method: "GET", run: () => { started.push(2); return Promise.resolve(classifiedOutcome("completed", 200)); } },
+      // Op 3: also queued, must NOT start
+      { kind: "queued2", method: "GET", run: () => { started.push(3); return Promise.resolve(classifiedOutcome("completed", 200)); } },
+    ];
+    // We need op 0 to go fatal. Replace its run with a throw.
+    ops[0].run = async () => { started.push(0); throw new Error("fatal harness error"); };
+    // Concurrency 2: ops 0+1 start, 2+3 are queued.
+    const burstPromise = runBurst(ops, { concurrency: 2, pacing: { mode: "none" } });
+    // Wait for the burst to settle (op 0 rejects, op 1 completes, scheduler
+    // stops scheduling 2+3).
+    let threw = false;
+    try { await burstPromise; } catch (e) { threw = true; expect(e.code).toBe("BURST_OPERATION_REJECTED"); }
+    expect(threw).toBe(true);
+    // Ops 2 and 3 must NOT have started.
+    expect(started).not.toContain(2);
+    expect(started).not.toContain(3);
+    // Ops 0 and 1 DID start.
+    expect(started).toContain(0);
+    expect(started).toContain(1);
+  });
+});
+
+// Fix 8b: Legacy-cohort fatal stop-and-drain.
+describe("fix 8b: legacy_batches fatal stop-and-drain", () => {
+  it("fatal rejection in cohort 1 prevents cohort 2 from starting", async () => {
+    const started = [];
+    const ops = [
+      { kind: "c1-fatal", method: "GET", run: async () => { started.push("c1-fatal"); throw new Error("fatal"); } },
+      { kind: "c1-ok", method: "GET", run: async () => { started.push("c1-ok"); return classifiedOutcome("completed", 200); } },
+      { kind: "c2-1", method: "GET", run: async () => { started.push("c2-1"); return classifiedOutcome("completed", 200); } },
+      { kind: "c2-2", method: "GET", run: async () => { started.push("c2-2"); return classifiedOutcome("completed", 200); } },
+    ];
+    let threw = false;
+    try {
+      await runBurst(ops, { concurrency: 2, pacing: { mode: "legacy_batches", delayMs: 10 } });
+    } catch (e) {
+      threw = true;
+      expect(e.code).toBe("BURST_OPERATION_REJECTED");
+    }
+    expect(threw).toBe(true);
+    // Cohort 1 ran; cohort 2 did not.
+    expect(started).toContain("c1-fatal");
+    expect(started).toContain("c1-ok");
+    expect(started).not.toContain("c2-1");
+    expect(started).not.toContain("c2-2");
+  });
+});
+
+// Fix 8c: Invalid outcome through the scheduler (not just direct validateOutcome).
+describe("fix 8c: invalid outcome through scheduler becomes fatal", () => {
+  it("an operation returning an invalid outcome fails the burst, not hangs", async () => {
+    const ops = [
+      { kind: "bad", method: "GET", run: async () => ({ transport: "completed", status: null, body: { state: "parsed", value: null, error: null }, error: null }) },
+      { kind: "ok", method: "GET", run: async () => { await new Promise(r => setTimeout(r, 10)); return classifiedOutcome("completed", 200); } },
+    ];
+    let threw = false;
+    try { await runBurst(ops, { concurrency: 2, pacing: { mode: "none" } }); }
+    catch (e) { threw = true; expect(e.code).toBe("BURST_OPERATION_REJECTED"); }
+    expect(threw).toBe(true);
+  });
+});
+
+// Fix 8d: Injected legacy delay (verifies delayMs is actually applied via
+// the injected sleep, not just that cohort 2 waits for cohort 1).
+describe("fix 8d: injected legacy delay timing", () => {
+  it("delayMs is applied via the injected sleep between cohorts", async () => {
+    const sleepCalls = [];
+    const injectedSleep = async (ms) => { sleepCalls.push(ms); };
+    const ops = [
+      { kind: "c1", method: "GET", run: async () => classifiedOutcome("completed", 200) },
+      { kind: "c2", method: "GET", run: async () => classifiedOutcome("completed", 200) },
+    ];
+    await runBurst(ops, {
+      concurrency: 1,
+      pacing: { mode: "legacy_batches", delayMs: 42 },
+      sleep: injectedSleep,
+    });
+    // The injected sleep should have been called with 42ms between cohorts.
+    expect(sleepCalls).toContain(42);
+  });
+});
+
+// Fix 7a: TLS/protocol taxonomy gaps
+describe("fix 7a: TLS and protocol error classification", () => {
+  it("CERT_HAS_EXPIRED → tls", () => {
+    const err = new Error("cert expired");
+    err.code = "CERT_HAS_EXPIRED";
+    expect(classifyTransportError(err).category).toBe("tls");
+  });
+  it("ERR_TLS_CERT_ALTNAME_INVALID → tls", () => {
+    const err = new Error("altname mismatch");
+    err.code = "ERR_TLS_CERT_ALTNAME_INVALID";
+    expect(classifyTransportError(err).category).toBe("tls");
+  });
+  it("HPE_INVALID_VERSION → protocol", () => {
+    const err = new Error("invalid HTTP version");
+    err.code = "HPE_INVALID_VERSION";
+    expect(classifyTransportError(err).category).toBe("protocol");
+  });
+  it("UND_ERR_INVALID_REDIRECT → protocol", () => {
+    const err = new Error("bad redirect");
+    err.code = "UND_ERR_INVALID_REDIRECT";
+    expect(classifyTransportError(err).category).toBe("protocol");
+  });
+});
+
+// Fix 7b: Nested ABORT_ERR detection (code on cause chain, no name)
+describe("fix 7b: nested ABORT_ERR detection", () => {
+  it("ABORT_ERR on cause.code → abort", () => {
+    const err = new TypeError("fetch failed");
+    err.cause = { code: "ABORT_ERR", message: "aborted" };
+    expect(classifyTransportError(err).category).toBe("abort");
+  });
+});
+
+// Fix 7c: Sanitization redacts bearer tokens and auth headers
+describe("fix 7c: sanitization redacts secrets globally", () => {
+  it("redacts Bearer tokens", () => {
+    const err = new Error("Authorization: Bearer sk-ant-1234567890abcdef");
+    const c = classifyTransportError(err);
+    expect(c.message).not.toContain("sk-ant-1234567890abcdef");
+    // The secret must be redacted regardless of which pattern catches it.
+    expect(c.message).toMatch(/<(bearer-token|auth-header)>/);
+  });
+  it("redacts authorization header forms", () => {
+    const err = new Error("authorization: Basic dXNlcjpwYXNz");
+    const c = classifyTransportError(err);
+    expect(c.message).not.toContain("dXNlcjpwYXNz");
+  });
+  it("redacts token-like query params", () => {
+    const err = new Error("fetch https://host/path?token=secret123 failed");
+    const c = classifyTransportError(err);
+    expect(c.message).not.toContain("secret123");
+  });
+  it("fatal cause messages are sanitized", async () => {
+    // A policy error that includes a bearer token should not leak it into
+    // the BURST_OPERATION_REJECTED cause.
+    const err = new Error("policy check failed for Bearer sk-ant-leaked");
+    const ops = [{ kind: "x", method: "GET", run: async () => { throw err; } }];
+    let caught;
+    try { await runBurst(ops, { concurrency: 1, pacing: { mode: "none" } }); }
+    catch (e) { caught = e; }
+    expect(caught.code).toBe("BURST_OPERATION_REJECTED");
+    expect(caught.cause).not.toContain("sk-ant-leaked");
+    expect(caught.cause).toContain("<bearer-token>");
+  });
+});

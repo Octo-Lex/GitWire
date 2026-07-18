@@ -250,26 +250,30 @@ export function resilientGetBurstOperation(path, options = {}) {
     kind,
     method: "GET",
     run: async () => {
+      // prepareApiRequest is OUTSIDE httpOperation.execute (amendment 10:
+      // policy errors escape as BURST_OPERATION_REJECTED, not transport
+      // failures). The retry loop is INSIDE httpOperation.execute so that
+      // fetch failures (DNS, timeout, etc.) during any attempt are classified
+      // by httpOperation's transport catch, not escaped as bare rejections.
       const request = prepareApiRequest(path, { method: "GET" });
-      let lastResponse = null;
-      for (let attempt = 0; attempt <= retries; attempt++) {
-        const response = await fetch(request.url.href, request.init);
-        if (response.status === 429 && attempt < retries) {
-          const retryAfter = parseInt(response.headers.get("Retry-After") || "1", 10);
-          const delayMs = Math.min(retryAfter, 2) * 1000;
-          await new Promise(r => setTimeout(r, delayMs));
-          continue;
-        }
-        lastResponse = response;
-        break;
-      }
-      // Use httpOperation's body handling on the final response, bypassing
-      // its transport catch (fetch already succeeded). We call httpOperation
-      // with an execute that returns the already-obtained response.
       return httpOperation({
         method: "GET",
         bodyMode,
-        execute: async () => lastResponse,
+        execute: async () => {
+          for (let attempt = 0; attempt <= retries; attempt++) {
+            const response = await fetch(request.url.href, request.init);
+            if (response.status === 429 && attempt < retries) {
+              // Drain the 429 response body before retrying to avoid
+              // resource leaks and connection-pool exhaustion.
+              try { await response.text(); } catch { /* ignore */ }
+              const retryAfter = parseInt(response.headers.get("Retry-After") || "1", 10);
+              const delayMs = Math.min(retryAfter, 2) * 1000;
+              await new Promise(r => setTimeout(r, delayMs));
+              continue;
+            }
+            return response; // final response (non-429 or last attempt)
+          }
+        },
       });
     },
   };

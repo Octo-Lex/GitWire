@@ -38,6 +38,22 @@ const CODE_TO_CATEGORY = {
   UND_ERR_CONNECT_TIMEOUT: "timeout",
   UND_ERR_HEADERS_TIMEOUT: "timeout",
   UND_ERR_BODY_TIMEOUT: "timeout",
+  // TLS errors
+  CERT_HAS_EXPIRED: "tls",
+  CERT_NOT_YET_VALID: "tls",
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: "tls",
+  ERR_TLS_CERT_ALTNAME_INVALID: "tls",
+  DEPTH_ZERO_SELF_SIGNED_CERT: "tls",
+  ERR_TLS_INVALID_PROTOCOL_METHOD: "tls",
+  ERR_SSL_INTERNAL_ERROR: "tls",
+  // Protocol / HTTP parser errors
+  HPE_INVALID_CONSTANT: "protocol",
+  HPE_INVALID_VERSION: "protocol",
+  HPE_INVALID_STATUS: "protocol",
+  HPE_INVALID_HEADER_TOKEN: "protocol",
+  HPE_INVALID_CONTENT_LENGTH: "protocol",
+  UND_ERR_INVALID_REDIRECT: "protocol",
+  UND_ERR_REQUEST_TIMEOUT: "protocol",
 };
 
 /**
@@ -68,13 +84,18 @@ export function classifyTransportError(err) {
   while (cursor && hop < 5) {
     const c = cursor.code || (cursor.cause && cursor.cause.code);
     if (c && CODE_TO_CATEGORY[c]) { foundCode = c; break; }
-    if (cursor.name === "AbortError") { foundName = "AbortError"; }
+    // Name-based abort detection (may appear on cause, not top-level).
+    if (cursor.name === "AbortError") { foundName = "AbortError"; break; }
+    // Code-based abort detection (ABORT_ERR may appear on cause).
+    if (cursor.code === "ABORT_ERR" || (cursor.cause && cursor.cause.code === "ABORT_ERR")) {
+      foundCode = "ABORT_ERR"; break;
+    }
     cursor = cursor.cause;
     hop++;
   }
 
-  // Name-based abort detection.
-  if (foundName === "AbortError" || code === "ABORT_ERR" || code === "AbortError") {
+  // Abort detection (name-based or code-based, including nested).
+  if (foundName === "AbortError" || code === "ABORT_ERR" || foundCode === "ABORT_ERR") {
     return { category: "abort", name, code, message: sanitizeMessage(err.message) };
   }
 
@@ -83,14 +104,25 @@ export function classifyTransportError(err) {
 }
 
 /**
- * Strip credentials, URLs, and full payloads from an error message. Keeps
- * only a safe summary so logs and aggregates don't leak secrets.
+ * Strip credentials, URLs, tokens, and authorization headers from an error
+ * message. Applied globally — to transport errors, body errors, AND fatal
+ * operation-rejection causes. Redacts:
+ *   - URLs with credentials (http(s)://user:pass@host)
+ *   - Bearer tokens (Authorization: Bearer ...)
+ *   - Token-like query parameters (?token=..., &api_key=..., etc.)
+ *   - Long base64/hex blobs that might be tokens
  */
 function sanitizeMessage(msg) {
   if (typeof msg !== "string") return "transport error";
-  // Remove any http(s)://user:pass@host patterns.
-  let s = msg.replace(/https?:\/\/[^\s"']+/, "<url>");
-  // Remove long base64/hex blobs that might be tokens.
+  let s = msg;
+  // Remove URLs with credentials or paths.
+  s = s.replace(/https?:\/\/[^\s"']+/g, "<url>");
+  // Remove Authorization header values (Bearer <token>, Basic <base64>, etc.).
+  s = s.replace(/[Aa]uthorization:\s*\S+\s+\S+/g, "<auth-header>");
+  s = s.replace(/[Bb]earer\s+[A-Za-z0-9._-]+/g, "<bearer-token>");
+  // Remove token-like query parameters.
+  s = s.replace(/[?&](token|api_key|apikey|access_token|secret|password)=[^&\s"']+/g, "<redacted-param>");
+  // Truncate long strings that might contain tokens or payloads.
   if (s.length > 200) s = s.slice(0, 200) + "...";
   return s;
 }
@@ -368,9 +400,13 @@ export async function runBurst(operations, opts) {
   let fatalRejection = null;
 
   /**
-   * Execute one descriptor, timing it and validating the outcome. On escaped
-   * rejection (the run promise itself rejects, not a classified failure
-   * returned from httpOperation), mark fatal.
+   * Execute one descriptor, timing it and validating the outcome. This
+   * function is NON-REJECTING — it never throws to the scheduler. Both
+   * escaped operation rejections AND invalid outcomes (validateOutcome
+   * failures) are recorded as fatal errors via `fatalRejection` (first one
+   * preserved), and the function returns normally so the scheduler's
+   * .then() handler always fires, removes the descriptor from `active`,
+   * and can drain properly.
    */
   async function executeOne(desc) {
     const opStart = now();
@@ -379,16 +415,31 @@ export async function runBurst(operations, opts) {
       classified = await desc.run();
     } catch (err) {
       // Escaped rejection — harness/policy/programming defect. Fatal.
-      fatalRejection = Object.assign(new Error(`operation ${desc.id} rejected`), {
-        code: BURST_OPERATION_REJECTED,
-        operation: { id: desc.id, kind: desc.kind, method: desc.method },
-        cause: err && err.message ? err.message : String(err),
-      });
-      // Return a sentinel so the scheduler loop sees this op "complete".
+      // Preserve the FIRST fatal error (subsequent ones don't overwrite).
+      if (!fatalRejection) {
+        fatalRejection = Object.assign(new Error(`operation ${desc.id} rejected`), {
+          code: BURST_OPERATION_REJECTED,
+          operation: { id: desc.id, kind: desc.kind, method: desc.method },
+          cause: sanitizeMessage(err && err.message ? err.message : String(err)),
+        });
+      }
       return;
     }
-    // Validate the classified outcome (constraint 2).
-    validateOutcome(classified);
+    // Validate the classified outcome (constraint 2). This is inside the
+    // non-rejecting boundary: an invalid outcome is also a fatal error,
+    // not an unhandled rejection that hangs the scheduler.
+    try {
+      validateOutcome(classified);
+    } catch (err) {
+      if (!fatalRejection) {
+        fatalRejection = Object.assign(new Error(`operation ${desc.id} produced invalid outcome`), {
+          code: BURST_OPERATION_REJECTED,
+          operation: { id: desc.id, kind: desc.kind, method: desc.method },
+          cause: sanitizeMessage(err && err.message ? err.message : String(err)),
+        });
+      }
+      return;
+    }
     const durationMs = now() - opStart;
     results[desc.id] = {
       id: desc.id,

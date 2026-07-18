@@ -95,7 +95,9 @@ function printLatency(label, latency) {
     return;
   }
   console.log(`    Count:      ${latency.count}`);
-  console.log(`    RPS:        ${(latency.count / (latency.maxMs / 1000)).toFixed(1)} (max-duration approx)`);
+  // Do NOT invent an RPS from latency percentiles. RPS is a full-burst
+  // throughput metric (attempted / wall-clock elapsed) reported at the
+  // aggregate level, not per latency subset.
   console.log(`    P50:        ${latency.p50Ms != null ? latency.p50Ms.toFixed(1) : "null"} ms`);
   console.log(`    P95:        ${latency.p95Ms != null ? latency.p95Ms.toFixed(1) : "null"} ms`);
   console.log(`    P99:        ${latency.p99Ms != null ? latency.p99Ms.toFixed(1) : "null"} ms`);
@@ -213,28 +215,32 @@ async function benchmarkMixed() {
   // The previous version chose operations inside the scheduled callback
   // and caught rejections into fulfilled error objects. Both behaviors are
   // gone: descriptors exist before execution begins, guaranteeing attribution.
+  //
+  // Workload composition preserves the previous uniform template selection:
+  // ~7 read operations + ~1 write operation, selected uniformly, producing
+  // ~12.5% writes when mutations are enabled (NOT a hardcoded 30% which
+  // would double mutation pressure and alter comparability).
   const readPaths = [
     "/api/repos", "/api/issues?limit=20", "/api/ci/stats",
     "/api/actions/summary", "/api/activity/summary", "/health",
     "/api/webhooks/deliveries?limit=10",
   ];
-  const writeOps = POLICY.allowMutations && POLICY.fixtureRepo
-    ? [syncOp(POLICY.fixtureRepo)]
-    : [];
+  const allOps = POLICY.allowMutations && POLICY.fixtureRepo
+    ? [...readPaths.map(p => ({ kind: "read", path: p })), { kind: "write", path: null }]
+    : readPaths.map(p => ({ kind: "read", path: p }));
 
-  if (writeOps.length === 0) {
+  if (POLICY.allowMutations && POLICY.fixtureRepo) {
+    // Uniform selection from 8 templates (7 reads + 1 write) = ~12.5% writes.
+  } else {
     console.log("  Mutations disabled — running read-only mixed workload.");
   }
 
-  // Build the full descriptor list up front. Each iteration randomly picks
-  // a read or write descriptor template and materializes a fresh instance.
-  const ops = Array.from({ length: ITERATIONS }, (_, i) => {
-    const isWrite = writeOps.length > 0 && Math.random() < 0.3;
-    if (isWrite) {
+  const ops = Array.from({ length: ITERATIONS }, () => {
+    const template = allOps[Math.floor(Math.random() * allOps.length)];
+    if (template.kind === "write") {
       return syncOp(POLICY.fixtureRepo);
     }
-    const path = readPaths[Math.floor(Math.random() * readPaths.length)];
-    return readOp(path);
+    return readOp(template.path);
   });
 
   const r = await runBurst(ops, {
@@ -243,11 +249,13 @@ async function benchmarkMixed() {
   });
 
   // Split latency by kind using result.results[].kind (attached before exec).
+  // Filter to transport-completed only — transport failures have no HTTP
+  // response latency and must not contaminate the latency population.
   const readDurations = r.results
-    .filter(x => x.kind === "read" && x.durationMs != null)
+    .filter(x => x.kind === "read" && x.transport === "completed" && x.durationMs != null)
     .map(x => x.durationMs);
   const writeDurations = r.results
-    .filter(x => x.kind === "write" && x.durationMs != null)
+    .filter(x => x.kind === "write" && x.transport === "completed" && x.durationMs != null)
     .map(x => x.durationMs);
 
   // Compute per-kind stats via the runner's computeLatencyStats.
