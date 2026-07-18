@@ -25,23 +25,23 @@ ssh pve        # Proxmox host (192.168.3.5)
 
 ## About GitWire
 
-GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard. Current version: **0.20.0**.
+GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard. Current version: **0.23.1**.
 
 ## Repository Structure
 
 ```
 GitWire/
 ├── packages/
-│   ├── web/                 # Express API server + 9 background workers
+│   ├── web/                 # Express API server + 14 BullMQ worker handles
 │   │   ├── src/
 │   │   │   ├── app.js           # Express app setup, route mounting
 │   │   │   ├── index.js         # Entry: starts server + all workers
 │   │   │   ├── routes/          # 22 route files
 │   │   │   ├── services/        # 27 business logic modules
-│   │   │   ├── workers/         # 10 BullMQ background workers (incl. reconciliation)
+│   │   │   ├── workers/         # Worker modules (reconciliation scheduled separately)
 │   │   │   ├── lib/             # GitHub client, queue helpers, DB
 │   │   │   └── middleware/      # Auth, pagination, rate limiting
-│   │   ├── db/migrations/       # 36 SQL migrations (001-036)
+│   │   ├── db/migrations/       # 37 SQL migrations (001-037)
 │   │   ├── tests/               # Unit + integration tests (Jest)
 │   │   └── docker-compose.prod.yml
 │   ├── web-dashboard/       # Next.js 16 + Tailwind + SWR
