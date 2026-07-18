@@ -12,10 +12,10 @@
 // with real Node fetch error shapes (incl. error.cause), deferred-promise
 // barriers, and an injected deterministic clock. No real HTTP.
 
-import { describe, it, expect, jest } from "@jest/globals";
+import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
 import {
   runBurst, httpOperation, classifyTransportError,
-  detectJsonContentType,
+  detectJsonContentType, retryingHttpOperation, formatBurstThroughput,
   TESTING_ONLY,
 } from "../stress/burst-runner.js";
 
@@ -724,5 +724,112 @@ describe("fix 2: retry-wrapper classifies transport failures", () => {
     expect(outcome.status).toBe(200);
     expect(outcome.body.state).toBe("parsed");
     expect(attempt).toBe(2); // first attempt was 429, second was 200
+  });
+});
+
+// ─── Round-3 review fixes ──────────────────────────────────────────────────
+
+// Fix 1: Test the ACTUAL retryingHttpOperation function (not a reconstruction).
+// Proves: nested ECONNREFUSED → connection_refused via the real wrapper;
+// transport failure (not BURST_OPERATION_REJECTED); 429 body drained; only
+// final response classified.
+describe("fix R3-1: retryingHttpOperation wrapper-level regression", () => {
+  it("nested ECONNREFUSED via injected fetch → transportFailed + connection_refused", async () => {
+    const fetchFn = async () => {
+      const err = new TypeError("fetch failed");
+      err.cause = { code: "ECONNREFUSED", message: "ECONNREFUSED" };
+      throw err;
+    };
+    const outcome = await retryingHttpOperation({
+      method: "GET", bodyMode: "none", retries: 3, fetchFn,
+      url: "http://iso.local/x", init: {},
+    });
+    expect(outcome.transport).toBe("failed");
+    expect(outcome.error.category).toBe("connection_refused");
+    // NOT a rejection — the function returns a classified outcome.
+    expect(outcome.status).toBeNull();
+  });
+
+  it("429 then 200: intermediate body drained, only final response classified", async () => {
+    const calls = [];
+    let textCalledOn429 = false;
+    const fetchFn = async () => {
+      calls.push(1);
+      if (calls.length < 2) {
+        return {
+          status: 429,
+          text: async () => { textCalledOn429 = true; return "rate limited"; },
+          headers: { get: () => "0" },
+        };
+      }
+      return fakeResponse(200, '{"ok":true}', "application/json");
+    };
+    const outcome = await retryingHttpOperation({
+      method: "GET", bodyMode: "auto", retries: 3, fetchFn,
+      url: "http://iso.local/x", init: {},
+    });
+    expect(textCalledOn429).toBe(true); // 429 body WAS drained
+    expect(outcome.transport).toBe("completed");
+    expect(outcome.status).toBe(200); // only the final response classified
+    expect(calls.length).toBe(2); // exactly 2 fetch calls (1 retry)
+  });
+});
+
+// Fix 2: prepareApiRequest omitAuth network-free test.
+// Requires the stress-env sandbox to import helpers.js.
+describe("fix R3-2: prepareApiRequest omitAuth suppresses bearer token", () => {
+  let savedEnv;
+  beforeEach(() => {
+    savedEnv = { ...process.env };
+    for (const k of ["GITWIRE_BASE_URL", "API_KEY", "GITWIRE_STRESS_ENV"]) {
+      delete process.env[k];
+    }
+    process.env.GITWIRE_BASE_URL = "http://iso-test.local:3000";
+    process.env.API_KEY = "test-key-12345";
+    process.env.GITWIRE_STRESS_ENV = "isolated";
+  });
+  afterEach(() => { process.env = savedEnv; });
+
+  it("omitAuth:true → Authorization header is undefined", async () => {
+    const { prepareApiRequest } = await import("../helpers.js");
+    const req = prepareApiRequest("/health", { method: "GET", omitAuth: true });
+    expect(req.init.headers.Authorization).toBeUndefined();
+  });
+
+  it("default (no omitAuth) → Authorization header is present", async () => {
+    const { prepareApiRequest } = await import("../helpers.js");
+    const req = prepareApiRequest("/api/repos", { method: "GET" });
+    expect(req.init.headers.Authorization).toContain("Bearer");
+    expect(req.init.headers.Authorization).toContain("test-key-12345");
+  });
+});
+
+// Fix 3: formatBurstThroughput uses rps, not latency-derived formula.
+describe("fix R3-3: formatBurstThroughput uses wall-clock rps", () => {
+  it("output contains rps from the aggregate, not latency count/maxMs", () => {
+    const agg = { attempted: 100, elapsedMs: 2000, rps: 50 };
+    const out = formatBurstThroughput(agg);
+    expect(out).toContain("50.0"); // the rps value
+    expect(out).toContain("100"); // attempted
+    expect(out).toContain("2.00"); // elapsed seconds
+  });
+
+  it("does NOT reference latency fields", () => {
+    const agg = { attempted: 10, elapsedMs: 1000, rps: 10 };
+    const out = formatBurstThroughput(agg);
+    // The formatter must not derive RPS from latency percentiles.
+    expect(out).not.toMatch(/count.*max/i);
+    expect(out).not.toMatch(/latency/i);
+  });
+});
+
+// Fix 4: Nested abort retains the discovered code (foundCode || code).
+describe("fix R3-4: nested abort retains ABORT_ERR code", () => {
+  it("TypeError(cause: ABORT_ERR) → category=abort, code=ABORT_ERR", () => {
+    const err = new TypeError("fetch failed");
+    err.cause = { code: "ABORT_ERR", message: "aborted" };
+    const c = classifyTransportError(err);
+    expect(c.category).toBe("abort");
+    expect(c.code).toBe("ABORT_ERR"); // retained, not lost as null
   });
 });

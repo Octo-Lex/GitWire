@@ -27,7 +27,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const POLICY_PATH = resolve(__dirname, "../packages/web/tests/target-policy.js");
 const RUNNER_PATH = resolve(__dirname, "../packages/web/tests/stress/burst-runner.js");
 const { loadPolicy } = await import(pathToFileURL(POLICY_PATH).href);
-const { runBurst, httpOperation } = await import(pathToFileURL(RUNNER_PATH).href);
+const { runBurst, httpOperation, formatBurstThroughput } = await import(pathToFileURL(RUNNER_PATH).href);
 
 // benchmark.js requires the full isolated stress gate for ALL modes.
 const POLICY = loadPolicy({ requireStressGate: true });
@@ -131,7 +131,7 @@ async function benchmarkAPI() {
       pacing: { mode: "none" },
     });
     printLatency(ep.label, r.latency);
-    console.log(`    RPS:        ${r.rps.toFixed(1)} (wall-clock: ${r.attempted} ops / ${(r.elapsedMs / 1000).toFixed(2)}s)`);
+    console.log(`    ${formatBurstThroughput(r)}`);
     if (r.transportFailed > 0) {
       console.log(`    Transport failures: ${r.transportFailed}`);
     }
@@ -191,7 +191,7 @@ async function benchmarkQueue() {
   });
 
   printLatency("POST /api/repos/:owner/:repo/sync (queue enqueue)", r.latency);
-  console.log(`    RPS:        ${r.rps.toFixed(1)} (wall-clock: ${r.attempted} ops / ${(r.elapsedMs / 1000).toFixed(2)}s)`);
+  console.log(`    ${formatBurstThroughput(r)}`);
   console.log(`    Transport completed: ${r.transportCompleted}/${r.attempted}`);
   console.log(`    202 Accepted: ${r.statusCounts[202] || 0}`);
 

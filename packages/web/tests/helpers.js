@@ -17,7 +17,7 @@
 // declared location. See registerMutationContracts() below for the surface.
 
 import { loadPolicy } from './target-policy.js';
-import { httpOperation } from './stress/burst-runner.js';
+import { httpOperation, retryingHttpOperation } from './stress/burst-runner.js';
 
 // Load once at module import. Any missing env var or denylisted target
 // throws here, so a misconfigured run fails before any request is attempted.
@@ -255,30 +255,18 @@ export function resilientGetBurstOperation(path, options = {}) {
     kind,
     method: "GET",
     run: async () => {
-      // prepareApiRequest is OUTSIDE httpOperation.execute (amendment 10:
+      // prepareApiRequest is OUTSIDE the transport boundary (amendment 10:
       // policy errors escape as BURST_OPERATION_REJECTED, not transport
-      // failures). The retry loop is INSIDE httpOperation.execute so that
-      // fetch failures (DNS, timeout, etc.) during any attempt are classified
-      // by httpOperation's transport catch, not escaped as bare rejections.
+      // failures). The retry loop is inside retryingHttpOperation's execute
+      // boundary so fetch failures are classified as transportFailed.
       const request = prepareApiRequest(path, { method: "GET" });
-      return httpOperation({
+      return retryingHttpOperation({
         method: "GET",
         bodyMode,
-        execute: async () => {
-          for (let attempt = 0; attempt <= retries; attempt++) {
-            const response = await fetch(request.url.href, request.init);
-            if (response.status === 429 && attempt < retries) {
-              // Drain the 429 response body before retrying to avoid
-              // resource leaks and connection-pool exhaustion.
-              try { await response.text(); } catch { /* ignore */ }
-              const retryAfter = parseInt(response.headers.get("Retry-After") || "1", 10);
-              const delayMs = Math.min(retryAfter, 2) * 1000;
-              await new Promise(r => setTimeout(r, delayMs));
-              continue;
-            }
-            return response; // final response (non-429 or last attempt)
-          }
-        },
+        retries,
+        fetchFn: (url, init) => fetch(url, init),
+        url: request.url.href,
+        init: request.init,
       });
     },
   };

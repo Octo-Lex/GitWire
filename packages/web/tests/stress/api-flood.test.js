@@ -49,10 +49,9 @@ describe(`API Flood: ${CONCURRENT} concurrent × ${ROUNDS} rounds`, () => {
   });
 
   test('GET /health survives flood (no auth required)', async () => {
-    // /health does not require auth. Use apiBurstOperation with bodyMode:none
-    // so fetch failures are classified by httpOperation (not escaped as
-    // BURST_OPERATION_REJECTED). The policy still resolves the URL and
-    // attaches the API key, which /health ignores.
+    // /health does not require auth. omitAuth:true suppresses the bearer
+    // token entirely — no API key is placed on the request. fetch failures
+    // are classified by httpOperation (not escaped as BURST_OPERATION_REJECTED).
     const tasks = Array.from({ length: CONCURRENT }, () =>
       apiBurstOperation('/health', { kind: 'health', method: 'GET', bodyMode: 'none', omitAuth: true })
     );

@@ -114,7 +114,7 @@ export function classifyTransportError(err) {
 
   // Abort detection (name-based or code-based, including nested).
   if (foundName === "AbortError" || code === "ABORT_ERR" || foundCode === "ABORT_ERR") {
-    return { category: "abort", name, code, message: sanitizeMessage(err.message) };
+    return { category: "abort", name, code: foundCode || code, message: sanitizeMessage(err.message) };
   }
 
   const category = codeToCategory(foundCode) || "other";
@@ -624,6 +624,66 @@ function buildAggregate({ results, attempted, elapsedMs, requestedConcurrency, m
     latency,
     results,
   };
+}
+
+// ─── Retrying HTTP operation (used by resilientGetBurstOperation) ───────────
+
+/**
+ * Execute an HTTP operation with retry on 429. The retry loop runs INSIDE
+ * the httpOperation.execute boundary so fetch failures during any attempt
+ * are classified as transportFailed (not escaped as BURST_OPERATION_REJECTED).
+ *
+ * Intermediate 429 response bodies are drained (via .text()) before
+ * retrying to avoid resource leaks.
+ *
+ * This function is exported so it can be unit-tested directly with an
+ * injected fetch — the test proves the ACTUAL retry logic (not a
+ * reconstruction of it in the test file).
+ *
+ * @param {Object} opts
+ * @param {string} opts.method
+ * @param {"none"|"text"|"json"|"auto"} [opts.bodyMode="auto"]
+ * @param {number} [opts.retries=3]
+ * @param {(url: string, init: Object) => Promise<Response>} opts.fetchFn
+ * @param {string} opts.url
+ * @param {Object} opts.init
+ * @returns {Promise<ClassifiedOutcome>}
+ */
+export async function retryingHttpOperation({ method, bodyMode = "auto", retries = 3, fetchFn, url, init }) {
+  return httpOperation({
+    method,
+    bodyMode,
+    execute: async () => {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        const response = await fetchFn(url, init);
+        if (response.status === 429 && attempt < retries) {
+          // Drain the 429 body before retrying.
+          try { await response.text(); } catch { /* ignore drain failure */ }
+          const retryAfter = parseInt(
+            (response.headers && response.headers.get ? response.headers.get("Retry-After") : null) || "1",
+            10,
+          );
+          const delayMs = Math.min(retryAfter, 2) * 1000;
+          await new Promise(r => setTimeout(r, delayMs));
+          continue;
+        }
+        return response; // final response (non-429 or last attempt)
+      }
+    },
+  });
+}
+
+// ─── Formatter for benchmark throughput ────────────────────────────────────
+
+/**
+ * Format a burst throughput line for console output. Uses the aggregate's
+ * wall-clock RPS (attempted / elapsed), never a latency-derived formula.
+ *
+ * @param {{ attempted: number, elapsedMs: number, rps: number }} aggregate
+ * @returns {string}
+ */
+export function formatBurstThroughput({ attempted, elapsedMs, rps }) {
+  return `RPS: ${rps.toFixed(1)} (wall-clock: ${attempted} ops / ${(elapsedMs / 1000).toFixed(2)}s)`;
 }
 
 // ─── Exports for testing ───────────────────────────────────────────────────
