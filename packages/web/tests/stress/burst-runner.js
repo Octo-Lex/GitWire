@@ -695,46 +695,55 @@ const INVALID_RESPONSE_CONTRACT = "INVALID_RESPONSE_CONTRACT";
  * @param {Array} operations
  */
 function preflightContracts(operations) {
+  if (!Array.isArray(operations)) {
+    throw Object.assign(new Error("operations must be an array"), { code: INVALID_RESPONSE_CONTRACT });
+  }
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i];
+    // Validate the descriptor itself (null, primitive, bare function).
+    if (op === null || typeof op !== "object") {
+      throw Object.assign(new Error(`operation ${i}: descriptor must be a non-null object`), { code: INVALID_RESPONSE_CONTRACT });
+    }
     if (typeof op === "function") {
-      throw Object.assign(new Error(`operation ${i}: bare function not permitted in runContractedBurst (requires descriptor with responseContract)`), { code: INVALID_RESPONSE_CONTRACT });
+      throw Object.assign(new Error(`operation ${i}: bare function not permitted (requires descriptor with responseContract)`), { code: INVALID_RESPONSE_CONTRACT });
+    }
+    if (typeof op.run !== "function") {
+      throw Object.assign(new Error(`operation ${i}: descriptor must have a run function`), { code: INVALID_RESPONSE_CONTRACT });
     }
     const c = op.responseContract;
     if (!c || typeof c !== "object") {
       throw Object.assign(new Error(`operation ${i}: missing responseContract`), { code: INVALID_RESPONSE_CONTRACT });
     }
-    // expectedStatuses: optional, but if present must be non-empty, integers, in range, no duplicates.
-    if (c.expectedStatuses !== undefined) {
-      if (!Array.isArray(c.expectedStatuses) || c.expectedStatuses.length === 0) {
-        throw Object.assign(new Error(`operation ${i}: expectedStatuses must be a non-empty array`), { code: INVALID_RESPONSE_CONTRACT });
+
+    // Shared status-array validation for both expectedStatuses and assertOnStatuses.
+    const validateStatusArray = (arr, fieldName) => {
+      if (!Array.isArray(arr) || arr.length === 0) {
+        throw Object.assign(new Error(`operation ${i}: ${fieldName} must be a non-empty array`), { code: INVALID_RESPONSE_CONTRACT });
       }
       const seen = new Set();
-      for (const s of c.expectedStatuses) {
+      for (const s of arr) {
         if (!Number.isInteger(s) || s < 100 || s > 599) {
-          throw Object.assign(new Error(`operation ${i}: expectedStatuses contains invalid status ${s}`), { code: INVALID_RESPONSE_CONTRACT });
+          throw Object.assign(new Error(`operation ${i}: ${fieldName} contains invalid status ${s}`), { code: INVALID_RESPONSE_CONTRACT });
         }
         if (seen.has(s)) {
-          throw Object.assign(new Error(`operation ${i}: duplicate status ${s} in expectedStatuses`), { code: INVALID_RESPONSE_CONTRACT });
+          throw Object.assign(new Error(`operation ${i}: duplicate status ${s} in ${fieldName}`), { code: INVALID_RESPONSE_CONTRACT });
         }
         seen.add(s);
       }
+    };
+
+    if (c.expectedStatuses !== undefined) {
+      validateStatusArray(c.expectedStatuses, "expectedStatuses");
     }
-    // assertOnStatuses: optional, but if present must be non-empty integers.
     if (c.assertOnStatuses !== undefined) {
-      if (!Array.isArray(c.assertOnStatuses) || c.assertOnStatuses.length === 0) {
-        throw Object.assign(new Error(`operation ${i}: assertOnStatuses must be a non-empty array`), { code: INVALID_RESPONSE_CONTRACT });
-      }
+      validateStatusArray(c.assertOnStatuses, "assertOnStatuses");
     }
-    // assert: optional, but if present must be a function.
     if (c.assert !== undefined && typeof c.assert !== "function") {
       throw Object.assign(new Error(`operation ${i}: assert must be a function`), { code: INVALID_RESPONSE_CONTRACT });
     }
-    // assertOnStatuses without assert is vacuous.
     if (c.assertOnStatuses && !c.assert) {
       throw Object.assign(new Error(`operation ${i}: assertOnStatuses declared without assert`), { code: INVALID_RESPONSE_CONTRACT });
     }
-    // Vacuous contract: neither expectedStatuses nor assert.
     if (!c.expectedStatuses && !c.assert) {
       throw Object.assign(new Error(`operation ${i}: vacuous contract (neither expectedStatuses nor assert)`), { code: INVALID_RESPONSE_CONTRACT });
     }
@@ -743,21 +752,46 @@ function preflightContracts(operations) {
 
 /**
  * Validate a callback return value. Must be {passed:true} or {passed:false,code,message}.
- * @param {*} ret
- * @param {number} id
+ * Uses makeFatalError for proper attribution ({id,kind,method} + sanitized reason).
+ * Detects promise/thenable returns as harness defects.
+ * Validates code/message types and format on failure returns.
+ *
+ * @param {*} ret the callback return value
+ * @param {Object} desc { id, kind, method } for attribution
+ * @throws {Error} BURST_OPERATION_REJECTED with attribution on malformed return
  */
-function validateCallbackReturn(ret, id) {
+function validateCallbackReturn(ret, desc) {
+  // Detect promise/thenable returns.
+  if (ret !== null && typeof ret === "object" && typeof ret.then === "function") {
+    throw makeFatalError(desc, "assertion callback returned a promise",
+      "assert callbacks must be synchronous, not return promises");
+  }
   if (ret === null || typeof ret !== "object") {
-    throw Object.assign(new Error(`operation ${id}: assert returned non-object`), { code: BURST_OPERATION_REJECTED });
+    throw makeFatalError(desc, "assertion callback returned non-object",
+      `got ${typeof ret}`);
   }
   if (ret.passed !== true && ret.passed !== false) {
-    throw Object.assign(new Error(`operation ${id}: assert returned unknown passed value`), { code: BURST_OPERATION_REJECTED });
+    throw makeFatalError(desc, "assertion callback returned unknown passed value",
+      `got ${String(ret.passed)}`);
   }
   if (ret.passed === true && (ret.code || ret.message)) {
-    throw Object.assign(new Error(`operation ${id}: assert returned passed:true with error data`), { code: BURST_OPERATION_REJECTED });
+    throw makeFatalError(desc, "assertion callback returned passed:true with error data",
+      "passed:true must not carry code or message");
   }
-  if (ret.passed === false && (!ret.code || !ret.message)) {
-    throw Object.assign(new Error(`operation ${id}: assert returned passed:false without code/message`), { code: BURST_OPERATION_REJECTED });
+  if (ret.passed === false) {
+    // code must be a non-empty string matching a stable identifier format.
+    if (typeof ret.code !== "string" || ret.code.length === 0 || ret.code.length > 100) {
+      throw makeFatalError(desc, "assertion callback returned invalid code",
+        `code must be a non-empty string ≤100 chars, got ${typeof ret.code}`);
+    }
+    if (!/^[A-Z][A-Z0-9_]*$/.test(ret.code)) {
+      throw makeFatalError(desc, "assertion callback returned invalid code format",
+        `code must match UPPER_SNAKE_CASE, got '${ret.code}'`);
+    }
+    if (typeof ret.message !== "string" || ret.message.length === 0) {
+      throw makeFatalError(desc, "assertion callback returned invalid message",
+        `message must be a non-empty string, got ${typeof ret.message}`);
+    }
   }
 }
 
@@ -821,7 +855,7 @@ function enrichResult(factualResult, contract, id) {
       sanitizeMessage(err && err.message ? err.message : String(err)));
   }
   // Validate the return shape.
-  validateCallbackReturn(ret, id);
+  validateCallbackReturn(ret, { id, kind: factualResult.kind, method: factualResult.method });
 
   if (ret.passed) {
     enriched.assertion = "passed";
