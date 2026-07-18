@@ -1,110 +1,165 @@
 // tests/stress/pagination-boundary.test.js
-// Stress Test: Pagination edge cases — boundary values, deep pagination, invalid inputs
+// Stress Test: Pagination edge cases — boundary values, deep pagination, invalid inputs.
 //
-// Run individually: NODE_OPTIONS="--experimental-vm-modules" npx jest tests/stress/pagination-boundary.test.js --testTimeout=60000 --runInBand
+// Each test uses resilientGetBurstOperation (retry-aware) wrapped with a
+// responseContract. Body assertions inspect body.state before body.value.
+// The dead expectOkOr429 helper is removed.
 
-import { get, BASE_URL, API_KEY } from '../helpers.js';
-import { sleep, resilientGet } from './stress-helpers.js';
+import { describe, it, expect, beforeEach } from "@jest/globals";
+import { runContractedOperation } from "./burst-runner.js";
+import { resilientGetBurstOperation, BASE_URL } from "../helpers.js";
+import { STATUS_SETS } from "./response-contracts.js";
+import { sleep } from "./stress-helpers.js";
 
-function expectOkOr429(res) {
-  if (res.status === 429) return false; // skip
-  if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}: ${JSON.stringify(res.body).slice(0, 300)}`);
-  return true;
+/**
+ * Build a retry-aware contracted read operation for pagination testing.
+ * Wraps resilientGetBurstOperation with a responseContract.
+ */
+function paginationOp(path, { expectedStatuses = STATUS_SETS.READ_OK, assertOnStatuses, assert } = {}) {
+  const burst = resilientGetBurstOperation(path, { kind: "pagination", bodyMode: "auto" });
+  return {
+    ...burst,
+    responseContract: {
+      ...(expectedStatuses ? { expectedStatuses } : {}),
+      ...(assertOnStatuses ? { assertOnStatuses } : {}),
+      ...(assert ? { assert } : {}),
+    },
+  };
 }
 
-describe('Pagination Boundary Tests', () => {
+/** Assertion: body.meta.page must equal expected value */
+function assertPageEquals(expectedPage) {
+  return ({ body }) => {
+    if (body.state !== "parsed") return { passed: false, code: "BODY_NOT_PARSED", message: "Expected a parsed response body" };
+    return body.value?.meta?.page === expectedPage
+      ? { passed: true }
+      : { passed: false, code: "EXPECTED_PAGE_CLAMP", message: `Expected body.meta.page to equal ${expectedPage}, got ${body.value?.meta?.page}` };
+  };
+}
+
+/** Assertion: body.meta.per_page must be within [min, max] */
+function assertPerPageInRange(min, max) {
+  return ({ body }) => {
+    if (body.state !== "parsed") return { passed: false, code: "BODY_NOT_PARSED", message: "Expected a parsed response body" };
+    const pp = body.value?.meta?.per_page;
+    return (pp >= min && pp <= max)
+      ? { passed: true }
+      : { passed: false, code: "PER_PAGE_OUT_OF_RANGE", message: `Expected per_page in [${min},${max}], got ${pp}` };
+  };
+}
+
+/** Assertion: body.data must be an empty array */
+function assertEmptyData() {
+  return ({ body }) => {
+    if (body.state !== "parsed") return { passed: false, code: "BODY_NOT_PARSED", message: "Expected a parsed response body" };
+    return (Array.isArray(body.value?.data) && body.value.data.length === 0)
+      ? { passed: true }
+      : { passed: false, code: "EXPECTED_EMPTY_DATA", message: "Expected body.data to be an empty array" };
+  };
+}
+
+describe("Pagination Boundary Tests", () => {
   beforeEach(async () => { await sleep(500); });
 
-  test('page=0 should clamp to page 1', async () => {
-    const res = await resilientGet('/api/repos?page=0');
-    if (res.status === 429) return;
-    expect(res.status).toBe(200);
-    expect(res.body.meta.page).toBe(1);
+  it("page=0 should clamp to page 1", async () => {
+    const result = await runContractedOperation(
+      paginationOp("/api/repos?page=0", { assert: assertPageEquals(1) })
+    );
+    expect(result.http).toBe("expected");
+    expect(result.assertion).toBe("passed");
   });
 
-  test('page=-1 should clamp to page 1', async () => {
-    const res = await resilientGet('/api/repos?page=-1');
-    if (res.status === 429) return;
-    expect(res.status).toBe(200);
-    expect(res.body.meta.page).toBe(1);
+  it("page=-1 should clamp to page 1", async () => {
+    const result = await runContractedOperation(
+      paginationOp("/api/repos?page=-1", { assert: assertPageEquals(1) })
+    );
+    expect(result.http).toBe("expected");
+    expect(result.assertion).toBe("passed");
   });
 
-  test('page=999999 returns empty data', async () => {
-    const res = await resilientGet('/api/repos?page=999999');
-    if (res.status === 429) return;
-    expect(res.status).toBe(200);
-    expect(res.body.data).toBeInstanceOf(Array);
-    expect(res.body.data.length).toBe(0);
+  it("page=999999 returns empty data", async () => {
+    const result = await runContractedOperation(
+      paginationOp("/api/repos?page=999999", { assert: assertEmptyData() })
+    );
+    expect(result.http).toBe("expected");
+    expect(result.assertion).toBe("passed");
   });
 
-  test('limit=0 should use default', async () => {
-    const res = await resilientGet('/api/repos?limit=0');
-    if (res.status === 429) return;
-    expect(res.status).toBe(200);
-    expect(res.body.meta.per_page).toBeGreaterThanOrEqual(1);
+  it("limit=0 should use default", async () => {
+    const result = await runContractedOperation(
+      paginationOp("/api/repos?limit=0", { assert: assertPerPageInRange(1, 100) })
+    );
+    expect(result.http).toBe("expected");
+    expect(result.assertion).toBe("passed");
   });
 
-  test('limit=-5 should use default', async () => {
-    const res = await resilientGet('/api/repos?limit=-5');
-    if (res.status === 429) return;
-    expect(res.status).toBe(200);
-    expect(res.body.meta.per_page).toBeGreaterThanOrEqual(1);
+  it("limit=-5 should use default", async () => {
+    const result = await runContractedOperation(
+      paginationOp("/api/repos?limit=-5", { assert: assertPerPageInRange(1, 100) })
+    );
+    expect(result.http).toBe("expected");
+    expect(result.assertion).toBe("passed");
   });
 
-  test('limit=10000 should cap at max', async () => {
-    const res = await resilientGet('/api/repos?limit=10000');
-    if (res.status === 429) return;
-    expect(res.status).toBe(200);
-    expect(res.body.meta.per_page).toBeLessThanOrEqual(100);
+  it("limit=10000 should cap at max", async () => {
+    const result = await runContractedOperation(
+      paginationOp("/api/repos?limit=10000", { assert: assertPerPageInRange(1, 100) })
+    );
+    expect(result.http).toBe("expected");
+    expect(result.assertion).toBe("passed");
   });
 
-  test('limit=abc (non-numeric) should use default', async () => {
-    const res = await resilientGet('/api/repos?limit=abc');
-    if (res.status === 429) return;
-    expect(res.status).toBe(200);
+  it("limit=abc (non-numeric) should use default", async () => {
+    const result = await runContractedOperation(
+      paginationOp("/api/repos?limit=abc")
+    );
+    expect(result.http).toBe("expected");
   });
 
-  test('page=abc (non-numeric) should use default', async () => {
-    const res = await resilientGet('/api/repos?page=abc');
-    if (res.status === 429) return;
-    expect(res.status).toBe(200);
+  it("page=abc (non-numeric) should use default", async () => {
+    const result = await runContractedOperation(
+      paginationOp("/api/repos?page=abc")
+    );
+    expect(result.http).toBe("expected");
   });
 
-  test('Deep pagination across 6 endpoints', async () => {
+  it("Deep pagination across 6 endpoints", async () => {
     const endpoints = [
-      '/api/issues?page=9999', '/api/pull-requests?page=9999',
-      '/api/ci?page=9999', '/api/heal?page=9999',
-      '/api/duplicates?page=9999', '/api/audit/entries?page=9999',
+      "/api/issues?page=9999", "/api/pull-requests?page=9999",
+      "/api/ci?page=9999", "/api/heal?page=9999",
+      "/api/duplicates?page=9999", "/api/audit/entries?page=9999",
     ];
     let pass = 0;
     for (const ep of endpoints) {
-      const res = await resilientGet(ep);
-      if (res.status === 200) pass++;
-      else if (res.status === 429) { await sleep(2000); continue; }
-      expect(res.status).not.toBe(500);
+      const result = await runContractedOperation(
+        paginationOp(ep, {
+          assert: ({ status }) => status !== 500
+            ? { passed: true }
+            : { passed: false, code: "UNEXPECTED_500", message: "Deep pagination returned 500" },
+        })
+      );
+      if (result.assertion === "passed") pass++;
     }
-    console.log(`  ${pass}/${endpoints.length} endpoints returned 200`);
+    console.log(`  ${pass}/${endpoints.length} endpoints handled deep pagination without 500`);
     expect(pass).toBeGreaterThan(0);
   });
 
-  test('All paginated endpoints handle limit=1 consistently', async () => {
+  it("All paginated endpoints handle limit=1 consistently", async () => {
     const endpoints = [
-      '/api/repos?limit=1', '/api/issues?limit=1', '/api/pull-requests?limit=1',
-      '/api/ci?limit=1', '/api/duplicates?limit=1', '/api/heal?limit=1',
-      '/api/phase2/queue?limit=1', '/api/audit/entries?limit=1', '/api/review/results?limit=1',
+      "/api/repos?limit=1", "/api/issues?limit=1", "/api/pull-requests?limit=1",
+      "/api/ci?limit=1", "/api/duplicates?limit=1", "/api/heal?limit=1",
+      "/api/phase2/queue?limit=1", "/api/audit/entries?limit=1", "/api/review/results?limit=1",
     ];
     let pass = 0;
     for (const ep of endpoints) {
-      const res = await resilientGet(ep);
-      if (res.status === 200) {
-        const data = res.body.data || res.body;
-        if (Array.isArray(data) && data.length > 1) {
-          console.log(`  BUG: ${ep} returned ${data.length} items (expected ≤1)`);
-          // Don't fail — just log. Some endpoints may not support limit param.
-        }
-        pass++;
-      }
-      await sleep(200);
+      const result = await runContractedOperation(
+        paginationOp(ep, {
+          assert: ({ status }) => status !== 500
+            ? { passed: true }
+            : { passed: false, code: "UNEXPECTED_500", message: "limit=1 returned 500" },
+        })
+      );
+      if (result.assertion === "passed") pass++;
     }
     console.log(`  ${pass}/${endpoints.length} endpoints handle limit=1 correctly`);
     expect(pass).toBeGreaterThan(0);
