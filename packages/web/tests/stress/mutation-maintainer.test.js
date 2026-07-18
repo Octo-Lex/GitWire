@@ -1,9 +1,9 @@
 // tests/stress/mutation-maintainer.test.js
 // Stress Test: Maintainer mutation routes — settings, stale-scan, branch-cleanup.
 import { apiContractedOperation, STATUS_SETS } from './response-contracts.js';
-import { runContractedBurst } from './burst-runner.js';
-import { post, FIXTURE_REPO } from '../helpers.js';
-import { sleep, resilientGet } from './stress-helpers.js';
+import { runContractedBurst, runContractedOperation } from './burst-runner.js';
+import { resilientGetBurstOperation, FIXTURE_REPO } from '../helpers.js';
+import { sleep } from './stress-helpers.js';
 
 const REPO = FIXTURE_REPO;
 const ORG = REPO.split('/')[0];
@@ -28,28 +28,34 @@ describe('Stress: Maintainer Mutations', () => {
   });
 
   test('POST /maintainer/:owner/:repo/stale-scan — trigger stale scan', async () => {
-    const res = await post(`/api/maintainer/${REPO}/stale-scan`, {}, { contractName: 'maintainer-stale-scan' });
-    expect([200, 201, 202, 204]).toContain(res.status);
+    const result = await runContractedOperation(
+      apiContractedOperation(`/api/maintainer/${REPO}/stale-scan`, {
+        kind: 'write', method: 'POST', body: {},
+        contractName: 'maintainer-stale-scan',
+        expectedStatuses: STATUS_SETS.MUTATION_TRIGGER,
+      })
+    );
+    expect(result.http).toBe('expected');
   });
 
   test('POST /maintainer/:owner/:repo/branch-cleanup — trigger branch cleanup', async () => {
-    const res = await post(`/api/maintainer/${REPO}/branch-cleanup`, {}, { contractName: 'maintainer-branch-cleanup' });
-    expect([200, 201, 202, 204]).toContain(res.status);
+    const result = await runContractedOperation(
+      apiContractedOperation(`/api/maintainer/${REPO}/branch-cleanup`, {
+        kind: 'write', method: 'POST', body: {},
+        contractName: 'maintainer-branch-cleanup',
+        expectedStatuses: STATUS_SETS.MUTATION_TRIGGER,
+      })
+    );
+    expect(result.http).toBe('expected');
   });
 
-  test.skip('POST /maintainer/members/sync — needs org-target contract', async () => {
-    const res = await post('/api/maintainer/members/sync', { org: ORG });
-    expect([200, 201, 202, 204]).toContain(res.status);
-  });
+  test.skip('POST /maintainer/members/sync — needs org-target contract', async () => {});
 
   test('POST /maintainer/:owner/:repo/stale-scan — 3 concurrent scans idempotent', async () => {
     const tasks = Array.from({ length: 3 }, () => apiContractedOperation(
       `/api/maintainer/${REPO}/stale-scan`,
-      {
-        kind: 'write', method: 'POST', body: {},
-        contractName: 'maintainer-stale-scan',
-        expectedStatuses: STATUS_SETS.MUTATION_TRIGGER,
-      }
+      { kind: 'write', method: 'POST', body: {}, contractName: 'maintainer-stale-scan',
+        expectedStatuses: STATUS_SETS.MUTATION_TRIGGER }
     ));
     const result = await runContractedBurst(tasks, {
       concurrency: 3, pacing: { mode: 'legacy_batches', delayMs: 1000 },
@@ -60,7 +66,10 @@ describe('Stress: Maintainer Mutations', () => {
 
   test('GET settings after mutations — still returns valid data', async () => {
     await sleep(500);
-    const res = await resilientGet(`/api/maintainer/${REPO}/settings`);
-    expect([200, 429]).toContain(res.status);
+    const result = await runContractedOperation({
+      ...resilientGetBurstOperation(`/api/maintainer/${REPO}/settings`, { kind: 'read', bodyMode: 'auto' }),
+      responseContract: { expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED },
+    });
+    expect(result.http).toBe('expected');
   });
 });

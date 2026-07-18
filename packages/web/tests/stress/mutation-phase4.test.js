@@ -1,20 +1,23 @@
 // tests/stress/mutation-phase4.test.js
 // Stress Test: Phase 4 mutation routes — AI review config.
 import { apiContractedOperation, STATUS_SETS } from './response-contracts.js';
-import { runContractedBurst } from './burst-runner.js';
-import { post, FIXTURE_REPO } from '../helpers.js';
+import { runContractedBurst, runContractedOperation } from './burst-runner.js';
+import { FIXTURE_REPO } from '../helpers.js';
 
 const REPO = FIXTURE_REPO;
 
 describe('Stress: Phase 4 Mutations', () => {
 
   test('POST /review/config/:owner/:repo — set AI review config', async () => {
-    const res = await post(
-      `/api/review/config/${REPO}`,
-      { enabled: true, review_mode: 'comment', max_files: 20, repo_filter: null },
-      { contractName: 'review-config' }
+    const result = await runContractedOperation(
+      apiContractedOperation(`/api/review/config/${REPO}`, {
+        kind: 'write', method: 'POST',
+        body: { enabled: true, review_mode: 'comment', max_files: 20, repo_filter: null },
+        contractName: 'review-config',
+        expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED,
+      })
     );
-    expect([200, 201, 202]).toContain(res.status);
+    expect(result.http).toBe('expected');
   });
 
   test('POST /review/config/:owner/:repo — concurrent config updates', async () => {
