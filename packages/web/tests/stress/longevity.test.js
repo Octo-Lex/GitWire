@@ -1,14 +1,15 @@
 // tests/stress/longevity.test.js
 // Stress Test: Longevity — sustained load over multiple rounds to detect memory leaks.
 //
-// Uses runContractedOperation per read (sequential, not burst). The
-// degradation calculation is preserved exactly — PR2b does not redefine the
-// longitudinal metric.
+// Semantics preserved from the original test:
+// - Rounds with all-200 are counted for degradation
+// - Rounds with non-200 results must NOT contain 500s
+// - Transport failures are failures (not ordinary degraded rounds)
+// - Degradation calculation unchanged
 
 import { describe, it, expect } from "@jest/globals";
 import { runContractedOperation } from "./burst-runner.js";
-import { apiContractedOperation } from "./response-contracts.js";
-import { STATUS_SETS } from "./response-contracts.js";
+import { apiContractedOperation, STATUS_SETS } from "./response-contracts.js";
 import { httpOperation } from "./burst-runner.js";
 import { BASE_URL } from "../helpers.js";
 import { sleep } from "./stress-helpers.js";
@@ -22,6 +23,7 @@ describe(`Longevity: ${ROUNDS} rounds × ${REQUESTS_PER_ROUND} requests`, () => 
   it("Sustained read load stays stable", async () => {
     for (let round = 0; round < ROUNDS; round++) {
       const start = Date.now();
+      const statuses = [];
       let allOk = true;
       for (let i = 0; i < REQUESTS_PER_ROUND; i++) {
         const result = await runContractedOperation(
@@ -30,14 +32,22 @@ describe(`Longevity: ${ROUNDS} rounds × ${REQUESTS_PER_ROUND} requests`, () => 
             expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
           })
         );
-        if (result.http !== "expected") allOk = false;
+        // Transport failure is a hard failure, not a degraded round.
+        if (result.transport === "failed") {
+          throw new Error(`Transport failure in round ${round}: ${result.error?.category}`);
+        }
+        statuses.push(result.status);
+        if (result.status !== 200) allOk = false;
         await sleep(100);
       }
       const elapsed = Date.now() - start;
       roundTimes.push(elapsed);
 
       if (!allOk) {
-        // Rate limited — that's expected under sustained load
+        // Original behavior: assert every non-200 response is NOT 500.
+        for (const s of statuses) {
+          expect(s).not.toBe(500);
+        }
         await sleep(200);
         continue;
       }
@@ -64,12 +74,18 @@ describe(`Longevity: ${ROUNDS} rounds × ${REQUESTS_PER_ROUND} requests`, () => 
     for (let round = 0; round < ROUNDS; round++) {
       const start = Date.now();
       for (const ep of endpoints) {
-        await runContractedOperation(
+        const result = await runContractedOperation(
           apiContractedOperation(ep, {
             kind: "read", method: "GET", bodyMode: "auto",
             expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
           })
         );
+        if (result.transport === "failed") {
+          throw new Error(`Transport failure at ${ep}: ${result.error?.category}`);
+        }
+        if (result.status === 500) {
+          throw new Error(`${ep} returned 500`);
+        }
         await sleep(50);
       }
       const elapsed = Date.now() - start;

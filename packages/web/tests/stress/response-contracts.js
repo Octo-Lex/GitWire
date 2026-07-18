@@ -28,7 +28,6 @@ export const STATUS_SETS = Object.freeze({
   MUTATION_ACCEPTED_OR_NOT_FOUND: Object.freeze([200, 201, 202, 404]),
   MUTATION_ACCEPTED_OR_BAD_REQUEST_OR_NOT_FOUND: Object.freeze([200, 201, 202, 400, 404]),
   FIX_ATTEMPT_LEGACY_OUTCOMES: Object.freeze([200, 202, 400, 404, 429, 500]),
-  NO_CRASH: Object.freeze([200, 201, 202, 204, 400, 401, 403, 404, 429]), // any non-500
 });
 
 /**
