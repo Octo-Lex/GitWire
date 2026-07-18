@@ -9,7 +9,6 @@ import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { TESTING_ONLY, loadPolicy } from "../target-policy.js";
 
 const {
@@ -26,6 +25,7 @@ const {
   compileRoute,
   matchRoute,
   parseStrictBudget,
+  sanitizeRunId,
   TargetPolicy,
   canonicalHost,
   canonicalRepo,
@@ -309,33 +309,89 @@ describe("string mutation bodies rejected", () => {
 // ─── 10. Run-wide mutation budget (REGRESSION: bypass #6) ──────────────────
 
 describe("run-wide mutation budget (atomic slots)", () => {
-  it("consumes exactly max slots and then exhausts", () => {
+  it("owner initializes, consumes exactly max slots, then exhausts", () => {
     const runId = "rwtest-" + Math.random();
     const b = new RunWideMutationBudget(2, runId);
+    expect(b.role()).toBe("owner");
     expect(b.remaining()).toBe(2);
     b.consume("a");
     b.consume("b");
     expect(b.remaining()).toBe(0);
     expect(() => b.consume("c")).toThrow(/exhausted/);
     b.finalize();
+    b.purge();
   });
 
-  it("two SEPARATE budget objects with the same runId — the second fails closed on collision", () => {
-    // This is the regression for the previous design's fatal flaw: a second
-    // worker constructing a budget with the same runId would truncate the
-    // shared state. The atomic-slot design instead fails closed, forcing the
-    // operator to use a fresh runId per run.
-    const runId = "collide-" + Math.random();
-    const b1 = new RunWideMutationBudget(3, runId);
-    b1.consume("first"); // creates slot-0 → directory now has 1 slot
-    expect(() => new RunWideMutationBudget(3, runId)).toThrow(/run-ID collision/);
-    b1.finalize();
+  it("participant can ATTACH after slots already exist (the run-wide property)", () => {
+    // The round-3 design rejected any second constructor as a 'collision'.
+    // The fix: a second constructor with matching metadata ATTACHES and
+    // shares the existing slots directory, even when slots already exist.
+    const runId = "attach-" + Math.random();
+    const meta = { fixtureRepo: "fixture-org/fixture-repo", fixtureInstallationId: "999999999" };
+    const owner = new RunWideMutationBudget(5, runId, meta);
+    expect(owner.role()).toBe("owner");
+    owner.consume("first");   // slot-0 now exists
+    owner.consume("second");  // slot-1 now exists
+
+    const participant = new RunWideMutationBudget(5, runId, meta);
+    expect(participant.role()).toBe("participant");
+    expect(participant.remaining()).toBe(3); // 5 - 2 already claimed
+    participant.consume("third"); // participant claims slot-2 in the shared dir
+    expect(owner.remaining()).toBe(2); // owner sees the participant's claim
+
+    owner.finalize();
+    owner.purge();
+  });
+
+  it("participant with mismatched fixture metadata is rejected", () => {
+    const runId = "mismatch-" + Math.random();
+    const meta1 = { fixtureRepo: "fixture-org/fixture-repo", fixtureInstallationId: "999999999" };
+    const owner = new RunWideMutationBudget(3, runId, meta1);
+    const meta2 = { fixtureRepo: "OTHER/repo", fixtureInstallationId: "999999999" };
+    expect(() => new RunWideMutationBudget(3, runId, meta2)).toThrow(/fixture-repo mismatch/);
+    owner.finalize();
+    owner.purge();
+  });
+
+  it("participant with a different max is rejected", () => {
+    const runId = "maxmatch-" + Math.random();
+    const meta = { fixtureRepo: "f/r", fixtureInstallationId: "1" };
+    const owner = new RunWideMutationBudget(5, runId, meta);
+    expect(() => new RunWideMutationBudget(10, runId, meta)).toThrow(/max mismatch/);
+    owner.finalize();
+    owner.purge();
+  });
+
+  it("stale (finalized) namespace reuse fails closed", () => {
+    const runId = "stale-" + Math.random();
+    const meta = { fixtureRepo: "f/r", fixtureInstallationId: "1" };
+    const owner = new RunWideMutationBudget(3, runId, meta);
+    owner.consume("a");
+    owner.finalize();
+    expect(() => new RunWideMutationBudget(3, runId, meta)).toThrow(/marked .finalized/);
+    owner.purge();
+  });
+
+  it("distinct raw run IDs that sanitize to the same dir fail closed (collision)", () => {
+    // Two raw runIds that both sanitize to the same token. We embed a unique
+    // suffix so this test never collides with a leftover from a prior run.
+    const uniq = Math.random().toString(36).slice(2);
+    const rawA = `collide ${uniq}`;   // space → _
+    const rawB = `collide+${uniq}`;   // + → _
+    // Both sanitize to 'collide_<uniq>'.
+    expect(sanitizeRunId(rawA)).toBe(sanitizeRunId(rawB));
+    const meta = { fixtureRepo: "f/r", fixtureInstallationId: "1" };
+    const owner = new RunWideMutationBudget(3, rawA, meta);
+    expect(() => new RunWideMutationBudget(3, rawB, meta)).toThrow(/run-ID collision/);
+    owner.finalize();
+    owner.purge();
   });
 
   it("budget=0 rejects the first mutation", () => {
     const z = new RunWideMutationBudget(0, "zero-" + Math.random());
     expect(() => z.consume("a")).toThrow(/exhausted/);
     z.finalize();
+    z.purge();
   });
 
   it("rejects non-integer / negative budgets", () => {
@@ -352,81 +408,105 @@ describe("run-wide mutation budget (atomic slots)", () => {
     expect(() => parseStrictBudget("   ")).toThrow(/malformed/);
   });
 
-  // ─── The real concurrency regression the reviewer required ─────────────
+  // ─── The real concurrent regression the reviewer required ──────────────
   //
-  // Spawn N child processes that each attempt to consume K slots from a
-  // budget of max=N*K/2 (i.e. half what they collectively demand). Under the
-  // flawed append-file design, the unlocked read-then-append would let all
-  // children observe capacity and over-claim. Under the atomic-slot design,
-  // exactly `max` slots can ever be created regardless of concurrency.
+  // Spawns N child processes that all WAIT on a stdin barrier, then releases
+  // them simultaneously so they genuinely contend on O_EXCL slot creation.
+  // Children use the PUBLIC budget API (no internal-path monkey-patching),
+  // receive a single JSON argv, and report both their claim count and role.
   //
-  // This test spawns REAL child processes via node, not a simulated env.
-  it("concurrent child processes cannot exceed the cap (real forked consumers)", () => {
+  // This replaces the round-3 regression which (a) ran sequentially via
+  // spawnSync, (b) monkey-patched b.slotsDir, and (c) had shifted argv
+  // indices that made every child report CHILD_OK=0, trivially satisfying
+  // the ≤ MAX assertion while proving nothing.
+  it("concurrent child processes cannot exceed the cap (genuine parallel contention)", async () => {
     if (process.platform === "win32") {
-      // Slot files use O_EXCL which Windows supports, but the test's process
-      // orchestration via spawnSync with sh -c is Linux-oriented. The budget
-      // itself is cross-platform; this concurrency regression runs on Linux CI.
-      // Skip is explicit, not a silent pass.
+      // O_EXCL works on Windows, but the stdin-barrier orchestration here is
+      // tested on Linux CI. Explicit skip, not a silent pass.
       console.log("  skipped on win32 (concurrency regression runs on Linux CI)");
       return;
     }
+    const { spawn } = await import("node:child_process");
     const runId = "concurrency-" + Math.random();
     const WORKERS = 8;
-    const PER_WORKER = 10;           // each child attempts 10 consumes
+    const PER_WORKER = 10;
     const MAX = (WORKERS * PER_WORKER) / 2; // 40 — half of total demand (80)
-    // Pre-create the budget directory so all children see the same one and
-    // neither "wins" the mkdir race. (In production, the orchestrator's
-    // loadPolicy constructs the single budget; workers inherit. Here we
-    // simulate by pre-initializing the shared dir.)
-    const safe = runId.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const slotsDir = path.join(os.tmpdir(), `gitwire-stress-budget-${safe}`);
-    fs.mkdirSync(slotsDir, { recursive: true });
-    // Write a marker so the dir is "owned" (matches _initSlotsDir behavior).
-    fs.writeFileSync(path.join(slotsDir, ".run-marker"), String(process.pid), { flag: "wx" });
+    const meta = { fixtureRepo: "fixture-org/fixture-repo", fixtureInstallationId: "999999999" };
 
-    // Child script: import the policy, construct a budget pointing at the
-    // existing dir, attempt PER_WORKER consumes, report how many succeeded.
-    const childScript = `
-import { TESTING_ONLY } from "${path.resolve(__dirname, "..", "target-policy.js").replace(/\\/g, "/")}";
-const { RunWideMutationBudget } = TESTING_ONLY;
-const dir = process.argv[2];
-const max = Number(process.argv[3]);
-const n = Number(process.argv[4]);
-// Monkey-patch the directory so we share the parent's pre-created dir.
-const b = new RunWideMutationBudget(max, process.argv[5]);
-b.slotsDir = dir;
-let ok = 0;
-for (let i = 0; i < n; i++) {
-  try { b.consume("child-" + process.pid); ok++; } catch (e) { /* exhausted */ }
-}
-console.log("CHILD_OK=" + ok);
-`;
-    const results = [];
+    const childPath = path.resolve(__dirname, "..", "fixtures", "budget-child.mjs");
+    const cfg = {
+      max: MAX,
+      runId,
+      perWorker: PER_WORKER,
+      fixtureRepo: meta.fixtureRepo,
+      fixtureInstallationId: meta.fixtureInstallationId,
+    };
+
+    // Spawn all children PAUSED (they block on stdin). stdio: pipe so we can
+    // write the release byte; the child reads one byte then proceeds.
+    const children = [];
     for (let i = 0; i < WORKERS; i++) {
-      const r = spawnSync(process.execPath, ["--input-type=module", "-e", childScript,
-        slotsDir, String(MAX), String(PER_WORKER), runId], {
-        encoding: "utf8",
+      const child = spawn(process.execPath, [
+        "--input-type=module",
+        childPath,
+        JSON.stringify(cfg),
+      ], {
         env: { ...process.env, NODE_OPTIONS: "--experimental-vm-modules" },
+        stdio: ["pipe", "pipe", "pipe"],
       });
-      if (r.status !== 0) {
-        // If the child failed (e.g. EEXIST collision on construction because
-        // our pre-mkdir raced), surface it rather than silently passing.
-        throw new Error("child " + i + " failed: " + r.stderr);
-      }
-      const m = r.stdout.match(/CHILD_OK=(\d+)/);
-      if (!m) throw new Error("child " + i + " no CHILD_OK output: " + r.stdout + r.stderr);
-      results.push(Number(m[1]));
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d) => { stdout += d; });
+      child.stderr.on("data", (d) => { stderr += d; });
+      const done = new Promise((resolve) => child.on("close", () => resolve({ stdout, stderr })));
+      children.push({ child, done: done.then((r) => ({ ...r, i })) });
     }
-    const totalClaimed = results.reduce((a, b) => a + b, 0);
-    // The cap is the invariant: total claims MUST NOT EXCEED MAX. Over-claim
-    // is the exact failure mode the budget exists to prevent.
+
+    // Release the barrier simultaneously. A tiny tick lets each child's
+    // stdin handler install before we write.
+    await new Promise((r) => setTimeout(r, 50));
+    for (const { child } of children) {
+      child.stdin.write("go\n");
+      child.stdin.end();
+    }
+
+    const results = await Promise.all(children.map((c) => c.done));
+    // Surface any child errors rather than silently passing.
+    for (const r of results) {
+      if (r.stderr && r.stderr.trim()) {
+        throw new Error(`child ${r.i} stderr: ${r.stderr}`);
+      }
+    }
+
+    // Parse claim counts and roles.
+    let totalClaimed = 0;
+    const roles = { owner: 0, participant: 0 };
+    for (const r of results) {
+      const okMatch = r.stdout.match(/CHILD_OK=(\d+)/);
+      const roleMatch = r.stdout.match(/ROLE=(\w+)/);
+      if (!okMatch) {
+        throw new Error(`child ${r.i} produced no CHILD_OK: stdout=${JSON.stringify(r.stdout)}`);
+      }
+      totalClaimed += Number(okMatch[1]);
+      if (roleMatch) roles[roleMatch[1]] = (roles[roleMatch[1]] || 0) + 1;
+    }
+
+    // INVARIANT 1: exactly MAX claims — never more. Over-claim is the failure
+    // mode the budget exists to prevent.
     expect(totalClaimed).toBeLessThanOrEqual(MAX);
-    // And we should have claimed exactly MAX (collective demand 80 > MAX 40,
-    // so the cap is the only thing stopping the children).
     expect(totalClaimed).toBe(MAX);
-    // Cleanup.
+
+    // INVARIANT 2: contention actually happened. Exactly one owner won the
+    // marker; the rest attached. If roles.owner === WORKERS, no contention
+    // occurred and the test proved nothing (the round-3 failure mode).
+    expect(roles.owner).toBe(1);
+    expect(roles.participant).toBe(WORKERS - 1);
+
+    // Cleanup. The owner's directory — purge it.
+    const safe = sanitizeRunId(runId);
+    const slotsDir = path.join(os.tmpdir(), `gitwire-stress-budget-${safe}`);
     fs.rmSync(slotsDir, { recursive: true, force: true });
-  });
+  }, 30000);
 });
 
 // ─── 11. Valid reads accepted ──────────────────────────────────────────────

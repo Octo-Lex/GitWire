@@ -335,10 +335,33 @@ function parseStrictBudget(raw) {
  */
 class RunWideMutationBudget {
   /**
+   * Constructs a budget handle. The constructor distinguishes three cases
+   * against the per-run directory:
+   *
+   *   1. INITIALIZE — the directory does not exist OR exists but has no
+   *      `.run-marker`. This caller becomes the OWNER: it atomically creates
+   *      the marker (O_EXCL) with immutable run metadata. If two processes
+   *      race to initialize, exactly one wins the marker; the other attaches.
+   *   2. ATTACH — the directory exists with a `.run-marker`. This caller is a
+   *      PARTICIPANT: it reads the marker and validates that its own
+   *      configuration (runId, max, fixture identities) matches the marker's
+   *      immutable metadata. Mismatch fails closed. Attachment is allowed
+   *      even when slots already exist — that is the whole point of a
+   *      run-wide budget: workers join an active run mid-flight.
+   *   3. STALE — the directory has a `.finalized` marker. The run is over;
+   *      reuse fails closed. The operator must use a fresh runId.
+   *
+   * The marker stores immutable run metadata so two distinct raw run IDs
+   * that sanitize to the same directory name cannot accidentally share state:
+   * the stored exact runId must equal the caller's exact runId.
+   *
    * @param {number} max non-negative integer
    * @param {string} runId unique run identifier (GITWIRE_STRESS_RUN_ID)
+   * @param {Object} metadata immutable run metadata for the marker
+   * @param {string} metadata.fixtureRepo
+   * @param {string} metadata.fixtureInstallationId
    */
-  constructor(max, runId) {
+  constructor(max, runId, metadata = {}) {
     if (!Number.isInteger(max) || max < 0) {
       throw new Error(
         `Mutation budget max must be a non-negative integer, got: ${max}`
@@ -349,52 +372,107 @@ class RunWideMutationBudget {
     }
     this.max = max;
     this.runId = runId;
-    const safe = runId.replace(/[^a-zA-Z0-9._-]/g, '_');
+    this.metadata = metadata;
+    const safe = sanitizeRunId(runId);
     this.slotsDir = path.join(os.tmpdir(), `gitwire-stress-budget-${safe}`);
     this._markerFile = path.join(this.slotsDir, '.run-marker');
-
-    // Fail-closed on run-ID reuse: if the slots directory already exists AND
-    // contains any slot files, refuse. A crash-then-reuse with the same runId
-    // would otherwise silently inherit stale consumption state. The operator
-    // must use a fresh runId per run (the policy requires RUN_ID env, and the
-    // runbook documents this).
-    this._initSlotsDir();
+    this._finalizedFile = path.join(this.slotsDir, '.finalized');
+    this._role = this._establishRole();
   }
 
-  _initSlotsDir() {
-    let dirExists = false;
+  /**
+   * Determine initialize vs attach vs stale. Returns 'owner' | 'participant'.
+   * @returns {'owner'|'participant'}
+   * @throws {Error} on stale namespace, metadata mismatch, or collision
+   */
+  _establishRole() {
+    // Ensure the directory exists (idempotent). Both owner and participant
+    // need it present.
     try {
       fs.mkdirSync(this.slotsDir, { recursive: false });
     } catch (err) {
-      if (err.code === 'EEXIST') {
-        dirExists = true;
-      } else {
+      if (err.code !== 'EEXIST') {
         throw new Error(
           `Could not create mutation budget directory at ${this.slotsDir}: ${err.message}`
         );
       }
     }
-    if (dirExists) {
-      // Directory already exists — fail closed unless it is genuinely empty
-      // (no slot files from a prior run with the same runId).
-      const existing = this._listSlots();
-      if (existing.length > 0) {
-        throw new Error(
-          `Mutation budget run-ID collision: directory ${this.slotsDir} already ` +
-          `contains ${existing.length} slot(s) from a prior run. ` +
-          `Reuse of GITWIRE_STRESS_RUN_ID='${this.runId}' is not permitted; ` +
-          `use a fresh runId per run. If the prior run crashed, remove the ` +
-          `directory manually before reusing the runId.`
-        );
+
+    // Stale check: a finalized run cannot be reused.
+    if (fs.existsSync(this._finalizedFile)) {
+      throw new Error(
+        `Mutation budget run-ID reuse: directory ${this.slotsDir} is marked ` +
+        `.finalized (the run is over). Reuse of GITWIRE_STRESS_RUN_ID='${this.runId}' ` +
+        `is not permitted; use a fresh runId per run.`
+      );
+    }
+
+    // Try to INITIALIZE by atomically creating the marker. O_EXCL means
+    // exactly one process wins; concurrent losers fall through to attach.
+    const markerPayload = JSON.stringify({
+      runId: this.runId,                 // exact, unsanitized
+      max: this.max,
+      fixtureRepo: this.metadata.fixtureRepo || null,
+      fixtureInstallationId: this.metadata.fixtureInstallationId || null,
+      ownerPid: process.pid,
+      createdAt: Date.now(),
+      nonce: cryptoRandomToken(),
+    });
+    try {
+      fs.writeFileSync(this._markerFile, markerPayload, { flag: 'wx' });
+      return 'owner';
+    } catch (err) {
+      if (err.code !== 'EEXIST') {
+        throw new Error(`Could not write budget marker: ${err.message}`);
       }
-      // Empty dir (perhaps a concurrent constructor beat us to mkdir and has
-      // not yet written slots). Claim the marker exclusively; if we lose the
-      // marker race, the other constructor is the owner.
-      try {
-        fs.writeFileSync(this._markerFile, String(process.pid), { flag: 'wx' });
-      } catch (err) {
-        if (err.code !== 'EEXIST') throw err;
-      }
+    }
+
+    // ATTACH path. Marker exists — read it and validate every field this
+    // caller cares about. This is what lets a worker join an active run
+    // mid-flight while still rejecting a different run that happens to
+    // sanitize to the same directory name.
+    const stored = this._readMarker();
+    if (stored.runId !== this.runId) {
+      throw new Error(
+        `Mutation budget run-ID collision: directory ${this.slotsDir} belongs ` +
+        `to runId '${stored.runId}' but caller supplied '${this.runId}'. ` +
+        `Two distinct raw run IDs sanitized to the same directory name; ` +
+        `use a fresh runId.`
+      );
+    }
+    if (stored.max !== this.max) {
+      throw new Error(
+        `Mutation budget max mismatch: marker says ${stored.max} but caller ` +
+        `supplied ${this.max}. All participants must agree on the budget.`
+      );
+    }
+    // Fixture identities must match (a worker misconfigured to point at a
+    // different fixture repo must not join this run's budget).
+    const wantRepo = this.metadata.fixtureRepo || null;
+    const wantInst = this.metadata.fixtureInstallationId || null;
+    if ((stored.fixtureRepo || null) !== wantRepo) {
+      throw new Error(
+        `Mutation budget fixture-repo mismatch: marker says '${stored.fixtureRepo}' ` +
+        `but caller supplied '${wantRepo}'. Participants must share fixture config.`
+      );
+    }
+    if ((stored.fixtureInstallationId || null) !== wantInst) {
+      throw new Error(
+        `Mutation budget fixture-installation mismatch: marker says ` +
+        `'${stored.fixtureInstallationId}' but caller supplied '${wantInst}'.`
+      );
+    }
+    return 'participant';
+  }
+
+  _readMarker() {
+    try {
+      return JSON.parse(fs.readFileSync(this._markerFile, 'utf8'));
+    } catch (err) {
+      throw new Error(
+        `Mutation budget marker at ${this._markerFile} is missing or corrupt: ` +
+        `${err.message}. If the prior run crashed, remove ${this.slotsDir} manually.`
+      );
     }
   }
 
@@ -440,7 +518,8 @@ class RunWideMutationBudget {
   /**
    * Consume one unit of budget. Attempts slots 0..max-1 in order until one is
    * exclusively created; if all are already owned, the budget is exhausted.
-   * Atomic across processes via O_EXCL — no TOCTOU window.
+   * Atomic across processes via O_EXCL — no TOCTOU window. Works identically
+   * for owners and participants: both create slots in the shared directory.
    * @param {string} [operation] for error clarity
    * @throws {Error} when all max slots are already owned (budget exhausted)
    */
@@ -466,17 +545,61 @@ class RunWideMutationBudget {
     return Math.max(0, this.max - this._listSlots().length);
   }
 
+  /** @returns {'owner'|'participant'} this handle's role in the run */
+  role() {
+    return this._role;
+  }
+
   /**
-   * Remove the slot directory. Intended for the run orchestrator ONLY, after
-   * the run is definitively over (e.g. a test-runner `globalTeardown`). Not
-   * registered as an exit handler because workers exit before the run is over
-   * and must not delete shared state.
+   * Mark the run as finalized. Intended for the orchestrator ONLY, after the
+   * run is definitively over. Writes a `.finalized` marker so a later
+   * constructor using the same runId fails closed (stale reuse). Does NOT
+   * delete the directory — the slot files remain as an audit record until
+   * the operator removes them (or the OS reaps the temp dir).
+   *
+   * Not registered as an exit handler: workers exit before the run is over
+   * and must not finalize a run still in progress.
    */
   finalize() {
     try {
-      fs.rmSync(this.slotsDir, { recursive: true, force: true });
-    } catch { /* best-effort cleanup */ }
+      fs.writeFileSync(this._finalizedFile, JSON.stringify({ at: Date.now() }), { flag: 'wx' });
+    } catch (err) {
+      if (err.code !== 'EEXIST') {
+        // Best-effort; a failed finalize must not crash the run.
+      }
+    }
   }
+
+  /**
+   * Remove the slot directory entirely. Separate from finalize() so that
+   * audit data can persist after finalization if desired. Orchestrator-only.
+   */
+  purge() {
+    try {
+      fs.rmSync(this.slotsDir, { recursive: true, force: true });
+    } catch { /* best-effort */ }
+  }
+}
+
+/**
+ * Sanitize a runId into a filename-safe token. Exported so tests can predict
+ * the directory name for two-runIds-same-sanitization collision tests.
+ * @param {string} runId
+ * @returns {string}
+ */
+function sanitizeRunId(runId) {
+  return String(runId).replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+/**
+ * Generate a short random hex token for the marker nonce. Not cryptographically
+ * strong (uses Math.random); its purpose is only to disambiguate two
+ * legitimate owners that race the marker and somehow both believe they won
+ * (which O_EXCL prevents, but defense in depth).
+ * @returns {string}
+ */
+function cryptoRandomToken() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
 // ─── Mutation target contracts ─────────────────────────────────────────────
@@ -1032,7 +1155,10 @@ export function loadPolicy(opts = {}) {
     // counter was per-process (silently multiplied the cap by worker count);
     // the intervening append-file version had a TOCTOU window and truncated
     // shared state on each worker's construction/exit.
-    budget = new RunWideMutationBudget(budgetNum, runId);
+    budget = new RunWideMutationBudget(budgetNum, runId, {
+      fixtureRepo,
+      fixtureInstallationId,
+    });
   }
 
   return new TargetPolicy({
@@ -1075,5 +1201,6 @@ export const TESTING_ONLY = {
   compileRoute,
   matchRoute,
   parseStrictBudget,
+  sanitizeRunId,
   TargetPolicy,
 };
