@@ -686,6 +686,22 @@ export function formatBurstThroughput({ attempted, elapsedMs, rps }) {
   return `RPS: ${rps.toFixed(1)} (wall-clock: ${attempted} ops / ${(elapsedMs / 1000).toFixed(2)}s)`;
 }
 
+// ─── Contracted burst (PR2b semantic layer) ────────────────────────────────
+//
+// ⚠️ MECHANICAL SEMANTIC STUB — temporary pass-through for the PR2b red phase.
+//
+// This is a thin wrapper over runBurst that does NOT enrich results with
+// http/assertion fields. Tests asserting result.http, result.assertion, etc.
+// will fail at the assertion level (undefined !== "expected") — demonstrating
+// defect-sensitivity, not import-error.
+//
+// Once the red evidence is captured, this stub is replaced with the real
+// preflight + enrichment + semanticLatency implementation.
+
+export async function runContractedBurst(operations, options) {
+  return runBurst(operations, options);
+}
+
 // ─── Exports for testing ───────────────────────────────────────────────────
 
 export const TESTING_ONLY = {
