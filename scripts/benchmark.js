@@ -1,24 +1,62 @@
 // scripts/benchmark.js
-// GitWire Benchmark Harness — measures webhook RPS, queue throughput, and API p95.
+// GitWire Benchmark Harness — measures API p95 latency, queue throughput,
+// and mixed read/write workload latency.
 //
 // Usage:
 //   node scripts/benchmark.js                    # Full suite
-//   node scripts/benchmark.js --webhook          # Webhook ingestion only
 //   node scripts/benchmark.js --api              # API latency only
 //   node scripts/benchmark.js --queue            # Queue throughput only
 //   node scripts/benchmark.js --iterations 500   # Custom iteration count
 //   node scripts/benchmark.js --concurrency 20   # Custom concurrency
 //
 // Requires:
-//   - GitWire running (local or production)
-//   - API_KEY set in env or passed via --api-key
+//   - GitWire running in an ISOLATED environment (never production)
+//   - GITWIRE_BASE_URL, API_KEY, GITWIRE_STRESS_ENV=isolated all set in env
+//
+// This harness shares the same isolation policy as the Jest stress suite
+// (tests/target-policy.js). It refuses to run without explicit configuration,
+// rejects known production hostnames/repositories/installations regardless of
+// configuration, and rejects cross-origin absolute URLs before any header is
+// constructed. Mutating benchmarks additionally require
+// GITWIRE_STRESS_ALLOW_MUTATIONS=true plus fixture identities and a budget.
 
-import { randomUUID } from "crypto";
+import { fileURLToPath, pathToFileURL } from "url";
+import { dirname, resolve } from "path";
+
+// Resolve the shared policy module relative to this script so benchmark.js
+// works regardless of the current working directory. On Windows, dynamic
+// import requires a file:// URL (a bare C:\ path throws
+// ERR_UNSUPPORTED_ESM_URL_SCHEME), so we convert via pathToFileURL.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const POLICY_PATH = resolve(__dirname, "../packages/web/tests/target-policy.js");
+const { loadPolicy } = await import(pathToFileURL(POLICY_PATH).href);
+
+// benchmark.js requires the full isolated stress gate for ALL modes, including
+// read-only benchmarks. The previous requireStressGate=false was inconsistent
+// with the header's claim that GITWIRE_STRESS_ENV=isolated is required, and
+// allowed read benchmarks to target production. Mutations additionally
+// require the fixture opt-in, fixture identities, run ID, and budget.
+const POLICY = loadPolicy({ requireStressGate: true });
+
+// Register benchmark mutation contracts at init (not inside a benchmark
+// function). Previously repo-sync was registered inside benchmarkMixed(),
+// which meant --queue (which runs first and never invokes mixed) failed at
+// the contract check. Registering here makes every benchmark mode that
+// mutates work regardless of invocation order.
+if (POLICY.allowMutations) {
+  POLICY.registerMutationContract({
+    name: "repo-sync",
+    method: "POST",
+    classification: "FIXTURE_MUTATION",
+    route: "/api/repos/:owner/:repo/sync",
+    identities: [{ field: "repo", location: "path", param: "owner" }],
+  });
+}
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
-const BASE_URL = process.env.GITWIRE_BASE_URL || "https://gitwire.erlab.uk";
-const API_KEY = process.env.API_KEY || process.argv.find((a, i) => process.argv[i - 1] === "--api-key") || "";
+const BASE_URL = POLICY.baseUrlRaw;
+const API_KEY = POLICY.apiKey;
 const ITERATIONS = parseInt(process.argv.find((a, i) => process.argv[i - 1] === "--iterations")) || 200;
 const CONCURRENCY = parseInt(process.argv.find((a, i) => process.argv[i - 1] === "--concurrency")) || 10;
 
@@ -54,18 +92,30 @@ function stats(durationsMs) {
 }
 
 async function apiFetch(path, opts = {}) {
+  // Resolve through the policy: same-origin check + production denylist +
+  // mutation gate + budget. Throws before fetch if the target is disallowed.
+  const url = POLICY.resolveRequest(path);
+  const method = (opts.method || "GET").toUpperCase();
+  POLICY.assertMutationAllowed({
+    method,
+    url,
+    body: opts.body,
+    contractName: opts.contractName,
+    operationName: `benchmark:${method}:${url.pathname}`,
+  });
+
   const headers = {
     "Content-Type": "application/json",
-    ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
+    ...(POLICY.authHeader() ? { Authorization: POLICY.authHeader() } : {}),
     ...opts.headers,
   };
   const start = performance.now();
-  const res = await fetch(`${BASE_URL}${path}`, { ...opts, headers });
+  const res = await fetch(url.href, { ...opts, method, headers });
   const elapsed = performance.now() - start;
   const text = await res.text();
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
-  return { status: res.status, body, elapsed };
+  return { status: res.status, body, elapsed, method, path: url.pathname };
 }
 
 async function burst(fn, count, concurrency) {
@@ -131,88 +181,36 @@ async function benchmarkAPI() {
 
 async function benchmarkWebhook() {
   console.log("\n━━━ Webhook Ingestion Benchmark ━━━");
-  console.log(`  ${ITERATIONS} synthetic push events × ${CONCURRENCY} concurrency`);
-
-  // Build a synthetic push event payload
-  function makePayload() {
-    const deliveryId = randomUUID();
-    return {
-      deliveryId,
-      eventName: "push",
-      payload: JSON.stringify({
-        ref: "refs/heads/main",
-        before: "abc1234",
-        after: "def5678",
-        repository: {
-          id: 99999999,
-          full_name: "benchmark-org/benchmark-repo",
-          name: "benchmark-repo",
-          owner: { login: "benchmark-org" },
-          private: true,
-          default_branch: "main",
-        },
-        sender: { login: "benchmark-bot" },
-        installation: { id: 9999999 },
-        commits: [],
-        head_commit: { id: "def5678", message: "bench: synthetic push" },
-      }),
-    };
-  }
-
-  // We POST to /webhooks/github with synthetic data.
-  // Signature won't verify, so we measure the rejection speed.
-  // For a true benchmark, we'd need the webhook secret — but rejection
-  // speed still tests the HTTP stack, body parsing, and early return.
-  const durations = [];
-  let accepted = 0;
-  let rejected = 0;
-
-  const res = await burst(
-    () => {
-      const p = makePayload();
-      return apiFetch("/webhooks/github", {
-        method: "POST",
-        headers: {
-          "X-GitHub-Event": p.eventName,
-          "X-GitHub-Delivery": p.deliveryId,
-          "X-Hub-Signature-256": "sha256=fakesignature",
-        },
-        body: p.payload,
-      });
-    },
-    ITERATIONS,
-    CONCURRENCY,
-  );
-
-  for (const r of res) {
-    durations.push(r.elapsed);
-    if (r.status === 202) accepted++;
-    else rejected++;
-  }
-
-  const s = stats(durations);
-  printStats("POST /webhooks/github (synthetic)", s);
-  console.log(`    Accepted:  ${accepted}`);
-  console.log(`    Rejected:  ${rejected} (expected — fake signature)`);
-
-  return { ...s, accepted, rejected };
+  console.log("  Not implemented in this revision.");
+  console.log("  Previous behavior sent fake-signature payloads and measured early");
+  console.log("  rejection latency while labelling it 'ingestion' — that measured the");
+  console.log("  HTTP stack's reject path, not ingestion, and produced misleading numbers.");
+  console.log("  Real ingestion throughput requires validly HMAC-signed payloads against");
+  console.log("  a configured webhook secret, which is scoped to the ST-04 follow-up.");
+  return null;
 }
 
 // ── Benchmark: Queue Throughput ─────────────────────────────────────────────
 
 async function benchmarkQueue() {
   console.log("\n━━━ Queue Throughput Benchmark ━━━");
-  console.log(`  ${ITERATIONS} jobs enqueued × measure drain time`);
 
-  // We'll enqueue N jobs to a dedicated benchmark queue,
-  // then measure how fast they drain with a temporary worker.
+  // Queue benchmark enqueues real sync jobs, which are mutations against a
+  // fixture repository. Require the full mutation gate.
+  if (!POLICY.allowMutations) {
+    console.log("  Skipped — requires GITWIRE_STRESS_ALLOW_MUTATIONS=true and a fixture repo.");
+    console.log("  (queue enqueue creates real BullMQ jobs against the configured fixture repo)");
+    return null;
+  }
+  const fixtureRepo = POLICY.fixtureRepo;
+  console.log(`  ${Math.min(ITERATIONS, 20)} sync jobs × fixture ${fixtureRepo}`);
 
-  // Use the API to trigger sync jobs (they go to BullMQ) and measure
-  // how fast the queue accepts them.
-  const syncJobs = [];
+  // Use the API to trigger sync jobs (they go to BullMQ) against the
+  // configured fixture repository only. The policy's mutation gate + budget
+  // bound how many may fire.
   const res = await burst(
-    () => apiFetch("/api/repos/Elephant-Rock-Lab/GitWire/sync", { method: "POST" }),
-    Math.min(ITERATIONS, 20), // Don't overwhelm with real sync jobs
+    () => apiFetch(`/api/repos/${fixtureRepo}/sync`, { method: "POST", contractName: "repo-sync" }),
+    Math.min(ITERATIONS, 20),
     Math.min(CONCURRENCY, 3),
   );
 
@@ -226,7 +224,7 @@ async function benchmarkQueue() {
 
   const s = stats(durations);
   printStats("POST /api/repos/:owner/:repo/sync (queue enqueue)", s);
-  if (errors > 0) console.log(`    Errors:    ${errors} (404s expected for missing repos)`);
+  if (errors > 0) console.log(`    Errors:    ${errors}`);
 
   return s;
 }
@@ -235,54 +233,62 @@ async function benchmarkQueue() {
 
 async function benchmarkMixed() {
   console.log("\n━━━ Mixed Workload Benchmark ━━━");
-  console.log(`  ${ITERATIONS} mixed read/write ops × ${CONCURRENCY} concurrency`);
+  console.log(`  ${ITERATIONS} ops × ${CONCURRENCY} concurrency`);
 
-  const operations = [
-    // Reads (70%)
-    () => apiFetch("/api/repos"),
-    () => apiFetch("/api/issues?limit=20"),
-    () => apiFetch("/api/ci/stats"),
-    () => apiFetch("/api/actions/summary"),
-    () => apiFetch("/api/activity/summary"),
-    () => apiFetch("/health"),
-    () => apiFetch("/api/webhooks/deliveries?limit=10"),
-    // Writes (30%) — use safe non-destructive operations
-    () => apiFetch("/api/repos/nonexistent/benchmark-sync/sync", { method: "POST" }),
-    () => apiFetch("/api/ci/999999999/retry", { method: "POST" }),
-    () => apiFetch("/api/actions/999999999/retry", { method: "POST" }),
+  // Each operation carries its kind, and the kind is attached DIRECTLY to the
+  // result object the promise resolves with (not tracked in a parallel array
+  // keyed by invocation order — that misclassified under out-of-order
+  // completion or rejected promises). The repo-sync contract is registered
+  // at module init (above), so both --queue and --mixed can use it.
+  const readOps = [
+    { kind: "read", run: () => apiFetch("/api/repos").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/issues?limit=20").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/ci/stats").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/actions/summary").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/activity/summary").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/health").then(r => ({ ...r, kind: "read" })) },
+    { kind: "read", run: () => apiFetch("/api/webhooks/deliveries?limit=10").then(r => ({ ...r, kind: "read" })) },
   ];
+  // Only the fixture-targeted sync mutation. The previous NONEXISTENT_ID
+  // ci/actions retry writes targeted guessed IDs that were not fixture-owned
+  // records — that is not a safety boundary (the reviewer is correct), and
+  // under the fail-closed contract model a guessed ID cannot be validated.
+  const writeOps = POLICY.allowMutations && POLICY.fixtureRepo ? [
+    { kind: "write", run: () => apiFetch(
+      `/api/repos/${POLICY.fixtureRepo}/sync`,
+      { method: "POST", contractName: "repo-sync" }
+    ).then(r => ({ ...r, kind: "write" })) },
+  ] : [];
+
+  if (writeOps.length === 0) {
+    console.log("  Mutations disabled — running read-only mixed workload.");
+  }
+  const operations = [...readOps, ...writeOps];
 
   const res = await burst(
-    () => operations[Math.floor(Math.random() * operations.length)](),
+    () => {
+      const op = operations[Math.floor(Math.random() * operations.length)];
+      // Attach kind on both resolve and reject so a failed write isn't
+      // misclassified as a read. burst() catches rejections into its results
+      // array as { error }; we synthesize a kind-tagged failure object.
+      return op.run().catch(err => ({ kind: op.kind, error: err.message, elapsed: -1 }));
+    },
     ITERATIONS,
     CONCURRENCY,
   );
 
   const readDurations = [];
   const writeDurations = [];
-  let readErrors = 0;
-  let writeErrors = 0;
-
-  // Classify: operations 0-6 are reads, 7-9 are writes
-  // We can't perfectly classify from results, so split by status pattern
   for (const r of res) {
-    if (r.elapsed < 0) continue;
-    // Writes typically return 202, 404, or 400; reads return 200
-    if (r.status === 200) {
-      readDurations.push(r.elapsed);
-    } else {
-      writeDurations.push(r.elapsed);
-    }
+    if (!r || r.elapsed < 0) continue;
+    if (r.kind === "write") writeDurations.push(r.elapsed);
+    else readDurations.push(r.elapsed);
   }
 
-  if (readDurations.length > 0) {
-    printStats("Read operations", stats(readDurations));
-  }
-  if (writeDurations.length > 0) {
-    printStats("Write operations", stats(writeDurations));
-  }
+  if (readDurations.length > 0) printStats("Read operations", stats(readDurations));
+  if (writeDurations.length > 0) printStats("Write operations", stats(writeDurations));
 
-  const allDurations = res.filter((r) => r.elapsed > 0).map((r) => r.elapsed);
+  const allDurations = res.filter((r) => r && r.elapsed > 0).map((r) => r.elapsed);
   printStats("All operations", stats(allDurations));
 
   return stats(allDurations);
@@ -291,6 +297,24 @@ async function benchmarkMixed() {
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
+  try {
+    await runSuite();
+  } finally {
+    // Finalize the budget so a future run with the same runId fails closed
+    // (stale reuse) rather than attaching to this run's consumed slots.
+    // Only the owner finalizes; participants (if any) do not.
+    if (POLICY.allowMutations && POLICY.budget) {
+      try {
+        POLICY.budget.finalize();
+      } catch (err) {
+        console.error(`[benchmark] finalize failed: ${err.message}`);
+        process.exitCode = 1;
+      }
+    }
+  }
+}
+
+async function runSuite() {
   const suiteStart = performance.now();
 
   console.log("╔══════════════════════════════════════════╗");
@@ -333,6 +357,8 @@ async function main() {
 
   if (results.webhook) {
     console.log(`  Webhook:     ${results.webhook.rps} RPS, p95=${results.webhook.p95}ms`);
+  } else {
+    console.log(`  Webhook:     (not implemented in this revision)`);
   }
 
   console.log("\n✅ Benchmark complete.");
