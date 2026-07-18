@@ -71,8 +71,12 @@ describe("Auth Edge Cases", () => {
     expect(result.status).toBe(401);
   });
 
-  it("/health and /webhooks/github require no auth", async () => {
-    // /health: no auth needed, expect 200
+  it("/health requires no auth", async () => {
+    // /health: no auth needed, expect 200.
+    // NOTE: the previous version also POSTed to /webhooks/github, but signed
+    // webhook ingestion is explicitly out of scope (ST-04). That POST is
+    // removed — it would bypass the PR1 isolation boundary without a
+    // registered fixture contract.
     const healthResult = await runContractedOperation({
       kind: "no-auth-health",
       method: "GET",
@@ -83,22 +87,6 @@ describe("Auth Edge Cases", () => {
       responseContract: { expectedStatuses: [200] },
     });
     expect(healthResult.http).toBe("expected");
-
-    // /webhooks/github POST: no auth, should NOT get 401
-    const webhookResult = await runContractedOperation({
-      kind: "no-auth-webhook",
-      method: "POST",
-      run: () => httpOperation({
-        method: "POST", bodyMode: "auto",
-        execute: () => fetch(`${BASE_URL}/webhooks/github`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        }),
-      }),
-      responseContract: { assert: ({ status }) => status !== 401 ? { passed: true } : { passed: false, code: "UNEXPECTED_401", message: "Webhook endpoint should not require auth" } },
-    });
-    expect(webhookResult.assertion).toBe("passed");
   });
 
   it("Sequential authed + unauthed: authed=200/429, unauthed=401", async () => {
