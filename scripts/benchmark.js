@@ -131,6 +131,7 @@ async function benchmarkAPI() {
       pacing: { mode: "none" },
     });
     printLatency(ep.label, r.latency);
+    console.log(`    RPS:        ${r.rps.toFixed(1)} (wall-clock: ${r.attempted} ops / ${(r.elapsedMs / 1000).toFixed(2)}s)`);
     if (r.transportFailed > 0) {
       console.log(`    Transport failures: ${r.transportFailed}`);
     }
@@ -190,6 +191,7 @@ async function benchmarkQueue() {
   });
 
   printLatency("POST /api/repos/:owner/:repo/sync (queue enqueue)", r.latency);
+  console.log(`    RPS:        ${r.rps.toFixed(1)} (wall-clock: ${r.attempted} ops / ${(r.elapsedMs / 1000).toFixed(2)}s)`);
   console.log(`    Transport completed: ${r.transportCompleted}/${r.attempted}`);
   console.log(`    202 Accepted: ${r.statusCounts[202] || 0}`);
 

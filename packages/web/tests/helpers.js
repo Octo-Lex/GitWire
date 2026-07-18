@@ -155,9 +155,14 @@ export function prepareApiRequest(path, options = {}) {
   // Construct headers ONLY after all policy checks pass. This is what makes
   // the absolute-URL bypass safe: a rejected request never produces a
   // credential string.
-  const authHeader = options.headers && Object.keys(options.headers).some(
+  // omitAuth=true suppresses the bearer token entirely (for endpoints that
+  // must not receive it, e.g. /health, /webhooks/github).
+  const hasAuthOverride = options.headers && Object.keys(options.headers).some(
     h => h.toLowerCase() === 'authorization'
-  ) ? {} : (POLICY.authHeader() ? { Authorization: POLICY.authHeader() } : {});
+  );
+  const authHeader = (options.omitAuth || hasAuthOverride)
+    ? {}
+    : (POLICY.authHeader() ? { Authorization: POLICY.authHeader() } : {});
 
   const headers = {
     'Content-Type': 'application/json',

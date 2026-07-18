@@ -462,75 +462,87 @@ describe("constraint 2: outcome validators fail closed", () => {
 // ─── Round-1 review fixes: defect-sensitive scheduler tests ────────────────
 
 // Fix 8a: Semaphore fatal stop-and-drain with MULTIPLE operations.
-// The old test used one op; it couldn't prove queued work stops or active
-// work drains.
+// Proves: queued work stops AND already-active work drains before the fatal
+// error is thrown. The nonfatal active op blocks on a deferred promise so
+// we can verify the burst remains unsettled until it completes.
 describe("fix 8a: semaphore fatal stop-and-drain", () => {
-  it("fatal rejection in op 0 stops op 2 from starting; op 1 drains", async () => {
+  it("fatal op stops queued ops; burst waits for active blocker to drain", async () => {
     const started = [];
-    const blocker = deferred();
+    const activeBlocker = deferred();
     const ops = [
-      // Op 0: active, blocks (will be drained)
-      { kind: "block", method: "GET", run: () => { started.push(0); return blocker.promise.then(() => classifiedOutcome("completed", 200)); } },
-      // Op 1: active, completes normally (must drain)
-      { kind: "quick", method: "GET", run: () => { started.push(1); return Promise.resolve(classifiedOutcome("completed", 200)); } },
-      // Op 2: queued, must NOT start after op 0 goes fatal
-      { kind: "queued", method: "GET", run: () => { started.push(2); return Promise.resolve(classifiedOutcome("completed", 200)); } },
-      // Op 3: also queued, must NOT start
-      { kind: "queued2", method: "GET", run: () => { started.push(3); return Promise.resolve(classifiedOutcome("completed", 200)); } },
+      // Op 0: goes fatal immediately.
+      { kind: "fatal", method: "GET", run: async () => { started.push("fatal"); throw new Error("fatal harness error"); } },
+      // Op 1: active, BLOCKS on a deferred — must drain before burst rejects.
+      { kind: "active", method: "GET", run: () => { started.push("active"); return activeBlocker.promise.then(() => classifiedOutcome("completed", 200)); } },
+      // Op 2: queued, must NOT start.
+      { kind: "queued", method: "GET", run: async () => { started.push("queued"); return classifiedOutcome("completed", 200); } },
     ];
-    // We need op 0 to go fatal. Replace its run with a throw.
-    ops[0].run = async () => { started.push(0); throw new Error("fatal harness error"); };
-    // Concurrency 2: ops 0+1 start, 2+3 are queued.
     const burstPromise = runBurst(ops, { concurrency: 2, pacing: { mode: "none" } });
-    // Wait for the burst to settle (op 0 rejects, op 1 completes, scheduler
-    // stops scheduling 2+3).
-    let threw = false;
-    try { await burstPromise; } catch (e) { threw = true; expect(e.code).toBe("BURST_OPERATION_REJECTED"); }
-    expect(threw).toBe(true);
-    // Ops 2 and 3 must NOT have started.
-    expect(started).not.toContain(2);
-    expect(started).not.toContain(3);
-    // Ops 0 and 1 DID start.
-    expect(started).toContain(0);
-    expect(started).toContain(1);
+    // Suppress unhandled-rejection between creation and await — the fatal
+    // error may reject the promise before we reach the try/catch below.
+    const resultPromise = burstPromise.then(r => ({ ok: true, r }), e => ({ ok: false, e }));
+    // Let the scheduler start ops 0+1.
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    // Op 0 should have thrown fatal by now. Op 1 is blocked (active, not yet drained).
+    expect(started).toContain("fatal");
+    expect(started).toContain("active");
+    // The burst should NOT have settled yet (op 1 is still active/draining).
+    let settled = false;
+    resultPromise.then((r) => { settled = true; });
+    await Promise.resolve(); await Promise.resolve();
+    expect(settled).toBe(false); // burst is still waiting for op 1 to drain
+    // Op 2 must not have started.
+    expect(started).not.toContain("queued");
+    // Now release the active blocker — the burst should settle with fatal error.
+    activeBlocker.resolve();
+    const outcome = await resultPromise;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.e.code).toBe("BURST_OPERATION_REJECTED");
+    expect(started).not.toContain("queued"); // still not started
   });
 });
 
 // Fix 8b: Legacy-cohort fatal stop-and-drain.
+// Proves: cohort 2 doesn't start AND cohort 1's active blocker drains before
+// the fatal error is thrown.
 describe("fix 8b: legacy_batches fatal stop-and-drain", () => {
-  it("fatal rejection in cohort 1 prevents cohort 2 from starting", async () => {
+  it("fatal in cohort 1 prevents cohort 2; cohort 1's active blocker drains", async () => {
     const started = [];
+    const activeBlocker = deferred();
     const ops = [
       { kind: "c1-fatal", method: "GET", run: async () => { started.push("c1-fatal"); throw new Error("fatal"); } },
-      { kind: "c1-ok", method: "GET", run: async () => { started.push("c1-ok"); return classifiedOutcome("completed", 200); } },
+      { kind: "c1-block", method: "GET", run: () => { started.push("c1-block"); return activeBlocker.promise.then(() => classifiedOutcome("completed", 200)); } },
       { kind: "c2-1", method: "GET", run: async () => { started.push("c2-1"); return classifiedOutcome("completed", 200); } },
-      { kind: "c2-2", method: "GET", run: async () => { started.push("c2-2"); return classifiedOutcome("completed", 200); } },
     ];
-    let threw = false;
-    try {
-      await runBurst(ops, { concurrency: 2, pacing: { mode: "legacy_batches", delayMs: 10 } });
-    } catch (e) {
-      threw = true;
-      expect(e.code).toBe("BURST_OPERATION_REJECTED");
-    }
-    expect(threw).toBe(true);
-    // Cohort 1 ran; cohort 2 did not.
+    const burstPromise = runBurst(ops, { concurrency: 2, pacing: { mode: "legacy_batches", delayMs: 10 } });
+    // Suppress unhandled-rejection between creation and await.
+    const resultPromise = burstPromise.then(r => ({ ok: true, r }), e => ({ ok: false, e }));
+    // Cohort 1 started; op c1-block is still active.
+    await Promise.resolve(); await Promise.resolve();
     expect(started).toContain("c1-fatal");
-    expect(started).toContain("c1-ok");
+    expect(started).toContain("c1-block");
+    // Burst should be unsettled (c1-block not yet drained).
+    let settled = false;
+    resultPromise.then(() => { settled = true; });
+    await Promise.resolve(); await Promise.resolve();
+    expect(settled).toBe(false);
+    // Release the blocker — burst should throw.
+    activeBlocker.resolve();
+    const outcome = await resultPromise;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.e.code).toBe("BURST_OPERATION_REJECTED");
     expect(started).not.toContain("c2-1");
-    expect(started).not.toContain("c2-2");
   });
 });
 
 // Fix 8c: Invalid outcome through the scheduler (not just direct validateOutcome).
 describe("fix 8c: invalid outcome through scheduler becomes fatal", () => {
-  it("an operation returning an invalid outcome fails the burst, not hangs", async () => {
+  it("an operation returning an invalid outcome (transport=completed, status=null) fails the burst", async () => {
     const ops = [
       { kind: "bad", method: "GET", run: async () => ({ transport: "completed", status: null, body: { state: "parsed", value: null, error: null }, error: null }) },
-      { kind: "ok", method: "GET", run: async () => { await new Promise(r => setTimeout(r, 10)); return classifiedOutcome("completed", 200); } },
     ];
     let threw = false;
-    try { await runBurst(ops, { concurrency: 2, pacing: { mode: "none" } }); }
+    try { await runBurst(ops, { concurrency: 1, pacing: { mode: "none" } }); }
     catch (e) { threw = true; expect(e.code).toBe("BURST_OPERATION_REJECTED"); }
     expect(threw).toBe(true);
   });
@@ -595,8 +607,27 @@ describe("fix 7c: sanitization redacts secrets globally", () => {
     const err = new Error("Authorization: Bearer sk-ant-1234567890abcdef");
     const c = classifyTransportError(err);
     expect(c.message).not.toContain("sk-ant-1234567890abcdef");
-    // The secret must be redacted regardless of which pattern catches it.
     expect(c.message).toMatch(/<(bearer-token|auth-header)>/);
+  });
+  it("redacts uppercase AUTHORIZATION: BEARER", () => {
+    const err = new Error("AUTHORIZATION: BEARER sk-secret");
+    const c = classifyTransportError(err);
+    expect(c.message).not.toContain("sk-secret");
+  });
+  it("redacts HTTPS:// URLs case-insensitively", () => {
+    const err = new Error("fetch HTTPS://Host/Path failed");
+    const c = classifyTransportError(err);
+    expect(c.message).not.toContain("Host");
+  });
+  it("redacts ?API_KEY= case-insensitively", () => {
+    const err = new Error("request ?API_KEY=secret456 failed");
+    const c = classifyTransportError(err);
+    expect(c.message).not.toContain("secret456");
+  });
+  it("redacts bearer tokens with base64 chars (+/=)", () => {
+    const err = new Error("Bearer abc+def/ghi=jkl");
+    const c = classifyTransportError(err);
+    expect(c.message).not.toContain("abc+def/ghi=jkl");
   });
   it("redacts authorization header forms", () => {
     const err = new Error("authorization: Basic dXNlcjpwYXNz");
@@ -609,15 +640,89 @@ describe("fix 7c: sanitization redacts secrets globally", () => {
     expect(c.message).not.toContain("secret123");
   });
   it("fatal cause messages are sanitized", async () => {
-    // A policy error that includes a bearer token should not leak it into
-    // the BURST_OPERATION_REJECTED cause.
     const err = new Error("policy check failed for Bearer sk-ant-leaked");
     const ops = [{ kind: "x", method: "GET", run: async () => { throw err; } }];
     let caught;
     try { await runBurst(ops, { concurrency: 1, pacing: { mode: "none" } }); }
     catch (e) { caught = e; }
     expect(caught.code).toBe("BURST_OPERATION_REJECTED");
-    expect(caught.cause).not.toContain("sk-ant-leaked");
-    expect(caught.cause).toContain("<bearer-token>");
+    expect(caught.reason).not.toContain("sk-ant-leaked");
+    expect(caught.reason).toContain("<bearer-token>");
+  });
+});
+
+// Fix 5b: UND_ERR_REQUEST_TIMEOUT → timeout (not protocol)
+describe("fix 5b: UND_ERR_REQUEST_TIMEOUT classified as timeout", () => {
+  it("UND_ERR_REQUEST_TIMEOUT → timeout", () => {
+    const err = fetchError("UND_ERR_REQUEST_TIMEOUT");
+    expect(classifyTransportError(err).category).toBe("timeout");
+  });
+});
+
+// Fix 5c: ERR_TLS_* and HPE_* prefix-family classification
+describe("fix 5c: prefix-family classification", () => {
+  it("ERR_TLS_CERT_ALTNAME_INVALID → tls (exact code)", () => {
+    expect(classifyTransportError(fetchError("ERR_TLS_CERT_ALTNAME_INVALID")).category).toBe("tls");
+  });
+  it("ERR_TLS_UNKNOWN_VARIANT → tls (prefix family)", () => {
+    expect(classifyTransportError(fetchError("ERR_TLS_UNKNOWN_VARIANT")).category).toBe("tls");
+  });
+  it("ERR_SSL_HANDSHAKE_FAILED → tls (prefix family)", () => {
+    expect(classifyTransportError(fetchError("ERR_SSL_HANDSHAKE_FAILED")).category).toBe("tls");
+  });
+  it("HPE_INVALID_PROTOCOL → protocol (prefix family)", () => {
+    expect(classifyTransportError(fetchError("HPE_INVALID_PROTOCOL")).category).toBe("protocol");
+  });
+  it("HPE_UNKNOWN_PARSER_ERROR → protocol (prefix family)", () => {
+    expect(classifyTransportError(fetchError("HPE_UNKNOWN_PARSER_ERROR")).category).toBe("protocol");
+  });
+});
+
+// Fix 2: retry-wrapper transport classification.
+// Proves that a fetch failure inside a retry loop is classified as
+// transportFailed (not BURST_OPERATION_REJECTED) when the retry loop
+// is inside httpOperation.execute. Tests the pattern used by
+// resilientGetBurstOperation without importing helpers.js.
+describe("fix 2: retry-wrapper classifies transport failures", () => {
+  it("TypeError(cause: ECONNREFUSED) inside retry execute → transportFailed, not BURST_OPERATION_REJECTED", async () => {
+    let attempts = 0;
+    const outcome = await httpOperation({
+      method: "GET",
+      bodyMode: "none",
+      execute: async () => {
+        attempts++;
+        throw fetchError("ECONNREFUSED");
+      },
+    });
+    expect(outcome.transport).toBe("failed");
+    expect(outcome.error.category).toBe("connection_refused");
+    expect(attempts).toBe(1); // no retry logic here, just proving the boundary
+  });
+
+  it("429 then success: final response alone is classified (retry loop inside execute)", async () => {
+    let attempt = 0;
+    const outcome = await httpOperation({
+      method: "GET",
+      bodyMode: "auto",
+      execute: async () => {
+        // This is the retry loop pattern used by resilientGetBurstOperation.
+        // It loops INSIDE execute, draining 429 bodies, and returns only
+        // the final non-429 response to httpOperation for classification.
+        for (let i = 0; i < 3; i++) {
+          attempt++;
+          if (attempt < 2) {
+            // Simulate a 429 — drain the body before retrying.
+            const r429 = { status: 429, text: async () => "rate limited", headers: { get: () => "1" } };
+            await r429.text(); // drain
+            continue;
+          }
+          return fakeResponse(200, '{"ok":true}', "application/json");
+        }
+      },
+    });
+    expect(outcome.transport).toBe("completed");
+    expect(outcome.status).toBe(200);
+    expect(outcome.body.state).toBe("parsed");
+    expect(attempt).toBe(2); // first attempt was 429, second was 200
   });
 });

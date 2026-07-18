@@ -38,23 +38,41 @@ const CODE_TO_CATEGORY = {
   UND_ERR_CONNECT_TIMEOUT: "timeout",
   UND_ERR_HEADERS_TIMEOUT: "timeout",
   UND_ERR_BODY_TIMEOUT: "timeout",
-  // TLS errors
+  UND_ERR_REQUEST_TIMEOUT: "timeout",
+  // TLS errors (specific codes + family prefix matching below)
   CERT_HAS_EXPIRED: "tls",
   CERT_NOT_YET_VALID: "tls",
   UNABLE_TO_VERIFY_LEAF_SIGNATURE: "tls",
-  ERR_TLS_CERT_ALTNAME_INVALID: "tls",
   DEPTH_ZERO_SELF_SIGNED_CERT: "tls",
-  ERR_TLS_INVALID_PROTOCOL_METHOD: "tls",
-  ERR_SSL_INTERNAL_ERROR: "tls",
-  // Protocol / HTTP parser errors
-  HPE_INVALID_CONSTANT: "protocol",
-  HPE_INVALID_VERSION: "protocol",
-  HPE_INVALID_STATUS: "protocol",
-  HPE_INVALID_HEADER_TOKEN: "protocol",
-  HPE_INVALID_CONTENT_LENGTH: "protocol",
+  // Protocol / HTTP parser errors (specific codes + family prefix below)
   UND_ERR_INVALID_REDIRECT: "protocol",
-  UND_ERR_REQUEST_TIMEOUT: "protocol",
 };
+
+/**
+ * Code prefixes that map to a category. Any error code starting with one of
+ * these prefixes is classified accordingly. This covers the full ERR_TLS_*,
+ * ERR_SSL_*, and HPE_* families without enumerating every variant.
+ */
+const CODE_PREFIX_TO_CATEGORY = [
+  { prefix: "ERR_TLS_", category: "tls" },
+  { prefix: "ERR_SSL_", category: "tls" },
+  { prefix: "HPE_", category: "protocol" },
+];
+
+/**
+ * Classify an error code to a category using exact match first, then prefix
+ * families. Returns null if unrecognized.
+ * @param {string} code
+ * @returns {string | null}
+ */
+function codeToCategory(code) {
+  if (!code) return null;
+  if (CODE_TO_CATEGORY[code]) return CODE_TO_CATEGORY[code];
+  for (const { prefix, category } of CODE_PREFIX_TO_CATEGORY) {
+    if (code.startsWith(prefix)) return category;
+  }
+  return null;
+}
 
 /**
  * Classify a transport error into the frozen taxonomy. Inspects:
@@ -83,7 +101,7 @@ export function classifyTransportError(err) {
   let cursor = err;
   while (cursor && hop < 5) {
     const c = cursor.code || (cursor.cause && cursor.cause.code);
-    if (c && CODE_TO_CATEGORY[c]) { foundCode = c; break; }
+    if (c && codeToCategory(c)) { foundCode = c; break; }
     // Name-based abort detection (may appear on cause, not top-level).
     if (cursor.name === "AbortError") { foundName = "AbortError"; break; }
     // Code-based abort detection (ABORT_ERR may appear on cause).
@@ -99,30 +117,34 @@ export function classifyTransportError(err) {
     return { category: "abort", name, code, message: sanitizeMessage(err.message) };
   }
 
-  const category = (foundCode && CODE_TO_CATEGORY[foundCode]) || "other";
+  const category = codeToCategory(foundCode) || "other";
   return { category, name, code: foundCode || code, message: sanitizeMessage(err.message) };
 }
 
 /**
  * Strip credentials, URLs, tokens, and authorization headers from an error
  * message. Applied globally — to transport errors, body errors, AND fatal
- * operation-rejection causes. Redacts:
- *   - URLs with credentials (http(s)://user:pass@host)
- *   - Bearer tokens (Authorization: Bearer ...)
+ * operation-rejection causes. All patterns are CASE-INSENSITIVE.
+ *
+ * Redacts:
+ *   - URLs (http(s)://...) with or without credentials
+ *   - Authorization header values (Authorization: Bearer ..., Basic ..., etc.)
+ *   - Bearer tokens (bearer <value>) including base64 chars (+, /, =)
  *   - Token-like query parameters (?token=..., &api_key=..., etc.)
- *   - Long base64/hex blobs that might be tokens
+ *   - Long strings that might contain tokens or payloads
  */
 function sanitizeMessage(msg) {
   if (typeof msg !== "string") return "transport error";
   let s = msg;
-  // Remove URLs with credentials or paths.
-  s = s.replace(/https?:\/\/[^\s"']+/g, "<url>");
-  // Remove Authorization header values (Bearer <token>, Basic <base64>, etc.).
-  s = s.replace(/[Aa]uthorization:\s*\S+\s+\S+/g, "<auth-header>");
-  s = s.replace(/[Bb]earer\s+[A-Za-z0-9._-]+/g, "<bearer-token>");
-  // Remove token-like query parameters.
-  s = s.replace(/[?&](token|api_key|apikey|access_token|secret|password)=[^&\s"']+/g, "<redacted-param>");
-  // Truncate long strings that might contain tokens or payloads.
+  // Case-insensitive URL removal.
+  s = s.replace(/https?:\/\/[^\s"']+/gi, "<url>");
+  // Case-insensitive Authorization header (scheme + value).
+  s = s.replace(/authorization:\s*\S+\s+\S+/gi, "<auth-header>");
+  // Case-insensitive Bearer token (covers base64 chars +, /, =).
+  s = s.replace(/bearer\s+[A-Za-z0-9._+/=-]+/gi, "<bearer-token>");
+  // Case-insensitive token-like query parameters.
+  s = s.replace(/[?&](token|api_key|apikey|access_token|secret|password)=[^&\s"']+/gi, "<redacted-param>");
+  // Truncate long strings.
   if (s.length > 200) s = s.slice(0, 200) + "...";
   return s;
 }
@@ -400,6 +422,24 @@ export async function runBurst(operations, opts) {
   let fatalRejection = null;
 
   /**
+   * Construct a fatal-error object with safe attribution. Uses a factory
+   * rather than Object.assign(new Error(), ...) to avoid potential
+   * --experimental-vm-modules issues with property assignment on Error
+   * instances inside the VM sandbox.
+   * @param {Object} desc the operation descriptor
+   * @param {string} what "rejected" or "produced invalid outcome"
+   * @param {string} reason sanitized reason message
+   * @returns {Object} a throwable with code/operation/reason
+   */
+  function makeFatalError(desc, what, reason) {
+    const e = new Error(`operation ${desc.id} ${what}`);
+    e.code = BURST_OPERATION_REJECTED;
+    e.operation = { id: desc.id, kind: desc.kind, method: desc.method };
+    e.reason = reason;
+    return e;
+  }
+
+  /**
    * Execute one descriptor, timing it and validating the outcome. This
    * function is NON-REJECTING — it never throws to the scheduler. Both
    * escaped operation rejections AND invalid outcomes (validateOutcome
@@ -417,11 +457,8 @@ export async function runBurst(operations, opts) {
       // Escaped rejection — harness/policy/programming defect. Fatal.
       // Preserve the FIRST fatal error (subsequent ones don't overwrite).
       if (!fatalRejection) {
-        fatalRejection = Object.assign(new Error(`operation ${desc.id} rejected`), {
-          code: BURST_OPERATION_REJECTED,
-          operation: { id: desc.id, kind: desc.kind, method: desc.method },
-          cause: sanitizeMessage(err && err.message ? err.message : String(err)),
-        });
+        fatalRejection = makeFatalError(desc, "rejected",
+          sanitizeMessage(err && err.message ? err.message : String(err)));
       }
       return;
     }
@@ -432,11 +469,8 @@ export async function runBurst(operations, opts) {
       validateOutcome(classified);
     } catch (err) {
       if (!fatalRejection) {
-        fatalRejection = Object.assign(new Error(`operation ${desc.id} produced invalid outcome`), {
-          code: BURST_OPERATION_REJECTED,
-          operation: { id: desc.id, kind: desc.kind, method: desc.method },
-          cause: sanitizeMessage(err && err.message ? err.message : String(err)),
-        });
+        fatalRejection = makeFatalError(desc, "produced invalid outcome",
+          sanitizeMessage(err && err.message ? err.message : String(err)));
       }
       return;
     }
@@ -489,6 +523,17 @@ export async function runBurst(operations, opts) {
             if (nextIndex < descriptors.length) {
               scheduleNext();
             } else if (active.size === 0) {
+              resolve();
+            }
+          }).catch(() => {
+            // executeOne is non-rejecting by contract. If it rejects due to
+            // a VM sandbox issue or unexpected runtime error, ensure the
+            // descriptor is removed from active so the scheduler doesn't hang.
+            active.delete(desc.id);
+            if (!fatalRejection) {
+              fatalRejection = makeFatalError(desc, "unexpected scheduler rejection", "executeOne rejected unexpectedly");
+            }
+            if (fatalRejection && active.size === 0) {
               resolve();
             }
           });

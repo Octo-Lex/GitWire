@@ -54,7 +54,7 @@ describe(`API Flood: ${CONCURRENT} concurrent × ${ROUNDS} rounds`, () => {
     // BURST_OPERATION_REJECTED). The policy still resolves the URL and
     // attaches the API key, which /health ignores.
     const tasks = Array.from({ length: CONCURRENT }, () =>
-      apiBurstOperation('/health', { kind: 'health', method: 'GET', bodyMode: 'none' })
+      apiBurstOperation('/health', { kind: 'health', method: 'GET', bodyMode: 'none', omitAuth: true })
     );
     const result = await boundedBurst(tasks);
     console.log(`  Health: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
