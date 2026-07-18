@@ -1,12 +1,9 @@
 // tests/stress/db-concurrency.test.js
 // Stress Test: Database concurrency — verify no deadlocks or constraint
 // violations under concurrent fixture-targeted writes + reads.
-//
-// CRUD-creation routes (enforcement/policies, phase2/feedback) are removed:
-// they create new resources without a fixture identity and don't fit the
-// fail-closed fixture contract.
-import { apiBurstOperation, FIXTURE_REPO } from '../helpers.js';
-import { boundedBurst } from './stress-helpers.js';
+import { apiContractedOperation, STATUS_SETS } from './response-contracts.js';
+import { runContractedBurst } from './burst-runner.js';
+import { FIXTURE_REPO } from '../helpers.js';
 
 const CONCURRENT = 8;
 
@@ -19,39 +16,52 @@ describe('DB Concurrency: parallel fixture writes + reads', () => {
       const tasks = [];
       for (let i = 0; i < CONCURRENT; i++) {
         if (i % 2 === 0) {
-          tasks.push(apiBurstOperation(
+          tasks.push(apiContractedOperation(
             `/api/phase2/queue/${REPO}/config`,
             {
               kind: 'write', method: 'POST',
               body: { enabled: true, merge_method: 'squash', max_queue_depth: 10 + i, check_timeout_mins: 30 },
               contractName: 'phase2-queue-config',
+              expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED,
             }
           ));
         } else {
-          tasks.push(apiBurstOperation(`/api/phase2/queue/${REPO}`, { kind: 'read' }));
+          tasks.push(apiContractedOperation(
+            `/api/phase2/queue/${REPO}`,
+            {
+              kind: 'read', method: 'GET',
+              expectedStatuses: STATUS_SETS.READ_OK_OR_NOT_FOUND_OR_RATE_LIMITED,
+            }
+          ));
         }
       }
-      const result = await boundedBurst(tasks, { maxConcurrent: 4, delayBetweenBatches: 500 });
-      console.log(`  Queue R/W: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
-      const okOr404 = result.results.filter(r => r.status === 200 || r.status === 404 || r.status === 429).length;
-      expect(okOr404).toBe(result.attempted);
+      const result = await runContractedBurst(tasks, {
+        concurrency: 4, pacing: { mode: 'legacy_batches', delayMs: 500 },
+      });
+      console.log(`  Queue R/W: ${result.httpExpected}/${result.attempted} expected in ${result.elapsedMs}ms`);
+      expect(result.httpNotReceived).toBe(0);
+      expect(result.httpExpected).toBe(result.attempted);
     });
   });
 
   describe('Maintainer settings concurrent updates', () => {
     test('Update same fixture repo settings concurrently (no deadlocks)', async () => {
       const REPO = FIXTURE_REPO;
-      const tasks = Array.from({ length: CONCURRENT }, (_, i) => apiBurstOperation(
+      const tasks = Array.from({ length: CONCURRENT }, (_, i) => apiContractedOperation(
         `/api/maintainer/${REPO}/settings`,
         {
           kind: 'write', method: 'PATCH',
           body: { stale_issue_days: 30 + i, stale_pr_days: 14 + i },
           contractName: 'maintainer-settings',
+          expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED,
         }
       ));
-      const result = await boundedBurst(tasks, { maxConcurrent: 4, delayBetweenBatches: 500 });
-      console.log(`  Settings: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
-      expect(result.transportCompleted).toBe(result.attempted);
+      const result = await runContractedBurst(tasks, {
+        concurrency: 4, pacing: { mode: 'legacy_batches', delayMs: 500 },
+      });
+      console.log(`  Settings: ${result.httpExpected}/${result.attempted} expected in ${result.elapsedMs}ms`);
+      expect(result.httpExpected).toBe(result.attempted);
+      expect(result.httpUnexpected).toBe(0);
     });
   });
 });

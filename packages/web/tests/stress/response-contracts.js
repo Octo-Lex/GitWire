@@ -22,6 +22,7 @@ import { apiBurstOperation } from "../helpers.js";
 export const STATUS_SETS = Object.freeze({
   READ_OK: Object.freeze([200]),
   READ_OK_OR_RATE_LIMITED: Object.freeze([200, 429]),
+  READ_OK_OR_NOT_FOUND_OR_RATE_LIMITED: Object.freeze([200, 404, 429]),
   MUTATION_ACCEPTED: Object.freeze([200, 201, 202]),
   MUTATION_TRIGGER: Object.freeze([200, 201, 202, 204]),
   MUTATION_ACCEPTED_OR_NOT_FOUND: Object.freeze([200, 201, 202, 404]),

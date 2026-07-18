@@ -1,12 +1,8 @@
 // tests/stress/mutation-phase4.test.js
 // Stress Test: Phase 4 mutation routes — AI review config.
-//
-// Audit report/export routes (POST /api/audit/*) are removed: they generate
-// reports without targeting a fixture identity and don't fit the fail-closed
-// fixture contract. Review-trigger on a guessed PR number is also removed
-// (the PR is not a fixture-owned record). Belongs in a later PR.
-import { apiBurstOperation, post, FIXTURE_REPO } from '../helpers.js';
-import { boundedBurst } from './stress-helpers.js';
+import { apiContractedOperation, STATUS_SETS } from './response-contracts.js';
+import { runContractedBurst } from './burst-runner.js';
+import { post, FIXTURE_REPO } from '../helpers.js';
 
 const REPO = FIXTURE_REPO;
 
@@ -22,16 +18,19 @@ describe('Stress: Phase 4 Mutations', () => {
   });
 
   test('POST /review/config/:owner/:repo — concurrent config updates', async () => {
-    const tasks = Array.from({ length: 5 }, (_, i) => apiBurstOperation(
+    const tasks = Array.from({ length: 5 }, (_, i) => apiContractedOperation(
       `/api/review/config/${REPO}`,
       {
         kind: 'write', method: 'POST',
         body: { enabled: true, review_mode: i % 2 === 0 ? 'comment' : 'check_run', max_files: 10 + i * 5, repo_filter: null },
         contractName: 'review-config',
+        expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED,
       }
     ));
-    const result = await boundedBurst(tasks, { maxConcurrent: 5, delayBetweenBatches: 1000 });
-    const ok = result.results.filter(r => [200, 201, 202].includes(r.status)).length;
-    expect(ok).toBe(5);
+    const result = await runContractedBurst(tasks, {
+      concurrency: 5, pacing: { mode: 'legacy_batches', delayMs: 1000 },
+    });
+    expect(result.httpExpected).toBe(result.attempted);
+    expect(result.httpUnexpected).toBe(0);
   });
 });
