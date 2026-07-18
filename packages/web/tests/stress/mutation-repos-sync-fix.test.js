@@ -55,7 +55,7 @@ describe('Stress: Repo Sync + Fix Mutations', () => {
       {
         kind: 'write', method: 'POST', body: {},
         contractName: 'fix-attempt',
-        expectedStatuses: STATUS_SETS.FIX_ATTEMPT_LEGACY_OUTCOMES,
+        expectedStatuses: STATUS_SETS.FIX_ATTEMPT_LEGACY_CONCURRENT,
       }
     ));
     const result = await runContractedBurst(tasks, {

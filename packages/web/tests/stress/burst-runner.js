@@ -774,7 +774,7 @@ function validateCallbackReturn(ret, desc) {
     throw makeFatalError(desc, "assertion callback returned unknown passed value",
       `got ${String(ret.passed)}`);
   }
-  if (ret.passed === true && (ret.code || ret.message)) {
+  if (ret.passed === true && ("code" in ret || "message" in ret)) {
     throw makeFatalError(desc, "assertion callback returned passed:true with error data",
       "passed:true must not carry code or message");
   }

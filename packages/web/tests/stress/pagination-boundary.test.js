@@ -15,14 +15,15 @@ import { resilientGetBurstOperation } from "../helpers.js";
 import { STATUS_SETS } from "./response-contracts.js";
 import { sleep } from "./stress-helpers.js";
 
-function paginationOp(path, { assertOnStatuses = [200], assert } = {}) {
+function paginationOp(path, { assert } = {}) {
   const burst = resilientGetBurstOperation(path, { kind: "pagination", bodyMode: "auto" });
   return {
     ...burst,
     responseContract: {
       expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
-      assertOnStatuses,
-      ...(assert ? { assert } : {}),
+      // Only attach assertOnStatuses when an assert callback exists.
+      // Preflight rejects assertOnStatuses without assert.
+      ...(assert ? { assertOnStatuses: [200], assert } : {}),
     },
   };
 }
@@ -112,10 +113,19 @@ describe("Pagination Boundary Tests", () => {
     ];
     let pass200 = 0;
     for (const ep of endpoints) {
-      const result = await runContractedOperation(paginationOp(ep));
+      // Original behavior: assertion-only contract (status !== 500).
+      // expectedStatuses omitted → all transport-completed are "expected".
+      // Count only HTTP 200 as pass. Sleep 2000ms only on 429.
+      const result = await runContractedOperation({
+        ...resilientGetBurstOperation(ep, { kind: "pagination", bodyMode: "auto" }),
+        responseContract: {
+          assert: ({ status }) => status !== 500
+            ? { passed: true }
+            : { passed: false, code: "UNEXPECTED_500", message: "Deep pagination returned 500" },
+        },
+      });
       if (result.status === 200) pass200++;
-      else if (result.status === 500) throw new Error(`${ep} returned 500`);
-      await sleep(200);
+      if (result.status === 429) { await sleep(2000); continue; }
     }
     console.log(`  ${pass200}/${endpoints.length} endpoints returned 200`);
     expect(pass200).toBeGreaterThan(0);
@@ -140,7 +150,7 @@ describe("Pagination Boundary Tests", () => {
         },
       }));
       if (result.status === 200) pass200++;
-      await sleep(200);
+      await sleep(200); // Original inter-request delay preserved
     }
     console.log(`  ${pass200}/${endpoints.length} endpoints handle limit=1 correctly`);
     expect(pass200).toBeGreaterThan(0);

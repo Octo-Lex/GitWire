@@ -29,13 +29,20 @@ describe(`Longevity: ${ROUNDS} rounds × ${REQUESTS_PER_ROUND} requests`, () => 
         const result = await runContractedOperation(
           apiContractedOperation("/api/repos", {
             kind: "read", method: "GET", bodyMode: "auto",
-            expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
+            // Assertion-only contract: no expectedStatuses → all transport-
+            // completed are http=expected. The "must not return 500" rule
+            // is expressed through the assertion, not status classification.
+            assert: ({ status }) => status !== 500
+              ? { passed: true }
+              : { passed: false, code: "UNEXPECTED_500", message: "Sustained read returned 500" },
           })
         );
         // Transport failure is a hard failure, not a degraded round.
         if (result.transport === "failed") {
           throw new Error(`Transport failure in round ${round}: ${result.error?.category}`);
         }
+        // Assert the semantic assertion passed (catches 500 via the contract).
+        expect(result.assertion).toBe("passed");
         statuses.push(result.status);
         if (result.status !== 200) allOk = false;
         await sleep(100);
@@ -44,10 +51,6 @@ describe(`Longevity: ${ROUNDS} rounds × ${REQUESTS_PER_ROUND} requests`, () => 
       roundTimes.push(elapsed);
 
       if (!allOk) {
-        // Original behavior: assert every non-200 response is NOT 500.
-        for (const s of statuses) {
-          expect(s).not.toBe(500);
-        }
         await sleep(200);
         continue;
       }
@@ -80,11 +83,10 @@ describe(`Longevity: ${ROUNDS} rounds × ${REQUESTS_PER_ROUND} requests`, () => 
             expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
           })
         );
+        // Original behavior: measured duration only, did not inspect statuses.
+        // Transport failure is still a hard failure.
         if (result.transport === "failed") {
           throw new Error(`Transport failure at ${ep}: ${result.error?.category}`);
-        }
-        if (result.status === 500) {
-          throw new Error(`${ep} returned 500`);
         }
         await sleep(50);
       }

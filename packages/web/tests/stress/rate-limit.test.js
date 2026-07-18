@@ -13,9 +13,28 @@ import { STATUS_SETS } from "./response-contracts.js";
 
 const BURST = 120;
 
-function rateLimitOp() {
+// Status-only operation for the 120-request burst (no body reading).
+function rateLimitStatusOp() {
   return {
     kind: "rate-limit-probe",
+    method: "GET",
+    run: () => httpOperation({
+      method: "GET",
+      bodyMode: "none",
+      execute: () => fetch(`${BASE_URL}/api/repos`, {
+        headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+      }),
+    }),
+    responseContract: {
+      expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
+    },
+  };
+}
+
+// Body-asserting operation for the single-request body test.
+function rateLimitBodyOp() {
+  return {
+    kind: "rate-limit-body",
     method: "GET",
     run: () => httpOperation({
       method: "GET",
@@ -41,7 +60,7 @@ function rateLimitOp() {
 
 describe("Rate Limiting", () => {
   it(`Burst ${BURST} requests — should see 200 or 429`, async () => {
-    const ops = Array.from({ length: BURST }, () => rateLimitOp());
+    const ops = Array.from({ length: BURST }, () => rateLimitStatusOp());
     // Restore original cohort pacing: batches of 10, no delay between.
     const result = await runContractedBurst(ops, {
       concurrency: 10,
@@ -56,7 +75,7 @@ describe("Rate Limiting", () => {
   });
 
   it("Rate-limited request includes proper error body", async () => {
-    const result = await runContractedBurst([rateLimitOp()], {
+    const result = await runContractedBurst([rateLimitBodyOp()], {
       concurrency: 1, pacing: { mode: "none" },
     });
     // Either 200 (not rate limited) or 429 (rate limited with body check)

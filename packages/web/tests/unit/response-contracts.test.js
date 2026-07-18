@@ -278,3 +278,197 @@ describe("gate RC-8: factual fields remain unchanged", () => {
     expect(r.latency.population).toBe("transport_completed");
   });
 });
+
+// ─── Round-2 expanded engine tests ────────────────────────────────────────
+
+// Fix 5a: Preflight rejects invalid assertOnStatuses
+describe("gate RC-9: assertOnStatuses validation", () => {
+  it("string in assertOnStatuses → INVALID_RESPONSE_CONTRACT", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assertOnStatuses: ["429"], assert: () => ({ passed: true }) },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE_CONTRACT" });
+  });
+
+  it("negative status in assertOnStatuses → INVALID_RESPONSE_CONTRACT", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assertOnStatuses: [-1], assert: () => ({ passed: true }) },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE_CONTRACT" });
+  });
+
+  it("duplicate status in assertOnStatuses → INVALID_RESPONSE_CONTRACT", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assertOnStatuses: [200, 200], assert: () => ({ passed: true }) },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE_CONTRACT" });
+  });
+
+  it("assertOnStatuses without assert → INVALID_RESPONSE_CONTRACT", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assertOnStatuses: [200] },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE_CONTRACT" });
+  });
+});
+
+// Fix 5b: null/primitive descriptor validation
+describe("gate RC-10: descriptor validation", () => {
+  it("null descriptor → INVALID_RESPONSE_CONTRACT", async () => {
+    await expect(runContractedBurst([null], { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE_CONTRACT" });
+  });
+
+  it("primitive descriptor → INVALID_RESPONSE_CONTRACT", async () => {
+    await expect(runContractedBurst([42], { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE_CONTRACT" });
+  });
+
+  it("descriptor without run function → INVALID_RESPONSE_CONTRACT", async () => {
+    const ops = [{ kind: "r", method: "GET", responseContract: { expectedStatuses: [200] } }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE_CONTRACT" });
+  });
+});
+
+// Fix 5c: Preflight zero-traffic sentinel
+describe("gate RC-11: preflight stops before traffic", () => {
+  it("malformed contract prevents run() from being called", async () => {
+    let runCalled = false;
+    const ops = [
+      // First op has a malformed contract (empty expectedStatuses).
+      { kind: "bad", method: "GET", run: async () => { runCalled = true; return outcome("completed", 200); },
+        responseContract: { expectedStatuses: [] } },
+      // Second op would run if preflight didn't stop.
+      { kind: "ok", method: "GET", run: async () => { runCalled = true; return outcome("completed", 200); },
+        responseContract: { expectedStatuses: [200] } },
+    ];
+    await expect(runContractedBurst(ops, { concurrency: 2, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE_CONTRACT" });
+    expect(runCalled).toBe(false); // No operation started
+  });
+});
+
+// Fix 5d: Callback return validation expanded
+describe("gate RC-12: expanded callback validation", () => {
+  it("promise return → BURST_OPERATION_REJECTED", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => Promise.resolve({ passed: true }) },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "BURST_OPERATION_REJECTED" });
+  });
+
+  it("undefined return → BURST_OPERATION_REJECTED", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => undefined },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "BURST_OPERATION_REJECTED" });
+  });
+
+  it("passed:true with empty-string code → BURST_OPERATION_REJECTED (property presence)", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => ({ passed: true, code: "" }) },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "BURST_OPERATION_REJECTED" });
+  });
+
+  it("passed:true with empty-string message → BURST_OPERATION_REJECTED (property presence)", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => ({ passed: true, message: "" }) },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "BURST_OPERATION_REJECTED" });
+  });
+
+  it("passed:false with lowercase code → BURST_OPERATION_REJECTED (format)", async () => {
+    const ops = [{
+      kind: "r", method: "GET", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => ({ passed: false, code: "lowercase_code", message: "x" }) },
+    }];
+    await expect(runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }))
+      .rejects.toMatchObject({ code: "BURST_OPERATION_REJECTED" });
+  });
+
+  it("fatal error carries full {id, kind, method} attribution", async () => {
+    const ops = [{
+      kind: "my-op", method: "POST", run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200], assert: () => { throw new Error("boom"); } },
+    }];
+    let caught;
+    try { await runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } }); }
+    catch (e) { caught = e; }
+    expect(caught.code).toBe("BURST_OPERATION_REJECTED");
+    expect(caught.operation.id).toBe(0);
+    expect(caught.operation.kind).toBe("my-op");
+    expect(caught.operation.method).toBe("POST");
+    expect(caught.reason).toContain("boom");
+  });
+});
+
+// Fix 5e: httpNotReceived === transportFailed
+describe("gate RC-13: transport failure counts", () => {
+  it("httpNotReceived equals transportFailed", async () => {
+    const ops = [
+      { kind: "ok", method: "GET", run: async () => outcome("completed", 200),
+        responseContract: { expectedStatuses: [200] } },
+      { kind: "fail", method: "GET", run: async () => outcome("failed"),
+        responseContract: { expectedStatuses: [200] } },
+    ];
+    const r = await runContractedBurst(ops, { concurrency: 2, pacing: { mode: "none" } });
+    expect(r.httpNotReceived).toBe(r.transportFailed);
+  });
+});
+
+// Fix 5f: Assertion not-run reason reconciliation
+describe("gate RC-14: assertion not-run reasons", () => {
+  it("reasons reconcile with counts", async () => {
+    const ops = [
+      // transport_failed → not_run, transport_failed
+      { kind: "fail", method: "GET", run: async () => outcome("failed"),
+        responseContract: { expectedStatuses: [200], assert: () => ({ passed: true }) } },
+      // no assert → not_run, not_declared
+      { kind: "no-assert", method: "GET", run: async () => outcome("completed", 200),
+        responseContract: { expectedStatuses: [200] } },
+      // status excluded → not_run, status_not_applicable
+      { kind: "excluded", method: "GET", run: async () => outcome("completed", 429),
+        responseContract: { expectedStatuses: [200, 429], assertOnStatuses: [200], assert: () => ({ passed: true }) } },
+    ];
+    const r = await runContractedBurst(ops, { concurrency: 3, pacing: { mode: "none" } });
+    const reasons = r.results.map(x => x.assertionNotRunReason).filter(Boolean);
+    expect(reasons).toContain("transport_failed");
+    expect(reasons).toContain("not_declared");
+    expect(reasons).toContain("status_not_applicable");
+    // All three are not_run
+    expect(r.assertionNotRun).toBe(3);
+  });
+});
+
+// Fix 5g: Network-free pagination descriptor (no assert, no assertOnStatuses)
+describe("gate RC-15: pagination status-only descriptor", () => {
+  it("descriptor with expectedStatuses but no assert does not fail preflight", async () => {
+    const ops = [{
+      kind: "pagination", method: "GET",
+      run: async () => outcome("completed", 200),
+      responseContract: { expectedStatuses: [200, 429] },
+    }];
+    const r = await runContractedBurst(ops, { concurrency: 1, pacing: { mode: "none" } });
+    expect(r.httpExpected).toBe(1);
+    expect(r.results[0].assertion).toBe("not_run");
+    expect(r.results[0].assertionNotRunReason).toBe("not_declared");
+  });
+});

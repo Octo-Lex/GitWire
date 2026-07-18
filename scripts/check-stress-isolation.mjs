@@ -32,6 +32,8 @@ const RAW_MUTATING_FETCH = /fetch\s*\(\s*[^)]*?method:\s*["'](?:POST|PUT|PATCH|D
 const LEGACY_PATTERNS = [
   { regex: /apiBurstOperation\s*\(/, msg: "use apiContractedOperation instead of apiBurstOperation" },
   { regex: /boundedBurst\s*\(/, msg: "use runContractedBurst instead of boundedBurst" },
+  { regex: /\bawait\s+(get|post|put|patch|del)\s*\(/, msg: "legacy helper used for semantic check — use runContractedOperation instead" },
+  { regex: /\b\[200,\s*(201|429|404|400)/, msg: "inline status array — use STATUS_SETS constant instead" },
 ];
 
 let violations = 0;
