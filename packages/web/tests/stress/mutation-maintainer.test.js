@@ -1,60 +1,75 @@
 // tests/stress/mutation-maintainer.test.js
-// Stress Test: Maintainer mutation routes — settings, stale-scan, branch-cleanup, member sync.
-import { apiBurstOperation, post, patch, FIXTURE_REPO } from '../helpers.js';
-import { sleep, resilientGet, boundedBurst } from './stress-helpers.js';
+// Stress Test: Maintainer mutation routes — settings, stale-scan, branch-cleanup.
+import { apiContractedOperation, STATUS_SETS } from './response-contracts.js';
+import { runContractedBurst, runContractedOperation } from './burst-runner.js';
+import { resilientGetBurstOperation, FIXTURE_REPO } from '../helpers.js';
+import { sleep } from './stress-helpers.js';
 
 const REPO = FIXTURE_REPO;
-// Org is the owner segment of the fixture repo (owner/repo).
 const ORG = REPO.split('/')[0];
 
 describe('Stress: Maintainer Mutations', () => {
 
   test('PATCH /maintainer/:owner/:repo/settings — concurrent settings updates', async () => {
-    const tasks = Array.from({ length: 5 }, (_, i) => apiBurstOperation(
+    const tasks = Array.from({ length: 5 }, (_, i) => apiContractedOperation(
       `/api/maintainer/${REPO}/settings`,
       {
         kind: 'write', method: 'PATCH',
         body: { stale_issue_days: 30 + i * 10, stale_pr_days: 60 + i * 10, stale_label: 'stale', enable_auto_close: false },
         contractName: 'maintainer-settings',
+        expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED,
       }
     ));
-    const result = await boundedBurst(tasks, { maxConcurrent: 5, delayBetweenBatches: 1000 });
-    const ok = result.results.filter(r => [200, 201, 202].includes(r.status)).length;
-    expect(ok).toBe(5);
+    const result = await runContractedBurst(tasks, {
+      concurrency: 5, pacing: { mode: 'legacy_batches', delayMs: 1000 },
+    });
+    expect(result.httpExpected).toBe(result.attempted);
+    expect(result.httpUnexpected).toBe(0);
   });
 
   test('POST /maintainer/:owner/:repo/stale-scan — trigger stale scan', async () => {
-    const res = await post(`/api/maintainer/${REPO}/stale-scan`, {}, { contractName: 'maintainer-stale-scan' });
-    expect([200, 201, 202, 204]).toContain(res.status);
+    const result = await runContractedOperation(
+      apiContractedOperation(`/api/maintainer/${REPO}/stale-scan`, {
+        kind: 'write', method: 'POST', body: {},
+        contractName: 'maintainer-stale-scan',
+        expectedStatuses: STATUS_SETS.MUTATION_TRIGGER,
+      })
+    );
+    expect(result.http).toBe('expected');
   });
 
   test('POST /maintainer/:owner/:repo/branch-cleanup — trigger branch cleanup', async () => {
-    const res = await post(`/api/maintainer/${REPO}/branch-cleanup`, {}, { contractName: 'maintainer-branch-cleanup' });
-    expect([200, 201, 202, 204]).toContain(res.status);
+    const result = await runContractedOperation(
+      apiContractedOperation(`/api/maintainer/${REPO}/branch-cleanup`, {
+        kind: 'write', method: 'POST', body: {},
+        contractName: 'maintainer-branch-cleanup',
+        expectedStatuses: STATUS_SETS.MUTATION_TRIGGER,
+      })
+    );
+    expect(result.http).toBe('expected');
   });
 
-  // SKIPPED: members/sync targets an org (the fixture repo's owner). The
-  // current contract model covers repo-in-path and installationId-in-body/
-  // query; an org-targeted contract is a clean extension but out of scope
-  // for this isolation PR. Tracked for a later 'org-target' contract.
-  test.skip('POST /maintainer/members/sync — needs org-target contract', async () => {
-    const res = await post('/api/maintainer/members/sync', { org: ORG });
-    expect([200, 201, 202, 204]).toContain(res.status);
-  });
+  test.skip('POST /maintainer/members/sync — needs org-target contract', async () => {});
 
   test('POST /maintainer/:owner/:repo/stale-scan — 3 concurrent scans idempotent', async () => {
-    const tasks = Array.from({ length: 3 }, () => apiBurstOperation(
+    const tasks = Array.from({ length: 3 }, () => apiContractedOperation(
       `/api/maintainer/${REPO}/stale-scan`,
-      { kind: 'write', method: 'POST', body: {}, contractName: 'maintainer-stale-scan' }
+      { kind: 'write', method: 'POST', body: {}, contractName: 'maintainer-stale-scan',
+        expectedStatuses: STATUS_SETS.MUTATION_TRIGGER }
     ));
-    const result = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
-    const ok = result.results.filter(r => [200, 201, 202, 204].includes(r.status)).length;
-    expect(ok).toBe(3);
+    const result = await runContractedBurst(tasks, {
+      concurrency: 3, pacing: { mode: 'legacy_batches', delayMs: 1000 },
+    });
+    expect(result.httpExpected).toBe(result.attempted);
+    expect(result.httpUnexpected).toBe(0);
   });
 
   test('GET settings after mutations — still returns valid data', async () => {
     await sleep(500);
-    const res = await resilientGet(`/api/maintainer/${REPO}/settings`);
-    expect([200, 429]).toContain(res.status);
+    const result = await runContractedOperation({
+      ...resilientGetBurstOperation(`/api/maintainer/${REPO}/settings`, { kind: 'read', bodyMode: 'auto' }),
+      responseContract: { expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED },
+    });
+    expect(result.http).toBe('expected');
   });
 });

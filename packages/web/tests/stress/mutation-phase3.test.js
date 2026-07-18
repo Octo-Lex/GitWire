@@ -1,62 +1,74 @@
 // tests/stress/mutation-phase3.test.js
 // Stress Test: Phase 3 mutation routes — reconciler, dependency scanning.
-//
-// Only fixture-targeted mutations are exercised. Routes that previously
-// targeted guessed non-existent IDs (flaky/999999/graduate, vuln/999999/dismiss)
-// are removed: a fail-closed fixture contract requires the declared fixture
-// identity be present and correct, and a guessed ID is neither. Rejection-path
-// coverage for non-existent resources is a separate concern and belongs in a
-// suite that owns fixture-created records.
-import { apiBurstOperation, post, put, FIXTURE_REPO, FIXTURE_INSTALLATION_ID } from '../helpers.js';
-import { boundedBurst } from './stress-helpers.js';
+import { apiContractedOperation, STATUS_SETS } from './response-contracts.js';
+import { runContractedBurst, runContractedOperation } from './burst-runner.js';
+import { FIXTURE_REPO, FIXTURE_INSTALLATION_ID } from '../helpers.js';
 
 const REPO = FIXTURE_REPO;
 
 describe('Stress: Phase 3 Mutations', () => {
 
   test('POST /phase3/reconciler/run — trigger reconciliation', async () => {
-    const res = await post(
-      '/api/phase3/reconciler/run',
-      { installation_id: FIXTURE_INSTALLATION_ID },
-      { contractName: 'phase3-reconciler-run' }
+    const result = await runContractedOperation(
+      apiContractedOperation('/api/phase3/reconciler/run', {
+        kind: 'write', method: 'POST',
+        body: { installation_id: FIXTURE_INSTALLATION_ID },
+        contractName: 'phase3-reconciler-run',
+        expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED,
+      })
     );
-    expect([200, 201, 202]).toContain(res.status);
+    expect(result.http).toBe('expected');
   });
 
   test('POST /phase3/reconciler/run — 3 concurrent runs idempotent', async () => {
-    const tasks = Array.from({ length: 3 }, () => apiBurstOperation(
+    const tasks = Array.from({ length: 3 }, () => apiContractedOperation(
       '/api/phase3/reconciler/run',
-      { kind: 'write', method: 'POST', body: { installation_id: FIXTURE_INSTALLATION_ID }, contractName: 'phase3-reconciler-run' }
+      {
+        kind: 'write', method: 'POST',
+        body: { installation_id: FIXTURE_INSTALLATION_ID },
+        contractName: 'phase3-reconciler-run',
+        expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED,
+      }
     ));
-    const result = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
-    const ok = result.results.filter(r => [200, 201, 202].includes(r.status)).length;
-    expect(ok).toBe(3);
+    const result = await runContractedBurst(tasks, {
+      concurrency: 3, pacing: { mode: 'legacy_batches', delayMs: 1000 },
+    });
+    expect(result.httpExpected).toBe(result.attempted);
+    expect(result.httpUnexpected).toBe(0);
   });
 
   test('PUT /phase3/reconciler/repos/:owner/:repo — update reconciler config', async () => {
-    const res = await put(
-      `/api/phase3/reconciler/repos/${REPO}`,
-      { reconcile_skip: false },
-      { contractName: 'phase3-reconciler-repos-config' }
+    const result = await runContractedOperation(
+      apiContractedOperation(`/api/phase3/reconciler/repos/${REPO}`, {
+        kind: 'write', method: 'PUT',
+        body: { reconcile_skip: false },
+        contractName: 'phase3-reconciler-repos-config',
+        expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED_OR_NOT_FOUND,
+      })
     );
-    expect([200, 201, 202, 404]).toContain(res.status);
+    expect(result.http).toBe('expected');
   });
 
   test('POST /phase3/dependencies/:owner/:repo/scan — trigger dep scan', async () => {
-    const res = await post(
-      `/api/phase3/dependencies/${REPO}/scan`,
-      {},
-      { contractName: 'phase3-dependencies-scan' }
+    const result = await runContractedOperation(
+      apiContractedOperation(`/api/phase3/dependencies/${REPO}/scan`, {
+        kind: 'write', method: 'POST', body: {},
+        contractName: 'phase3-dependencies-scan',
+        expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED,
+      })
     );
-    expect([200, 201, 202]).toContain(res.status);
+    expect(result.http).toBe('expected');
   });
 
   test('POST /phase3/dependencies/:owner/:repo/batch-pr — batch update PR', async () => {
-    const res = await post(
-      `/api/phase3/dependencies/${REPO}/batch-pr`,
-      { ecosystem: 'npm', deps: ['express'] },
-      { contractName: 'phase3-dependencies-batch-pr' }
+    const result = await runContractedOperation(
+      apiContractedOperation(`/api/phase3/dependencies/${REPO}/batch-pr`, {
+        kind: 'write', method: 'POST',
+        body: { ecosystem: 'npm', deps: ['express'] },
+        contractName: 'phase3-dependencies-batch-pr',
+        expectedStatuses: STATUS_SETS.MUTATION_ACCEPTED_OR_BAD_REQUEST_OR_NOT_FOUND,
+      })
     );
-    expect([200, 201, 202, 400, 404]).toContain(res.status);
+    expect(result.http).toBe('expected');
   });
 });

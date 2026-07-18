@@ -1,71 +1,104 @@
 // tests/stress/rate-limit.test.js
-// Stress Test: Rate limiting — verify 429 responses after hitting the limit
+// Stress Test: Rate limiting — verify 429 responses after hitting the limit.
 //
-// Run individually (must be FIRST suite to get clean rate limit window):
-// NODE_OPTIONS="--experimental-vm-modules" npx jest tests/stress/rate-limit.test.js --testTimeout=120000 --runInBand
+// IMPORTANT: traffic shape preserved from the original test — sequential
+// cohorts of 10 (not semaphore mode), accepting any mix of 200+429.
+// Does NOT require both 200 and 429 (an earlier suite may have exhausted
+// the window).
 
-import { BASE_URL, API_KEY } from '../helpers.js';
+import { describe, it, expect } from "@jest/globals";
+import { httpOperation, runContractedBurst } from "./burst-runner.js";
+import { BASE_URL, API_KEY } from "../helpers.js";
+import { STATUS_SETS } from "./response-contracts.js";
 
 const BURST = 120;
 
-async function rawGet(path) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json',
+// Status-only operation for the 120-request burst (no body reading).
+function rateLimitStatusOp() {
+  return {
+    kind: "rate-limit-probe",
+    method: "GET",
+    run: () => httpOperation({
+      method: "GET",
+      bodyMode: "none",
+      execute: () => fetch(`${BASE_URL}/api/repos`, {
+        headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+      }),
+    }),
+    responseContract: {
+      expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
     },
-  });
-  return { status: res.status };
+  };
 }
 
-describe('Rate Limiting', () => {
-  test(`Burst ${BURST} requests — should see 429 after limit`, async () => {
-    const statuses = [];
-    const start = Date.now();
+// Body-asserting operation for the single-request body test.
+function rateLimitBodyOp() {
+  return {
+    kind: "rate-limit-body",
+    method: "GET",
+    run: () => httpOperation({
+      method: "GET",
+      bodyMode: "auto",
+      execute: () => fetch(`${BASE_URL}/api/repos`, {
+        headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+      }),
+    }),
+    responseContract: {
+      expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
+      assertOnStatuses: [429],
+      assert: ({ body }) => {
+        if (body.state !== "parsed") {
+          return { passed: false, code: "RATE_LIMIT_BODY_NOT_PARSED", message: "Expected a parsed 429 response body" };
+        }
+        return body.value?.error !== undefined
+          ? { passed: true }
+          : { passed: false, code: "RATE_LIMIT_ERROR_MISSING", message: "Expected the 429 response body to contain error" };
+      },
+    },
+  };
+}
 
-    // Sequential batches to avoid socket exhaustion
-    for (let batch = 0; batch < Math.ceil(BURST / 10); batch++) {
-      const batchSize = Math.min(10, BURST - batch * 10);
-      const batchResults = await Promise.all(
-        Array.from({ length: batchSize }, () => rawGet('/api/repos'))
-      );
-      statuses.push(...batchResults.map(r => r.status));
-    }
-
-    const elapsed = Date.now() - start;
-    const ok200 = statuses.filter(s => s === 200).length;
-    const rateLimited = statuses.filter(s => s === 429).length;
-    const other = statuses.filter(s => s !== 200 && s !== 429).length;
-
-    console.log(`  ${BURST} requests in ${elapsed}ms:`);
-    console.log(`    200 OK: ${ok200}`);
-    console.log(`    429 Rate Limited: ${rateLimited}`);
-    console.log(`    Other: ${other}`);
-
-    // We should see BOTH 200s AND 429s (if rate limiter is working)
-    // If all 429: previous tests exhausted the limit — that's OK too
-    expect(ok200 + rateLimited).toBe(BURST);
-    expect(other).toBe(0);
-  });
-
-  test('Rate-limited request includes proper error body', async () => {
-    const res = await fetch(`${BASE_URL}/api/repos`, {
-      headers: { 'Authorization': `Bearer ${API_KEY}` },
+describe("Rate Limiting", () => {
+  it(`Burst ${BURST} requests — should see 200 or 429`, async () => {
+    const ops = Array.from({ length: BURST }, () => rateLimitStatusOp());
+    // Restore original cohort pacing: batches of 10, no delay between.
+    const result = await runContractedBurst(ops, {
+      concurrency: 10,
+      pacing: { mode: "legacy_batches", delayMs: 0 },
     });
-    // Either 200 (limit reset) or 429 (still limited)
-    expect([200, 429]).toContain(res.status);
-    if (res.status === 429) {
-      const body = await res.json();
-      expect(body.error).toBeDefined();
-    }
+    console.log(`    200 OK: ${result.statusCounts[200] || 0}`);
+    console.log(`    429 Rate Limited: ${result.statusCounts[429] || 0}`);
+    // Original acceptance: 200 or 429, any mix (including all-429).
+    expect(result.httpUnexpected).toBe(0);
+    expect(result.httpNotReceived).toBe(0);
+    expect(result.httpExpected).toBe(result.attempted);
   });
 
-  test('/health endpoint is NOT rate limited', async () => {
-    const results = await Promise.all(
-      Array.from({ length: 50 }, () => fetch(`${BASE_URL}/health`))
-    );
-    const all200 = results.every(r => r.status === 200);
-    console.log(`  Health x50: all 200 = ${all200}`);
-    expect(all200).toBe(true);
+  it("Rate-limited request includes proper error body", async () => {
+    const result = await runContractedBurst([rateLimitBodyOp()], {
+      concurrency: 1, pacing: { mode: "none" },
+    });
+    // Either 200 (not rate limited) or 429 (rate limited with body check)
+    expect(result.httpUnexpected).toBe(0);
+    expect(result.httpNotReceived).toBe(0);
+    expect(result.assertionFailed).toBe(0);
+  });
+
+  it("/health endpoint is NOT rate limited", async () => {
+    const ops = Array.from({ length: 50 }, () => ({
+      kind: "health",
+      method: "GET",
+      run: () => httpOperation({
+        method: "GET", bodyMode: "none",
+        execute: () => fetch(`${BASE_URL}/health`),
+      }),
+      responseContract: { expectedStatuses: STATUS_SETS.READ_OK },
+    }));
+    const result = await runContractedBurst(ops, {
+      concurrency: 10, pacing: { mode: "none" },
+    });
+    console.log(`  Health x50: all 200 = ${result.httpExpected === result.attempted}`);
+    expect(result.httpExpected).toBe(result.attempted);
+    expect(result.httpUnexpected).toBe(0);
   });
 });

@@ -378,6 +378,23 @@ export function computeLatencyStats(durationsMs) {
  * @param {(ms:number)=>Promise<void>} [opts.sleep] defaults to real setTimeout
  * @returns {Promise<Aggregate>}
  */
+
+/**
+ * Construct a fatal-error object with safe attribution. Module-scoped so both
+ * runBurst (scheduler) and enrichResult (semantic layer) can use it.
+ * @param {Object} desc { id, kind, method }
+ * @param {string} what description of the failure
+ * @param {string} reason sanitized reason message
+ * @returns {Error} throwable with code/operation/reason
+ */
+function makeFatalError(desc, what, reason) {
+  const e = new Error(`operation ${desc.id} ${what}`);
+  e.code = BURST_OPERATION_REJECTED;
+  e.operation = { id: desc.id, kind: desc.kind, method: desc.method };
+  e.reason = reason;
+  return e;
+}
+
 export async function runBurst(operations, opts) {
   if (!Array.isArray(operations)) {
     throw new Error("runBurst: operations must be an array");
@@ -420,24 +437,6 @@ export async function runBurst(operations, opts) {
   // Fatal-rejection state: once an escaped rejection occurs, stop scheduling
   // new work, let active work drain, then throw.
   let fatalRejection = null;
-
-  /**
-   * Construct a fatal-error object with safe attribution. Uses a factory
-   * rather than Object.assign(new Error(), ...) to avoid potential
-   * --experimental-vm-modules issues with property assignment on Error
-   * instances inside the VM sandbox.
-   * @param {Object} desc the operation descriptor
-   * @param {string} what "rejected" or "produced invalid outcome"
-   * @param {string} reason sanitized reason message
-   * @returns {Object} a throwable with code/operation/reason
-   */
-  function makeFatalError(desc, what, reason) {
-    const e = new Error(`operation ${desc.id} ${what}`);
-    e.code = BURST_OPERATION_REJECTED;
-    e.operation = { id: desc.id, kind: desc.kind, method: desc.method };
-    e.reason = reason;
-    return e;
-  }
 
   /**
    * Execute one descriptor, timing it and validating the outcome. This
@@ -684,6 +683,289 @@ export async function retryingHttpOperation({ method, bodyMode = "auto", retries
  */
 export function formatBurstThroughput({ attempted, elapsedMs, rps }) {
   return `RPS: ${rps.toFixed(1)} (wall-clock: ${attempted} ops / ${(elapsedMs / 1000).toFixed(2)}s)`;
+}
+
+// ─── Contracted burst (PR2b semantic layer) ────────────────────────────────
+
+const INVALID_RESPONSE_CONTRACT = "INVALID_RESPONSE_CONTRACT";
+
+/**
+ * Preflight-validate all operation contracts BEFORE any operation runs.
+ * Rejects malformed contracts with INVALID_RESPONSE_CONTRACT.
+ * @param {Array} operations
+ */
+function preflightContracts(operations) {
+  if (!Array.isArray(operations)) {
+    throw Object.assign(new Error("operations must be an array"), { code: INVALID_RESPONSE_CONTRACT });
+  }
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i];
+    // Validate the descriptor itself (null, primitive, bare function).
+    if (op === null || typeof op !== "object") {
+      throw Object.assign(new Error(`operation ${i}: descriptor must be a non-null object`), { code: INVALID_RESPONSE_CONTRACT });
+    }
+    if (typeof op === "function") {
+      throw Object.assign(new Error(`operation ${i}: bare function not permitted (requires descriptor with responseContract)`), { code: INVALID_RESPONSE_CONTRACT });
+    }
+    if (typeof op.run !== "function") {
+      throw Object.assign(new Error(`operation ${i}: descriptor must have a run function`), { code: INVALID_RESPONSE_CONTRACT });
+    }
+    const c = op.responseContract;
+    if (!c || typeof c !== "object") {
+      throw Object.assign(new Error(`operation ${i}: missing responseContract`), { code: INVALID_RESPONSE_CONTRACT });
+    }
+
+    // Shared status-array validation for both expectedStatuses and assertOnStatuses.
+    const validateStatusArray = (arr, fieldName) => {
+      if (!Array.isArray(arr) || arr.length === 0) {
+        throw Object.assign(new Error(`operation ${i}: ${fieldName} must be a non-empty array`), { code: INVALID_RESPONSE_CONTRACT });
+      }
+      const seen = new Set();
+      for (const s of arr) {
+        if (!Number.isInteger(s) || s < 100 || s > 599) {
+          throw Object.assign(new Error(`operation ${i}: ${fieldName} contains invalid status ${s}`), { code: INVALID_RESPONSE_CONTRACT });
+        }
+        if (seen.has(s)) {
+          throw Object.assign(new Error(`operation ${i}: duplicate status ${s} in ${fieldName}`), { code: INVALID_RESPONSE_CONTRACT });
+        }
+        seen.add(s);
+      }
+    };
+
+    if (c.expectedStatuses !== undefined) {
+      validateStatusArray(c.expectedStatuses, "expectedStatuses");
+    }
+    if (c.assertOnStatuses !== undefined) {
+      validateStatusArray(c.assertOnStatuses, "assertOnStatuses");
+    }
+    if (c.assert !== undefined && typeof c.assert !== "function") {
+      throw Object.assign(new Error(`operation ${i}: assert must be a function`), { code: INVALID_RESPONSE_CONTRACT });
+    }
+    if (c.assertOnStatuses && !c.assert) {
+      throw Object.assign(new Error(`operation ${i}: assertOnStatuses declared without assert`), { code: INVALID_RESPONSE_CONTRACT });
+    }
+    if (!c.expectedStatuses && !c.assert) {
+      throw Object.assign(new Error(`operation ${i}: vacuous contract (neither expectedStatuses nor assert)`), { code: INVALID_RESPONSE_CONTRACT });
+    }
+  }
+}
+
+/**
+ * Validate a callback return value. Must be {passed:true} or {passed:false,code,message}.
+ * Uses makeFatalError for proper attribution ({id,kind,method} + sanitized reason).
+ * Detects promise/thenable returns as harness defects.
+ * Validates code/message types and format on failure returns.
+ *
+ * @param {*} ret the callback return value
+ * @param {Object} desc { id, kind, method } for attribution
+ * @throws {Error} BURST_OPERATION_REJECTED with attribution on malformed return
+ */
+function validateCallbackReturn(ret, desc) {
+  // Detect promise/thenable returns.
+  if (ret !== null && typeof ret === "object" && typeof ret.then === "function") {
+    throw makeFatalError(desc, "assertion callback returned a promise",
+      "assert callbacks must be synchronous, not return promises");
+  }
+  if (ret === null || typeof ret !== "object") {
+    throw makeFatalError(desc, "assertion callback returned non-object",
+      `received type: ${typeof ret}`);
+  }
+  if (ret.passed !== true && ret.passed !== false) {
+    // Never interpolate ret.passed directly — it could contain secrets or be
+    // excessively long. Use typeof (a fixed, bounded string) instead.
+    throw makeFatalError(desc, "assertion callback returned unknown passed value",
+      `passed must be exactly true or false; received ${typeof ret.passed}`);
+  }
+  if (ret.passed === true && ("code" in ret || "message" in ret)) {
+    throw makeFatalError(desc, "assertion callback returned passed:true with error data",
+      "passed:true must not carry code or message");
+  }
+  if (ret.passed === false) {
+    // code must be a non-empty string matching a stable identifier format.
+    if (typeof ret.code !== "string" || ret.code.length === 0 || ret.code.length > 100) {
+      throw makeFatalError(desc, "assertion callback returned invalid code",
+        `code must be a non-empty string ≤100 chars, got ${typeof ret.code}`);
+    }
+    if (!/^[A-Z][A-Z0-9_]*$/.test(ret.code)) {
+      // Do not interpolate ret.code directly — sanitize it first.
+      throw makeFatalError(desc, "assertion callback returned invalid code format",
+        `code must match UPPER_SNAKE_CASE, got ${sanitizeMessage(ret.code)}`);
+    }
+    if (typeof ret.message !== "string" || ret.message.length === 0) {
+      throw makeFatalError(desc, "assertion callback returned invalid message",
+        `message must be a non-empty string, got ${typeof ret.message}`);
+    }
+  }
+}
+
+/**
+ * Sanitize and bound an assertion error's code and message.
+ * @param {string} str
+ * @param {number} maxLen
+ * @returns {string}
+ */
+function sanitizeAssertionText(str, maxLen = 200) {
+  return sanitizeMessage(String(str).slice(0, maxLen));
+}
+
+/**
+ * Enrich a factual result with semantic classification.
+ * @param {Object} factualResult the result from runBurst
+ * @param {Object} contract the responseContract
+ * @param {number} id the operation id (for error attribution)
+ * @returns {Object} enriched result
+ */
+function enrichResult(factualResult, contract, id) {
+  const { transport, status, body } = factualResult;
+  const enriched = { ...factualResult };
+
+  if (transport === "failed") {
+    enriched.http = "not_received";
+    enriched.assertion = "not_run";
+    enriched.assertionNotRunReason = "transport_failed";
+    enriched.assertionError = null;
+    return enriched;
+  }
+
+  // HTTP classification.
+  const expected = contract.expectedStatuses
+    ? contract.expectedStatuses.includes(status)
+    : true; // no expectedStatuses → all transport-completed are expected
+  enriched.http = expected ? "expected" : "unexpected";
+
+  // Assertion classification.
+  if (!contract.assert) {
+    enriched.assertion = "not_run";
+    enriched.assertionNotRunReason = "not_declared";
+    enriched.assertionError = null;
+    return enriched;
+  }
+
+  // Check assertOnStatuses applicability.
+  if (contract.assertOnStatuses && !contract.assertOnStatuses.includes(status)) {
+    enriched.assertion = "not_run";
+    enriched.assertionNotRunReason = "status_not_applicable";
+    enriched.assertionError = null;
+    return enriched;
+  }
+
+  // Run the assertion callback. Fail-closed on programming errors.
+  let ret;
+  try {
+    ret = contract.assert({ status, http: enriched.http, body });
+  } catch (err) {
+    throw makeFatalError({ id, kind: factualResult.kind, method: factualResult.method }, "assertion callback threw",
+      sanitizeMessage(err && err.message ? err.message : String(err)));
+  }
+  // Validate the return shape.
+  validateCallbackReturn(ret, { id, kind: factualResult.kind, method: factualResult.method });
+
+  if (ret.passed) {
+    enriched.assertion = "passed";
+    enriched.assertionNotRunReason = null;
+    enriched.assertionError = null;
+  } else {
+    enriched.assertion = "failed";
+    enriched.assertionNotRunReason = null;
+    enriched.assertionError = {
+      code: sanitizeAssertionText(ret.code, 100),
+      message: sanitizeAssertionText(ret.message),
+    };
+  }
+  return enriched;
+}
+
+/**
+ * Run a contracted burst: preflight-validate all contracts, execute via
+ * runBurst (unchanged), then enrich each result with http/assertion
+ * classification. Callback programming errors (throw, malformed return)
+ * become BURST_OPERATION_REJECTED AFTER factual execution completes — the
+ * semantic layer does NOT re-run the scheduler.
+ *
+ * @param {Array} operations with responseContract
+ * @param {Object} options same as runBurst
+ * @returns {Promise<Object>} enriched aggregate
+ */
+export async function runContractedBurst(operations, options) {
+  // 1. Preflight BEFORE any traffic.
+  preflightContracts(operations);
+
+  // 2. Run the factual burst (unchanged PR2a core).
+  // Strip responseContract before passing to runBurst (it doesn't know about it).
+  const factualOps = operations.map(op => ({
+    kind: op.kind, method: op.method, run: op.run,
+  }));
+  const factual = await runBurst(factualOps, options);
+
+  // 3. Enrich each result with semantic classification.
+  // Correlate by the factual result's preallocated id.
+  const enrichedResults = factual.results.map((r) => {
+    const contract = operations[r.id]?.responseContract;
+    return enrichResult(r, contract, r.id);
+  });
+
+  // 4. Build semantic aggregate counts.
+  let httpExpected = 0, httpUnexpected = 0, httpNotReceived = 0;
+  let assertionPassed = 0, assertionFailed = 0, assertionNotRun = 0;
+  for (const r of enrichedResults) {
+    if (r.http === "expected") httpExpected++;
+    else if (r.http === "unexpected") httpUnexpected++;
+    else if (r.http === "not_received") httpNotReceived++;
+
+    if (r.assertion === "passed") assertionPassed++;
+    else if (r.assertion === "failed") assertionFailed++;
+    else if (r.assertion === "not_run") assertionNotRun++;
+  }
+
+  // 5. Build semantic latency populations.
+  const httpExpectedDurations = enrichedResults
+    .filter(r => r.http === "expected" && r.durationMs != null)
+    .map(r => r.durationMs);
+  const assertionPassedDurations = enrichedResults
+    .filter(r => r.assertion === "passed" && r.durationMs != null)
+    .map(r => r.durationMs);
+
+  function nullLatency(population) {
+    return { population, count: 0, minMs: null, p50Ms: null, p95Ms: null, p99Ms: null, maxMs: null };
+  }
+  function buildLatency(population, durations) {
+    if (durations.length === 0) return nullLatency(population);
+    return { population, ...computeLatencyStats(durations) };
+  }
+
+  // 6. Return the enriched aggregate. Factual fields are preserved unchanged;
+  //    semantic fields are added.
+  return {
+    ...factual,
+    results: enrichedResults,
+    httpExpected,
+    httpUnexpected,
+    httpNotReceived,
+    assertionPassed,
+    assertionFailed,
+    assertionNotRun,
+    semanticLatency: {
+      httpExpected: buildLatency("http_expected", httpExpectedDurations),
+      assertionPassed: buildLatency("assertion_passed", assertionPassedDurations),
+    },
+  };
+}
+
+/**
+ * Run a single contracted operation. Forces concurrency:1 and pacing:none.
+ * Only `now` and `sleep` are accepted as overrides.
+ *
+ * @param {Object} operation with responseContract
+ * @param {Object} [options] only {now, sleep} accepted
+ * @returns {Promise<Object>} the single enriched result
+ */
+export async function runContractedOperation(operation, options = {}) {
+  const { now, sleep } = options;
+  const runOpts = { concurrency: 1, pacing: { mode: "none", delayMs: 0 } };
+  if (now) runOpts.now = now;
+  if (sleep) runOpts.sleep = sleep;
+  const aggregate = await runContractedBurst([operation], runOpts);
+  return aggregate.results[0];
 }
 
 // ─── Exports for testing ───────────────────────────────────────────────────
