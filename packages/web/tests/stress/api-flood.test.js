@@ -3,8 +3,9 @@
 //
 // Run: NODE_OPTIONS="--experimental-vm-modules" npx jest tests/stress/api-flood.test.js --testTimeout=120000 --runInBand
 
-import { apiBurstOperation, get } from '../helpers.js';
-import { boundedBurst, sleep } from './stress-helpers.js';
+import { apiContractedOperation, STATUS_SETS } from './response-contracts.js';
+import { runContractedBurst, runContractedOperation } from './burst-runner.js';
+import { sleep } from './stress-helpers.js';
 
 const CONCURRENT = 8;
 const ROUNDS = 3;
@@ -16,49 +17,83 @@ describe(`API Flood: ${CONCURRENT} concurrent × ${ROUNDS} rounds`, () => {
 
   test('GET /api/repos survives flood', async () => {
     for (let round = 0; round < ROUNDS; round++) {
-      const tasks = Array.from({ length: CONCURRENT }, () => apiBurstOperation('/api/repos', { kind: 'read' }));
-      const result = await boundedBurst(tasks, { maxConcurrent: CONCURRENT });
-      console.log(`  Round ${round + 1}: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
-      expect(result.transportCompleted).toBe(result.attempted);
-      // Allow 429 in later rounds (rate limit)
-      const okStatuses = result.results.filter(r => r.status === 200 || r.status === 429);
-      expect(okStatuses.length).toBe(result.attempted);
+      const tasks = Array.from({ length: CONCURRENT }, () =>
+        apiContractedOperation('/api/repos', {
+          kind: 'read', method: 'GET', bodyMode: 'auto',
+          expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
+        })
+      );
+      const result = await runContractedBurst(tasks, {
+        concurrency: CONCURRENT, pacing: { mode: 'none' },
+      });
+      console.log(`  Round ${round + 1}: ${result.httpExpected}/${result.attempted} expected in ${result.elapsedMs}ms`);
+      expect(result.httpNotReceived).toBe(0);
+      expect(result.httpExpected).toBe(result.attempted);
+      expect(result.httpUnexpected).toBe(0);
       await sleep(500);
     }
   });
 
   test('GET /api/issues survives flood', async () => {
-    const tasks = Array.from({ length: CONCURRENT }, () => apiBurstOperation('/api/issues', { kind: 'read' }));
-    const result = await boundedBurst(tasks);
-    console.log(`  Issues: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
-    expect(result.transportCompleted).toBe(result.attempted);
+    const tasks = Array.from({ length: CONCURRENT }, () =>
+      apiContractedOperation('/api/issues', {
+        kind: 'read', method: 'GET', bodyMode: 'auto',
+        expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
+      })
+    );
+    const result = await runContractedBurst(tasks, {
+      concurrency: 8, pacing: { mode: 'none' },
+    });
+    console.log(`  Issues: ${result.httpExpected}/${result.attempted} expected in ${result.elapsedMs}ms`);
+    expect(result.httpNotReceived).toBe(0);
+    expect(result.httpExpected).toBe(result.attempted);
   });
 
   test('GET /api/ci/stats survives flood', async () => {
-    const tasks = Array.from({ length: CONCURRENT }, () => apiBurstOperation('/api/ci/stats', { kind: 'read' }));
-    const result = await boundedBurst(tasks);
-    console.log(`  CI stats: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
-    expect(result.transportCompleted).toBe(result.attempted);
+    const tasks = Array.from({ length: CONCURRENT }, () =>
+      apiContractedOperation('/api/ci/stats', {
+        kind: 'read', method: 'GET', bodyMode: 'auto',
+        expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
+      })
+    );
+    const result = await runContractedBurst(tasks, {
+      concurrency: 8, pacing: { mode: 'none' },
+    });
+    console.log(`  CI stats: ${result.httpExpected}/${result.attempted} expected in ${result.elapsedMs}ms`);
+    expect(result.httpNotReceived).toBe(0);
+    expect(result.httpExpected).toBe(result.attempted);
   });
 
   test('GET /api/insights/overview survives flood', async () => {
-    const tasks = Array.from({ length: CONCURRENT }, () => apiBurstOperation('/api/insights/overview', { kind: 'read' }));
-    const result = await boundedBurst(tasks);
-    console.log(`  Insights: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
-    expect(result.transportCompleted).toBe(result.attempted);
+    const tasks = Array.from({ length: CONCURRENT }, () =>
+      apiContractedOperation('/api/insights/overview', {
+        kind: 'read', method: 'GET', bodyMode: 'auto',
+        expectedStatuses: STATUS_SETS.READ_OK_OR_RATE_LIMITED,
+      })
+    );
+    const result = await runContractedBurst(tasks, {
+      concurrency: 8, pacing: { mode: 'none' },
+    });
+    console.log(`  Insights: ${result.httpExpected}/${result.attempted} expected in ${result.elapsedMs}ms`);
+    expect(result.httpNotReceived).toBe(0);
+    expect(result.httpExpected).toBe(result.attempted);
   });
 
   test('GET /health survives flood (no auth required)', async () => {
-    // /health does not require auth. omitAuth:true suppresses the bearer
-    // token entirely — no API key is placed on the request. fetch failures
-    // are classified by httpOperation (not escaped as BURST_OPERATION_REJECTED).
+    // omitAuth:true suppresses the bearer token entirely. Strict READ_OK
+    // contract — health must return exactly 200.
     const tasks = Array.from({ length: CONCURRENT }, () =>
-      apiBurstOperation('/health', { kind: 'health', method: 'GET', bodyMode: 'none', omitAuth: true })
+      apiContractedOperation('/health', {
+        kind: 'health', method: 'GET', bodyMode: 'none', omitAuth: true,
+        expectedStatuses: STATUS_SETS.READ_OK,
+      })
     );
-    const result = await boundedBurst(tasks);
-    console.log(`  Health: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
-    expect(result.transportCompleted).toBe(result.attempted);
-    expect(result.results.every(r => r.status === 200)).toBe(true);
+    const result = await runContractedBurst(tasks, {
+      concurrency: 8, pacing: { mode: 'none' },
+    });
+    console.log(`  Health: ${result.httpExpected}/${result.attempted} expected in ${result.elapsedMs}ms`);
+    expect(result.httpExpected).toBe(result.attempted);
+    expect(result.httpUnexpected).toBe(0);
   });
 
   test('Mixed 18 endpoints all return 200', async () => {
@@ -70,11 +105,16 @@ describe(`API Flood: ${CONCURRENT} concurrent × ${ROUNDS} rounds`, () => {
       '/api/enforcement/stats', '/api/phase2/queue',
       '/api/phase2/telemetry/summary', '/api/review/stats', '/api/audit/stats',
     ];
-    // Sequential to avoid rate limits
+    // Sequential to avoid rate limits — each uses runContractedOperation.
     let ok = 0;
     for (const ep of endpoints) {
-      const res = await get(ep);
-      if (res.status === 200) ok++;
+      const result = await runContractedOperation(
+        apiContractedOperation(ep, {
+          kind: 'read', method: 'GET', bodyMode: 'auto',
+          expectedStatuses: STATUS_SETS.READ_OK,
+        })
+      );
+      if (result.http === 'expected') ok++;
     }
     console.log(`  Mixed ${endpoints.length} endpoints: ${ok}/${endpoints.length} OK`);
     expect(ok).toBe(endpoints.length);
