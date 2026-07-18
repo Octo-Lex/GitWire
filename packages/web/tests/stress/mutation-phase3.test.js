@@ -7,7 +7,7 @@
 // identity be present and correct, and a guessed ID is neither. Rejection-path
 // coverage for non-existent resources is a separate concern and belongs in a
 // suite that owns fixture-created records.
-import { post, put, FIXTURE_REPO, FIXTURE_INSTALLATION_ID } from '../helpers.js';
+import { apiBurstOperation, post, put, FIXTURE_REPO, FIXTURE_INSTALLATION_ID } from '../helpers.js';
 import { boundedBurst } from './stress-helpers.js';
 
 const REPO = FIXTURE_REPO;
@@ -24,15 +24,12 @@ describe('Stress: Phase 3 Mutations', () => {
   });
 
   test('POST /phase3/reconciler/run — 3 concurrent runs idempotent', async () => {
-    const tasks = Array.from({ length: 3 }, () => () =>
-      post(
-        '/api/phase3/reconciler/run',
-        { installation_id: FIXTURE_INSTALLATION_ID },
-        { contractName: 'phase3-reconciler-run' }
-      )
-    );
-    const { succeeded, statuses } = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
-    const ok = statuses.filter(s => [200, 201, 202].includes(s)).length;
+    const tasks = Array.from({ length: 3 }, () => apiBurstOperation(
+      '/api/phase3/reconciler/run',
+      { kind: 'write', method: 'POST', body: { installation_id: FIXTURE_INSTALLATION_ID }, contractName: 'phase3-reconciler-run' }
+    ));
+    const result = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
+    const ok = result.results.filter(r => [200, 201, 202].includes(r.status)).length;
     expect(ok).toBe(3);
   });
 
