@@ -407,8 +407,24 @@ class RunWideMutationBudget {
       );
     }
 
-    // Try to INITIALIZE by atomically creating the marker. O_EXCL means
-    // exactly one process wins; concurrent losers fall through to attach.
+    // Try to INITIALIZE by atomically publishing the marker. The publication
+    // is two-stage to satisfy two distinct atomicity requirements:
+    //
+    //   1. CONTENT atomicity — a reader must never observe a partially-
+    //      written marker (empty or truncated JSON). Achieved by writing the
+    //      payload to a unique temp file first, then atomically linking it
+    //      into place. Readers see either no marker or the complete marker.
+    //
+    //   2. OWNERSHIP atomicity — exactly one process becomes the owner.
+    //      Achieved by fs.linkSync(temp, marker): link() fails with EEXIST
+    //      if the target already exists. Unlike the previous 'wx' approach
+    //      (which created an empty file then wrote content into it, leaving
+    //      a window where readers saw an empty file), the temp file already
+    //      contains the full payload at the moment of linking.
+    //
+    // The temp file is removed in finally; if link succeeded, the temp file's
+    // inode is now also reachable via the marker path so unlinking the temp
+    // path does not remove the content.
     const markerPayload = JSON.stringify({
       runId: this.runId,                 // exact, unsanitized
       max: this.max,
@@ -418,13 +434,23 @@ class RunWideMutationBudget {
       createdAt: Date.now(),
       nonce: cryptoRandomToken(),
     });
+    const tempMarker = path.join(this.slotsDir, `.run-marker.tmp.${process.pid}.${cryptoRandomToken()}`);
     try {
-      fs.writeFileSync(this._markerFile, markerPayload, { flag: 'wx' });
-      return 'owner';
-    } catch (err) {
-      if (err.code !== 'EEXIST') {
-        throw new Error(`Could not write budget marker: ${err.message}`);
+      fs.writeFileSync(tempMarker, markerPayload, { flag: 'wx' });
+      try {
+        // Atomic link into place. EEXIST means another owner won.
+        fs.linkSync(tempMarker, this._markerFile);
+        return 'owner';
+      } catch (err) {
+        if (err.code !== 'EEXIST') {
+          throw new Error(`Could not publish budget marker: ${err.message}`);
+        }
+        // Another owner exists; fall through to attach.
       }
+    } finally {
+      // Remove the temp path. After a successful link, the inode is still
+      // reachable via _markerFile so this unlink does not delete the content.
+      try { fs.unlinkSync(tempMarker); } catch { /* already gone */ }
     }
 
     // ATTACH path. Marker exists — read it and validate every field this
@@ -559,14 +585,31 @@ class RunWideMutationBudget {
    *
    * Not registered as an exit handler: workers exit before the run is over
    * and must not finalize a run still in progress.
+   *
+   * Fail-closed: a non-EEXIST write error is THROWN, not swallowed. The
+   * previous version silently dropped finalize failures, which meant a run
+   * could complete without recording .finalized and a later reuse would
+   * attach as a participant to stale state. The orchestrator must surface
+   * finalize failures so the operator knows the namespace is not marked done.
+   *
+   * @throws {Error} on any non-EEXIST write failure
    */
   finalize() {
+    let fd;
     try {
-      fs.writeFileSync(this._finalizedFile, JSON.stringify({ at: Date.now() }), { flag: 'wx' });
+      fd = fs.openSync(this._finalizedFile, 'wx');
     } catch (err) {
-      if (err.code !== 'EEXIST') {
-        // Best-effort; a failed finalize must not crash the run.
-      }
+      if (err.code === 'EEXIST') return; // already finalized (idempotent)
+      throw new Error(
+        `Could not write finalized marker at ${this._finalizedFile}: ${err.message}. ` +
+        `The run completed but its namespace is not marked done; reuse of this ` +
+        `runId will incorrectly attach to stale state. Remove ${this.slotsDir} manually.`
+      );
+    }
+    try {
+      fs.writeFileSync(fd, JSON.stringify({ at: Date.now(), pid: process.pid }));
+    } finally {
+      fs.closeSync(fd);
     }
   }
 

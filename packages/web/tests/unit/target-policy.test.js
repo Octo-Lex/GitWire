@@ -9,7 +9,12 @@ import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { TESTING_ONLY, loadPolicy } from "../target-policy.js";
+
+// ESM does not define __dirname. Derive it once from import.meta.url.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const {
   parseBaseUrl,
@@ -419,13 +424,13 @@ describe("run-wide mutation budget (atomic slots)", () => {
   // spawnSync, (b) monkey-patched b.slotsDir, and (c) had shifted argv
   // indices that made every child report CHILD_OK=0, trivially satisfying
   // the ≤ MAX assertion while proving nothing.
-  it("concurrent child processes cannot exceed the cap (genuine parallel contention)", async () => {
-    if (process.platform === "win32") {
-      // O_EXCL works on Windows, but the stdin-barrier orchestration here is
-      // tested on Linux CI. Explicit skip, not a silent pass.
-      console.log("  skipped on win32 (concurrency regression runs on Linux CI)");
-      return;
-    }
+  // The concurrency regression runs on Linux CI. On win32 it is genuinely
+  // SKIPPED via it.skip (not a silent in-body return that Jest counts as a
+  // pass). This is the only platform-conditional test in the file.
+  const concurrentTest = process.platform === "win32"
+    ? it.skip
+    : it;
+  concurrentTest("concurrent child processes cannot exceed the cap (genuine parallel contention)", async () => {
     const { spawn } = await import("node:child_process");
     const runId = "concurrency-" + Math.random();
     const WORKERS = 8;
@@ -447,7 +452,9 @@ describe("run-wide mutation budget (atomic slots)", () => {
     const children = [];
     for (let i = 0; i < WORKERS; i++) {
       const child = spawn(process.execPath, [
-        "--input-type=module",
+        // The child is a .mjs file — Node treats .mjs as a module by
+        // extension, so --input-type=module must NOT be passed (node rejects
+        // --input-type when executing a file rather than eval/stdin).
         childPath,
         JSON.stringify(cfg),
       ], {

@@ -297,6 +297,24 @@ async function benchmarkMixed() {
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
+  try {
+    await runSuite();
+  } finally {
+    // Finalize the budget so a future run with the same runId fails closed
+    // (stale reuse) rather than attaching to this run's consumed slots.
+    // Only the owner finalizes; participants (if any) do not.
+    if (POLICY.allowMutations && POLICY.budget) {
+      try {
+        POLICY.budget.finalize();
+      } catch (err) {
+        console.error(`[benchmark] finalize failed: ${err.message}`);
+        process.exitCode = 1;
+      }
+    }
+  }
+}
+
+async function runSuite() {
   const suiteStart = performance.now();
 
   console.log("╔══════════════════════════════════════════╗");
