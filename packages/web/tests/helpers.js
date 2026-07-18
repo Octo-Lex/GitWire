@@ -17,6 +17,7 @@
 // declared location. See registerMutationContracts() below for the surface.
 
 import { loadPolicy } from './target-policy.js';
+import { httpOperation, retryingHttpOperation } from './stress/burst-runner.js';
 
 // Load once at module import. Any missing env var or denylisted target
 // throws here, so a misconfigured run fails before any request is attempted.
@@ -116,35 +117,25 @@ function registerMutationContracts() {
 registerMutationContracts();
 
 /**
- * Fetch wrapper with API key auth. Returns parsed JSON + status.
+ * Prepare an API request: resolve URL, validate policy/mutation-gate, consume
+ * budget, construct headers, stringify body. Returns { url, init, method }
+ * ready for fetch(). This is the shared preparation path used by BOTH the
+ * legacy api() compatibility wrapper AND the new apiBurstOperation()
+ * factual-outcome constructor. The PR1 isolation boundary (policy, denylist,
+ * contract, budget, credential timing) is preserved exactly.
  *
- * URL resolution and mutation gating are delegated to the shared target
- * policy:
- *   - Relative paths resolve against the validated base URL.
- *   - Absolute URLs must be same-origin with the base URL; cross-origin
- *     requests throw BEFORE any header is constructed or fetch is called.
- *   - Mutating methods (POST/PUT/PATCH/DELETE) require
- *     GITWIRE_STRESS_ALLOW_MUTATIONS=true plus a configured fixture repo
- *     and installation ID, a REGISTERED mutation contract, and consume the
- *     mutation budget.
+ * Any failure here (policy violation, denylisted target, missing contract,
+ * budget exhaustion) escapes as a throw — which, in apiBurstOperation,
+ * becomes BURST_OPERATION_REJECTED (a fatal harness defect, NOT a transport
+ * failure). This is the amendment-10 boundary: policy errors are never
+ * classified as transport outcomes.
  *
  * @param {string} path relative path or same-origin absolute URL
- * @param {Object} [options]
- * @param {string} [options.method] default GET
- * @param {Object} [options.body] request body. For mutations this MUST be an
- *   object (string bodies are rejected — the policy cannot inspect them).
- * @param {Object} [options.headers] merged on top of the auth + content-type
- *   headers. Pass `{ Authorization: '' }` to suppress the bearer token for
- *   endpoints that must not receive it (e.g. /webhooks/github).
- * @param {string} [options.contractName] REQUIRED for mutations. Name of a
- *   registered mutation contract (see registerMutationContracts above).
- * @param {string} [options.operationName] label for budget consumption.
+ * @param {Object} [options] same shape as api()
+ * @returns {{ url: URL, init: Object, method: string }}
  */
-export async function api(path, options = {}) {
+export function prepareApiRequest(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
-  // The body is passed to the policy for inspection. Object bodies are
-  // inspected for embedded production identities; string bodies are rejected
-  // for mutations (the policy throws). For reads, body shape is irrelevant.
   const bodyForPolicy = options.body;
 
   // Resolve + same-origin check + production-host check. Throws before any
@@ -164,9 +155,14 @@ export async function api(path, options = {}) {
   // Construct headers ONLY after all policy checks pass. This is what makes
   // the absolute-URL bypass safe: a rejected request never produces a
   // credential string.
-  const authHeader = options.headers && Object.keys(options.headers).some(
+  // omitAuth=true suppresses the bearer token entirely (for endpoints that
+  // must not receive it, e.g. /health, /webhooks/github).
+  const hasAuthOverride = options.headers && Object.keys(options.headers).some(
     h => h.toLowerCase() === 'authorization'
-  ) ? {} : (POLICY.authHeader() ? { Authorization: POLICY.authHeader() } : {});
+  );
+  const authHeader = (options.omitAuth || hasAuthOverride)
+    ? {}
+    : (POLICY.authHeader() ? { Authorization: POLICY.authHeader() } : {});
 
   const headers = {
     'Content-Type': 'application/json',
@@ -175,17 +171,105 @@ export async function api(path, options = {}) {
   };
 
   // Stringify object bodies. (String bodies for mutations were already
-  // rejected above; string bodies for reads are passed through unchanged,
-  // which is fine since reads carry no fixture identity to inspect.)
+  // rejected above; string bodies for reads are passed through unchanged.)
   const bodyToSend = options.body && typeof options.body === 'object'
     ? JSON.stringify(options.body)
     : options.body;
 
-  const res = await fetch(url.href, { method, headers, body: bodyToSend });
+  return { url, init: { method, headers, body: bodyToSend }, method };
+}
+
+/**
+ * Fetch wrapper with API key auth. Returns parsed JSON + status.
+ *
+ * COMPATIBILITY wrapper for non-burst callers (integration tests, individual
+ * stress tests that call get()/post() directly outside a burst). Body
+ * parse state is NOT preserved here — a JSON parse failure silently becomes
+ * the raw string (the pre-PR2a behavior). For factual body classification,
+ * use apiBurstOperation() inside a runBurst() call.
+ *
+ * @param {string} path relative path or same-origin absolute URL
+ * @param {Object} [options] see prepareApiRequest
+ */
+export async function api(path, options = {}) {
+  const { url, init } = prepareApiRequest(path, options);
+  const res = await fetch(url.href, init);
   const text = await res.text();
   let body;
   try { body = JSON.parse(text); } catch { body = text; }
   return { status: res.status, body, headers: res.headers };
+}
+
+/**
+ * Construct an operation descriptor for use with runBurst(). The descriptor
+ * uses prepareApiRequest() for policy/contract/budget (preserving the PR1
+ * isolation boundary) and httpOperation() for factual transport/body
+ * classification. Only the fetch() call is inside the transport catch.
+ *
+ * Policy errors (from prepareApiRequest) escape operation.run and become
+ * BURST_OPERATION_REJECTED — they are NOT classified as transport failures.
+ *
+ * @param {string} path
+ * @param {Object} [options]
+ * @param {string} [options.kind] operation label for attribution
+ * @param {string} [options.method] default GET
+ * @param {"none"|"text"|"json"|"auto"} [options.bodyMode="auto"]
+ * @param {string} [options.contractName] required for mutations
+ * @param {Object} [options.body] request body
+ * @param {Object} [options.headers] extra headers
+ * @returns {{ kind: string|null, method: string, run: () => Promise<ClassifiedOutcome> }}
+ */
+export function apiBurstOperation(path, options = {}) {
+  return {
+    kind: options.kind ?? null,
+    method: (options.method || "GET").toUpperCase(),
+    run: async () => {
+      const request = prepareApiRequest(path, options);
+      return httpOperation({
+        method: request.method,
+        bodyMode: options.bodyMode ?? "auto",
+        execute: () => fetch(request.url.href, request.init),
+      });
+    },
+  };
+}
+
+/**
+ * Construct a retry-aware read operation for use with runBurst(). Retries on
+ * 429 (rate limit) with Retry-After backoff, up to `retries` attempts. Only
+ * the final Response enters the operation result; intermediate 429s are
+ * retried. Fetch failures during any attempt use the frozen transport taxonomy.
+ *
+ * @param {string} path
+ * @param {Object} [options]
+ * @param {number} [options.retries=3]
+ * @param {string} [options.kind="read"]
+ * @param {"none"|"text"|"json"|"auto"} [options.bodyMode="auto"]
+ * @returns {{ kind: string, method: string, run: () => Promise<ClassifiedOutcome> }}
+ */
+export function resilientGetBurstOperation(path, options = {}) {
+  const retries = options.retries ?? 3;
+  const kind = options.kind ?? "read";
+  const bodyMode = options.bodyMode ?? "auto";
+  return {
+    kind,
+    method: "GET",
+    run: async () => {
+      // prepareApiRequest is OUTSIDE the transport boundary (amendment 10:
+      // policy errors escape as BURST_OPERATION_REJECTED, not transport
+      // failures). The retry loop is inside retryingHttpOperation's execute
+      // boundary so fetch failures are classified as transportFailed.
+      const request = prepareApiRequest(path, { method: "GET" });
+      return retryingHttpOperation({
+        method: "GET",
+        bodyMode,
+        retries,
+        fetchFn: (url, init) => fetch(url, init),
+        url: request.url.href,
+        init: request.init,
+      });
+    },
+  };
 }
 
 /** GET request */

@@ -6,7 +6,7 @@
 // contract requires the declared fixture identity be present and correct,
 // and a guessed ID is neither. Rejection-path coverage for non-existent
 // resources belongs in a suite that owns fixture-created records.
-import { post, FIXTURE_REPO, FIXTURE_INSTALLATION_ID } from '../helpers.js';
+import { apiBurstOperation, post, FIXTURE_REPO, FIXTURE_INSTALLATION_ID } from '../helpers.js';
 import { boundedBurst } from './stress-helpers.js';
 
 const REPO = FIXTURE_REPO;
@@ -19,11 +19,12 @@ describe('Stress: Repo Sync + Fix Mutations', () => {
   });
 
   test('POST /repos/:owner/:repo/sync — 3 concurrent syncs idempotent', async () => {
-    const tasks = Array.from({ length: 3 }, () => () =>
-      post(`/api/repos/${REPO}/sync`, {}, { contractName: 'repo-sync' })
-    );
-    const { succeeded, statuses } = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
-    const ok = statuses.filter(s => [200, 201, 202].includes(s)).length;
+    const tasks = Array.from({ length: 3 }, () => apiBurstOperation(
+      `/api/repos/${REPO}/sync`,
+      { kind: 'write', method: 'POST', body: {}, contractName: 'repo-sync' }
+    ));
+    const result = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
+    const ok = result.results.filter(r => [200, 201, 202].includes(r.status)).length;
     expect(ok).toBe(3);
   });
 
@@ -38,15 +39,12 @@ describe('Stress: Repo Sync + Fix Mutations', () => {
 
   test('POST /fix/:owner/:repo/issues/:number — 3 concurrent fix triggers rate-limited', async () => {
     // Fix attempts are rate-limited: 1 per issue per day, 3 per repo per day
-    const tasks = Array.from({ length: 3 }, () => () =>
-      post(
-        `/api/fix/${REPO}/issues/99999?installation_id=${FIXTURE_INSTALLATION_ID}`,
-        {},
-        { contractName: 'fix-attempt' }
-      )
-    );
-    const { succeeded, statuses } = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
-    const ok = statuses.filter(s => [200, 202, 404, 429, 500].includes(s)).length;
+    const tasks = Array.from({ length: 3 }, () => apiBurstOperation(
+      `/api/fix/${REPO}/issues/99999?installation_id=${FIXTURE_INSTALLATION_ID}`,
+      { kind: 'write', method: 'POST', body: {}, contractName: 'fix-attempt' }
+    ));
+    const result = await boundedBurst(tasks, { maxConcurrent: 3, delayBetweenBatches: 1000 });
+    const ok = result.results.filter(r => [200, 202, 404, 429, 500].includes(r.status)).length;
     expect(ok).toBe(3);
   });
 });

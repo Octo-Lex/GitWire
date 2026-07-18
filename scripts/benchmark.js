@@ -1,6 +1,6 @@
 // scripts/benchmark.js
 // GitWire Benchmark Harness — measures API p95 latency, queue throughput,
-// and mixed read/write workload latency.
+// and mixed read/write workload latency using the shared factual burst runner.
 //
 // Usage:
 //   node scripts/benchmark.js                    # Full suite
@@ -13,36 +13,26 @@
 //   - GitWire running in an ISOLATED environment (never production)
 //   - GITWIRE_BASE_URL, API_KEY, GITWIRE_STRESS_ENV=isolated all set in env
 //
-// This harness shares the same isolation policy as the Jest stress suite
-// (tests/target-policy.js). It refuses to run without explicit configuration,
-// rejects known production hostnames/repositories/installations regardless of
-// configuration, and rejects cross-origin absolute URLs before any header is
-// constructed. Mutating benchmarks additionally require
-// GITWIRE_STRESS_ALLOW_MUTATIONS=true plus fixture identities and a budget.
+// This harness shares the same isolation policy AND the same factual burst
+// runner as the Jest stress suite. The local burst()/stats() functions have
+// been removed — all measurement goes through burst-runner.js's runBurst(),
+// which reports factual HTTP outcomes (transportCompleted, transportFailed,
+// statusCounts) instead of conflating Promise fulfillment with success.
 
 import { fileURLToPath, pathToFileURL } from "url";
 import { dirname, resolve } from "path";
 
-// Resolve the shared policy module relative to this script so benchmark.js
-// works regardless of the current working directory. On Windows, dynamic
-// import requires a file:// URL (a bare C:\ path throws
-// ERR_UNSUPPORTED_ESM_URL_SCHEME), so we convert via pathToFileURL.
+// Resolve shared modules relative to this script.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const POLICY_PATH = resolve(__dirname, "../packages/web/tests/target-policy.js");
+const RUNNER_PATH = resolve(__dirname, "../packages/web/tests/stress/burst-runner.js");
 const { loadPolicy } = await import(pathToFileURL(POLICY_PATH).href);
+const { runBurst, httpOperation, formatBurstThroughput } = await import(pathToFileURL(RUNNER_PATH).href);
 
-// benchmark.js requires the full isolated stress gate for ALL modes, including
-// read-only benchmarks. The previous requireStressGate=false was inconsistent
-// with the header's claim that GITWIRE_STRESS_ENV=isolated is required, and
-// allowed read benchmarks to target production. Mutations additionally
-// require the fixture opt-in, fixture identities, run ID, and budget.
+// benchmark.js requires the full isolated stress gate for ALL modes.
 const POLICY = loadPolicy({ requireStressGate: true });
 
-// Register benchmark mutation contracts at init (not inside a benchmark
-// function). Previously repo-sync was registered inside benchmarkMixed(),
-// which meant --queue (which runs first and never invokes mixed) failed at
-// the contract check. Registering here makes every benchmark mode that
-// mutates work regardless of invocation order.
+// Register the repo-sync mutation contract at init (for queue + mixed).
 if (POLICY.allowMutations) {
   POLICY.registerMutationContract({
     name: "repo-sync",
@@ -56,7 +46,6 @@ if (POLICY.allowMutations) {
 // ── Configuration ──────────────────────────────────────────────────────────
 
 const BASE_URL = POLICY.baseUrlRaw;
-const API_KEY = POLICY.apiKey;
 const ITERATIONS = parseInt(process.argv.find((a, i) => process.argv[i - 1] === "--iterations")) || 200;
 const CONCURRENCY = parseInt(process.argv.find((a, i) => process.argv[i - 1] === "--concurrency")) || 10;
 
@@ -67,83 +56,52 @@ const FLAGS = {
 };
 const RUN_ALL = !FLAGS.webhook && !FLAGS.api && !FLAGS.queue;
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// ── Operation construction (uses prepareApiRequest via helpers.js) ──────────
+//
+// benchmark.js builds operation descriptors using the same prepareApiRequest()
+// path that the stress suite uses. We import helpers.js for its
+// apiBurstOperation() and prepareApiRequest().
 
-function percentile(sorted, p) {
-  const idx = Math.ceil((p / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, idx)];
+const HELPERS_PATH = resolve(__dirname, "../packages/web/tests/helpers.js");
+const { prepareApiRequest, apiBurstOperation } = await import(pathToFileURL(HELPERS_PATH).href);
+
+/**
+ * Build a read operation descriptor for an endpoint.
+ * @param {string} path
+ * @param {string} kind
+ * @returns {{ kind: string, method: string, run: () => Promise<ClassifiedOutcome> }}
+ */
+function readOp(path, kind = "read") {
+  return apiBurstOperation(path, { kind, method: "GET", bodyMode: "auto" });
 }
 
-function stats(durationsMs) {
-  if (!durationsMs.length) return { total: 0, min: "0", max: "0", mean: "0", p50: "0", p90: "0", p95: "0", p99: "0", rps: "0" };
-  const sorted = [...durationsMs].sort((a, b) => a - b);
-  const sum = sorted.reduce((a, b) => a + b, 0);
-  return {
-    total: sorted.length,
-    min: sorted[0].toFixed(1),
-    max: sorted[sorted.length - 1].toFixed(1),
-    mean: (sum / sorted.length).toFixed(1),
-    p50: percentile(sorted, 50).toFixed(1),
-    p90: percentile(sorted, 90).toFixed(1),
-    p95: percentile(sorted, 95).toFixed(1),
-    p99: percentile(sorted, 99).toFixed(1),
-    rps: (sorted.length / (sum / 1000)).toFixed(1),
-  };
-}
-
-async function apiFetch(path, opts = {}) {
-  // Resolve through the policy: same-origin check + production denylist +
-  // mutation gate + budget. Throws before fetch if the target is disallowed.
-  const url = POLICY.resolveRequest(path);
-  const method = (opts.method || "GET").toUpperCase();
-  POLICY.assertMutationAllowed({
-    method,
-    url,
-    body: opts.body,
-    contractName: opts.contractName,
-    operationName: `benchmark:${method}:${url.pathname}`,
+/**
+ * Build a write operation descriptor for a sync.
+ * @param {string} fixtureRepo
+ * @returns {{ kind: string, method: string, run: () => Promise<ClassifiedOutcome> }}
+ */
+function syncOp(fixtureRepo) {
+  return apiBurstOperation(`/api/repos/${fixtureRepo}/sync`, {
+    kind: "write", method: "POST", body: {}, contractName: "repo-sync",
   });
-
-  const headers = {
-    "Content-Type": "application/json",
-    ...(POLICY.authHeader() ? { Authorization: POLICY.authHeader() } : {}),
-    ...opts.headers,
-  };
-  const start = performance.now();
-  const res = await fetch(url.href, { ...opts, method, headers });
-  const elapsed = performance.now() - start;
-  const text = await res.text();
-  let body;
-  try { body = JSON.parse(text); } catch { body = text; }
-  return { status: res.status, body, elapsed, method, path: url.pathname };
 }
 
-async function burst(fn, count, concurrency) {
-  const results = [];
-  const batchSize = Math.min(concurrency, 5); // Stay under 100 req/min rate limit
-  const batchDelay = 100; // ms between batches
-  for (let i = 0; i < count; i += batchSize) {
-    const batch = Array.from({ length: Math.min(batchSize, count - i) }, () => fn());
-    const batchResults = await Promise.allSettled(batch);
-    for (const r of batchResults) {
-      if (r.status === "fulfilled") results.push(r.value);
-      else results.push({ status: 0, elapsed: -1, error: r.reason?.message });
-    }
-    if (i + batchSize < count) await new Promise(r => setTimeout(r, batchDelay));
-  }
-  return results;
-}
+// ── Printing ───────────────────────────────────────────────────────────────
 
-function printStats(label, s) {
+function printLatency(label, latency) {
   console.log(`\n  ${label}`);
-  console.log(`    Requests:  ${s.total}`);
-  console.log(`    RPS:       ${s.rps}`);
-  console.log(`    Mean:      ${s.mean} ms`);
-  console.log(`    P50:       ${s.p50} ms`);
-  console.log(`    P90:       ${s.p90} ms`);
-  console.log(`    P95:       ${s.p95} ms`);
-  console.log(`    P99:       ${s.p99} ms`);
-  console.log(`    Min/Max:   ${s.min} / ${s.max} ms`);
+  if (latency.count === 0) {
+    console.log("    (no transport-completed responses)");
+    return;
+  }
+  console.log(`    Count:      ${latency.count}`);
+  // Do NOT invent an RPS from latency percentiles. RPS is a full-burst
+  // throughput metric (attempted / wall-clock elapsed) reported at the
+  // aggregate level, not per latency subset.
+  console.log(`    P50:        ${latency.p50Ms != null ? latency.p50Ms.toFixed(1) : "null"} ms`);
+  console.log(`    P95:        ${latency.p95Ms != null ? latency.p95Ms.toFixed(1) : "null"} ms`);
+  console.log(`    P99:        ${latency.p99Ms != null ? latency.p99Ms.toFixed(1) : "null"} ms`);
+  console.log(`    Min/Max:    ${latency.minMs != null ? latency.minMs.toFixed(1) : "null"} / ${latency.maxMs != null ? latency.maxMs.toFixed(1) : "null"} ms`);
 }
 
 // ── Benchmark: API Latency ──────────────────────────────────────────────────
@@ -151,6 +109,7 @@ function printStats(label, s) {
 async function benchmarkAPI() {
   console.log("\n━━━ API Latency Benchmark ━━━");
   console.log(`  ${ITERATIONS} requests × ${CONCURRENCY} concurrency × ${BASE_URL}`);
+  console.log(`  Latency = transport-completed duration (incl. body handling)`);
 
   const endpoints = [
     { label: "GET /api/repos", path: "/api/repos" },
@@ -165,13 +124,29 @@ async function benchmarkAPI() {
   const results = {};
 
   for (const ep of endpoints) {
-    const res = await burst(() => apiFetch(ep.path), ITERATIONS, CONCURRENCY);
-    const durations = res.filter((r) => r.status === 200).map((r) => r.elapsed);
-    const errors = res.filter((r) => r.status !== 200).length;
-    const s = stats(durations);
-    results[ep.label] = { ...s, errors };
-    printStats(ep.label, s);
-    if (errors > 0) console.log(`    Errors:    ${errors}`);
+    // Pre-materialize all descriptors before execution (not inside callbacks).
+    const ops = Array.from({ length: ITERATIONS }, () => readOp(ep.path));
+    const r = await runBurst(ops, {
+      concurrency: CONCURRENCY,
+      pacing: { mode: "none" },
+    });
+    printLatency(ep.label, r.latency);
+    console.log(`    ${formatBurstThroughput(r)}`);
+    if (r.transportFailed > 0) {
+      console.log(`    Transport failures: ${r.transportFailed}`);
+    }
+    // Report unexpected HTTP statuses (non-200, non-429).
+    const unexpected = Object.entries(r.statusCounts)
+      .filter(([s]) => s !== "200" && s !== "429")
+      .map(([s, n]) => `${s}×${n}`);
+    if (unexpected.length > 0) console.log(`    Other:      ${unexpected.join(", ")}`);
+    results[ep.label] = {
+      transportCompleted: r.transportCompleted,
+      transportFailed: r.transportFailed,
+      rps: r.rps.toFixed(1),
+      p95: r.latency.p95Ms != null ? r.latency.p95Ms.toFixed(1) : "null",
+      statusCounts: r.statusCounts,
+    };
   }
 
   return results;
@@ -182,11 +157,8 @@ async function benchmarkAPI() {
 async function benchmarkWebhook() {
   console.log("\n━━━ Webhook Ingestion Benchmark ━━━");
   console.log("  Not implemented in this revision.");
-  console.log("  Previous behavior sent fake-signature payloads and measured early");
-  console.log("  rejection latency while labelling it 'ingestion' — that measured the");
-  console.log("  HTTP stack's reject path, not ingestion, and produced misleading numbers.");
   console.log("  Real ingestion throughput requires validly HMAC-signed payloads against");
-  console.log("  a configured webhook secret, which is scoped to the ST-04 follow-up.");
+  console.log("  a configured webhook secret (ST-04 follow-up).");
   return null;
 }
 
@@ -195,38 +167,44 @@ async function benchmarkWebhook() {
 async function benchmarkQueue() {
   console.log("\n━━━ Queue Throughput Benchmark ━━━");
 
-  // Queue benchmark enqueues real sync jobs, which are mutations against a
-  // fixture repository. Require the full mutation gate.
   if (!POLICY.allowMutations) {
     console.log("  Skipped — requires GITWIRE_STRESS_ALLOW_MUTATIONS=true and a fixture repo.");
-    console.log("  (queue enqueue creates real BullMQ jobs against the configured fixture repo)");
     return null;
   }
   const fixtureRepo = POLICY.fixtureRepo;
-  console.log(`  ${Math.min(ITERATIONS, 20)} sync jobs × fixture ${fixtureRepo}`);
+  // The queue benchmark deliberately limits concurrency and operation count
+  // as a mutation-safety constraint (not a hidden scheduler cap). This is
+  // disclosed explicitly below, not hidden in Math.min().
+  const QUEUE_OP_CAP = 20;
+  const QUEUE_CONCURRENCY_CAP = 3;
+  const opCount = Math.min(ITERATIONS, QUEUE_OP_CAP);
+  const queueConcurrency = Math.min(CONCURRENCY, QUEUE_CONCURRENCY_CAP);
+  console.log(`  ${opCount} sync jobs × fixture ${fixtureRepo}`);
+  console.log(`  Configured concurrency: ${CONCURRENCY}`);
+  console.log(`  Requested concurrency: ${queueConcurrency} (concurrencyLimitReason: queue_mutation_safety_cap)`);
 
-  // Use the API to trigger sync jobs (they go to BullMQ) against the
-  // configured fixture repository only. The policy's mutation gate + budget
-  // bound how many may fire.
-  const res = await burst(
-    () => apiFetch(`/api/repos/${fixtureRepo}/sync`, { method: "POST", contractName: "repo-sync" }),
-    Math.min(ITERATIONS, 20),
-    Math.min(CONCURRENCY, 3),
-  );
+  // Pre-materialize all sync descriptors before execution.
+  const ops = Array.from({ length: opCount }, () => syncOp(fixtureRepo));
+  const r = await runBurst(ops, {
+    concurrency: queueConcurrency,
+    pacing: { mode: "none" },
+  });
 
-  const durations = res.filter((r) => r.status === 202).map((r) => r.elapsed);
-  const errors = res.filter((r) => r.status !== 202).length;
+  printLatency("POST /api/repos/:owner/:repo/sync (queue enqueue)", r.latency);
+  console.log(`    ${formatBurstThroughput(r)}`);
+  console.log(`    Transport completed: ${r.transportCompleted}/${r.attempted}`);
+  console.log(`    202 Accepted: ${r.statusCounts[202] || 0}`);
 
-  if (durations.length === 0) {
-    console.log("  No successful queue jobs — skipping");
-    return null;
-  }
-
-  const s = stats(durations);
-  printStats("POST /api/repos/:owner/:repo/sync (queue enqueue)", s);
-  if (errors > 0) console.log(`    Errors:    ${errors}`);
-
-  return s;
+  return {
+    transportCompleted: r.transportCompleted,
+    transportFailed: r.transportFailed,
+    rps: r.rps.toFixed(1),
+    p95: r.latency.p95Ms != null ? r.latency.p95Ms.toFixed(1) : "null",
+    statusCounts: r.statusCounts,
+    configuredConcurrency: CONCURRENCY,
+    requestedConcurrency: queueConcurrency,
+    concurrencyLimitReason: "queue_mutation_safety_cap",
+  };
 }
 
 // ── Benchmark: Mixed Workload ───────────────────────────────────────────────
@@ -235,63 +213,72 @@ async function benchmarkMixed() {
   console.log("\n━━━ Mixed Workload Benchmark ━━━");
   console.log(`  ${ITERATIONS} ops × ${CONCURRENCY} concurrency`);
 
-  // Each operation carries its kind, and the kind is attached DIRECTLY to the
-  // result object the promise resolves with (not tracked in a parallel array
-  // keyed by invocation order — that misclassified under out-of-order
-  // completion or rejected promises). The repo-sync contract is registered
-  // at module init (above), so both --queue and --mixed can use it.
-  const readOps = [
-    { kind: "read", run: () => apiFetch("/api/repos").then(r => ({ ...r, kind: "read" })) },
-    { kind: "read", run: () => apiFetch("/api/issues?limit=20").then(r => ({ ...r, kind: "read" })) },
-    { kind: "read", run: () => apiFetch("/api/ci/stats").then(r => ({ ...r, kind: "read" })) },
-    { kind: "read", run: () => apiFetch("/api/actions/summary").then(r => ({ ...r, kind: "read" })) },
-    { kind: "read", run: () => apiFetch("/api/activity/summary").then(r => ({ ...r, kind: "read" })) },
-    { kind: "read", run: () => apiFetch("/health").then(r => ({ ...r, kind: "read" })) },
-    { kind: "read", run: () => apiFetch("/api/webhooks/deliveries?limit=10").then(r => ({ ...r, kind: "read" })) },
+  // Pre-materialize ALL operation descriptors before calling runBurst.
+  // The previous version chose operations inside the scheduled callback
+  // and caught rejections into fulfilled error objects. Both behaviors are
+  // gone: descriptors exist before execution begins, guaranteeing attribution.
+  //
+  // Workload composition preserves the previous uniform template selection:
+  // ~7 read operations + ~1 write operation, selected uniformly, producing
+  // ~12.5% writes when mutations are enabled (NOT a hardcoded 30% which
+  // would double mutation pressure and alter comparability).
+  const readPaths = [
+    "/api/repos", "/api/issues?limit=20", "/api/ci/stats",
+    "/api/actions/summary", "/api/activity/summary", "/health",
+    "/api/webhooks/deliveries?limit=10",
   ];
-  // Only the fixture-targeted sync mutation. The previous NONEXISTENT_ID
-  // ci/actions retry writes targeted guessed IDs that were not fixture-owned
-  // records — that is not a safety boundary (the reviewer is correct), and
-  // under the fail-closed contract model a guessed ID cannot be validated.
-  const writeOps = POLICY.allowMutations && POLICY.fixtureRepo ? [
-    { kind: "write", run: () => apiFetch(
-      `/api/repos/${POLICY.fixtureRepo}/sync`,
-      { method: "POST", contractName: "repo-sync" }
-    ).then(r => ({ ...r, kind: "write" })) },
-  ] : [];
+  const allOps = POLICY.allowMutations && POLICY.fixtureRepo
+    ? [...readPaths.map(p => ({ kind: "read", path: p })), { kind: "write", path: null }]
+    : readPaths.map(p => ({ kind: "read", path: p }));
 
-  if (writeOps.length === 0) {
+  if (POLICY.allowMutations && POLICY.fixtureRepo) {
+    // Uniform selection from 8 templates (7 reads + 1 write) = ~12.5% writes.
+  } else {
     console.log("  Mutations disabled — running read-only mixed workload.");
   }
-  const operations = [...readOps, ...writeOps];
 
-  const res = await burst(
-    () => {
-      const op = operations[Math.floor(Math.random() * operations.length)];
-      // Attach kind on both resolve and reject so a failed write isn't
-      // misclassified as a read. burst() catches rejections into its results
-      // array as { error }; we synthesize a kind-tagged failure object.
-      return op.run().catch(err => ({ kind: op.kind, error: err.message, elapsed: -1 }));
-    },
-    ITERATIONS,
-    CONCURRENCY,
-  );
+  const ops = Array.from({ length: ITERATIONS }, () => {
+    const template = allOps[Math.floor(Math.random() * allOps.length)];
+    if (template.kind === "write") {
+      return syncOp(POLICY.fixtureRepo);
+    }
+    return readOp(template.path);
+  });
 
-  const readDurations = [];
-  const writeDurations = [];
-  for (const r of res) {
-    if (!r || r.elapsed < 0) continue;
-    if (r.kind === "write") writeDurations.push(r.elapsed);
-    else readDurations.push(r.elapsed);
+  const r = await runBurst(ops, {
+    concurrency: CONCURRENCY,
+    pacing: { mode: "none" },
+  });
+
+  // Split latency by kind using result.results[].kind (attached before exec).
+  // Filter to transport-completed only — transport failures have no HTTP
+  // response latency and must not contaminate the latency population.
+  const readDurations = r.results
+    .filter(x => x.kind === "read" && x.transport === "completed" && x.durationMs != null)
+    .map(x => x.durationMs);
+  const writeDurations = r.results
+    .filter(x => x.kind === "write" && x.transport === "completed" && x.durationMs != null)
+    .map(x => x.durationMs);
+
+  // Compute per-kind stats via the runner's computeLatencyStats.
+  const { computeLatencyStats } = await import(pathToFileURL(RUNNER_PATH).href);
+  if (readDurations.length > 0) {
+    printLatency("Read operations", computeLatencyStats(readDurations));
+  }
+  if (writeDurations.length > 0) {
+    printLatency("Write operations", computeLatencyStats(writeDurations));
   }
 
-  if (readDurations.length > 0) printStats("Read operations", stats(readDurations));
-  if (writeDurations.length > 0) printStats("Write operations", stats(writeDurations));
+  printLatency("All operations", r.latency);
+  console.log(`    Transport:  ${r.transportCompleted} completed, ${r.transportFailed} failed`);
+  console.log(`    Scheduler:  requestedConcurrency=${r.requestedConcurrency}, maxInFlightObserved=${r.maxInFlightObserved}`);
 
-  const allDurations = res.filter((r) => r && r.elapsed > 0).map((r) => r.elapsed);
-  printStats("All operations", stats(allDurations));
-
-  return stats(allDurations);
+  return {
+    transportCompleted: r.transportCompleted,
+    transportFailed: r.transportFailed,
+    rps: r.rps.toFixed(1),
+    p95: r.latency.p95Ms != null ? r.latency.p95Ms.toFixed(1) : "null",
+  };
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -300,9 +287,6 @@ async function main() {
   try {
     await runSuite();
   } finally {
-    // Finalize the budget so a future run with the same runId fails closed
-    // (stale reuse) rather than attaching to this run's consumed slots.
-    // Only the owner finalizes; participants (if any) do not.
     if (POLICY.allowMutations && POLICY.budget) {
       try {
         POLICY.budget.finalize();
@@ -323,13 +307,12 @@ async function runSuite() {
   console.log(`║  Target:       ${BASE_URL.padEnd(26)}║`);
   console.log(`║  Iterations:   ${String(ITERATIONS).padEnd(26)}║`);
   console.log(`║  Concurrency:  ${String(CONCURRENCY).padEnd(26)}║`);
-  console.log(`║  Auth:         ${(API_KEY ? "API key" : "None").padEnd(26)}║`);
+  console.log(`║  Auth:         ${("API key").padEnd(26)}║`);
   console.log("╚══════════════════════════════════════════╝");
 
   // Warmup
   console.log("\n⏳ Warming up...");
-  await apiFetch("/health");
-  await new Promise((r) => setTimeout(r, 500));
+  await apiBurstOperation("/health", { kind: "warmup", method: "GET", bodyMode: "none" }).run();
 
   const results = {};
 
@@ -340,33 +323,22 @@ async function runSuite() {
 
   const suiteElapsed = ((performance.now() - suiteStart) / 1000).toFixed(1);
 
-  // Summary
   console.log("\n━━━ Summary ━━━");
   console.log(`  Total time:  ${suiteElapsed}s`);
-
-  if (results.api) {
-    const apiSummary = Object.entries(results.api)
-      .map(([k, v]) => `${k}: ${v.rps} RPS, p95=${v.p95}ms`)
-      .join("\n    ");
-    console.log(`  API:\n    ${apiSummary}`);
-  }
 
   if (results.mixed) {
     console.log(`  Mixed:       ${results.mixed.rps} RPS, p95=${results.mixed.p95}ms`);
   }
 
-  if (results.webhook) {
-    console.log(`  Webhook:     ${results.webhook.rps} RPS, p95=${results.webhook.p95}ms`);
-  } else {
-    console.log(`  Webhook:     (not implemented in this revision)`);
-  }
-
   console.log("\n✅ Benchmark complete.");
 
-  // Write results to JSON
   const outPath = `benchmark-results-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   const { writeFileSync } = await import("fs");
-  writeFileSync(outPath, JSON.stringify({ timestamp: new Date().toISOString(), config: { baseUrl: BASE_URL, iterations: ITERATIONS, concurrency: CONCURRENCY }, results }, null, 2));
+  writeFileSync(outPath, JSON.stringify({
+    timestamp: new Date().toISOString(),
+    config: { baseUrl: BASE_URL, iterations: ITERATIONS, concurrency: CONCURRENCY },
+    results,
+  }, null, 2));
   console.log(`  Results saved to: ${outPath}`);
 }
 

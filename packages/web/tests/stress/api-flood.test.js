@@ -1,9 +1,9 @@
 // tests/stress/api-flood.test.js
-// Stress Test: API Flood — high-concurrency reads across all endpoints
+// Stress Test: API Flood — high-concurrency reads across all endpoints.
 //
 // Run: NODE_OPTIONS="--experimental-vm-modules" npx jest tests/stress/api-flood.test.js --testTimeout=120000 --runInBand
 
-import { get } from '../helpers.js';
+import { apiBurstOperation, get } from '../helpers.js';
 import { boundedBurst, sleep } from './stress-helpers.js';
 
 const CONCURRENT = 8;
@@ -16,47 +16,49 @@ describe(`API Flood: ${CONCURRENT} concurrent × ${ROUNDS} rounds`, () => {
 
   test('GET /api/repos survives flood', async () => {
     for (let round = 0; round < ROUNDS; round++) {
-      const tasks = Array.from({ length: CONCURRENT }, () => () => get('/api/repos'));
+      const tasks = Array.from({ length: CONCURRENT }, () => apiBurstOperation('/api/repos', { kind: 'read' }));
       const result = await boundedBurst(tasks, { maxConcurrent: CONCURRENT });
-      console.log(`  Round ${round + 1}: ${result.succeeded}/${result.total} OK in ${result.elapsed}ms`);
-      expect(result.succeeded).toBe(result.total);
+      console.log(`  Round ${round + 1}: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
+      expect(result.transportCompleted).toBe(result.attempted);
       // Allow 429 in later rounds (rate limit)
-      const okStatuses = result.statuses.filter(s => s === 200 || s === 429);
-      expect(okStatuses.length).toBe(result.total);
+      const okStatuses = result.results.filter(r => r.status === 200 || r.status === 429);
+      expect(okStatuses.length).toBe(result.attempted);
       await sleep(500);
     }
   });
 
   test('GET /api/issues survives flood', async () => {
-    const tasks = Array.from({ length: CONCURRENT }, () => () => get('/api/issues'));
+    const tasks = Array.from({ length: CONCURRENT }, () => apiBurstOperation('/api/issues', { kind: 'read' }));
     const result = await boundedBurst(tasks);
-    console.log(`  Issues: ${result.succeeded}/${result.total} OK in ${result.elapsed}ms`);
-    expect(result.succeeded).toBe(result.total);
+    console.log(`  Issues: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
+    expect(result.transportCompleted).toBe(result.attempted);
   });
 
   test('GET /api/ci/stats survives flood', async () => {
-    const tasks = Array.from({ length: CONCURRENT }, () => () => get('/api/ci/stats'));
+    const tasks = Array.from({ length: CONCURRENT }, () => apiBurstOperation('/api/ci/stats', { kind: 'read' }));
     const result = await boundedBurst(tasks);
-    console.log(`  CI stats: ${result.succeeded}/${result.total} OK in ${result.elapsed}ms`);
-    expect(result.succeeded).toBe(result.total);
+    console.log(`  CI stats: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
+    expect(result.transportCompleted).toBe(result.attempted);
   });
 
   test('GET /api/insights/overview survives flood', async () => {
-    const tasks = Array.from({ length: CONCURRENT }, () => () => get('/api/insights/overview'));
+    const tasks = Array.from({ length: CONCURRENT }, () => apiBurstOperation('/api/insights/overview', { kind: 'read' }));
     const result = await boundedBurst(tasks);
-    console.log(`  Insights: ${result.succeeded}/${result.total} OK in ${result.elapsed}ms`);
-    expect(result.succeeded).toBe(result.total);
+    console.log(`  Insights: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
+    expect(result.transportCompleted).toBe(result.attempted);
   });
 
   test('GET /health survives flood (no auth required)', async () => {
-    const tasks = Array.from({ length: CONCURRENT }, () => () =>
-      fetch(`${process.env.GITWIRE_BASE_URL || (() => { throw new Error("GITWIRE_BASE_URL is required"); })()}/health`)
-        .then(r => ({ status: r.status }))
+    // /health does not require auth. omitAuth:true suppresses the bearer
+    // token entirely — no API key is placed on the request. fetch failures
+    // are classified by httpOperation (not escaped as BURST_OPERATION_REJECTED).
+    const tasks = Array.from({ length: CONCURRENT }, () =>
+      apiBurstOperation('/health', { kind: 'health', method: 'GET', bodyMode: 'none', omitAuth: true })
     );
     const result = await boundedBurst(tasks);
-    console.log(`  Health: ${result.succeeded}/${result.total} OK in ${result.elapsed}ms`);
-    expect(result.succeeded).toBe(result.total);
-    expect(result.statuses.every(s => s === 200)).toBe(true);
+    console.log(`  Health: ${result.transportCompleted}/${result.attempted} transport-OK in ${result.elapsedMs}ms`);
+    expect(result.transportCompleted).toBe(result.attempted);
+    expect(result.results.every(r => r.status === 200)).toBe(true);
   });
 
   test('Mixed 18 endpoints all return 200', async () => {
@@ -69,15 +71,12 @@ describe(`API Flood: ${CONCURRENT} concurrent × ${ROUNDS} rounds`, () => {
       '/api/phase2/telemetry/summary', '/api/review/stats', '/api/audit/stats',
     ];
     // Sequential to avoid rate limits
-    const start = Date.now();
-    const statuses = [];
+    let ok = 0;
     for (const ep of endpoints) {
       const res = await get(ep);
-      statuses.push(res.status);
+      if (res.status === 200) ok++;
     }
-    const elapsed = Date.now() - start;
-    const ok = statuses.filter(s => s === 200).length;
-    console.log(`  Mixed ${endpoints.length} endpoints: ${ok}/${endpoints.length} OK in ${elapsed}ms`);
+    console.log(`  Mixed ${endpoints.length} endpoints: ${ok}/${endpoints.length} OK`);
     expect(ok).toBe(endpoints.length);
   });
 });
