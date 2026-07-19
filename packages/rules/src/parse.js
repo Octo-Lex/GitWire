@@ -1,7 +1,7 @@
 // @gitwire/rules — parse.js
 // YAML parser with deep-merge onto defaults.
 
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { DEFAULT_CONFIG, validateConfig } from "./schema.js";
 
 /**
