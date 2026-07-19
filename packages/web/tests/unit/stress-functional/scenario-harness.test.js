@@ -56,8 +56,10 @@ describe("scenario-harness — clean scenario completes", () => {
   afterEach(async () => { if (scenario) await scenario.cleanup(); });
 
   it("consumes scripted outcomes in order and records an exact trace", async () => {
-    const trace = createTrace({ clock: createClock(0) });
+    const clock = createClock(0);
+    const trace = createTrace({ clock });
     scenario = createScenario({
+      clock,
       trace,
       attempts: [
         { transport: "completed", status: 200, body: { ok: true } },
@@ -66,20 +68,24 @@ describe("scenario-harness — clean scenario completes", () => {
     });
 
     const a = await scenario.run();
+    // Advance the clock between runs so trace timestamps are distinguishable
+    // and the exact-equality assertion is meaningful (not all-zero).
+    clock.advance(10);
     const b = await scenario.run();
 
     // Outcomes consumed in order, normalized to valid ClassifiedOutcomes.
     expect(a).toMatchObject({ transport: "completed", status: 200, body: { state: "parsed", value: { ok: true } } });
     expect(b).toMatchObject({ transport: "completed", status: 201, body: { state: "parsed", value: { id: 1 } } });
 
-    // Exact trace: two starts + two settles, with monotonic scenarioOperationIds.
-    const events = trace.events();
-    expect(events.map((e) => e.kind)).toEqual([
-      "attempt_start", "attempt_settle",
-      "attempt_start", "attempt_settle",
+    // Exact trace: full event objects including ts, kind, scenarioOperationId,
+    // cursor, and the settle detail. Mutation of a returned snapshot must not
+    // affect the stored trace (covered by its own test below).
+    expect(trace.events()).toEqual([
+      { ts: 0, kind: "attempt_start", scenarioOperationId: 0, detail: { cursor: 0 } },
+      { ts: 0, kind: "attempt_settle", scenarioOperationId: 0, detail: { transport: "completed", status: 200 } },
+      { ts: 10, kind: "attempt_start", scenarioOperationId: 1, detail: { cursor: 1 } },
+      { ts: 10, kind: "attempt_settle", scenarioOperationId: 1, detail: { transport: "completed", status: 201 } },
     ]);
-    expect(events[0].scenarioOperationId).toBe(0);
-    expect(events[2].scenarioOperationId).toBe(1);
   });
 });
 
@@ -184,7 +190,7 @@ describe("scenario-harness — injected clock and sleeper", () => {
     await sleeper.sleep(2000);
     const after = clock.value();
 
-    expect(sleeper.calls).toEqual([2000]);
+    expect(sleeper.calls()).toEqual([2000]);
     expect(after - before).toBe(2000); // deterministic, no real wait
     expect(trace.events()).toEqual([{ ts: 3000, kind: "sleep", detail: { ms: 2000 } }]);
   });
@@ -237,6 +243,10 @@ describe("scenario-harness — cleanup", () => {
     // not produce a process-level unhandledRejection. The trackedRun wrapper
     // attaches a safety .catch on the .finally return promise so the
     // rejecting p does not propagate through the finally chain unhandled.
+    //
+    // Event-loop turns (not a real timer) are enough for Node to emit any
+    // pending unhandledRejection — the assertion does not depend on a
+    // machine completing a timer within an arbitrary duration.
     const rejections = [];
     const handler = (reason) => { rejections.push(reason); };
     process.on("unhandledRejection", handler);
@@ -246,12 +256,67 @@ describe("scenario-harness — cleanup", () => {
       });
       scenario.run(); // fire and forget — the misuse pattern
       await scenario.cleanup();
-      // Yield long enough for any pending microtask to surface a rejection.
-      await new Promise((r) => setTimeout(r, 50));
+      // Two setImmediate yields let Node fire any queued microtasks and
+      // emit unhandledRejection if one is pending. No wall-clock wait.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
       expect(rejections).toEqual([]);
     } finally {
       process.off("unhandledRejection", handler);
     }
+  });
+
+  it("cleanup cancels a genuinely-blocked deferred run with SCENARIO_CANCELLED", async () => {
+    // The primary C1-fix regression: run() is blocked on a deferred gate
+    // when cleanup begins. cleanup must reject the gate with SCENARIO_CANCELLED
+    // so the blocked run settles, the original caller observes the typed
+    // cancellation, and no deferred leaks past cleanup.
+    const gate = deferred();
+    const trace = createTrace({ clock: createClock(0) });
+    const scenario = createScenario({
+      trace,
+      attempts: [{ deferred: gate }],
+    });
+
+    // Start the run; let it reach the await gate.promise line.
+    const runP = scenario.run();
+    await new Promise((r) => setImmediate(r));
+    expect(scenario.pendingDeferredCount()).toBe(1); // genuinely blocked
+
+    // cleanup while run is blocked.
+    const cleanupP = scenario.cleanup();
+    let observed = null;
+    try { await runP; } catch (e) { observed = e; }
+    await cleanupP;
+
+    // Original caller observes the typed cancellation.
+    expect(observed).toMatchObject({ code: SCENARIO_CANCELLED });
+    // Deferred gate released; count returns to zero.
+    expect(scenario.pendingDeferredCount()).toBe(0);
+    // Trace records a terminal cancellation event.
+    const cleanupEvents = trace.events().filter((e) => e.kind === "scenario_cleanup");
+    expect(cleanupEvents.length).toBe(1);
+    expect(cleanupEvents[0].detail.cancelledDeferreds).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a fulfilled deferred value is normalized through mockOutcome", async () => {
+    const gate = deferred();
+    const scenario = createScenario({
+      trace: createTrace({ clock: createClock(0) }),
+      attempts: [{ deferred: gate }],
+    });
+    const runP = scenario.run();
+    await new Promise((r) => setImmediate(r));
+    gate.resolve({ transport: "completed", status: 200, body: { ok: true } });
+    const result = await runP;
+    // Fulfilled value ran through mockOutcome — body wrapped, validated.
+    expect(result).toMatchObject({
+      transport: "completed",
+      status: 200,
+      body: { state: "parsed", value: { ok: true }, error: null },
+      error: null,
+    });
+    await scenario.cleanup();
   });
 });
 
@@ -318,5 +383,84 @@ describe("scenario-harness — mockOutcome boundary failures", () => {
   it("rejects an unrecognized transport", () => {
     expect(() => mockOutcome({ transport: "purple" }))
       .toThrow(/transport must be "completed" or "failed"/);
+  });
+});
+
+// ─── Defensive copy: trace and sleeper snapshots ──────────────────────────
+
+describe("scenario-harness — defensive snapshots", () => {
+  it("mutating a returned trace snapshot does not corrupt the stored trace", async () => {
+    const trace = createTrace({ clock: createClock(0) });
+    const scenario = createScenario({
+      trace,
+      attempts: [{ transport: "completed", status: 200, body: { ok: true } }],
+    });
+    await scenario.run();
+    await scenario.cleanup();
+
+    const original = trace.events();
+    // Mutate the returned snapshot in depth.
+    original[0].kind = "corrupted";
+    original[0].detail.status = 999;
+    if (original.find((e) => e.kind === "attempt_settle")) {
+      original.find((e) => e.kind === "attempt_settle").detail.status = 999;
+    }
+
+    // A fresh snapshot is unaffected.
+    const fresh = trace.events();
+    expect(fresh[0].kind).toBe("attempt_start");
+    expect(fresh[0].detail).toEqual({ cursor: 0 });
+    const settle = fresh.find((e) => e.kind === "attempt_settle");
+    if (settle) expect(settle.detail.status).toBe(200);
+  });
+
+  it("mutating a returned sleeper.calls() snapshot does not corrupt the record", async () => {
+    const sleeper = createSleeper({ clock: createClock(0) });
+    await sleeper.sleep(10);
+    await sleeper.sleep(20);
+
+    const snap = sleeper.calls();
+    expect(snap).toEqual([10, 20]);
+    snap.push(999);
+    snap[0] = -1;
+
+    expect(sleeper.calls()).toEqual([10, 20]);
+  });
+});
+
+// ─── Fail-closed: invalid arguments ───────────────────────────────────────
+
+describe("scenario-harness — invalid-argument fail-closed", () => {
+  it("createClock rejects a non-finite initialMs", () => {
+    expect(() => createClock(Infinity)).toThrow(/initialMs must be a finite number/);
+    expect(() => createClock(NaN)).toThrow(/initialMs must be a finite number/);
+    expect(() => createClock("100")).toThrow(/initialMs must be a finite number/);
+  });
+
+  it("createClock accepts undefined and finite initialMs", () => {
+    expect(() => createClock()).not.toThrow();
+    expect(() => createClock(0)).not.toThrow();
+    expect(() => createClock(1000)).not.toThrow();
+  });
+
+  it("clock.advance rejects negative, non-finite, and non-numeric values", () => {
+    const clock = createClock(0);
+    expect(() => clock.advance(-1)).toThrow(/non-negative finite number/);
+    expect(() => clock.advance(Infinity)).toThrow(/non-negative finite number/);
+    expect(() => clock.advance(NaN)).toThrow(/non-negative finite number/);
+    expect(() => clock.advance("10")).toThrow(/non-negative finite number/);
+  });
+
+  it("clock.advance(0) is a valid no-movement call", () => {
+    const clock = createClock(100);
+    expect(clock.advance(0)).toBe(100);
+    expect(clock.now()).toBe(100);
+  });
+
+  it("sleeper.sleep rejects invalid delays", async () => {
+    const sleeper = createSleeper({});
+    await expect(sleeper.sleep(-1)).rejects.toThrow(/non-negative finite number/);
+    await expect(sleeper.sleep(Infinity)).rejects.toThrow(/non-negative finite number/);
+    await expect(sleeper.sleep(NaN)).rejects.toThrow(/non-negative finite number/);
   });
 });

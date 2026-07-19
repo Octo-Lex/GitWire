@@ -52,8 +52,17 @@ export const SCENARIO_CANCELLED = "SCENARIO_CANCELLED";
  *
  * @param {number} [initialMs=0]
  * @returns {{now: () => number, advance: (ms: number) => number, value: () => number}}
+ * @throws {Error} if initialMs is present but not a finite number (typed
+ *   INVALID_CLOCK_INIT — fail-closed rather than silently coercing to zero,
+ *   which would hide a faulty scenario configuration).
  */
 export function createClock(initialMs = 0) {
+  if (initialMs !== undefined && !Number.isFinite(initialMs)) {
+    throw Object.assign(
+      new Error(`createClock: initialMs must be a finite number, got ${initialMs}`),
+      { code: "INVALID_CLOCK_INIT" }
+    );
+  }
   let t = Number.isFinite(initialMs) ? initialMs : 0;
   return Object.freeze({
     now: () => t,
@@ -77,12 +86,11 @@ export function createClock(initialMs = 0) {
  * Create a deterministic sleeper. sleep(ms) records the requested delay and,
  * if a clock was injected, advances it by exactly ms. No real timer is used.
  *
- * `calls` is a live view into the recorded delays; tests read it after the
- * scenario settles. Object.freeze on the returned sleeper prevents mutation
- * of the methods, not of the internal calls array.
+ * `calls()` returns a fresh array snapshot each call — external mutation of
+ * a returned array cannot corrupt the internal record.
  *
  * @param {{clock?: object, trace?: object}} [opts]
- * @returns {{sleep: (ms: number) => Promise<void>, calls: number[]}}
+ * @returns {{sleep: (ms: number) => Promise<void>, calls: () => number[]}}
  */
 export function createSleeper(opts = {}) {
   const { clock, trace } = opts;
@@ -101,7 +109,7 @@ export function createSleeper(opts = {}) {
     // preserving ordering with other async work without introducing latency.
     await Promise.resolve();
   };
-  return Object.freeze({ sleep, calls });
+  return Object.freeze({ sleep, calls: () => [...calls] });
 }
 
 // ─── Deferred barrier ─────────────────────────────────────────────────────
@@ -140,6 +148,11 @@ export function deferred() {
  * appended with a timestamp from the injected clock, so tests can assert
  * exact event sequences without inferring from elapsed time.
  *
+ * Both append and events() deep-copy via structuredClone. Internal event
+ * objects (and their nested `detail`) cannot be mutated by a caller through
+ * a returned snapshot, and an event passed to append() cannot be mutated
+ * later to alter the stored trace.
+ *
  * @param {{clock?: object}} [opts]
  * @returns {{append: (event) => void, events: () => object[]}}
  */
@@ -148,11 +161,11 @@ export function createTrace(opts = {}) {
   const events = [];
   const append = (event) => {
     const ts = clock && typeof clock.now === "function" ? clock.now() : null;
-    events.push({ ts, ...event });
+    events.push(structuredClone({ ts, ...event }));
   };
   return Object.freeze({
     append,
-    events: () => [...events],
+    events: () => structuredClone(events),
   });
 }
 
@@ -239,11 +252,22 @@ export function mockOutcome(spec) {
  *   "throw"        (default) — rejects with code SCENARIO_EXHAUSTED
  *   "repeat_last"  — returns the last scripted outcome again
  *
- * A spec of { throw: Error } inside the attempts array is an escaped
- * rejection: run() throws that Error, which the burst scheduler treats as
- * BURST_OPERATION_REJECTED (fatal harness/programming defect). It is NOT
- * converted to a transport-failed outcome — that path belongs to
- * { transport: "failed", error: Error }, which runs through mockOutcome.
+ * Accepted attempt spec shapes:
+ *   { transport: "completed"|"failed", ... }  — synchronous outcome via mockOutcome
+ *   { throw: Error }                           — escaped rejection (becomes
+ *                                                 BURST_OPERATION_REJECTED
+ *                                                 inside the burst scheduler;
+ *                                                 NOT normalized to transport
+ *                                                 failure)
+ *   { deferred: gate }                         — caller-controlled barrier.
+ *                                                 run() awaits gate.promise.
+ *                                                 A fulfilled value is
+ *                                                 normalized through
+ *                                                 mockOutcome; a rejected
+ *                                                 gate stays escaped. cleanup()
+ *                                                 rejects every unsettled gate
+ *                                                 with SCENARIO_CANCELLED so a
+ *                                                 blocked run() settles.
  *
  * Each non-throw attempt is normalized via mockOutcome before being recorded
  * in the trace and returned. start/settle events carry the scenarioOperationId
@@ -281,6 +305,11 @@ export function createScenario(opts = {}) {
   // exit. Legitimate callers still receive rejections via their own await;
   // the safety catch only suppresses the orphaned-reference count.
   const activeRuns = new Set();
+  // Track deferred gates that are currently awaited by some run(). cleanup()
+  // rejects each unsettled gate with SCENARIO_CANCELLED so a blocked run()
+  // settles (the original caller observes the cancellation rejection), and
+  // no deferred leaks past cleanup.
+  const pendingGates = new Set();
 
   const run = async () => {
     if (closing) {
@@ -305,6 +334,32 @@ export function createScenario(opts = {}) {
     if (spec && typeof spec === "object" && spec.throw instanceof Error) {
       trace.append({ kind: "attempt_throw", scenarioOperationId, detail: { code: spec.throw.code || null } });
       throw spec.throw;
+    }
+
+    // Deferred spec: block on the caller-controlled gate. A fulfilled value
+    // is normalized through mockOutcome (so the engine receives a valid
+    // ClassifiedOutcome); a rejected gate stays an escaped rejection. The
+    // gate is tracked in pendingGates so cleanup can cancel a blocked run.
+    if (spec && typeof spec === "object" && spec.deferred && typeof spec.deferred.promise === "object") {
+      const gate = spec.deferred;
+      pendingGates.add(gate);
+      let value;
+      try {
+        value = await gate.promise;
+      } finally {
+        pendingGates.delete(gate);
+      }
+      // cleanup() may have rejected the gate with SCENARIO_CANCELLED while
+      // we were awaiting — that rejection propagates as the awaited value's
+      // rejection, so we never reach this branch on cancellation. A genuine
+      // fulfillment runs through mockOutcome.
+      const outcome = mockOutcome(value);
+      trace.append({
+        kind: "attempt_settle",
+        scenarioOperationId,
+        detail: { transport: outcome.transport, status: outcome.status, deferred: true },
+      });
+      return outcome;
     }
 
     const outcome = mockOutcome(spec);
@@ -332,11 +387,19 @@ export function createScenario(opts = {}) {
     return p;
   };
 
-  const pendingDeferredCount = () => 0; // C1 has no built-in deferreds; callers compose with deferred().
+  const pendingDeferredCount = () => pendingGates.size;
 
   const cleanup = async () => {
     if (closing) return; // idempotent — second call is a no-op
     closing = true;
+    // Reject every unsettled deferred gate with SCENARIO_CANCELLED. The
+    // awaiting run() observes the rejection (caller's await rejects with the
+    // typed error), and the gate is removed from pendingGates by the run()'s
+    // own finally block. This is what makes a blocked run() settle during
+    // cleanup rather than hanging.
+    for (const gate of pendingGates) {
+      gate.reject(Object.assign(new Error("scenario: cleanup cancelled pending deferred"), { code: SCENARIO_CANCELLED }));
+    }
     // Snapshot pending runs. Attach a safety catch to each BEFORE awaiting
     // so any that reject during the allSettled drain cannot surface as
     // unhandledRejection (allSettled itself does not count as a handler for
@@ -346,7 +409,8 @@ export function createScenario(opts = {}) {
     for (const p of pending) p.catch(() => { /* safety — see trackedRun */ });
     await Promise.allSettled(pending);
     activeRuns.clear();
-    trace.append({ kind: "scenario_cleanup", detail: { consumedAttempts: cursor } });
+    trace.append({ kind: "scenario_cleanup", detail: { consumedAttempts: cursor, cancelledDeferreds: pendingGates.size } });
+    pendingGates.clear();
   };
 
   return Object.freeze({
