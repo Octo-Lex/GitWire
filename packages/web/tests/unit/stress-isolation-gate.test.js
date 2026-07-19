@@ -9,7 +9,8 @@ import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { scanStressIsolation, scanDockerfiles } from "../../../../scripts/check-stress-isolation.mjs";
+import { fileURLToPath } from "node:url";
+import { scanStressIsolation, scanDockerfiles, validateComposeDockerfiles, verifyKnownDockerfilesExist } from "../../../../scripts/check-stress-isolation.mjs";
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "stress-gate-test-"));
@@ -175,5 +176,100 @@ describe("Dockerfile uniqueness gate", () => {
     const violations = scanDockerfiles("/nonexistent/path");
     expect(violations.length).toBeGreaterThan(0);
     expect(violations[0].msg).toContain("cannot read");
+  });
+});
+
+// ─── Compose Dockerfile target validation ────────────────────────────────
+
+describe("Compose Dockerfile target validation", () => {
+  let dir;
+  beforeEach(() => { dir = makeTempDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  function writeYaml(name, content) {
+    fs.writeFileSync(path.join(dir, name), content);
+  }
+
+  it("root context + root Dockerfile passes", () => {
+    writeYaml("docker-compose.build.yml", `
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+`);
+    writeFile(dir, "Dockerfile", "FROM node:20");
+    const v = validateComposeDockerfiles(dir, "docker-compose.build.yml");
+    expect(v).toEqual([]);
+  });
+
+  it("package context + package Dockerfile passes", () => {
+    fs.mkdirSync(path.join(dir, "packages", "bot"), { recursive: true });
+    writeYaml("docker-compose.build.yml", `
+services:
+  bot:
+    build:
+      context: packages/bot
+      dockerfile: Dockerfile
+`);
+    writeFile(path.join(dir, "packages", "bot"), "Dockerfile", "FROM node:20");
+    const v = validateComposeDockerfiles(dir, "docker-compose.build.yml");
+    expect(v).toEqual([]);
+  });
+
+  it("missing Compose target fails", () => {
+    writeYaml("docker-compose.build.yml", `
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+`);
+    // No Dockerfile created
+    const v = validateComposeDockerfiles(dir, "docker-compose.build.yml");
+    expect(v.some(x => x.msg.includes("does not exist"))).toBe(true);
+  });
+
+  it("deleted allowlisted target fails (verifyKnownDockerfilesExist)", () => {
+    const known = new Set(["Dockerfile", "packages/bot/Dockerfile"]);
+    // Only create root Dockerfile, not packages/bot/Dockerfile
+    writeFile(dir, "Dockerfile", "FROM node:20");
+    const v = verifyKnownDockerfilesExist(dir, known);
+    expect(v.some(x => x.file === "packages/bot/Dockerfile")).toBe(true);
+  });
+
+  it("../ path escaping repository fails", () => {
+    writeYaml("docker-compose.build.yml", `
+services:
+  evil:
+    build:
+      context: ../../../etc
+      dockerfile: Dockerfile
+`);
+    const v = validateComposeDockerfiles(dir, "docker-compose.build.yml");
+    expect(v.some(x => x.msg.includes("escapes the repository"))).toBe(true);
+  });
+
+  it("unreadable Compose file fails closed", () => {
+    const v = validateComposeDockerfiles(dir, "nonexistent.yml");
+    expect(v.length).toBeGreaterThan(0);
+    expect(v[0].msg).toContain("cannot read");
+  });
+
+  it("current repository topology passes", () => {
+    // Run against the real repo (docker-compose.build.yml exists)
+    const __filename_real = fileURLToPath(import.meta.url);
+    const __dirname_real = path.dirname(__filename_real);
+    const repoRoot = path.resolve(__dirname_real, "../../../..");
+    const v = validateComposeDockerfiles(repoRoot, "docker-compose.build.yml");
+    expect(v).toEqual([]);
+  });
+
+  it("current repository known Dockerfiles all exist", () => {
+    const __filename_real = fileURLToPath(import.meta.url);
+    const __dirname_real = path.dirname(__filename_real);
+    const repoRoot = path.resolve(__dirname_real, "../../../..");
+    const v = verifyKnownDockerfilesExist(repoRoot);
+    expect(v).toEqual([]);
   });
 });

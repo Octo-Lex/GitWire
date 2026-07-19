@@ -9,6 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import yaml from "js-yaml";
 
 const STRESS_DIR_DEFAULT = path.resolve("packages/web/tests/stress");
 
@@ -124,12 +125,94 @@ export function scanStressIsolation(opts = {}) {
   return violations;
 }
 
+/**
+ * Parse a Compose file and validate that every build.dockerfile target exists
+ * relative to its build.context. Returns violations for missing targets and
+ * targets escaping the repository.
+ *
+ * @param {string} repoRoot repository root
+ * @param {string} composeRelPath relative path to the Compose file
+ * @returns {Array<{file: string, msg: string}>} violations
+ */
+export function validateComposeDockerfiles(repoRoot, composeRelPath = "docker-compose.build.yml") {
+  const violations = [];
+  const composePath = path.join(repoRoot, composeRelPath);
+
+  let composeContent;
+  try {
+    composeContent = fs.readFileSync(composePath, "utf8");
+  } catch (err) {
+    return [{ file: composeRelPath, msg: `cannot read Compose file: ${err.message}` }];
+  }
+
+  let compose;
+  try {
+    compose = yaml.load(composeContent);
+  } catch (err) {
+    return [{ file: composeRelPath, msg: `cannot parse Compose YAML: ${err.message}` }];
+  }
+
+  if (!compose || !compose.services) {
+    return [{ file: composeRelPath, msg: "Compose file has no services section" }];
+  }
+
+  for (const [svcName, svc] of Object.entries(compose.services)) {
+    if (!svc.build) continue;
+
+    const buildCtx = typeof svc.build === "string" ? svc.build : svc.build.context || ".";
+    const dockerfile = (typeof svc.build === "object" ? svc.build.dockerfile : null) || "Dockerfile";
+
+    // Resolve context relative to repo root.
+    const contextAbs = path.resolve(repoRoot, buildCtx);
+    const dockerfilePath = path.join(contextAbs, dockerfile);
+    const dockerfileRel = path.relative(repoRoot, dockerfilePath);
+
+    // Reject targets escaping the repository.
+    if (dockerfileRel.startsWith("..")) {
+      violations.push({
+        file: `${composeRelPath}:${svcName}`,
+        msg: `Dockerfile target '${dockerfile}' in context '${buildCtx}' escapes the repository`,
+      });
+      continue;
+    }
+
+    // Verify the target exists.
+    if (!fs.existsSync(dockerfilePath)) {
+      violations.push({
+        file: `${composeRelPath}:${svcName}`,
+        msg: `Dockerfile target '${dockerfileRel}' does not exist (context: ${buildCtx})`,
+      });
+    }
+  }
+
+  return violations;
+}
+
+/**
+ * Verify that every default allowlisted Dockerfile actually exists in the repo.
+ *
+ * @param {string} repoRoot repository root
+ * @param {Set<string>} [known] known permitted relative paths
+ * @returns {Array<{file: string, msg: string}>} violations
+ */
+export function verifyKnownDockerfilesExist(repoRoot, known = KNOWN_DOCKERFILES) {
+  const violations = [];
+  for (const rel of known) {
+    const abs = path.join(repoRoot, rel);
+    if (!fs.existsSync(abs)) {
+      violations.push({ file: rel, msg: "allowlisted Dockerfile does not exist" });
+    }
+  }
+  return violations;
+}
+
 // CLI entry point
 if (process.argv[1] && path.resolve(process.argv[1]).endsWith("check-stress-isolation.mjs")) {
   const violations = scanStressIsolation();
-  // Also check for unknown Dockerfiles
   const repoRoot = path.resolve(".");
   violations.push(...scanDockerfiles(repoRoot));
+  violations.push(...verifyKnownDockerfilesExist(repoRoot));
+  violations.push(...validateComposeDockerfiles(repoRoot));
   if (violations.length > 0) {
     for (const v of violations) {
       console.error(`VIOLATION: ${v.file} — ${v.msg}`);
