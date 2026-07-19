@@ -152,14 +152,14 @@ export function collectStressIsolationFiles(rootDir) {
       const abs = path.join(absDir, ent.name);
       // Symlinks: do NOT follow (a symlinked subdirectory could pull in
       // arbitrary uncommitted tree content). But also do NOT silently treat
-      // as clean — a symlink whose name matches a scannable pattern
-      // (e.g. modules/adapter.js → /elsewhere/evil.js) would disappear from
-      // the static-gate surface. Record as a violation entry so the gate
-      // fails closed on the symbolic link itself.
+      // as clean — any symlink beneath the stress tree is a bypass surface,
+      // because Linux can import through either a file link
+      // (modules/adapter.js → /elsewhere/evil.js) or a directory link
+      // (modules/linked → /elsewhere; `import "./linked/evil.js"` executes
+      // code outside the scanner). Report EVERY symlink, regardless of its
+      // own name's shape.
       if (ent.isSymbolicLink()) {
-        if (isScannableStressFile(normalizedRel)) {
-          out.push({ rel: normalizedRel, abs, symlink: true });
-        }
+        out.push({ rel: normalizedRel, abs, symlink: true });
         continue;
       }
       if (ent.isDirectory()) {

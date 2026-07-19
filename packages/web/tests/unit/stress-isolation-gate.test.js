@@ -135,21 +135,27 @@ describe("stress-isolation recursive module discovery", () => {
     expect(found).toEqual(["modules/scenario-harness.js", "modules/util.mjs"]);
   });
 
-  it("does not follow directory symbolic links", () => {
+  it("a directory symbolic link fails closed as a violation (not silently clean)", () => {
+    // A directory symlink whose own name is not a scannable pattern (e.g.
+    // modules/linked → /elsewhere) can still be an import target on Linux
+    // (`import "./linked/evil.js"` executes code outside the scanner). The
+    // gate must report EVERY symlink beneath the stress tree, not just
+    // file-shaped scannable-named ones. The scanner does not follow the
+    // link, but it must surface it.
     fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
     writeFile(path.join(dir, "modules"), "real.js", "export const x = 1;");
-    // A directory symlink whose name is not itself a scannable file must not
-    // be traversed (it could pull in arbitrary uncommitted tree content).
     try {
       fs.symlinkSync("/nonexistent/target", path.join(dir, "modules", "linked"), "dir");
     } catch (err) {
-      // On platforms/permission levels where symlink creation fails, skip
-      // this assertion rather than failing the suite.
       if (err.code !== "EPERM" && err.code !== "ENOSYS") throw err;
-      return;
+      return; // platform cannot create symlinks — skip, not fail
     }
-    const found = collectStressIsolationFiles(dir).map((c) => c.rel).sort();
-    expect(found).toEqual(["modules/real.js"]);
+    writeFile(dir, "clean.test.js", CLEAN_FILE); // satisfy non-empty scan
+    const violations = scanStressIsolation({ dir });
+    expect(violations).toContainEqual({
+      file: "modules/linked",
+      msg: "symbolic links are not permitted in the stress isolation surface",
+    });
   });
 
   it("a scannable-name symbolic link fails closed as a violation (not silently clean)", () => {

@@ -16,6 +16,7 @@ import {
   deferred,
   mockOutcome,
   createScenario,
+  validateDeferredGate,
   SCENARIO_EXHAUSTED,
   SCENARIO_CANCELLED,
 } from "../../stress/modules/scenario-harness.js";
@@ -293,10 +294,33 @@ describe("scenario-harness — cleanup", () => {
     expect(observed).toMatchObject({ code: SCENARIO_CANCELLED });
     // Deferred gate released; count returns to zero.
     expect(scenario.pendingDeferredCount()).toBe(0);
-    // Trace records a terminal cancellation event.
+    // Trace records a terminal cancellation event with the exact count of
+    // cancelled gates (captured before rejection so the count is not zeroed
+    // by each gate's self-removal in its finally block).
     const cleanupEvents = trace.events().filter((e) => e.kind === "scenario_cleanup");
     expect(cleanupEvents.length).toBe(1);
-    expect(cleanupEvents[0].detail.cancelledDeferreds).toBeGreaterThanOrEqual(0);
+    expect(cleanupEvents[0].detail.cancelledDeferreds).toBe(1);
+  });
+
+  it("concurrent cleanup() calls return the same promise and join the drain", async () => {
+    // Regression: a second cleanup() made while the first is still draining
+    // must NOT resolve immediately via `if (closing) return` — that would
+    // race the first drain. Both calls receive the same promise and await
+    // the same settlement.
+    const gate = deferred();
+    const scenario = createScenario({
+      trace: createTrace({ clock: createClock(0) }),
+      attempts: [{ deferred: gate }],
+    });
+    const runP = scenario.run();
+    await new Promise((r) => setImmediate(r));
+
+    const cleanupA = scenario.cleanup();
+    const cleanupB = scenario.cleanup();
+    expect(cleanupB).toBe(cleanupA); // same promise — single drain
+
+    await Promise.all([cleanupA, cleanupB]);
+    await expect(runP).rejects.toMatchObject({ code: SCENARIO_CANCELLED });
   });
 
   it("a fulfilled deferred value is normalized through mockOutcome", async () => {
@@ -462,5 +486,53 @@ describe("scenario-harness — invalid-argument fail-closed", () => {
     await expect(sleeper.sleep(-1)).rejects.toThrow(/non-negative finite number/);
     await expect(sleeper.sleep(Infinity)).rejects.toThrow(/non-negative finite number/);
     await expect(sleeper.sleep(NaN)).rejects.toThrow(/non-negative finite number/);
+  });
+});
+
+// ─── Deferred-gate validation ─────────────────────────────────────────────
+
+describe("scenario-harness — deferred-gate validation", () => {
+  it("validateDeferredGate accepts a well-formed gate", () => {
+    const g = deferred();
+    expect(() => validateDeferredGate(g)).not.toThrow();
+  });
+
+  it("validateDeferredGate rejects a missing promise", () => {
+    expect(() => validateDeferredGate({ reject: () => {} })).toThrow(/invalid deferred gate/);
+  });
+
+  it("validateDeferredGate rejects a non-thenable promise", () => {
+    expect(() => validateDeferredGate({ promise: {}, reject: () => {} })).toThrow(/invalid deferred gate/);
+  });
+
+  it("validateDeferredGate rejects a missing reject", () => {
+    expect(() => validateDeferredGate({ promise: Promise.resolve() })).toThrow(/invalid deferred gate/);
+  });
+
+  it("validateDeferredGate rejects a non-function reject", () => {
+    expect(() => validateDeferredGate({ promise: Promise.resolve(), reject: "nope" })).toThrow(/invalid deferred gate/);
+  });
+
+  it("run() rejects a malformed gate BEFORE entering pendingGates (cleanup stays safe)", async () => {
+    // The primary A2 regression: a malformed gate that passed the old loose
+    // predicate but had no callable reject made cleanup throw and left the
+    // run blocked. Now the gate is validated before tracking; the run rejects
+    // with INVALID_DEFERRED_GATE, pendingDeferredCount stays 0, and cleanup
+    // runs cleanly.
+    const scenario = createScenario({
+      trace: createTrace({ clock: createClock(0) }),
+      attempts: [{ deferred: { promise: new Promise(() => {}) } }],
+    });
+    await expect(scenario.run()).rejects.toMatchObject({ code: "INVALID_DEFERRED_GATE" });
+    expect(scenario.pendingDeferredCount()).toBe(0);
+    await expect(scenario.cleanup()).resolves.toBeUndefined();
+  });
+
+  it("a gate with callable reject but no resolve is still valid (resolve is not required by the harness)", () => {
+    // The harness only invokes gate.reject (cleanup). resolve() is called by
+    // the external test code that controls the gate. validateDeferredGate
+    // must not require resolve.
+    const minimalGate = { promise: Promise.resolve(), reject: () => {} };
+    expect(() => validateDeferredGate(minimalGate)).not.toThrow();
   });
 });
