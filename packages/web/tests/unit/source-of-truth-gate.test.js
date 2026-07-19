@@ -31,6 +31,13 @@ describe("source-of-truth gate — current repo is consistent", () => {
     expect(violations).toEqual([]);
   });
 
+  it("returns zero structural marker violations on the checked-out tree", () => {
+    // Commit 7: the three governed documents must each carry exactly one
+    // well-formed marker whose JSON conforms to SourceTruthContract.
+    const { structuralViolations } = checkSourceOfTruth(MODULE_REPO_ROOT);
+    expect(structuralViolations).toEqual([]);
+  });
+
   it("derives actual values from implementation sources", () => {
     const { actual } = checkSourceOfTruth(MODULE_REPO_ROOT);
     expect(actual.services).toBe(10);

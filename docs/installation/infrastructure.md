@@ -84,6 +84,22 @@ pct config 115
 | `gitwire-postgres` | 5432 | PostgreSQL 16 |
 | `gitwire-redis` | 6379 | Redis 7 (BullMQ queues) |
 
+The JSON block below is the **enforced contract** for these identities. It is
+parsed at CI time by `scripts/check-source-of-truth.mjs`; prose above is
+informational and this block is authoritative on disagreement.
+
+<!-- gitwire:source-of-truth:begin -->
+```json
+{
+  "schemaVersion": 1,
+  "version": "0.23.1",
+  "services": ["gitwire-app", "gitwire-executor-service", "postgres", "redis", "bot", "landing", "tunnel", "dashboard", "docs", "demo"],
+  "workers": ["startWebhookWorker", "startTriageWorker", "startCIHealWorker", "startCIEvidenceWorker", "startDiagnosisWorker", "startPatchWorker", "startVerificationWorker", "startCriticWorker", "startSyncWorker", "startMaintainerWorker", "startIssueFixWorker", "startMergeQueueWorker", "startPhase3Worker", "startPhase4Worker"],
+  "migrations": { "first": "001", "last": "037", "count": 37 }
+}
+```
+<!-- gitwire:source-of-truth:end -->
+
 ### Deployment Directory
 
 All GitWire files live at `/opt/gitwire` inside CT 115:

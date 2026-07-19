@@ -5,6 +5,24 @@
 > or documentation. This document is the authoritative basis for the P1
 > documentation reconciliation.
 
+## Enforced contract
+
+The JSON block below is the **enforced contract** this inventory tracks. It is
+parsed at CI time by `scripts/check-source-of-truth.mjs`; the tables below are
+the derivation provenance, and this block is authoritative on disagreement.
+
+<!-- gitwire:source-of-truth:begin -->
+```json
+{
+  "schemaVersion": 1,
+  "version": "0.23.1",
+  "services": ["gitwire-app", "gitwire-executor-service", "postgres", "redis", "bot", "landing", "tunnel", "dashboard", "docs", "demo"],
+  "workers": ["startWebhookWorker", "startTriageWorker", "startCIHealWorker", "startCIEvidenceWorker", "startDiagnosisWorker", "startPatchWorker", "startVerificationWorker", "startCriticWorker", "startSyncWorker", "startMaintainerWorker", "startIssueFixWorker", "startMergeQueueWorker", "startPhase3Worker", "startPhase4Worker"],
+  "migrations": { "first": "001", "last": "037", "count": 37 }
+}
+```
+<!-- gitwire:source-of-truth:end -->
+
 ## Verified facts
 
 | Claim | Authoritative source | Verified value |

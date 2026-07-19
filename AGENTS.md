@@ -31,6 +31,26 @@ ssh pve        # Proxmox host (192.168.3.5)
 
 GitWire is a self-hosted GitHub App that automates repository management using AI (Claude). It's an open-source monorepo (MIT license) with a Node.js backend and Next.js dashboard. Current version: **0.23.1**.
 
+## Source-of-Truth Contract
+
+The JSON block below is the **enforced contract** for GitWire's runtime
+identities. It is parsed by `scripts/check-source-of-truth.mjs` at CI time
+via `scripts/parse-source-truth.mjs`. Prose elsewhere in this document
+(Services count, worker handles, migration range, version) is informational;
+when prose and this block disagree, **this block is authoritative**.
+
+<!-- gitwire:source-of-truth:begin -->
+```json
+{
+  "schemaVersion": 1,
+  "version": "0.23.1",
+  "services": ["gitwire-app", "gitwire-executor-service", "postgres", "redis", "bot", "landing", "tunnel", "dashboard", "docs", "demo"],
+  "workers": ["startWebhookWorker", "startTriageWorker", "startCIHealWorker", "startCIEvidenceWorker", "startDiagnosisWorker", "startPatchWorker", "startVerificationWorker", "startCriticWorker", "startSyncWorker", "startMaintainerWorker", "startIssueFixWorker", "startMergeQueueWorker", "startPhase3Worker", "startPhase4Worker"],
+  "migrations": { "first": "001", "last": "037", "count": 37 }
+}
+```
+<!-- gitwire:source-of-truth:end -->
+
 ## Repository Structure
 
 ```
