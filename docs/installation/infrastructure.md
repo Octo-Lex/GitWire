@@ -67,11 +67,14 @@ pct reboot 115
 pct config 115
 ```
 
-## Docker Containers (9 services)
+## Docker Containers (10 services)
+
+> Derived from `docker-compose.yml` service definitions.
 
 | Container | Port | Purpose |
 |-----------|------|---------|
-| `gitwire-app` | 3000 | Express API + 9 background workers |
+| `gitwire-app` | 3000 | Express API + 14 BullMQ worker handles + reconciliation |
+| `gitwire-executor-service` | 3003 | Validator container-runtime authority (v0.23.0+) |
 | `gitwire-dashboard` | 3001 | Next.js dashboard |
 | `gitwire-bot` | 3002 | Telegram bot |
 | `gitwire-landing` | 80 | Landing page |
@@ -80,6 +83,22 @@ pct config 115
 | `gitwire-tunnel` | — | Cloudflare Tunnel (outbound only) |
 | `gitwire-postgres` | 5432 | PostgreSQL 16 |
 | `gitwire-redis` | 6379 | Redis 7 (BullMQ queues) |
+
+The JSON block below is the **enforced contract** for these identities. It is
+parsed at CI time by `scripts/check-source-of-truth.mjs`; prose above is
+informational and this block is authoritative on disagreement.
+
+<!-- gitwire:source-of-truth:begin -->
+```json
+{
+  "schemaVersion": 1,
+  "version": "0.23.1",
+  "services": ["gitwire-app", "gitwire-executor-service", "postgres", "redis", "bot", "landing", "tunnel", "dashboard", "docs", "demo"],
+  "workers": ["startWebhookWorker", "startTriageWorker", "startCIHealWorker", "startCIEvidenceWorker", "startDiagnosisWorker", "startPatchWorker", "startVerificationWorker", "startCriticWorker", "startSyncWorker", "startMaintainerWorker", "startIssueFixWorker", "startMergeQueueWorker", "startPhase3Worker", "startPhase4Worker"],
+  "migrations": { "first": "001", "last": "037", "count": 37 }
+}
+```
+<!-- gitwire:source-of-truth:end -->
 
 ### Deployment Directory
 
@@ -139,15 +158,15 @@ docker exec -it gitwire-postgres-1 psql -U gitwire -d gitops_hub
 
 ### Schema Migration Status
 
-Migrations are applied via PostgreSQL's `docker-entrypoint-initdb.d` mechanism,
-which **only runs on first database creation**. There is no migration runner
-in the app startup code.
+Migrations are applied **automatically on every container start** via the
+root `docker-entrypoint.sh`, which runs `node scripts/migrate.js` fail-closed
+before starting the app. If a migration fails, the container exits non-zero.
 
-**This means new migration files added after the initial database creation
-are NOT automatically applied.** They must be run manually.
+PostgreSQL's `docker-entrypoint-initdb.d` mechanism only runs on first
+database creation; the app's own entrypoint covers subsequent starts.
 
-See the [Deployment Runbook](/installation/deployment-runbook) for the
-manual migration procedure.
+See the [Deployment Runbook](/installation/deployment-runbook) for
+the manual migration procedure (override or one-off reconciliation).
 
 ## Redis 7
 
@@ -158,9 +177,11 @@ manual migration procedure.
 | **Keys** | ~4,500 (BullMQ job data) |
 | **Memory** | ~75 MB used |
 
-> **⚠️ No maxmemory limit is configured.** In a 2 GB container running 9
-> services, Redis can grow unbounded and trigger OOM. Set `maxmemory 256mb`
-> and `maxmemory-policy allkeys-lru` in the Redis command.
+> **Redis memory policy:** `maxmemory 256mb` with `maxmemory-policy noeviction`
+> is configured durably in `docker-compose.yml` via the Compose `command:` block.
+> The `noeviction` policy is correct for BullMQ: evicting queue keys with
+> `allkeys-lru` would silently drop active/delayed jobs. Write failures under
+> `noeviction` are loud and recoverable.
 
 ## Active Deployments
 
