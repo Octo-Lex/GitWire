@@ -17,7 +17,7 @@
 | **Application image** | Root `Dockerfile` | `ENTRYPOINT ["docker-entrypoint.sh"]` + `CMD ["node", "src/index.js"]`; entrypoint runs `node scripts/migrate.js` fail-closed |
 | **Migration startup** | Root `docker-entrypoint.sh` | Runs `node scripts/migrate.js` before `exec "$@"`; exits non-zero on failure |
 | **Package version** | `package.json` (root) | `0.23.1` |
-| **Secondary Dockerfile** | `packages/web/Dockerfile` | **Unreferenced** — no CI workflow, Compose file, script, or documentation references it. CI builds from root `Dockerfile` (`-f Dockerfile .`). Dev override (`docker-compose.build.yml`) uses root `Dockerfile`. |
+| **Secondary Dockerfile** | `packages/web/Dockerfile` | **Deleted** — the only consumer was `packages/web/docker-compose.prod.yml` (a stale legacy package-local Compose file). CI and dev overrides use root `Dockerfile`. Both `packages/web/Dockerfile` and `packages/web/docker-compose.prod.yml` deleted in P1 as retired legacy deployment surfaces. |
 
 ## Discrepancies found
 
@@ -35,14 +35,9 @@
 
 ## Secondary Dockerfile resolution
 
-`packages/web/Dockerfile` has **zero references** in:
-- CI workflows (`.github/workflows/`)
-- Compose files (`docker-compose.yml`, `docker-compose.build.yml`)
-- Scripts (`scripts/`)
-- Documentation (`docs/`)
-- Any source file
+`packages/web/Dockerfile` was referenced only by `packages/web/docker-compose.prod.yml` — a stale legacy package-local Compose file that predates the immutable root Compose model. Neither file is referenced by CI, the root `docker-compose.yml`, the dev override, or any deployment script.
 
-Decision: **Delete it.** Add a static check in CI preventing reintroduction of a second app Dockerfile without documentation.
+Decision: **Delete both** as retired legacy deployment surfaces. Add a static check in CI preventing reintroduction of a second app Dockerfile.
 
 ## Authoritative source hierarchy
 

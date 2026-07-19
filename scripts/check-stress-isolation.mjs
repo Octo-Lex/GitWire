@@ -27,41 +27,55 @@ const LEGACY_PATTERNS = [
 
 // Check for a secondary app Dockerfile that is not the canonical root Dockerfile.
 // The root Dockerfile is the only image source for the production app.
-function checkNoSecondaryDockerfile(repoRoot) {
-  const known = new Set([
-    "Dockerfile",                          // root — canonical app image
-    "packages/web-dashboard/Dockerfile",   // dashboard image
-    "packages/executor-service/Dockerfile", // executor image
-    "packages/bot/Dockerfile",             // bot image
-    "landing/Dockerfile",                  // landing image
-    "docs/Dockerfile",                     // docs image
-    "packages/demo-dashboard/Dockerfile",  // demo image
-    "validator-image/Dockerfile",          // validator image
-  ]);
+/**
+ * Known permitted Dockerfiles. Any file matching the Dockerfile-name pattern
+ * not in this set is a violation.
+ */
+const KNOWN_DOCKERFILES = new Set([
+  "Dockerfile",                           // root — canonical app image
+  "packages/web-dashboard/Dockerfile",    // dashboard image
+  "packages/executor-service/Dockerfile",  // executor image
+  "packages/bot/Dockerfile",              // bot image
+  "landing/Dockerfile",                   // landing image
+  "docs/Dockerfile",                      // docs image
+  "packages/demo-dashboard/Dockerfile",   // demo image
+  "validator-image/Dockerfile",           // validator image
+]);
+
+// Matches: Dockerfile, Dockerfile.dev, Dockerfile.prod, dockerfile, etc.
+// Does NOT match: .dockerignore, Dockerfile.dockerignore, Dockerfile.dockerignore.bak
+const DOCKERFILE_NAME_RE = /^Dockerfile(?:\.(?!dockerignore).+)?$/i;
+
+/**
+ * Scan a repository tree for unknown Dockerfiles. Fails closed on unreadable
+ * directories. Exports for unit testing.
+ *
+ * @param {string} repoRoot repository root to scan
+ * @param {Set<string>} [known] known permitted relative paths
+ * @returns {Array<{file: string, msg: string}>} violations
+ */
+export function scanDockerfiles(repoRoot, known = KNOWN_DOCKERFILES) {
   const violations = [];
-  try {
-    const all = fs.readdirSync(repoRoot);
-    // Check root-level
-    for (const f of all) {
-      if (f === "Dockerfile" || !f.toLowerCase().includes("dockerfile")) continue;
+  const findDockerfiles = (dir, prefix = "") => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      violations.push({ file: prefix || "(root)", msg: `cannot read directory: ${err.message}` });
+      return;
     }
-    // Check packages/ subdirectories
-    const findDockerfiles = (dir, prefix = "") => {
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        const rel = prefix + e.name;
-        if (e.isFile() && e.name.toLowerCase().includes("dockerfile") && !e.name.includes(".")
-            && !known.has(rel)) {
-          violations.push({ file: rel, msg: "unknown Dockerfile — only the root Dockerfile and service-specific Dockerfiles are permitted" });
-        }
-        if (e.isDirectory() && e.name !== "node_modules" && e.name !== ".git") {
-          findDockerfiles(path.join(dir, e.name), rel + "/");
-        }
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name === ".git" || e.name === ".ouroboros" || e.name === ".zcode") continue;
+      const rel = prefix + e.name;
+      if (e.isFile() && DOCKERFILE_NAME_RE.test(e.name) && !known.has(rel)) {
+        violations.push({ file: rel, msg: "unknown Dockerfile — only known service Dockerfiles are permitted" });
       }
-    };
-    findDockerfiles(repoRoot);
-  } catch { /* ignore */ }
+      if (e.isDirectory()) {
+        findDockerfiles(path.join(dir, e.name), rel + "/");
+      }
+    }
+  };
+  findDockerfiles(repoRoot);
   return violations;
 }
 
@@ -115,7 +129,7 @@ if (process.argv[1] && path.resolve(process.argv[1]).endsWith("check-stress-isol
   const violations = scanStressIsolation();
   // Also check for unknown Dockerfiles
   const repoRoot = path.resolve(".");
-  violations.push(...checkNoSecondaryDockerfile(repoRoot));
+  violations.push(...scanDockerfiles(repoRoot));
   if (violations.length > 0) {
     for (const v of violations) {
       console.error(`VIOLATION: ${v.file} — ${v.msg}`);

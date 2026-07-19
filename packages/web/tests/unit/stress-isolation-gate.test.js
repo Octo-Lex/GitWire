@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { scanStressIsolation } from "../../../../scripts/check-stress-isolation.mjs";
+import { scanStressIsolation, scanDockerfiles } from "../../../../scripts/check-stress-isolation.mjs";
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "stress-gate-test-"));
@@ -103,5 +103,77 @@ describe("stress-isolation static gate — negative tests", () => {
     // Need at least one .test.js file for the directory to be valid
     writeFile(dir, "clean.test.js", CLEAN_FILE);
     expect(scanStressIsolation({ dir })).toEqual([]);
+  });
+});
+
+// ─── Dockerfile uniqueness gate ───────────────────────────────────────────
+
+describe("Dockerfile uniqueness gate", () => {
+  let dir;
+  beforeEach(() => { dir = makeTempDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it("clean tree with known Dockerfiles passes", () => {
+    writeFile(dir, "Dockerfile", "FROM node:20");
+    const known = new Set(["Dockerfile"]);
+    expect(scanDockerfiles(dir, known)).toEqual([]);
+  });
+
+  it("unknown Dockerfile in packages/web is detected", () => {
+    fs.mkdirSync(path.join(dir, "packages", "web"), { recursive: true });
+    writeFile(path.join(dir, "packages", "web"), "Dockerfile", "FROM node:20");
+    const known = new Set(["Dockerfile"]);
+    const violations = scanDockerfiles(dir, known);
+    expect(violations.some(v => v.file === "packages/web/Dockerfile")).toBe(true);
+  });
+
+  it("Dockerfile.dev variant is detected", () => {
+    writeFile(dir, "Dockerfile.dev", "FROM node:20");
+    const known = new Set(["Dockerfile"]);
+    const violations = scanDockerfiles(dir, known);
+    expect(violations.some(v => v.file === "Dockerfile.dev")).toBe(true);
+  });
+
+  it("Dockerfile.prod variant is detected", () => {
+    writeFile(dir, "Dockerfile.prod", "FROM node:20");
+    const known = new Set(["Dockerfile"]);
+    const violations = scanDockerfiles(dir, known);
+    expect(violations.some(v => v.file === "Dockerfile.prod")).toBe(true);
+  });
+
+  it("nested unknown Dockerfile is detected", () => {
+    fs.mkdirSync(path.join(dir, "deep", "nested"), { recursive: true });
+    writeFile(path.join(dir, "deep", "nested"), "Dockerfile.legacy", "FROM node:20");
+    const known = new Set();
+    const violations = scanDockerfiles(dir, known);
+    expect(violations.some(v => v.file === "deep/nested/Dockerfile.legacy")).toBe(true);
+  });
+
+  it("lowercase dockerfile.local is detected (case-insensitive)", () => {
+    writeFile(dir, "dockerfile.local", "FROM node:20");
+    const known = new Set();
+    const violations = scanDockerfiles(dir, known);
+    expect(violations.some(v => v.file === "dockerfile.local")).toBe(true);
+  });
+
+  it(".dockerignore is NOT detected (excluded by pattern)", () => {
+    writeFile(dir, ".dockerignore", "node_modules");
+    const known = new Set();
+    expect(scanDockerfiles(dir, known)).toEqual([]);
+  });
+
+  it("node_modules and .git directories are skipped", () => {
+    fs.mkdirSync(path.join(dir, "node_modules", "pkg"), { recursive: true });
+    writeFile(path.join(dir, "node_modules", "pkg"), "Dockerfile", "FROM node:20");
+    fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
+    writeFile(dir + "/.git", "Dockerfile", "FROM node:20");
+    const known = new Set();
+    expect(scanDockerfiles(dir, known)).toEqual([]);
+  });
+
+  it("unreadable directory fails closed", () => {
+    const violations = scanDockerfiles("/nonexistent/path");
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations[0].msg).toContain("cannot read");
   });
 });

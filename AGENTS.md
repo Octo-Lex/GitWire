@@ -9,8 +9,12 @@ starting any work, read these two files:
 
 1. **`docs/installation/infrastructure.md`** — Proxmox VE host, CT 115 config,
    Docker containers, database, Redis, Cloudflare tunnel, GitHub App, LLM provider.
-2. **`docs/installation/deployment-runbook.md`** — Step-by-step post-release
-   checklist: pull, apply migrations, rebuild, verify, smoke test.
+2. **`docs/installation/deployment-runbook.md`** — The deployment model.
+   **v0.23+ uses immutable (pull-based) deployment**: CI publishes digest-pinned
+   images to GHCR; the `Deploy to Production` workflow pulls and recreates
+   release services in staged order (executor → app → dashboard), gating
+   each stage. The manual rebuild checklist (`docker compose build`,
+   `--force-recreate`) is **disaster-recovery fallback only**.
 
 **Before tagging any release**, you MUST follow the deployment runbook and
 verify the running system matches the release. Do not assume `git push` +
@@ -42,8 +46,7 @@ GitWire/
 │   │   │   ├── lib/             # GitHub client, queue helpers, DB
 │   │   │   └── middleware/      # Auth, pagination, rate limiting
 │   │   ├── db/migrations/       # 37 SQL migrations (001-037)
-│   │   ├── tests/               # Unit + integration tests (Jest)
-│   │   └── docker-compose.prod.yml
+│   │   └── tests/               # Unit + integration tests (Jest)
 │   ├── web-dashboard/       # Next.js 16 + Tailwind + SWR
 │   │   └── src/
 │   │       ├── app/             # 25 pages (App Router)
@@ -127,17 +130,18 @@ cd packages/web
 npm run dev
 
 # Run tests
-npm test                    # All workspaces (251 tests)
-cd packages/rules && npm test   # 184 rules tests
-cd packages/runtime && npm test # 16 runtime tests
+npm test                    # All workspaces
+cd packages/rules && npm test   # Rules tests
+cd packages/runtime && npm test # Runtime tests
 ```
 
 ## Testing
 
-- **2,196 tests** across 60 suites:
+Test counts change frequently and are not recorded here to avoid drift.
+Run `npm test` to get current totals:
   - `@gitwire/rules`: expression engine, gates, parsing, plugins, helpers
   - `@gitwire/runtime`: factory patterns, compat layer
-  - `@gitwire/web`: 60 suites — services, repair proposals, execution receipts, isolation evidence, pass-capable unlock
+  - `@gitwire/web`: services, repair proposals, execution receipts, isolation evidence, pass-capable unlock
   - `@gitwire/web-dashboard`: API client, components
 - Run all: `cd packages/web && NODE_OPTIONS="--experimental-vm-modules" npx jest --config jest.config.js --no-coverage`
 - Rules/engine tests require `--experimental-vm-modules`
@@ -194,8 +198,10 @@ Before tagging ANY release:
 4. Tag: `git tag -a v0.XX.0 -m "release notes"`
 5. Push: `git push origin master && git push origin v0.XX.0`
 6. Create GitHub release
-7. **Follow `docs/installation/deployment-runbook.md`** to deploy to CT 115
-   (export `GITWIRE_COMMIT_SHA` before `docker compose build`, use `--force-recreate`)
+7. **Follow `docs/installation/deployment-runbook.md`** — the immutable
+   deployment path is automated: CI publishes images, the deploy workflow
+   pulls them by digest and recreates services. Manual rebuild/export of
+   `GITWIRE_COMMIT_SHA`/`--force-recreate` is **disaster-recovery only**.
 8. Verify the running container version matches the tag
 9. Verify `/health.git_sha` is NOT `"unknown"` and matches the deployed commit
    (if `"unknown"`, GITWIRE_COMMIT_SHA was not exported at build time — rebuild)
