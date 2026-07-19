@@ -147,15 +147,25 @@ export function collectStressIsolationFiles(rootDir) {
     // Sort by name for deterministic ordering across platforms.
     const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const ent of sorted) {
-      // Do not follow symlinks recursively — protects against the gate
-      // scanning uncommitted tree content pulled in by a stray symlink.
-      if (ent.isSymbolicLink()) continue;
       const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+      const normalizedRel = rel.split(path.sep).join("/");
       const abs = path.join(absDir, ent.name);
+      // Symlinks: do NOT follow (a symlinked subdirectory could pull in
+      // arbitrary uncommitted tree content). But also do NOT silently treat
+      // as clean — a symlink whose name matches a scannable pattern
+      // (e.g. modules/adapter.js → /elsewhere/evil.js) would disappear from
+      // the static-gate surface. Record as a violation entry so the gate
+      // fails closed on the symbolic link itself.
+      if (ent.isSymbolicLink()) {
+        if (isScannableStressFile(normalizedRel)) {
+          out.push({ rel: normalizedRel, abs, symlink: true });
+        }
+        continue;
+      }
       if (ent.isDirectory()) {
         visit(abs, rel, false);
-      } else if (ent.isFile() && isScannableStressFile(rel)) {
-        out.push({ rel: rel.split(path.sep).join("/"), abs });
+      } else if (ent.isFile() && isScannableStressFile(normalizedRel)) {
+        out.push({ rel: normalizedRel, abs });
       }
     }
   };
@@ -190,21 +200,47 @@ export function scanStressIsolation(opts = {}) {
     return [{ file: "(directory)", msg: `cannot read stress directory ${dir}: ${err.message}` }];
   }
 
-  // Nested read failures surface as synthetic entries — report them.
+  // Nested directory-read failures and scannable-shape symlinks surface as
+  // synthetic entries — report them as violations BEFORE considering the
+  // "no scannable files" empty case, so a precise finding is never discarded
+  // by the coarser empty-directory fallback.
+  let scannableFileCount = 0;
   for (const c of collected) {
     if (c.readError) {
       violations.push({ file: c.rel, msg: `cannot read ${c.rel}: ${c.readError}` });
+      continue;
     }
+    if (c.symlink) {
+      // A symlink whose name matches the scannable-stress-file pattern is a
+      // bypass surface: it would be executable at runtime but its target is
+      // outside the committed tree the gate scans. Fail closed.
+      violations.push({
+        file: c.rel,
+        msg: "symbolic links are not permitted in the stress isolation surface",
+      });
+      continue;
+    }
+    scannableFileCount++;
   }
 
-  const scannable = collected.filter((c) => !c.readError);
-  if (scannable.length === 0) {
+  if (scannableFileCount === 0 && violations.length === 0) {
     return [{ file: "(directory)", msg: `stress directory ${dir} contains no scannable stress files` }];
   }
 
-  for (const { rel, abs } of scannable) {
+  // Per-file content scan. Each read is wrapped so an unreadable file
+  // produces a structured violation rather than throwing out of the pure
+  // scanner contract.
+  for (const c of collected) {
+    if (c.readError || c.symlink) continue; // already reported above
+    const { rel, abs } = c;
     if (allowlist.has(rel)) continue;
-    const content = fs.readFileSync(abs, "utf8");
+    let content;
+    try {
+      content = fs.readFileSync(abs, "utf8");
+    } catch (err) {
+      violations.push({ file: rel, msg: `cannot read stress file ${rel}: ${err.message}` });
+      continue;
+    }
     const isModule = rel.split(/[/\\]/).includes(MODULES_DIR_NAME);
 
     if (RAW_MUTATING_FETCH.test(content)) {

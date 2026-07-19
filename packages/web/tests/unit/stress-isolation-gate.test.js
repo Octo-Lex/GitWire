@@ -135,10 +135,11 @@ describe("stress-isolation recursive module discovery", () => {
     expect(found).toEqual(["modules/scenario-harness.js", "modules/util.mjs"]);
   });
 
-  it("does not follow symbolic links", () => {
+  it("does not follow directory symbolic links", () => {
     fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
     writeFile(path.join(dir, "modules"), "real.js", "export const x = 1;");
-    // Symlink modules/linked -> /some/external/path must not be traversed.
+    // A directory symlink whose name is not itself a scannable file must not
+    // be traversed (it could pull in arbitrary uncommitted tree content).
     try {
       fs.symlinkSync("/nonexistent/target", path.join(dir, "modules", "linked"), "dir");
     } catch (err) {
@@ -149,6 +150,96 @@ describe("stress-isolation recursive module discovery", () => {
     }
     const found = collectStressIsolationFiles(dir).map((c) => c.rel).sort();
     expect(found).toEqual(["modules/real.js"]);
+  });
+
+  it("a scannable-name symbolic link fails closed as a violation (not silently clean)", () => {
+    // A symlink whose name matches the scannable pattern (e.g.
+    // modules/adapter.js → /elsewhere/evil.js) would be executable at runtime
+    // but its target is outside the committed tree the gate scans. The gate
+    // must NOT silently treat it as clean; it must report the symlink itself.
+    fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
+    writeFile(path.join(dir, "modules"), "real.js", "export const x = 1;");
+    const symlinkPath = path.join(dir, "modules", "adapter.js");
+    try {
+      fs.symlinkSync("/nonexistent/target", symlinkPath, "file");
+    } catch (err) {
+      if (err.code !== "EPERM" && err.code !== "ENOSYS") throw err;
+      return; // platform cannot create symlinks — skip, not fail
+    }
+    writeFile(dir, "clean.test.js", CLEAN_FILE); // satisfy non-empty scan
+    const violations = scanStressIsolation({ dir });
+    expect(violations).toContainEqual({
+      file: "modules/adapter.js",
+      msg: "symbolic links are not permitted in the stress isolation surface",
+    });
+  });
+
+  it("unreadable individual stress file produces a structured violation (not a throw)", () => {
+    // The pure scanner contract: every failure mode returns structured
+    // violations, never throws. A file that exists in the collected list
+    // but cannot be read (permissions, race) must surface as a violation.
+    //
+    // Platform caveat: Windows ACLs govern access, not POSIX mode bits, so
+    // chmod(000) may succeed without actually blocking Node reads. Probe
+    // whether the platform honors the mode; if not, skip the test rather
+    // than falsely pass (the contract is still verified on Linux CI).
+    fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
+    const unreadable = path.join(dir, "modules", "locked.js");
+    writeFile(path.join(dir, "modules"), "locked.js", "export const x = 1;");
+    try {
+      fs.chmodSync(unreadable, 0o000);
+    } catch (err) {
+      if (err.code !== "EPERM") throw err;
+      return; // chmod itself refused — skip, not fail
+    }
+    // Verify the platform actually denies the read; if not, restore and skip.
+    let platformHonorsMode = false;
+    try {
+      fs.readFileSync(unreadable, "utf8");
+    } catch {
+      platformHonorsMode = true;
+    }
+    if (!platformHonorsMode) {
+      try { fs.chmodSync(unreadable, 0o644); } catch { /* best effort */ }
+      return; // platform ignores POSIX mode (e.g. Windows as non-admin) — skip
+    }
+    writeFile(dir, "clean.test.js", CLEAN_FILE);
+    const violations = scanStressIsolation({ dir });
+    expect(violations.some((v) => v.file === "modules/locked.js" && v.msg.startsWith("cannot read stress file"))).toBe(true);
+    // Restore so afterEach rmSync can clean up.
+    try { fs.chmodSync(unreadable, 0o644); } catch { /* best effort */ }
+  });
+
+  it("nested directory read failure is preserved even when no regular files are discovered", () => {
+    // The empty-directory fallback must NOT discard a more precise nested-
+    // read finding. Build a tree where the only scannable nested subdir is
+    // unreadable; the result should be the nested violation, not the
+    // generic "no scannable stress files" message.
+    //
+    // Same platform caveat as above: chmod may not deny reads on Windows.
+    const nestedDir = path.join(dir, "nested");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    try {
+      fs.chmodSync(nestedDir, 0o000);
+    } catch (err) {
+      if (err.code !== "EPERM") throw err;
+      return;
+    }
+    // Probe platform behavior.
+    let platformHonorsMode = false;
+    try {
+      fs.readdirSync(nestedDir);
+    } catch {
+      platformHonorsMode = true;
+    }
+    if (!platformHonorsMode) {
+      try { fs.chmodSync(nestedDir, 0o755); } catch { /* best effort */ }
+      return;
+    }
+    const violations = scanStressIsolation({ dir });
+    try { fs.chmodSync(nestedDir, 0o755); } catch { /* best effort */ }
+    const msgs = violations.map((v) => v.msg);
+    expect(msgs.some((m) => m.startsWith("cannot read") && m.includes("nested"))).toBe(true);
   });
 
   it("module file with raw mutating fetch is detected (regression for the modules-bypass path)", () => {
