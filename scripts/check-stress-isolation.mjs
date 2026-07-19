@@ -9,7 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import yaml from "js-yaml";
+import * as yaml from "yaml";
 
 const STRESS_DIR_DEFAULT = path.resolve("packages/web/tests/stress");
 
@@ -137,6 +137,12 @@ export function scanStressIsolation(opts = {}) {
 export function validateComposeDockerfiles(repoRoot, composeRelPath = "docker-compose.build.yml") {
   const violations = [];
   const composePath = path.join(repoRoot, composeRelPath);
+  // Compose resolves build.context relative to the directory containing the
+  // Compose file, NOT the repository root. A package-local Compose file with
+  // `context: .` must resolve against its own directory; resolving against
+  // repoRoot would silently accept a root-level Dockerfile (the exact defect
+  // class that previously masked the package-local broken consumer).
+  const composeDir = path.dirname(composePath);
 
   let composeContent;
   try {
@@ -147,7 +153,7 @@ export function validateComposeDockerfiles(repoRoot, composeRelPath = "docker-co
 
   let compose;
   try {
-    compose = yaml.load(composeContent);
+    compose = yaml.parse(composeContent);
   } catch (err) {
     return [{ file: composeRelPath, msg: `cannot parse Compose YAML: ${err.message}` }];
   }
@@ -162,12 +168,13 @@ export function validateComposeDockerfiles(repoRoot, composeRelPath = "docker-co
     const buildCtx = typeof svc.build === "string" ? svc.build : svc.build.context || ".";
     const dockerfile = (typeof svc.build === "object" ? svc.build.dockerfile : null) || "Dockerfile";
 
-    // Resolve context relative to repo root.
-    const contextAbs = path.resolve(repoRoot, buildCtx);
+    // Resolve context relative to the Compose file's directory (Compose semantics).
+    const contextAbs = path.resolve(composeDir, buildCtx);
     const dockerfilePath = path.join(contextAbs, dockerfile);
     const dockerfileRel = path.relative(repoRoot, dockerfilePath);
 
-    // Reject targets escaping the repository.
+    // Reject targets escaping the repository (boundary check stays relative
+    // to repoRoot — that is the actual repository boundary).
     if (dockerfileRel.startsWith("..")) {
       violations.push({
         file: `${composeRelPath}:${svcName}`,
@@ -184,6 +191,7 @@ export function validateComposeDockerfiles(repoRoot, composeRelPath = "docker-co
       });
     }
   }
+
 
   return violations;
 }

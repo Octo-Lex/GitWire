@@ -249,67 +249,52 @@ describe("source-of-truth gate — migration derivation failures", () => {
   beforeEach(() => { dir = buildCleanFixture(); });
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
-  it("detects a migration sequence gap (MIGRATION_GAP)", () => {
-    // Delete file 020 — creates a gap. Marker still says count:37, so the
-    // mismatch would also fire, but the derivation failure suppresses
-    // dependent identity comparison (cascade prevention).
+  it("detects a migration sequence gap → exactly [MIGRATION_GAP]", () => {
+    // Delete file 020 — creates a gap. The derivation fails, so migrations
+    // IDENTITY_MISMATCH is suppressed across all docs (cascade prevention).
+    // The fixture's other fields match, so the full violation set is one code.
     fs.rmSync(path.join(dir, "packages/web/db/migrations/020_f020.sql"));
     const result = checkSourceOfTruth(dir);
-    expect(codes(result)).toContain("MIGRATION_GAP");
-    // MIGRATION_GAP suppression: derived.migrations is null, so no
-    // IDENTITY_MISMATCH on the migrations field.
-    const mismatchFields = result.violations
-      .filter((v) => v.code === "IDENTITY_MISMATCH")
-      .map((v) => v.field);
-    expect(mismatchFields).not.toContain("migrations");
+    expect(codes(result)).toEqual(["MIGRATION_GAP"]);
   });
 
-  it("detects a duplicate migration prefix (MIGRATION_DUPLICATE_NUMBER)", () => {
-    // Add a second file with prefix 020.
+  it("detects a duplicate migration prefix → exactly [MIGRATION_DUPLICATE_NUMBER]", () => {
+    // Add a second file with prefix 020. Cascade suppression applies.
     fs.writeFileSync(path.join(dir, "packages/web/db/migrations/020_dup.sql"), "-- dup\n");
     const result = checkSourceOfTruth(dir);
-    expect(codes(result)).toContain("MIGRATION_DUPLICATE_NUMBER");
-    // Suppressed dependent comparison.
-    const mismatchFields = result.violations
-      .filter((v) => v.code === "IDENTITY_MISMATCH")
-      .map((v) => v.field);
-    expect(mismatchFields).not.toContain("migrations");
+    expect(codes(result)).toEqual(["MIGRATION_DUPLICATE_NUMBER"]);
   });
 
-  it("detects a malformed migration filename (MIGRATION_MALFORMED_NAME)", () => {
+  it("detects a malformed migration filename → exactly [MIGRATION_MALFORMED_NAME]", () => {
+    // A name failure suppresses gap evaluation AND migrations identity
+    // comparison, so the only emitted violation is the malformed-name one.
     fs.writeFileSync(path.join(dir, "packages/web/db/migrations/foo.sql"), "-- bad\n");
     const result = checkSourceOfTruth(dir);
-    expect(codes(result)).toContain("MIGRATION_MALFORMED_NAME");
-    // A name failure suppresses gap evaluation: do NOT also expect MIGRATION_GAP.
-    expect(codes(result)).not.toContain("MIGRATION_GAP");
-    // And suppresses dependent identity comparison.
-    const mismatchFields = result.violations
-      .filter((v) => v.code === "IDENTITY_MISMATCH")
-      .map((v) => v.field);
-    expect(mismatchFields).not.toContain("migrations");
+    expect(codes(result)).toEqual(["MIGRATION_MALFORMED_NAME"]);
   });
 });
 
 describe("source-of-truth gate — source-read failures are fail-closed", () => {
-  it("reports SOURCE_READ_FAILURE when the migrations directory is missing", () => {
+  it("reports exactly [SOURCE_READ_FAILURE] when the migrations directory is missing", () => {
     const dir = buildCleanFixture();
     fs.rmSync(path.join(dir, "packages/web/db/migrations"), { recursive: true, force: true });
     const result = checkSourceOfTruth(dir);
-    expect(codes(result)).toContain("SOURCE_READ_FAILURE");
+    // The migrations derivation fails; services/workers/version still derive
+    // cleanly and match the markers. The only violation is the source-read
+    // failure on the migrations field.
+    expect(codes(result)).toEqual(["SOURCE_READ_FAILURE"]);
+    expect(result.violations[0].field).toBe("migrations");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("reports SOURCE_READ_FAILURE when docker-compose.yml is missing", () => {
+  it("reports exactly [SOURCE_READ_FAILURE] when docker-compose.yml is missing", () => {
     const dir = buildCleanFixture();
     fs.rmSync(path.join(dir, "docker-compose.yml"));
     const result = checkSourceOfTruth(dir);
-    const srcFails = result.violations.filter((v) => v.code === "SOURCE_READ_FAILURE");
-    expect(srcFails.some((v) => v.field === "services")).toBe(true);
-    // Suppressed dependent identity comparison.
-    const mismatchFields = result.violations
-      .filter((v) => v.code === "IDENTITY_MISMATCH")
-      .map((v) => v.field);
-    expect(mismatchFields).not.toContain("services");
+    // The services derivation fails; services IDENTITY_MISMATCH is suppressed.
+    // The only violation is the source-read failure on the services field.
+    expect(codes(result)).toEqual(["SOURCE_READ_FAILURE"]);
+    expect(result.violations[0].field).toBe("services");
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

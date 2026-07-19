@@ -209,6 +209,14 @@ function codes(result) {
   return result.violations.map((v) => v.code).sort();
 }
 
+// Stable comparator for normalized Compose/Dockerfile violations so exact-set
+// assertions are order-independent. Compares by file, then by msg.
+function compareViolation(a, b) {
+  if (a.file !== b.file) return a.file < b.file ? -1 : 1;
+  if (a.msg !== b.msg) return a.msg < b.msg ? -1 : 1;
+  return 0;
+}
+
 // ─── Cases 1-16: marker contract + identity layers ──────────────────────
 
 describe("source-of-truth defect matrix — marker contract and identity", () => {
@@ -297,29 +305,29 @@ describe("source-of-truth defect matrix — marker contract and identity", () =>
   });
 
   // 11. migration gap
-  it("migration gap → MIGRATION_GAP (and suppresses migrations IDENTITY_MISMATCH)", () => {
+  it("migration gap → exactly [MIGRATION_GAP] (cascade suppression: no IDENTITY_MISMATCH)", () => {
     removeMigration(dir, "020");
     const result = checkSourceOfTruth(dir);
-    expect(codes(result)).toContain("MIGRATION_GAP");
-    const mismatchFields = result.violations.filter((v) => v.code === "IDENTITY_MISMATCH").map((v) => v.field);
-    expect(mismatchFields).not.toContain("migrations");
+    // Exact set: the derivation fails, so migrations IDENTITY_MISMATCH is
+    // suppressed across all three docs. No other field drifts in this
+    // fixture, so the full violation set is exactly one code.
+    expect(codes(result)).toEqual(["MIGRATION_GAP"]);
   });
 
   // 12. duplicate migration number
-  it("duplicate migration number → MIGRATION_DUPLICATE_NUMBER (and suppresses migrations IDENTITY_MISMATCH)", () => {
+  it("duplicate migration number → exactly [MIGRATION_DUPLICATE_NUMBER] (cascade suppression)", () => {
     addMigration(dir, "020_dup.sql");
     const result = checkSourceOfTruth(dir);
-    expect(codes(result)).toContain("MIGRATION_DUPLICATE_NUMBER");
-    const mismatchFields = result.violations.filter((v) => v.code === "IDENTITY_MISMATCH").map((v) => v.field);
-    expect(mismatchFields).not.toContain("migrations");
+    expect(codes(result)).toEqual(["MIGRATION_DUPLICATE_NUMBER"]);
   });
 
   // 13. malformed migration filename
-  it("malformed migration filename → MIGRATION_MALFORMED_NAME (and suppresses MIGRATION_GAP)", () => {
+  it("malformed migration filename → exactly [MIGRATION_MALFORMED_NAME] (suppresses MIGRATION_GAP)", () => {
     addMigration(dir, "foo.sql");
     const result = checkSourceOfTruth(dir);
-    expect(codes(result)).toContain("MIGRATION_MALFORMED_NAME");
-    expect(codes(result)).not.toContain("MIGRATION_GAP");
+    // Exact set: name failure suppresses gap evaluation AND migrations
+    // identity comparison. The only violation is the malformed-name one.
+    expect(codes(result)).toEqual(["MIGRATION_MALFORMED_NAME"]);
   });
 
   // 14. inventory drift
@@ -374,23 +382,27 @@ describe("source-of-truth defect matrix — Compose/Dockerfile integrity", () =>
   });
 
   // 17. Compose Dockerfile target removal (referenced by compose + allowlisted)
-  it("removing a compose-referenced allowlisted Dockerfile yields both violations (exact set)", () => {
+  it("removing a compose-referenced allowlisted Dockerfile yields exactly both violations", () => {
     fs.rmSync(path.join(dir, "packages/bot/Dockerfile"));
     const compose = validateComposeDockerfiles(dir, "docker-compose.build.yml");
     const known = verifyKnownDockerfilesExist(dir);
-    // Exact normalized object set. The compose validator reports a missing
-    // target; the known-Dockerfile validator reports a missing allowlist
-    // entry. Both fire because the file is both referenced and allowlisted.
-    const composeNorm = compose.map((v) => ({ file: v.file, msg: v.msg }));
-    const knownNorm = known.map((v) => ({ file: v.file, msg: v.msg }));
-    expect(composeNorm).toContainEqual({
-      file: "docker-compose.build.yml:bot",
-      msg: expect.stringContaining("does not exist"),
-    });
-    expect(knownNorm).toContainEqual({
-      file: "packages/bot/Dockerfile",
-      msg: "allowlisted Dockerfile does not exist",
-    });
+    // Exact normalized-object set. Combine both validator outputs, sort
+    // deterministically, and compare to the expected set. Path separators
+    // are normalized to '/' so the assertion is stable across Windows and
+    // POSIX CI runners (the validator itself uses path.join, which is
+    // platform-specific — that is correct behavior, not a defect).
+    const norm = (v) => ({ file: v.file, msg: v.msg.replace(/\\/g, "/") });
+    const combined = [...compose.map(norm), ...known.map(norm)].sort(compareViolation);
+    expect(combined).toEqual([
+      {
+        file: "docker-compose.build.yml:bot",
+        msg: "Dockerfile target 'packages/bot/Dockerfile' does not exist (context: packages/bot)",
+      },
+      {
+        file: "packages/bot/Dockerfile",
+        msg: "allowlisted Dockerfile does not exist",
+      },
+    ].sort(compareViolation));
   });
 
   // 18. allowlisted Dockerfile removal (allowlisted but NOT compose-referenced)
@@ -423,5 +435,72 @@ describe("source-of-truth defect matrix — Compose/Dockerfile integrity", () =>
         msg: "Dockerfile target 'Dockerfile' in context '../../../etc' escapes the repository",
       },
     ]);
+  });
+});
+
+// ─── Round-4 regressions: gate-integrity fail-open paths ─────────────────
+//
+// These cases reproduce the two fail-open defects identified in round-4
+// review. Each failed against the 4ff0dfa code (validator resolved context
+// from repoRoot; deriver filtered to .sql before validating) and passes
+// only after the fixes. They are exact-set assertions — no toContain.
+
+describe("source-of-truth defect matrix — round-4 fail-open regressions", () => {
+  let dir;
+  beforeEach(() => { dir = createValidRepoFixture(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  // Regression for fix 1: package-local Compose with context "."
+  // A Compose file in a nested directory whose build.context is "." must
+  // resolve against ITS OWN directory, not the repository root. Before the
+  // fix, this fixture passed (the validator incorrectly accepted the root
+  // Dockerfile); after the fix it reports the nested target as missing.
+  it("nested Compose with context '.' resolves against its own directory, not repoRoot", () => {
+    // Build a nested Compose file in packages/web/ that references a
+    // Dockerfile in its own directory (which we do NOT create). The root
+    // Dockerfile DOES exist. Pre-fix this passed silently; post-fix it must
+    // report the nested target as missing.
+    fs.writeFileSync(
+      path.join(dir, "packages/web/docker-compose.yml"),
+      "services:\n  app:\n    build:\n      context: .\n      dockerfile: Dockerfile\n"
+    );
+    // Deliberately do NOT create packages/web/Dockerfile.
+    const compose = validateComposeDockerfiles(dir, "packages/web/docker-compose.yml");
+    // Normalize path separators so the assertion is stable on Windows and
+    // POSIX (the validator uses path.join, which is platform-specific).
+    const norm = compose.map((v) => ({ file: v.file, msg: v.msg.replace(/\\/g, "/") }));
+    expect(norm).toEqual([
+      {
+        file: "packages/web/docker-compose.yml:app",
+        msg: "Dockerfile target 'packages/web/Dockerfile' does not exist (context: .)",
+      },
+    ]);
+  });
+
+  // Regression for fix 2: non-.sql entries in migrations directory
+  // Before the fix, README.md / foo.txt / subdirectories / .sql.bak files
+  // were silently ignored by a premature .sql filter. The contract requires
+  // validating EVERY directory entry. Each of these must now be rejected.
+  it("non-.sql entries in migrations directory are rejected (README.md)", () => {
+    fs.writeFileSync(path.join(dir, "packages/web/db/migrations/README.md"), "# hi\n");
+    const result = checkSourceOfTruth(dir);
+    // Exact set: the malformed name suppresses gap evaluation and migrations
+    // identity comparison. The only violation is the malformed-name one.
+    expect(codes(result)).toEqual(["MIGRATION_MALFORMED_NAME"]);
+    expect(result.violations[0].message).toContain("README.md");
+  });
+
+  it("subdirectory in migrations directory is rejected as a non-file entry", () => {
+    fs.mkdirSync(path.join(dir, "packages/web/db/migrations/subdir"));
+    const result = checkSourceOfTruth(dir);
+    expect(codes(result)).toEqual(["MIGRATION_MALFORMED_NAME"]);
+    expect(result.violations[0].message).toContain("subdir");
+  });
+
+  it(".sql.bak file in migrations directory is rejected (not a valid migration)", () => {
+    fs.writeFileSync(path.join(dir, "packages/web/db/migrations/038_migration.sql.bak"), "-- bak\n");
+    const result = checkSourceOfTruth(dir);
+    expect(codes(result)).toEqual(["MIGRATION_MALFORMED_NAME"]);
+    expect(result.violations[0].message).toContain("038_migration.sql.bak");
   });
 });

@@ -24,7 +24,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import yaml from "js-yaml";
+import * as yaml from "yaml";
 
 import { parseSourceTruthMarker } from "./parse-source-truth.mjs";
 
@@ -62,7 +62,7 @@ function deriveServices(root) {
   }
   let compose;
   try {
-    compose = yaml.load(composeText);
+    compose = yaml.parse(composeText);
   } catch (err) {
     return { identities: null, violations: [{ code: "SOURCE_READ_FAILURE", document: "(docker-compose.yml)", field: "services", message: `cannot parse docker-compose.yml YAML: ${err.message}` }] };
   }
@@ -152,25 +152,33 @@ function deriveWorkers(root) {
  */
 function deriveMigrations(root) {
   const dir = path.join(root, "packages/web/db/migrations");
-  let entries;
+  let dirents;
   try {
-    entries = fs.readdirSync(dir);
+    dirents = fs.readdirSync(dir, { withFileTypes: true });
   } catch (err) {
     return { identities: null, violations: [{ code: "SOURCE_READ_FAILURE", document: "(packages/web/db/migrations)", field: "migrations", message: `cannot read migrations directory: ${err.message}` }] };
   }
 
-  const sqlFiles = entries.filter((f) => f.endsWith(".sql"));
-  if (sqlFiles.length === 0) {
-    return { identities: null, violations: [{ code: "SOURCE_READ_FAILURE", document: "(packages/web/db/migrations)", field: "migrations", message: "migrations directory contains no .sql files" }] };
-  }
-
+  // Step 2: inspect EVERY entry. Fail on non-files (subdirectories, symlinks)
+  // and on any filename that does not match the canonical migration pattern.
+  // This closes a fail-open path where README.md, foo.txt, subdirectories, or
+  // .sql.bak files were silently ignored by a premature .sql filter.
   const nameRe = /^\d{3}_.+\.sql$/;
-  const malformed = sqlFiles.filter((f) => !nameRe.test(f));
+  const nonFiles = dirents.filter((d) => !d.isFile());
+  if (nonFiles.length > 0) {
+    return { identities: null, violations: [{ code: "MIGRATION_MALFORMED_NAME", document: "(packages/web/db/migrations)", field: "migrations", message: `migrations directory contains non-file entries: ${nonFiles.map((d) => d.name).join(", ")}` }] };
+  }
+  const filenames = dirents.map((d) => d.name);
+  const malformed = filenames.filter((f) => !nameRe.test(f));
   if (malformed.length > 0) {
     return { identities: null, violations: [{ code: "MIGRATION_MALFORMED_NAME", document: "(packages/web/db/migrations)", field: "migrations", message: `malformed migration filename(s): ${malformed.join(", ")}` }] };
   }
+  if (filenames.length === 0) {
+    return { identities: null, violations: [{ code: "SOURCE_READ_FAILURE", document: "(packages/web/db/migrations)", field: "migrations", message: "migrations directory contains no migration files" }] };
+  }
 
-  const prefixes = sqlFiles.map((f) => f.slice(0, 3));
+  // Step 3-4: extract numeric prefixes and detect duplicates.
+  const prefixes = filenames.map((f) => f.slice(0, 3));
   const prefixCounts = new Map();
   for (const p of prefixes) {
     prefixCounts.set(p, (prefixCounts.get(p) || 0) + 1);
@@ -180,8 +188,8 @@ function deriveMigrations(root) {
     return { identities: null, violations: [{ code: "MIGRATION_DUPLICATE_NUMBER", document: "(packages/web/db/migrations)", field: "migrations", message: `duplicate migration prefix(es): ${dups.join(", ")}` }] };
   }
 
+  // Step 5-6: numeric sort and enforce contiguous 001..N.
   const sorted = [...new Set(prefixes)].sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-  // Enforce contiguous 001..N.
   let gap = null;
   for (let i = 0; i < sorted.length; i++) {
     const expected = String(i + 1).padStart(3, "0");
