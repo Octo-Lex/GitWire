@@ -243,6 +243,35 @@ export function mockOutcome(spec) {
   );
 }
 
+// ─── Deferred-gate validation ─────────────────────────────────────────────
+
+/**
+ * Validate a deferred-gate object before tracking or awaiting it. A gate
+ * must be a non-null object with a thenable `promise` and a callable
+ * `reject` (cleanup invokes `reject` to cancel blocked runs). Rejecting
+ * here prevents a malformed gate from entering `pendingGates`, where it
+ * would later make cleanup throw `gate.reject is not a function` and leave
+ * the blocked run unsettled.
+ *
+ * @param {*} gate
+ * @throws {Error} INVALID_DEFERRED_GATE if the gate is missing, non-object,
+ *   has no thenable promise, or has no callable reject.
+ */
+export function validateDeferredGate(gate) {
+  if (
+    !gate ||
+    typeof gate !== "object" ||
+    !gate.promise ||
+    typeof gate.promise.then !== "function" ||
+    typeof gate.reject !== "function"
+  ) {
+    throw Object.assign(
+      new Error("scenario: invalid deferred gate"),
+      { code: "INVALID_DEFERRED_GATE" }
+    );
+  }
+}
+
 // ─── Scenario ─────────────────────────────────────────────────────────────
 
 /**
@@ -340,8 +369,11 @@ export function createScenario(opts = {}) {
     // is normalized through mockOutcome (so the engine receives a valid
     // ClassifiedOutcome); a rejected gate stays an escaped rejection. The
     // gate is tracked in pendingGates so cleanup can cancel a blocked run.
-    if (spec && typeof spec === "object" && spec.deferred && typeof spec.deferred.promise === "object") {
+    // The gate is validated BEFORE tracking so a malformed gate cannot enter
+    // pendingGates (where cleanup would later call gate.reject and throw).
+    if (spec && typeof spec === "object" && Object.prototype.hasOwnProperty.call(spec, "deferred")) {
       const gate = spec.deferred;
+      validateDeferredGate(gate);
       pendingGates.add(gate);
       let value;
       try {
@@ -389,28 +421,44 @@ export function createScenario(opts = {}) {
 
   const pendingDeferredCount = () => pendingGates.size;
 
-  const cleanup = async () => {
-    if (closing) return; // idempotent — second call is a no-op
-    closing = true;
-    // Reject every unsettled deferred gate with SCENARIO_CANCELLED. The
-    // awaiting run() observes the rejection (caller's await rejects with the
-    // typed error), and the gate is removed from pendingGates by the run()'s
-    // own finally block. This is what makes a blocked run() settle during
-    // cleanup rather than hanging.
-    for (const gate of pendingGates) {
-      gate.reject(Object.assign(new Error("scenario: cleanup cancelled pending deferred"), { code: SCENARIO_CANCELLED }));
-    }
-    // Snapshot pending runs. Attach a safety catch to each BEFORE awaiting
-    // so any that reject during the allSettled drain cannot surface as
-    // unhandledRejection (allSettled itself does not count as a handler for
-    // Node's unhandled-rejection detection in some runtimes; the explicit
-    // catch is the portable guarantee).
-    const pending = [...activeRuns];
-    for (const p of pending) p.catch(() => { /* safety — see trackedRun */ });
-    await Promise.allSettled(pending);
-    activeRuns.clear();
-    trace.append({ kind: "scenario_cleanup", detail: { consumedAttempts: cursor, cancelledDeferreds: pendingGates.size } });
-    pendingGates.clear();
+  // Concurrent-cleanup join: the first cleanup call drives the drain; every
+  // subsequent concurrent call receives the SAME promise. This prevents an
+  // afterEach or caller from continuing while deferred cancellation and run
+  // settlement are still incomplete (a second `if (closing) return` would
+  // resolve immediately, racing the first drain).
+  let cleanupPromise = null;
+  const cleanup = () => {
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = (async () => {
+      closing = true;
+      // Snapshot the gates BEFORE rejecting them. Each run()'s finally block
+      // removes its gate from pendingGates when the rejection propagates, so
+      // by the time we reach the trace.append below, pendingGates is empty
+      // and a naive count would record zero. Capture the count here.
+      const gatesToCancel = [...pendingGates];
+      const cancelError = Object.assign(
+        new Error("scenario: cleanup cancelled pending deferred"),
+        { code: SCENARIO_CANCELLED }
+      );
+      for (const gate of gatesToCancel) {
+        gate.reject(cancelError);
+      }
+      // Snapshot pending runs. Attach a safety catch to each BEFORE awaiting
+      // so any that reject during the allSettled drain cannot surface as
+      // unhandledRejection (allSettled itself does not count as a handler for
+      // Node's unhandled-rejection detection in some runtimes; the explicit
+      // catch is the portable guarantee).
+      const pending = [...activeRuns];
+      for (const p of pending) p.catch(() => { /* safety — see trackedRun */ });
+      await Promise.allSettled(pending);
+      activeRuns.clear();
+      pendingGates.clear();
+      trace.append({
+        kind: "scenario_cleanup",
+        detail: { consumedAttempts: cursor, cancelledDeferreds: gatesToCancel.length },
+      });
+    })();
+    return cleanupPromise;
   };
 
   return Object.freeze({
