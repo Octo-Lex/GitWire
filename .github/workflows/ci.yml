@@ -43,6 +43,8 @@ jobs:
             -exec node --check {} +
       - name: Stress isolation static gate
         run: node scripts/check-stress-isolation.mjs
+      - name: Source-of-truth drift check
+        run: node scripts/check-source-of-truth.mjs
 
   # ── Package test jobs ─────────────────────────────────────────────────────
   # Each package gets its own job so failures are attributed clearly.

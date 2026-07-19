@@ -31,7 +31,7 @@
 | `infrastructure.md` | `Express API + 9 background workers` | `14` worker handles | Update to `14` |
 | `infrastructure.md` | `no migration runner in the app startup code` | Root `docker-entrypoint.sh` runs `node scripts/migrate.js` fail-closed | Document the entrypoint |
 | `infrastructure.md` | `No maxmemory limit is configured` + recommends `allkeys-lru` | `256mb` + `noeviction` is configured in compose | Correct to `noeviction`/`256mb` |
-| `packages/web/Dockerfile` | Implies it is a production image (has `HEALTHCHECK`, `EXPOSE 3000`) | Unreferenced; CI and dev override both use root `Dockerfile` | **Delete** — no consumer |
+| `packages/web/Dockerfile` | Implies it is a production image (has `HEALTHCHECK`, `EXPOSE 3000`) | Referenced only by stale `packages/web/docker-compose.prod.yml`; CI and dev override both use root `Dockerfile` | **Retire both** — legacy package-local deployment surfaces |
 
 ## Secondary Dockerfile resolution
 

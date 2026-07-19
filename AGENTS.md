@@ -203,8 +203,12 @@ Before tagging ANY release:
    pulls them by digest and recreates services. Manual rebuild/export of
    `GITWIRE_COMMIT_SHA`/`--force-recreate` is **disaster-recovery only**.
 8. Verify the running container version matches the tag
-9. Verify `/health.git_sha` is NOT `"unknown"` and matches the deployed commit
-   (if `"unknown"`, GITWIRE_COMMIT_SHA was not exported at build time — rebuild)
+9. Verify `/health.git_sha` is NOT `"unknown"` and matches the deployed commit.
+   If `"unknown"` or mismatched: **treat the release as failed**. Inspect the
+   publication manifest, build metadata, and deployment run. Preserve or
+   restore the previous validated release via coherent rollback. Use manual
+   rebuild only under the explicitly labeled disaster-recovery procedure in
+   the deployment runbook.
 10. Verify all migrations are applied in the production database
 11. Smoke test the API at `https://gitwire.erlab.uk/health`
 
