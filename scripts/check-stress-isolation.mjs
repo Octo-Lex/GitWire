@@ -26,6 +26,40 @@ const LEGACY_PATTERNS = [
   { regex: /\[\s*200\s*,\s*\d{3}/, msg: "inline status array — use STATUS_SETS constant instead" },
 ];
 
+// P2: executable modules under tests/stress/modules/ must not introduce real
+// wall-clock reads or real timers. Determinism flows only through injected
+// createClock() / createSleeper(). The FORBIDDEN_TIME_TOKENS comment block
+// inside scenario-harness.js mirrors this list so the rule and rationale stay
+// co-located; this regex is the authoritative check.
+const FORBIDDEN_TIME_TOKENS = [
+  { regex: /\bDate\.now\s*\(/, msg: "forbidden Date.now — inject createClock() instead" },
+  { regex: /\bperformance\.now\s*\(/, msg: "forbidden performance.now — inject createClock() instead" },
+  { regex: /\bsetTimeout\s*\(/, msg: "forbidden setTimeout — inject createSleeper() instead" },
+  { regex: /\bsetInterval\s*\(/, msg: "forbidden setInterval — inject createSleeper() instead" },
+];
+
+// File selection rules for the recursive collector (see collectStressIsolationFiles).
+// Two file classes are scanned for prohibited constructs:
+//   - **/*.test.js       — the established stress test surface (now recursive)
+//   - modules/**/*.{js,mjs} — the new P2 executable-module surface
+// Non-test, non-module files at the stress root (helpers like burst-runner.js,
+// response-contracts.js, stress-helpers.js) are intentionally NOT scanned by
+// this function — they are library code consumed by tests, not tests/modules.
+const MODULES_DIR_NAME = "modules";
+
+function isScannableStressFile(relPath) {
+  if (relPath.endsWith(".test.js")) return true;
+  // Any file under a modules/ directory with a .js or .mjs extension. Split
+  // on either separator so the predicate works whether the caller passed a
+  // forward-slash or platform-native relative path.
+  const parts = relPath.split(/[/\\]/);
+  const modulesIdx = parts.indexOf(MODULES_DIR_NAME);
+  if (modulesIdx !== -1 && (relPath.endsWith(".js") || relPath.endsWith(".mjs"))) {
+    return true;
+  }
+  return false;
+}
+
 // Check for a secondary app Dockerfile that is not the canonical root Dockerfile.
 // The root Dockerfile is the only image source for the production app.
 /**
@@ -81,13 +115,67 @@ export function scanDockerfiles(repoRoot, known = KNOWN_DOCKERFILES) {
 }
 
 /**
+ * Recursively collect scannable stress files under a directory.
+ *
+ * Returns normalized relative paths (forward slashes) so the same allowlist
+ * entry works across POSIX and Windows. Selection rules (see
+ * isScannableStressFile):
+ *   - any .test.js file (recursively)  — stress test surface
+ *   - any .js/.mjs file under a modules/ subdirectory — P2 executable-module surface
+ *
+ * Directory entries are sorted for deterministic diagnostics. Symbolic links
+ * are NOT followed (a symlinked subdirectory could pull in arbitrary tree
+ * content; the gate must scan only what is committed).
+ *
+ * Fails closed: a nested read failure is recorded as a synthetic file entry
+ * rather than silently skipped.
+ *
+ * @param {string} rootDir absolute directory to scan
+ * @returns {Array<{rel: string, abs: string, readError?: string}>}
+ */
+export function collectStressIsolationFiles(rootDir) {
+  const out = [];
+  const visit = (absDir, prefix, isRoot) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch (err) {
+      if (isRoot) throw err; // root unreadable is a hard failure, not a nested warning
+      out.push({ rel: prefix || "(dir)", abs: absDir, readError: err.message });
+      return;
+    }
+    // Sort by name for deterministic ordering across platforms.
+    const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const ent of sorted) {
+      // Do not follow symlinks recursively — protects against the gate
+      // scanning uncommitted tree content pulled in by a stray symlink.
+      if (ent.isSymbolicLink()) continue;
+      const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
+      const abs = path.join(absDir, ent.name);
+      if (ent.isDirectory()) {
+        visit(abs, rel, false);
+      } else if (ent.isFile() && isScannableStressFile(rel)) {
+        out.push({ rel: rel.split(path.sep).join("/"), abs });
+      }
+    }
+  };
+  visit(rootDir, "", true);
+  return out;
+}
+
+/**
  * Scan stress test files for prohibited constructs.
  * Pure function — takes a directory and allowlist, returns violations.
  * Fails closed: a missing or unreadable directory is a structural violation.
  *
+ * Recursive: covers any .test.js under the stress tree AND any .js/.mjs
+ * under a modules/ subdirectory.
+ * Module files additionally checked against FORBIDDEN_TIME_TOKENS so the
+ * deterministic-harness contract is enforced at CI time.
+ *
  * @param {Object} opts
  * @param {string} [opts.dir] stress test directory
- * @param {Set<string>} [opts.allowlist] allowlisted filenames
+ * @param {Set<string>} [opts.allowlist] allowlisted relative paths
  * @returns {Array<{file: string, msg: string}>} violations
  */
 export function scanStressIsolation(opts = {}) {
@@ -95,30 +183,46 @@ export function scanStressIsolation(opts = {}) {
   const allowlist = opts.allowlist || new Set();
   const violations = [];
 
-  // Fail closed: if the stress directory cannot be read, that is a structural
-  // violation, not a clean result.
-  let files;
+  let collected;
   try {
-    files = fs.readdirSync(dir).filter(f => f.endsWith(".test.js"));
+    collected = collectStressIsolationFiles(dir);
   } catch (err) {
     return [{ file: "(directory)", msg: `cannot read stress directory ${dir}: ${err.message}` }];
   }
 
-  // If the directory exists but contains no test files, that is also suspicious.
-  if (files.length === 0) {
-    return [{ file: "(directory)", msg: `stress directory ${dir} contains no .test.js files` }];
+  // Nested read failures surface as synthetic entries — report them.
+  for (const c of collected) {
+    if (c.readError) {
+      violations.push({ file: c.rel, msg: `cannot read ${c.rel}: ${c.readError}` });
+    }
   }
 
-  for (const file of files) {
-    if (allowlist.has(file)) continue;
-    const content = fs.readFileSync(path.join(dir, file), "utf8");
+  const scannable = collected.filter((c) => !c.readError);
+  if (scannable.length === 0) {
+    return [{ file: "(directory)", msg: `stress directory ${dir} contains no scannable stress files` }];
+  }
+
+  for (const { rel, abs } of scannable) {
+    if (allowlist.has(rel)) continue;
+    const content = fs.readFileSync(abs, "utf8");
+    const isModule = rel.split(/[/\\]/).includes(MODULES_DIR_NAME);
 
     if (RAW_MUTATING_FETCH.test(content)) {
-      violations.push({ file, msg: "contains raw mutating fetch() bypassing isolation boundary" });
+      violations.push({ file: rel, msg: "contains raw mutating fetch() bypassing isolation boundary" });
     }
     for (const { regex, msg } of LEGACY_PATTERNS) {
       if (regex.test(content)) {
-        violations.push({ file, msg });
+        violations.push({ file: rel, msg });
+      }
+    }
+    // Determinism contract applies to executable modules (the harness).
+    // Stress tests themselves may legitimately use sleep/setTimeout to pace
+    // real network traffic, so the forbidden-time check is scoped to modules/.
+    if (isModule) {
+      for (const { regex, msg } of FORBIDDEN_TIME_TOKENS) {
+        if (regex.test(content)) {
+          violations.push({ file: rel, msg });
+        }
       }
     }
   }

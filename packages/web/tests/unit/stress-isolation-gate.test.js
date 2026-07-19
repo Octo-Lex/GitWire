@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { scanStressIsolation, scanDockerfiles, validateComposeDockerfiles, verifyKnownDockerfilesExist } from "../../../../scripts/check-stress-isolation.mjs";
+import { scanStressIsolation, collectStressIsolationFiles, scanDockerfiles, validateComposeDockerfiles, verifyKnownDockerfilesExist } from "../../../../scripts/check-stress-isolation.mjs";
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "stress-gate-test-"));
@@ -81,11 +81,11 @@ describe("stress-isolation static gate — negative tests", () => {
     expect(violations[0].msg).toContain("cannot read");
   });
 
-  it("directory with no .test.js files fails closed", () => {
+  it("directory with no scannable stress files fails closed", () => {
     writeFile(dir, "helper.js", `const x = 1;`);
     const violations = scanStressIsolation({ dir });
     expect(violations.length).toBeGreaterThan(0);
-    expect(violations[0].msg).toContain("no .test.js files");
+    expect(violations[0].msg).toContain("no scannable stress files");
   });
 
   it("allowlisted files are skipped entirely", () => {
@@ -99,11 +99,106 @@ describe("stress-isolation static gate — negative tests", () => {
     expect(scanStressIsolation({ dir, allowlist: new Set(["skipped.test.js"]) })).toEqual([]);
   });
 
-  it("non-.test.js files are ignored", () => {
+  it("root-level non-test, non-module files are ignored (library code is not scanned)", () => {
+    // burst-runner.js, response-contracts.js, stress-helpers.js at the stress
+    // root are consumed-by-tests library code, not tests/modules. They are
+    // intentionally NOT scanned by the isolation gate.
     writeFile(dir, "helper.js", `apiBurstOperation("/api/repos");`);
-    // Need at least one .test.js file for the directory to be valid
+    // Need at least one .test.js file for the directory to be valid.
     writeFile(dir, "clean.test.js", CLEAN_FILE);
     expect(scanStressIsolation({ dir })).toEqual([]);
+  });
+});
+
+// ─── Recursive module discovery (P2) ──────────────────────────────────────
+
+describe("stress-isolation recursive module discovery", () => {
+  let dir;
+  beforeEach(() => { dir = makeTempDir(); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it("collectStressIsolationFiles discovers nested .test.js files", () => {
+    writeFile(dir, "top.test.js", CLEAN_FILE);
+    fs.mkdirSync(path.join(dir, "nested"), { recursive: true });
+    writeFile(path.join(dir, "nested"), "deep.test.js", CLEAN_FILE);
+    const found = collectStressIsolationFiles(dir).map((c) => c.rel).sort();
+    expect(found).toEqual(["nested/deep.test.js", "top.test.js"]);
+  });
+
+  it("collectStressIsolationFiles discovers module files under modules/", () => {
+    fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
+    writeFile(path.join(dir, "modules"), "scenario-harness.js", "export const x = 1;");
+    writeFile(path.join(dir, "modules"), "util.mjs", "export const y = 2;");
+    // Root-level non-test, non-module files are NOT discovered.
+    writeFile(dir, "library.js", "export const z = 3;");
+    const found = collectStressIsolationFiles(dir).map((c) => c.rel).sort();
+    expect(found).toEqual(["modules/scenario-harness.js", "modules/util.mjs"]);
+  });
+
+  it("does not follow symbolic links", () => {
+    fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
+    writeFile(path.join(dir, "modules"), "real.js", "export const x = 1;");
+    // Symlink modules/linked -> /some/external/path must not be traversed.
+    try {
+      fs.symlinkSync("/nonexistent/target", path.join(dir, "modules", "linked"), "dir");
+    } catch (err) {
+      // On platforms/permission levels where symlink creation fails, skip
+      // this assertion rather than failing the suite.
+      if (err.code !== "EPERM" && err.code !== "ENOSYS") throw err;
+      return;
+    }
+    const found = collectStressIsolationFiles(dir).map((c) => c.rel).sort();
+    expect(found).toEqual(["modules/real.js"]);
+  });
+
+  it("module file with raw mutating fetch is detected (regression for the modules-bypass path)", () => {
+    fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
+    writeFile(path.join(dir, "modules"), "evil.js", `
+      fetch("http://x/api", { method: "POST", body: "{}" });
+    `);
+    // Need a clean .test.js so the directory isn't empty-fail.
+    writeFile(dir, "clean.test.js", CLEAN_FILE);
+    const violations = scanStressIsolation({ dir });
+    expect(violations.some((v) => v.file === "modules/evil.js" && v.msg.includes("raw mutating"))).toBe(true);
+  });
+
+  it("module file with forbidden time tokens is detected (determinism contract)", () => {
+    fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
+    writeFile(path.join(dir, "modules"), "bad.js", `
+      const t = Date.now();
+      setTimeout(() => {}, 100);
+    `);
+    writeFile(dir, "clean.test.js", CLEAN_FILE);
+    const violations = scanStressIsolation({ dir });
+    const badMsgs = violations.filter((v) => v.file === "modules/bad.js").map((v) => v.msg);
+    expect(badMsgs.some((m) => m.includes("Date.now"))).toBe(true);
+    expect(badMsgs.some((m) => m.includes("setTimeout"))).toBe(true);
+  });
+
+  it("module files are subject to the same legacy-helper ban as test files", () => {
+    // The contracted-API ban applies to every scannable file: a modules/ file
+    // using apiBurstOperation is just as much a contract bypass as a test
+    // file doing so. P2 modules produce scripted outcomes, not real fetches,
+    // so they have no legitimate reason to call the legacy helpers.
+    fs.mkdirSync(path.join(dir, "modules"), { recursive: true });
+    writeFile(path.join(dir, "modules"), "adapter.js", `
+      import { apiBurstOperation } from "../helpers.js";
+      export function read(path) { return apiBurstOperation(path, { method: "GET" }); }
+    `);
+    writeFile(dir, "clean.test.js", CLEAN_FILE);
+    const violations = scanStressIsolation({ dir });
+    expect(violations.some((v) => v.file === "modules/adapter.js" && v.msg.includes("apiContractedOperation"))).toBe(true);
+  });
+
+  it("real stress tree: modules/scenario-harness.js is discovered and clean", () => {
+    const __filename_real = fileURLToPath(import.meta.url);
+    const __dirname_real = path.dirname(__filename_real);
+    // tests/unit/stress-isolation-gate.test.js → tests/stress/ (one level up)
+    const stressRoot = path.resolve(__dirname_real, "../stress");
+    const found = collectStressIsolationFiles(stressRoot).map((c) => c.rel);
+    expect(found).toContain("modules/scenario-harness.js");
+    // The full scan against the real tree is clean.
+    expect(scanStressIsolation({ dir: stressRoot })).toEqual([]);
   });
 });
 
