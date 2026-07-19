@@ -67,3 +67,28 @@ When documentation disagrees with code:
 4. **Root `Dockerfile`** is the authoritative source for the production app image (build, entrypoint, CMD).
 5. **Root `package.json`** is the authoritative source for the version number.
 6. **`docker-entrypoint.sh`** is the authoritative source for the migration-on-startup behavior.
+
+## Provenance layers
+
+This inventory distinguishes three layers of truth, each verified differently:
+
+- **base-derived facts** — values read directly from the implementation
+  sources above (`docker-compose.yml`, `packages/web/src/index.js`,
+  `packages/web/db/migrations/`, `package.json`). The derivation logic
+  lives in `scripts/check-source-of-truth.mjs` (`deriveServices`,
+  `deriveWorkers`, `deriveMigrations`, `deriveVersion`). These facts are
+  the ground truth against which every marker is compared.
+
+- **P1-retired legacy surfaces** — files removed in P1 as retired legacy
+  deployment surfaces: `packages/web/Dockerfile` and
+  `packages/web/docker-compose.prod.yml`. They are no longer part of the
+  source-of-truth graph; reintroducing either is blocked by the
+  Dockerfile-uniqueness gate in `scripts/check-stress-isolation.mjs`.
+
+- **current post-P1 enforced state** — values asserted by the
+  `gitwire:source-of-truth` marker contract in each governed document and
+  verified by the gate at CI time. The marker is the enforced contract;
+  when prose and marker disagree, the marker is authoritative. Drift
+  between the marker and base-derived facts is reported as
+  `IDENTITY_MISMATCH` and fails the build.
+
