@@ -98,6 +98,17 @@ function expectViolations(report, expectedSorted) {
   expect(report.violations).toEqual(expectedSorted);
 }
 
+// Complete transactional-failure assertion: exact violations + ALL zero
+// aggregates + empty logicalOperations + empty attemptsById. Used by every
+// negative reducer test so no partial pattern can hide a defect.
+function expectTransactionalFailure(report, violations) {
+  expect(report.violations).toEqual(violations);
+  expect(report.logical).toEqual(ZERO_LOGICAL);
+  expect(report.attempts).toEqual(ZERO_ATTEMPTS);
+  expect(report.logicalOperations).toEqual([]);
+  expect(Object.keys(report.attemptsById)).toEqual([]);
+}
+
 // ─── deriveAttemptOutcome unit tests ──────────────────────────────────────
 
 describe("deriveAttemptOutcome — 3-rule order", () => {
@@ -323,51 +334,71 @@ describe("buildOperationReport — B-fix defect regressions", () => {
 
   it("BigInt attemptNumber + BigInt durationMs → exact transactional report, no throw", () => {
     const report = buildOperationReport([makeAttemptRecord({ attemptNumber: 1n, durationMs: 5n })]);
-    // Two Phase-1 violations; the malformed values appear ONLY in messages
-    // (via describeValue), never in the typed attemptNumber field — so the
-    // sorter's numeric subtraction cannot crash on BigInt.
-    expectViolations(report, [
-      v("INVALID_ATTEMPT_NUMBER", "attemptNumber must be a positive integer, got <unserializable bigint>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
-      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got <unserializable bigint>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    expectTransactionalFailure(report, [
+      v("INVALID_ATTEMPT_NUMBER", "attemptNumber must be a positive integer, got <bigint>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got <bigint>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
     ]);
-    expect(report.logical).toEqual(ZERO_LOGICAL);
-    expect(report.attempts).toEqual(ZERO_ATTEMPTS);
-    expect(report.logicalOperations).toEqual([]);
-    expect(Object.keys(report.attemptsById)).toEqual([]);
   });
 
   it("Symbol attemptId + invalid logicalOperationId → exact transactional report, no throw", () => {
     const report = buildOperationReport([makeAttemptRecord({ logicalOperationId: "", attemptId: Symbol("bad") })]);
-    // Both identity fields are invalid; neither enters typed violation fields
-    // (attemptId is a Symbol, not a string; logicalOperationId is empty).
-    // The violation() helper only attaches string/number fields — undefined
-    // and mistyped values stay out of the structured output.
-    expectViolations(report, [
+    expectTransactionalFailure(report, [
       v("MISSING_ATTEMPT_ID", "attemptId must be a non-empty string", { logicalOperationId: "", phase: P1 }),
       v("MISSING_LOGICAL_OPERATION_ID", "logicalOperationId must be a non-empty string", { phase: P1 }),
     ]);
-    expect(report.logical).toEqual(ZERO_LOGICAL);
-    expect(report.attempts).toEqual(ZERO_ATTEMPTS);
   });
 
   it("circular transport value → exact transactional report, no throw", () => {
     const circ = {};
     circ.self = circ;
     const report = buildOperationReport([makeAttemptRecord({ transport: circ })]);
-    expect(report.violations.every((x) => x.code === "UNKNOWN_TRANSPORT")).toBe(true);
-    expect(report.logical.total).toBe(0);
+    expectTransactionalFailure(report, [
+      v("UNKNOWN_TRANSPORT", "transport must be one of completed|failed, got <object>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
   it("symbol http classification → exact transactional report, no throw", () => {
     const report = buildOperationReport([makeAttemptRecord({ http: Symbol("x") })]);
-    expect(report.violations.every((x) => x.code === "UNKNOWN_HTTP")).toBe(true);
-    expect(report.attempts.total).toBe(0);
+    expectTransactionalFailure(report, [
+      v("UNKNOWN_HTTP", "http must be one of expected|unexpected|not_received, got <symbol>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
   it("function assertion classification → exact transactional report, no throw", () => {
     const report = buildOperationReport([makeAttemptRecord({ assertion: () => {} })]);
-    expect(report.violations.every((x) => x.code === "UNKNOWN_ASSERTION")).toBe(true);
-    expect(report.logical.total).toBe(0);
+    expectTransactionalFailure(report, [
+      v("UNKNOWN_ASSERTION", "assertion must be one of passed|failed|not_run, got <function>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
+  });
+
+  it("secret-bearing transport string is NOT copied into the violation message", () => {
+    // describeValue must not serialize arbitrary strings — bounding is not
+    // redaction. A string like "Authorization: Bearer secret-token" is
+    // reduced to a length descriptor, never quoted.
+    const secret = "Authorization: Bearer secret-token";
+    const report = buildOperationReport([makeAttemptRecord({ transport: secret })]);
+    expectTransactionalFailure(report, [
+      v("UNKNOWN_TRANSPORT", "transport must be one of completed|failed, got <string length=34>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
+    // The secret does not appear anywhere in the violation message.
+    for (const viol of report.violations) {
+      expect(viol.message).not.toContain("secret-token");
+      expect(viol.message).not.toContain("Bearer");
+    }
+  });
+
+  it("toJSON() is never invoked on untrusted values during validation", () => {
+    // describeValue must not call JSON.stringify, which would invoke a
+    // record-controlled toJSON() hook. The hook must not execute.
+    let hookCalled = false;
+    const malicious = {
+      toJSON() { hookCalled = true; return "bad"; },
+    };
+    const report = buildOperationReport([makeAttemptRecord({ transport: malicious })]);
+    expect(hookCalled).toBe(false);
+    expectTransactionalFailure(report, [
+      v("UNKNOWN_TRANSPORT", "transport must be one of completed|failed, got <object>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 });
 
@@ -382,11 +413,9 @@ describe("buildOperationReport — B4 transport-error shape", () => {
   }
 
   function expectOnlyTransportError(report) {
-    expect(report.violations.map((x) => x.code)).toEqual(["INVALID_TRANSPORT_ERROR"]);
-    expect(report.logical).toEqual(ZERO_LOGICAL);
-    expect(report.attempts).toEqual(ZERO_ATTEMPTS);
-    expect(report.logicalOperations).toEqual([]);
-    expect(Object.keys(report.attemptsById)).toEqual([]);
+    expectTransactionalFailure(report, [
+      v("INVALID_TRANSPORT_ERROR", "transport=failed requires a classified transport-error object", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
   }
 
   it("error = { category: 'timeout' } (missing name/code/message) → INVALID_TRANSPORT_ERROR", () => {
@@ -459,10 +488,10 @@ describe("validateAttemptRecord — Phase 1 record shape", () => {
 
   it("non-finite durationMs → exact violation", () => {
     expect(validateAttemptRecord(makeAttemptRecord({ durationMs: Infinity }))).toEqual([
-      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got null", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got <non-finite number>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
     ]);
     expect(validateAttemptRecord(makeAttemptRecord({ durationMs: NaN }))).toEqual([
-      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got null", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got <non-finite number>", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
     ]);
   });
 
@@ -539,38 +568,30 @@ describe("validateAttemptRecord — Phase 2 consistency", () => {
 describe("buildOperationReport — B4 status/error transactional path", () => {
   it("status = '200' (string) → exact transactional report", () => {
     const report = buildOperationReport([makeAttemptRecord({ status: "200" })]);
-    expectViolations(report, [
+    expectTransactionalFailure(report, [
       v("INVALID_STATUS_FOR_TRANSPORT", 'transport=completed requires integer status 100-599, got "200"', { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
     ]);
-    expect(report.logical).toEqual(ZERO_LOGICAL);
-    expect(report.attempts).toEqual(ZERO_ATTEMPTS);
-    expect(report.logicalOperations).toEqual([]);
-    expect(Object.keys(report.attemptsById)).toEqual([]);
   });
 
   it("status = 99 (below range) → exact transactional report", () => {
     const report = buildOperationReport([makeAttemptRecord({ status: 99 })]);
-    expectViolations(report, [
+    expectTransactionalFailure(report, [
       v("INVALID_STATUS_FOR_TRANSPORT", "transport=completed requires integer status 100-599, got 99", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
     ]);
-    expect(report.logical).toEqual(ZERO_LOGICAL);
   });
 
   it("status = 600 (above range) → exact transactional report", () => {
     const report = buildOperationReport([makeAttemptRecord({ status: 600 })]);
-    expectViolations(report, [
+    expectTransactionalFailure(report, [
       v("INVALID_STATUS_FOR_TRANSPORT", "transport=completed requires integer status 100-599, got 600", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
     ]);
-    expect(report.attempts).toEqual(ZERO_ATTEMPTS);
   });
 
   it("transport = failed, error = null → exact transactional report", () => {
     const report = buildOperationReport([failedTransport({ error: null })]);
-    expectViolations(report, [
+    expectTransactionalFailure(report, [
       v("INVALID_TRANSPORT_ERROR", "transport=failed requires a classified transport-error object", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
     ]);
-    expect(report.logical).toEqual(ZERO_LOGICAL);
-    expect(report.logicalOperations).toEqual([]);
   });
 
   it("transport=failed but http=expected → exact SEMANTIC_TRANSPORT_HTTP", () => {
@@ -632,7 +653,7 @@ describe("buildOperationReport — Phase 4 logical sequence", () => {
     ];
     const report = buildOperationReport(records);
     expectViolations(report, [
-      v("NONCONTIGUOUS_ATTEMPT_NUMBERS", 'attemptNumbers must be contiguous starting at 1; got [1,3] for logical operation', { logicalOperationId: "op-1", phase: P4 }),
+      v("NONCONTIGUOUS_ATTEMPT_NUMBERS", "attemptNumbers must be contiguous starting at 1; got <array> for logical operation", { logicalOperationId: "op-1", phase: P4 }),
     ]);
     expect(report.logical.total).toBe(0);
   });
