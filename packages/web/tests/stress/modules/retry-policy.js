@@ -62,11 +62,19 @@ function getHeader(headers, name) {
 function parseRateHeaders(headers) {
   if (!headers) return null;
   const remaining = parseInt(getHeader(headers, "x-ratelimit-remaining"), 10);
+  const resetEpoch = parseInt(getHeader(headers, "x-ratelimit-reset"), 10);
   const retryAfterHeader = getHeader(headers, "retry-after");
   const resource = getHeader(headers, "x-ratelimit-resource") || "core";
   const retryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) : null;
+
+  // Production requires BOTH finite remaining AND finite reset for a non-null
+  // result. Without reset, the 403+remaining=0 branch cannot compute
+  // cooldown duration and the production classifier returns 'forbidden'.
+  if (!Number.isFinite(remaining) || !Number.isFinite(resetEpoch)) return null;
+
   return {
-    remaining: Number.isFinite(remaining) ? remaining : null,
+    remaining,
+    resetAt: resetEpoch,
     retryAfter: Number.isFinite(retryAfter) ? retryAfter : null,
     resource,
   };
@@ -116,6 +124,17 @@ const RETRYABLE_REASONS = new Set([
   GITHUB_ERROR_REASONS.RATE_LIMITED_RETRY_AFTER,
   GITHUB_ERROR_REASONS.RATE_EXHAUSTED,
 ]);
+
+// ─── Typed fatal error codes for policy infrastructure failures ───────────
+//
+// These are NOT operation outcomes. A classifier or backoff defect is an
+// infrastructure/programming failure. The orchestrator throws these codes
+// and does NOT manufacture a final C2 record or produce an authoritative
+// report. Diagnostic prior records may be attached for debugging.
+
+export const RETRY_CLASSIFICATION_FAILED = "RETRY_CLASSIFICATION_FAILED";
+export const RETRY_BACKOFF_FAILED = "RETRY_BACKOFF_FAILED";
+export const RETRY_DELAY_FAILED = "RETRY_DELAY_FAILED";
 
 // ─── Generic retry policy ─────────────────────────────────────────────────
 
@@ -185,6 +204,7 @@ export function createRetryPolicy(opts) {
     const attemptsRemaining = maxAttempts - attemptNumber;
     const headers = retryMetadata?.headers ?? null;
 
+    // Classify the attempt using the injected classifier.
     let classification;
     try {
       classification = classifyAttempt({
@@ -193,13 +213,23 @@ export function createRetryPolicy(opts) {
         transport: engineResult?.transport,
         http: engineResult?.http,
         assertion: engineResult?.assertion,
+        error: engineResult?.error,
       });
-    } catch {
-      return { retryable: false, retry: false, reason: "classifier_error", attemptNumber, attemptsRemaining: 0, delayMs: null };
+    } catch (err) {
+      // Classifier threw — infrastructure/policy defect. Typed fatal error;
+      // no fabricated final record, no authoritative report.
+      throw Object.assign(
+        new Error(`retry classification failed: classifier threw`),
+        { code: RETRY_CLASSIFICATION_FAILED, cause: err }
+      );
     }
 
     if (!classification || typeof classification !== "object" || typeof classification.reason !== "string") {
-      return { retryable: false, retry: false, reason: "unknown_classification", attemptNumber, attemptsRemaining: 0, delayMs: null };
+      // Malformed classifier output — same treatment.
+      throw Object.assign(
+        new Error(`retry classification failed: invalid classifier output`),
+        { code: RETRY_CLASSIFICATION_FAILED }
+      );
     }
 
     const retryable = classification.retryable === true;
@@ -209,7 +239,7 @@ export function createRetryPolicy(opts) {
       return { retryable: false, retry: false, reason: "assertion_failure", attemptNumber, attemptsRemaining, delayMs: null };
     }
 
-    // Budget exhausted.
+    // Budget exhausted: intrinsically retryable but no more attempts available.
     if (attemptNumber >= maxAttempts) {
       return {
         retryable,
@@ -223,14 +253,27 @@ export function createRetryPolicy(opts) {
 
     // Budget remaining: retry if retryable.
     if (retryable) {
-      let delayMs;
-      try {
-        delayMs = backoffMs({ retryNumber: attemptNumber });
-      } catch {
-        return { retryable, retry: false, reason: "backoff_error", attemptNumber, attemptsRemaining, delayMs: null };
-      }
-      if (typeof delayMs !== "number" || !Number.isFinite(delayMs) || delayMs < 0 || Number.isNaN(delayMs)) {
-        return { retryable, retry: false, reason: "invalid_backoff", attemptNumber, attemptsRemaining, delayMs: null };
+      // Determine delay: classification.retryAfterMs takes precedence over
+      // backoffMs (correction #4). Retry-After from the server is
+      // authoritative when present.
+      let delayMs = null;
+      if (typeof classification.retryAfterMs === "number" && Number.isFinite(classification.retryAfterMs) && classification.retryAfterMs >= 0) {
+        delayMs = classification.retryAfterMs;
+      } else {
+        try {
+          delayMs = backoffMs({ retryNumber: attemptNumber });
+        } catch (err) {
+          throw Object.assign(
+            new Error(`retry backoff failed: backoffMs threw`),
+            { code: RETRY_BACKOFF_FAILED, cause: err }
+          );
+        }
+        if (typeof delayMs !== "number" || !Number.isFinite(delayMs) || delayMs < 0 || Number.isNaN(delayMs)) {
+          throw Object.assign(
+            new Error(`retry backoff failed: invalid value`),
+            { code: RETRY_BACKOFF_FAILED }
+          );
+        }
       }
       return { retryable, retry: true, reason: classification.reason, attemptNumber, attemptsRemaining, delayMs };
     }
@@ -243,9 +286,23 @@ export function createRetryPolicy(opts) {
 
 // ─── Production-compatible retry classifier ───────────────────────────────
 
-function productionClassifyAttempt({ status, headers, transport, http, assertion }) {
+function productionClassifyAttempt({ status, headers, transport, http, assertion, error }) {
   if (transport === "failed") {
-    return { reason: "transport_failure", retryable: true };
+    // Transport failures: retryable except abort (terminal) and unknown
+    // categories (fail-closed terminal per correction #2/#8).
+    const category = error?.category;
+    if (category === "abort") {
+      return { reason: "abort", retryable: false };
+    }
+    // Known retryable transport categories.
+    const retryableCategories = new Set([
+      "timeout", "connection_refused", "connection_reset", "dns", "tls", "protocol", "other",
+    ]);
+    if (retryableCategories.has(category)) {
+      return { reason: "transport_failure", retryable: true };
+    }
+    // Unknown category → fail-closed terminal.
+    return { reason: "unknown_transport_category", retryable: false };
   }
   if (assertion === "failed") {
     return { reason: "assertion_failure", retryable: false };
@@ -278,8 +335,6 @@ export const productionRetryPolicy = createRetryPolicy({
 });
 
 // ─── Retry orchestration helper (per correction #6) ───────────────────────
-
-export const RETRY_DELAY_FAILED = "RETRY_DELAY_FAILED";
 
 /**
  * Execute a retry scenario: run attempts until terminal, producing C2
@@ -321,7 +376,20 @@ export async function executeRetryScenario({
     }
 
     const retryMetadata = retryMetadataFor(attemptNumber, engineResult);
-    const decision = policy.decide({ attemptNumber, engineResult, retryMetadata });
+
+    let decision;
+    try {
+      decision = policy.decide({ attemptNumber, engineResult, retryMetadata });
+    } catch (err) {
+      // Classifier or backoff infrastructure defect — typed fatal error.
+      // Prior attempt records remain as diagnostics, but no authoritative
+      // report is produced and no fake final record is manufactured.
+      // The error from decide() already has the typed code; attach
+      // diagnostic context.
+      err.attemptRecords = attemptRecords;
+      err.decisions = decisions;
+      throw err;
+    }
     decisions.push(decision);
 
     const record = createAttemptRecord(engineResult, {
