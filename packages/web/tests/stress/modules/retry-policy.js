@@ -224,15 +224,36 @@ export function createRetryPolicy(opts) {
       );
     }
 
-    if (!classification || typeof classification !== "object" || typeof classification.reason !== "string") {
-      // Malformed classifier output — same treatment.
+    if (!classification || typeof classification !== "object" ||
+        typeof classification.reason !== "string" || classification.reason.length === 0) {
+      // Malformed classifier output — reason missing, non-string, or empty.
       throw Object.assign(
-        new Error(`retry classification failed: invalid classifier output`),
+        new Error(`retry classification failed: reason must be a non-empty string`),
         { code: RETRY_CLASSIFICATION_FAILED }
       );
     }
 
-    const retryable = classification.retryable === true;
+    // Require retryable to be exactly boolean (correction D1).
+    if (typeof classification.retryable !== "boolean") {
+      throw Object.assign(
+        new Error(`retry classification failed: retryable must be boolean, got ${typeof classification.retryable}`),
+        { code: RETRY_CLASSIFICATION_FAILED }
+      );
+    }
+
+    // Validate retryAfterMs if present (correction D1).
+    if (classification.retryAfterMs !== undefined) {
+      if (typeof classification.retryAfterMs !== "number" ||
+          !Number.isFinite(classification.retryAfterMs) ||
+          classification.retryAfterMs < 0) {
+        throw Object.assign(
+          new Error(`retry classification failed: retryAfterMs must be a finite non-negative number`),
+          { code: RETRY_CLASSIFICATION_FAILED }
+        );
+      }
+    }
+
+    const retryable = classification.retryable;
 
     // Assertion failures: retry only if explicitly permitted.
     if (engineResult?.assertion === "failed" && !retryAssertionFailures) {
