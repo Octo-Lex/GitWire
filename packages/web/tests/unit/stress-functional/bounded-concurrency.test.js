@@ -125,17 +125,22 @@ describe("bounded concurrency — matrix", () => {
       const burstPromise = runBurst(descriptors, {
         concurrency, pacing: { mode: "none" }, now,
       });
-      await flushSchedulerTurn();
 
-      expect(state.maxActive).toBe(expected);
-      expect(state.maxActive).toBeLessThanOrEqual(concurrency);
+      try {
+        await flushSchedulerTurn();
 
-      for (const c of controls) c.release.resolve();
-      const aggregate = await burstPromise;
+        expect(state.maxActive).toBe(expected);
+        expect(state.maxActive).toBeLessThanOrEqual(concurrency);
 
-      expect(aggregate.maxInFlightObserved).toBe(state.maxActive);
-      expect(aggregate.requestedConcurrency).toBe(concurrency);
-      expect(aggregate.attempted).toBe(nOps);
+        for (const c of controls) c.release.resolve();
+        const aggregate = await burstPromise;
+
+        expect(aggregate.maxInFlightObserved).toBe(state.maxActive);
+        expect(aggregate.requestedConcurrency).toBe(concurrency);
+        expect(aggregate.attempted).toBe(nOps);
+      } finally {
+        await releaseAllAndDrain(controls, burstPromise);
+      }
     });
   }
 });
@@ -144,7 +149,6 @@ describe("bounded concurrency — matrix", () => {
 
 describe("bounded concurrency — invalid configuration", () => {
   const now = deterministicNow();
-  const ops = [{ kind: "t", method: "GET", run: async () => completedOutcome() }];
 
   const invalid = [
     ["0", 0],
@@ -157,27 +161,32 @@ describe("bounded concurrency — invalid configuration", () => {
 
   for (const [label, value] of invalid) {
     it(`concurrency=${label} rejects before any work starts`, async () => {
+      let starts = 0;
+      const operations = [{
+        kind: "t", method: "GET",
+        run: async () => { starts += 1; return completedOutcome(); },
+      }];
+
       await expect(
-        runBurst(ops, { concurrency: value, pacing: { mode: "none" }, now })
+        runBurst(operations, { concurrency: value, pacing: { mode: "none" }, now })
       ).rejects.toThrow(/concurrency must be a positive integer/);
+
+      expect(starts).toBe(0);
     });
   }
 
-  it("missing concurrency property rejects", async () => {
-    await expect(
-      runBurst(ops, { pacing: { mode: "none" }, now })
-    ).rejects.toThrow(/concurrency must be a positive integer/);
-  });
+  it("missing concurrency property rejects before any work starts", async () => {
+    let starts = 0;
+    const operations = [{
+      kind: "t", method: "GET",
+      run: async () => { starts += 1; return completedOutcome(); },
+    }];
 
-  it("invalid concurrency does not invoke any operation run()", async () => {
-    let started = false;
-    const op = { kind: "t", method: "GET", run: async () => { started = true; return completedOutcome(); } };
-    try {
-      await runBurst([op], { concurrency: 0, pacing: { mode: "none" }, now });
-    } catch {
-      // expected rejection
-    }
-    expect(started).toBe(false);
+    await expect(
+      runBurst(operations, { pacing: { mode: "none" }, now })
+    ).rejects.toThrow(/concurrency must be a positive integer/);
+
+    expect(starts).toBe(0);
   });
 });
 
@@ -430,6 +439,11 @@ describe("bounded concurrency — attribution and drain", () => {
 
       let settled = false;
       burstPromise.then(() => { settled = true; }, () => { settled = true; });
+      // Yield to the event loop so .then callbacks COULD run if the burst
+      // had settled. Without this yield the assertion is vacuous — .then
+      // callbacks always run asynchronously, so `settled` would be false
+      // even if the promise were already resolved.
+      await flushSchedulerTurn();
       expect(settled).toBe(false);
 
       for (let i = 1; i < 5; i++) controls[i].release.resolve();
@@ -481,21 +495,19 @@ describe("bounded concurrency — attribution and drain", () => {
 // ─── 7. Synchronous throw no-deadlock ─────────────────────────────────────
 
 describe("bounded concurrency — synchronous throw", () => {
-  it("operation whose run() throws synchronously does not deadlock", async () => {
+  it("genuinely synchronous run() throw does not deadlock the scheduler", async () => {
+    // A NON-async run() that throws synchronously — the throw happens
+    // during desc.run() expression evaluation inside `await desc.run()`,
+    // before any promise is returned. The scheduler's try/catch around
+    // `classified = await desc.run()` catches this.
     const now = deterministicNow();
     const state = { active: 0, maxActive: 0 };
 
     const ctrl0 = controlledOperation(0, state);
     const throwingOp = {
       kind: "throw-op", method: "GET",
-      run: async () => {
-        state.active += 1;
-        state.maxActive = Math.max(state.maxActive, state.active);
-        try {
-          throw new Error("sync throw inside async run");
-        } finally {
-          state.active -= 1;
-        }
+      run: () => {
+        throw new Error("synchronous operation throw");
       },
     };
 
@@ -512,7 +524,11 @@ describe("bounded concurrency — synchronous throw", () => {
       try { await burstPromise; } catch (err) { caught = err; }
 
       expect(caught).not.toBeNull();
-      expect(caught.code).toBe("BURST_OPERATION_REJECTED");
+      expect(caught).toMatchObject({
+        code: "BURST_OPERATION_REJECTED",
+        operation: { id: 1, kind: "throw-op", method: "GET" },
+        reason: "synchronous operation throw",
+      });
     } finally {
       try { ctrl0.release.resolve(); } catch {}
       await flushSchedulerTurn();
