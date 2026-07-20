@@ -308,6 +308,33 @@ describe("buildOperationReport — B-fix defect regressions", () => {
     expect(r2.violations.length).toBe(beforeLen);
     expectViolations(r2, [v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 })]);
   });
+
+  it("BigInt attemptNumber → structured violation, no throw (describeValue is total)", () => {
+    const report = buildOperationReport([makeAttemptRecord({ attemptNumber: 1n })]);
+    expect(report.violations.some((x) => x.code === "INVALID_ATTEMPT_NUMBER")).toBe(true);
+  });
+
+  it("BigInt durationMs → structured violation, no throw", () => {
+    const report = buildOperationReport([makeAttemptRecord({ durationMs: 5n })]);
+    expect(report.violations.some((x) => x.code === "INVALID_DURATION")).toBe(true);
+  });
+
+  it("circular transport value → structured violation, no throw", () => {
+    const circ = {};
+    circ.self = circ;
+    const report = buildOperationReport([makeAttemptRecord({ transport: circ })]);
+    expect(report.violations.some((x) => x.code === "UNKNOWN_TRANSPORT")).toBe(true);
+  });
+
+  it("symbol http classification → structured violation, no throw", () => {
+    const report = buildOperationReport([makeAttemptRecord({ http: Symbol("x") })]);
+    expect(report.violations.some((x) => x.code === "UNKNOWN_HTTP")).toBe(true);
+  });
+
+  it("function assertion classification → structured violation, no throw", () => {
+    const report = buildOperationReport([makeAttemptRecord({ assertion: () => {} })]);
+    expect(report.violations.some((x) => x.code === "UNKNOWN_ASSERTION")).toBe(true);
+  });
 });
 
 // ─── Phase 1: record-shape violations (exact arrays) ─────────────────────
@@ -397,9 +424,37 @@ describe("validateAttemptRecord — Phase 1 record shape", () => {
 // ─── Phase 2: engine-result and semantic consistency (exact arrays) ──────
 
 describe("validateAttemptRecord — Phase 2 consistency", () => {
-  it("invalid engine outcome (transport=completed but status=null) → exact violation", () => {
+  it("invalid engine outcome (transport=completed but status=null) → exact stable wrapper", () => {
+    // The reducer does NOT expose the engine's internal error text; the
+    // accounting diagnostic schema is a stable wrapper so the reducer and
+    // engine can evolve independently.
     expect(validateAttemptRecord(makeAttemptRecord({ status: null }))).toEqual([
-      v("INVALID_ENGINE_OUTCOME", expect.stringContaining("engine outcome validation failed"), { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+      v("INVALID_ENGINE_OUTCOME", "engine outcome validation failed", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
+  });
+
+  it("completed status is a string → exact INVALID_STATUS_FOR_TRANSPORT", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ status: "200" }))).toEqual([
+      v("INVALID_STATUS_FOR_TRANSPORT", 'transport=completed requires integer status 100-599, got "200"', { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
+  });
+
+  it("completed status below 100 → exact INVALID_STATUS_FOR_TRANSPORT", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ status: 99 }))).toEqual([
+      v("INVALID_STATUS_FOR_TRANSPORT", "transport=completed requires integer status 100-599, got 99", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
+  });
+
+  it("completed status above 599 → exact INVALID_STATUS_FOR_TRANSPORT", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ status: 600 }))).toEqual([
+      v("INVALID_STATUS_FOR_TRANSPORT", "transport=completed requires integer status 100-599, got 600", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
+  });
+
+  it("failed transport with null error → exact INVALID_TRANSPORT_ERROR", () => {
+    const r = failedTransport({ error: null });
+    expect(validateAttemptRecord(r)).toEqual([
+      v("INVALID_TRANSPORT_ERROR", "transport=failed requires a classified transport-error object", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
     ]);
   });
 

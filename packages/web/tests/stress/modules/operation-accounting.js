@@ -58,6 +58,24 @@ function emptyReport() {
   };
 }
 
+// ─── Total bounded value formatter ────────────────────────────────────────
+//
+// JSON.stringify can throw on BigInt, circular references, and symbols.
+// Violation messages must never throw on untrusted record data, so every
+// interpolation goes through this formatter. It bounds output to 200 chars
+// and falls back to a fixed "<unserializable ...>" string on any failure.
+
+function describeValue(value) {
+  try {
+    const encoded = JSON.stringify(value);
+    return encoded === undefined
+      ? `<${typeof value}>`
+      : encoded.slice(0, 200);
+  } catch {
+    return `<unserializable ${typeof value}>`;
+  }
+}
+
 // ─── Violation helper ─────────────────────────────────────────────────────
 
 function violation(code, message, detail = {}) {
@@ -166,16 +184,24 @@ export function createAttemptRecord(engineResult, metadata) {
 
 /**
  * Validate a single normalized record's shape and engine-result consistency.
- * Returns an array of violations; NEVER throws — a null, primitive, or array
- * record produces a Phase-1 INVALID_ATTEMPT_RECORD violation rather than
- * throwing. (The only throw site in this module is buildOperationReport when
- * its top-level argument is not an array, which is a caller programming
- * error rather than malformed record data.)
+ *
+ * Throw contract:
+ *   - validateAttemptRecord never throws for record data. A null, primitive,
+ *     or array record produces a Phase-1 INVALID_ATTEMPT_RECORD violation.
+ *   - buildOperationReport throws only when its top-level input is not an
+ *     array (a caller programming error).
+ *   - createAttemptRecord throws on invalid adapter arguments
+ *     (INVALID_ADAPTER_ARGS).
+ * All violation messages interpolate untrusted values through describeValue,
+ * a total bounded formatter that cannot throw on BigInt, circular refs, or
+ * symbols.
  *
  * Phase 1 — record shape: identity fields, classifications, durations,
  *   retryable/final booleans.
  * Phase 2 — engine-result consistency: reuse validateOutcome for the
- *   transport/status/body/error contract; semantic consistency between
+ *   transport/status/body/error contract; accounting-layer status-range
+ *   (100-599 integer) and transport-error-presence checks; semantic
+ *   consistency between
  *   transport/http/assertion/assertionNotRunReason/assertionError; derived
  *   outcome matches deriveAttemptOutcome; NONFINAL_SUCCEEDED_ATTEMPT.
  *
@@ -211,23 +237,23 @@ export function validateAttemptRecord(record) {
     v.push(violation("INVALID_ATTEMPT_ID", `attemptId length must be ≤${MAX_ID_LENGTH}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
   }
   if (!Number.isInteger(record.attemptNumber) || record.attemptNumber < 1) {
-    v.push(violation("INVALID_ATTEMPT_NUMBER", `attemptNumber must be a positive integer, got ${JSON.stringify(record.attemptNumber)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, attemptNumber: record.attemptNumber, phase: phase1 }));
+    v.push(violation("INVALID_ATTEMPT_NUMBER", `attemptNumber must be a positive integer, got ${describeValue(record.attemptNumber)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, attemptNumber: record.attemptNumber, phase: phase1 }));
   }
 
   // ── Phase 1: classifications ──
   if (!TRANSPORTS.has(record.transport)) {
-    v.push(violation("UNKNOWN_TRANSPORT", `transport must be one of ${[...TRANSPORTS].join("|")}, got ${JSON.stringify(record.transport)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
+    v.push(violation("UNKNOWN_TRANSPORT", `transport must be one of ${[...TRANSPORTS].join("|")}, got ${describeValue(record.transport)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
   }
   if (!HTTP_CLASSES.has(record.http)) {
-    v.push(violation("UNKNOWN_HTTP", `http must be one of ${[...HTTP_CLASSES].join("|")}, got ${JSON.stringify(record.http)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
+    v.push(violation("UNKNOWN_HTTP", `http must be one of ${[...HTTP_CLASSES].join("|")}, got ${describeValue(record.http)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
   }
   if (!ASSERTION_CLASSES.has(record.assertion)) {
-    v.push(violation("UNKNOWN_ASSERTION", `assertion must be one of ${[...ASSERTION_CLASSES].join("|")}, got ${JSON.stringify(record.assertion)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
+    v.push(violation("UNKNOWN_ASSERTION", `assertion must be one of ${[...ASSERTION_CLASSES].join("|")}, got ${describeValue(record.assertion)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
   }
 
   // ── Phase 1: durationMs ──
   if (typeof record.durationMs !== "number" || !Number.isFinite(record.durationMs) || record.durationMs < 0) {
-    v.push(violation("INVALID_DURATION", `durationMs must be a non-negative finite number, got ${JSON.stringify(record.durationMs)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
+    v.push(violation("INVALID_DURATION", `durationMs must be a non-negative finite number, got ${describeValue(record.durationMs)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase1 }));
   }
 
   // ── Phase 1: retryable/final booleans ──
@@ -251,9 +277,34 @@ export function validateAttemptRecord(record) {
       body: record.body,
       error: record.error,
     });
-  } catch (err) {
-    v.push(violation("INVALID_ENGINE_OUTCOME", `engine outcome validation failed: ${err.message}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
+  } catch {
+    // Stable wrapper — do NOT expose the engine's internal error text, so
+    // the public accounting diagnostic schema stays independent of engine
+    // wording changes.
+    v.push(violation("INVALID_ENGINE_OUTCOME", "engine outcome validation failed", { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
     return v; // semantic consistency would cascade
+  }
+
+  // ── Phase 2: accounting-layer status range check ──
+  // validateOutcome only requires a completed result's status to be non-null;
+  // the accounting contract additionally requires it to be an integer HTTP
+  // status in the range 100-599. A string ("200") or out-of-range number
+  // (99, 600) is rejected here.
+  if (record.transport === "completed") {
+    if (!Number.isInteger(record.status) || record.status < 100 || record.status > 599) {
+      v.push(violation("INVALID_STATUS_FOR_TRANSPORT", `transport=completed requires integer status 100-599, got ${describeValue(record.status)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
+    }
+  }
+
+  // ── Phase 2: accounting-layer transport-error presence check ──
+  // validateOutcome does not require a failed transport to carry an error
+  // object; the accounting contract requires a classified transport-error
+  // (the engine's classifyTransportError always attaches one on real
+  // transport failures). A failed transport with error=null is rejected.
+  if (record.transport === "failed") {
+    if (!record.error || typeof record.error !== "object" || typeof record.error.category !== "string") {
+      v.push(violation("INVALID_TRANSPORT_ERROR", "transport=failed requires a classified transport-error object", { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
+    }
   }
 
   // ── Phase 2: semantic consistency ──
@@ -265,7 +316,7 @@ export function validateAttemptRecord(record) {
       v.push(violation("SEMANTIC_TRANSPORT_ASSERTION", `transport=failed requires assertion=not_run, got ${record.assertion}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
     }
     if (record.assertionNotRunReason !== "transport_failed") {
-      v.push(violation("SEMANTIC_TRANSPORT_REASON", `transport=failed requires assertionNotRunReason=transport_failed, got ${JSON.stringify(record.assertionNotRunReason)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
+      v.push(violation("SEMANTIC_TRANSPORT_REASON", `transport=failed requires assertionNotRunReason=transport_failed, got ${describeValue(record.assertionNotRunReason)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
     }
   }
   // Converse: a completed transport MUST have received an HTTP response
@@ -274,7 +325,7 @@ export function validateAttemptRecord(record) {
   // aggregates where responseReceived counts it but expected+unexpected do
   // not — producing inconsistent counters with no violation.
   if (record.transport === "completed" && record.http !== "expected" && record.http !== "unexpected") {
-    v.push(violation("SEMANTIC_COMPLETED_HTTP", `transport=completed requires http=expected|unexpected, got ${JSON.stringify(record.http)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
+    v.push(violation("SEMANTIC_COMPLETED_HTTP", `transport=completed requires http=expected|unexpected, got ${describeValue(record.http)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
   }
   if (record.assertion === "passed") {
     if (record.assertionError !== null && record.assertionError !== undefined) {
@@ -305,9 +356,9 @@ export function validateAttemptRecord(record) {
   // ── Phase 2: derived outcome consistency ──
   const expectedOutcome = deriveAttemptOutcome(record);
   if (!OUTCOMES.has(record.outcome)) {
-    v.push(violation("INVALID_OUTCOME", `outcome must be "succeeded"|"failed", got ${JSON.stringify(record.outcome)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
+    v.push(violation("INVALID_OUTCOME", `outcome must be "succeeded"|"failed", got ${describeValue(record.outcome)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
   } else if (record.outcome !== expectedOutcome) {
-    v.push(violation("OUTCOME_MISMATCH", `outcome=${JSON.stringify(record.outcome)} but classifications imply ${expectedOutcome}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
+    v.push(violation("OUTCOME_MISMATCH", `outcome=${describeValue(record.outcome)} but classifications imply ${expectedOutcome}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
   }
 
   // ── Phase 2: NONFINAL_SUCCEEDED_ATTEMPT ──
@@ -387,7 +438,7 @@ function validateLogicalSequences(records, groupsWithRecordDefects) {
     const numbers = [...seenNumbers].sort((a, b) => a - b);
     for (let i = 0; i < numbers.length; i++) {
       if (numbers[i] !== i + 1) {
-        v.push(violation("NONCONTIGUOUS_ATTEMPT_NUMBERS", `attemptNumbers must be contiguous starting at 1; got ${JSON.stringify(numbers)} for logical operation`, { logicalOperationId, phase: phase4 }));
+        v.push(violation("NONCONTIGUOUS_ATTEMPT_NUMBERS", `attemptNumbers must be contiguous starting at 1; got ${describeValue(numbers)} for logical operation`, { logicalOperationId, phase: phase4 }));
         break;
       }
     }
