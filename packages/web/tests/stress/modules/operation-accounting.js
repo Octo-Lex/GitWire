@@ -58,21 +58,41 @@ function emptyReport() {
   };
 }
 
-// ─── Total bounded value formatter ────────────────────────────────────────
+// ─── Non-serializing bounded value formatter ──────────────────────────────
 //
-// JSON.stringify can throw on BigInt, circular references, and symbols.
-// Violation messages must never throw on untrusted record data, so every
-// interpolation goes through this formatter. It bounds output to 200 chars
-// and falls back to a fixed "<unserializable ...>" string on any failure.
+// Never calls JSON.stringify on untrusted record values. JSON.stringify
+// invokes record-controlled toJSON() hooks (side effects) and can copy
+// secret-bearing strings (tokens, URLs, payloads) verbatim into public
+// violation messages. Bounding is not redaction.
+//
+// This formatter is total (never throws), bounded, deterministic, and
+// secret-safe: short alphanumeric strings are quoted; everything else is
+// reduced to a type tag with at most a length/count descriptor.
 
 function describeValue(value) {
-  try {
-    const encoded = JSON.stringify(value);
-    return encoded === undefined
-      ? `<${typeof value}>`
-      : encoded.slice(0, 200);
-  } catch {
-    return `<unserializable ${typeof value}>`;
+  if (value === null) return "null";
+
+  switch (typeof value) {
+    case "number":
+      return Number.isFinite(value) ? String(value) : "<non-finite number>";
+    case "string":
+      // Only short alphanumeric strings (no spaces, no credentials, no
+      // URLs) are quoted for readability. Anything else gets a bounded
+      // length descriptor — never the raw content.
+      return /^[A-Za-z0-9_.:-]{1,64}$/.test(value)
+        ? JSON.stringify(value)
+        : `<string length=${value.length}>`;
+    case "bigint":
+    case "symbol":
+    case "function":
+    case "undefined":
+      return `<${typeof value}>`;
+    case "boolean":
+      return String(value);
+    case "object":
+      return Array.isArray(value) ? "<array>" : "<object>";
+    default:
+      return "<unknown>";
   }
 }
 
