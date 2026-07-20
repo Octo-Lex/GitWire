@@ -1,23 +1,16 @@
 // tests/unit/stress-functional/functional-response-contracts.test.js
 //
-// Engine-driven functional response-contract matrix. Each record-producing
+// Engine-driven functional response-contract matrix. Every record-producing
 // case runs a one-operation contracted burst via runContractedOperation,
 // normalizes the real result through createAttemptRecord, reduces via
-// buildOperationReport, and asserts the EXACT:
-//   1. full engine result (all classification fields, with volatile
-//      durationMs normalized away);
-//   2. full normalized attempt record (all declared fields);
-//   3. complete reduced logical AND attempt counter objects.
+// buildOperationReport, and asserts the EXACT full:
+//   1. engine result (all fields, with durationMs pinned via deterministic clock);
+//   2. normalized attempt record (all declared fields);
+//   3. complete logical AND attempt counter objects;
+//   4. logicalOperations entry and attemptsById entry.
 //
-// Two fatal-harness-defect cases (assertion throws, assertion returns
-// malformed value) assert the engine's full safe-error contract, including
-// the exact message and sanitized reason — they do NOT produce attempt
-// records.
-//
-// All cases are network-free: operation run() returns scripted
-// ClassifiedOutcomes directly. Deterministic clock is injected so durationMs
-// is a known small value (the clock advances only when the scheduler reads
-// it, which is exactly twice per single operation: start + settle).
+// Two fatal-harness-defect cases pin the full safe-error contract. One
+// cross-case reconciliation verifies the spec section-5 invariants.
 
 import { describe, it, expect } from "@jest/globals";
 import { runContractedOperation } from "../../stress/burst-runner.js";
@@ -26,9 +19,9 @@ import { createAttemptRecord, buildOperationReport } from "../../stress/modules/
 // ─── Deterministic clock ──────────────────────────────────────────────────
 //
 // runContractedOperation accepts a `now` override. Each call advances t by
-// 10, so a single-operation run records two reads (start, settle) →
-// durationMs = 10 (second read minus first). Pinning this value keeps
-// durationMs out of the "volatile" bucket: it is fully deterministic.
+// 10, so a single-op run records two reads (opStart + durationMs) →
+// durationMs = 10. Pinning this value keeps durationMs out of the "volatile"
+// bucket: it is fully deterministic and asserted exactly.
 
 function detClock() {
   let t = 1000;
@@ -38,10 +31,9 @@ function detClock() {
   };
 }
 
-// The expected durationMs for a single-op run with the clock above.
-const EXPECTED_DURATION_MS = 10;
+const DURATION_MS = 10; // pinned: (t_after_settle) - (t_at_start) = 10
 
-// ─── Outcome builders for scripted operations ────────────────────────────
+// ─── Outcome builders ─────────────────────────────────────────────────────
 
 function completedOutcome(status, body) {
   return {
@@ -76,270 +68,269 @@ async function runAndAccount(operation, logicalOperationId) {
   return { result, record, report };
 }
 
-// ─── 10 record-producing functional cases ─────────────────────────────────
-//
-// Each case asserts the EXACT full result, full record, and full counter
-// objects. durationMs is the pinned deterministic value; the engine always
-// returns `assertionError: null` on success and on not_run.
+// ─── 10 record-producing functional cases (table-driven, exact-full) ──────
 
-describe("functional response contracts — record-producing cases", () => {
-  it("case 1: expected status + assertion passes → succeeded", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c1", method: "GET",
-      run: async () => completedOutcome(200, { state: "parsed", value: { ok: true }, error: null }),
-      responseContract: {
-        expectedStatuses: [200],
-        assert: ({ body }) => body.value && body.value.ok
-          ? { passed: true }
-          : { passed: false, code: "BODY_NO_OK", message: "missing ok" },
-      },
-    }, "case-expected-pass");
-
-    // 1. Full engine result.
-    expect(result).toEqual({
-      id: 0, kind: "c1", method: "GET", durationMs: EXPECTED_DURATION_MS,
-      transport: "completed", status: 200,
-      body: { state: "parsed", value: { ok: true }, error: null },
-      error: null,
-      http: "expected", assertion: "passed", assertionNotRunReason: null, assertionError: null,
-    });
-    // 2. Full normalized record.
-    expect(record).toEqual({
-      logicalOperationId: "case-expected-pass", attemptId: "case-expected-pass:1", attemptNumber: 1,
-      kind: "c1", method: "GET",
-      transport: "completed", http: "expected", assertion: "passed",
-      status: 200,
-      body: { state: "parsed", value: { ok: true }, error: null },
-      error: null, assertionError: null, assertionNotRunReason: null,
-      durationMs: EXPECTED_DURATION_MS,
-      retryable: false, final: true, outcome: "succeeded",
-    });
-    // 3. Exact counters.
-    expect(report.logical).toEqual({ total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 1, failed: 0 });
-    expect(report.attempts).toEqual({
-      total: 1, started: 1, completed: 1, inFlight: 0,
-      transportFailed: 0, responseReceived: 1,
-      expectedStatus: 1, unexpectedStatus: 0,
-      assertionPassed: 1, assertionFailed: 0, assertionNotRun: 0,
-    });
-  });
-
-  it("case 2: expected status + assertion fails → failed", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c2", method: "GET",
-      run: async () => completedOutcome(200, { state: "parsed", value: { ok: false }, error: null }),
-      responseContract: {
-        expectedStatuses: [200],
-        assert: ({ body }) => body.value && body.value.ok
-          ? { passed: true }
-          : { passed: false, code: "BODY_NO_OK", message: "missing ok" },
-      },
-    }, "case-expected-fail");
-
-    expect(result.http).toBe("expected");
-    expect(result.assertion).toBe("failed");
-    expect(result.assertionError).toEqual({ code: "BODY_NO_OK", message: "missing ok" });
-    expect(record).toEqual({
-      logicalOperationId: "case-expected-fail", attemptId: "case-expected-fail:1", attemptNumber: 1,
-      kind: "c2", method: "GET",
-      transport: "completed", http: "expected", assertion: "failed",
-      status: 200,
-      body: { state: "parsed", value: { ok: false }, error: null },
-      error: null,
-      assertionError: { code: "BODY_NO_OK", message: "missing ok" },
-      assertionNotRunReason: null,
-      durationMs: EXPECTED_DURATION_MS,
-      retryable: false, final: true, outcome: "failed",
-    });
-    expect(report.logical).toEqual({ total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 });
-    expect(report.attempts).toEqual({
-      total: 1, started: 1, completed: 1, inFlight: 0,
-      transportFailed: 0, responseReceived: 1,
-      expectedStatus: 1, unexpectedStatus: 0,
-      assertionPassed: 0, assertionFailed: 1, assertionNotRun: 0,
-    });
-  });
-
-  it("case 3: expected status + no assertion → not_run, succeeded (status-only contract)", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c3", method: "GET",
-      run: async () => completedOutcome(200),
-      responseContract: { expectedStatuses: [200] },
-    }, "case-expected-no-assert");
-
-    expect(result.http).toBe("expected");
-    expect(result.assertion).toBe("not_run");
-    expect(result.assertionNotRunReason).toBe("not_declared");
-    expect(record).toEqual({
-      logicalOperationId: "case-expected-no-assert", attemptId: "case-expected-no-assert:1", attemptNumber: 1,
-      kind: "c3", method: "GET",
-      transport: "completed", http: "expected", assertion: "not_run",
-      status: 200,
-      body: { state: "empty", value: null, error: null },
-      error: null, assertionError: null, assertionNotRunReason: "not_declared",
-      durationMs: EXPECTED_DURATION_MS,
-      retryable: false, final: true, outcome: "succeeded",
-    });
-    expect(report.attempts.assertionNotRun).toBe(1);
-    expect(report.logical.succeeded).toBe(1);
-  });
-
-  it("case 4: unexpected status → failed", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c4", method: "GET",
-      run: async () => completedOutcome(503, { state: "parsed", value: { error: "busy" }, error: null }),
-      responseContract: { expectedStatuses: [200] },
-    }, "case-unexpected");
-
-    expect(result.http).toBe("unexpected");
-    expect(result.assertion).toBe("not_run");
-    expect(result.assertionNotRunReason).toBe("not_declared");
-    expect(record).toEqual({
-      logicalOperationId: "case-unexpected", attemptId: "case-unexpected:1", attemptNumber: 1,
-      kind: "c4", method: "GET",
-      transport: "completed", http: "unexpected", assertion: "not_run",
-      status: 503,
-      body: { state: "parsed", value: { error: "busy" }, error: null },
-      error: null, assertionError: null, assertionNotRunReason: "not_declared",
-      durationMs: EXPECTED_DURATION_MS,
-      retryable: false, final: true, outcome: "failed",
-    });
-    expect(report.attempts.unexpectedStatus).toBe(1);
-    expect(report.logical.failed).toBe(1);
-  });
-
-  it("case 5: transport rejection (connection_refused) → failed", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c5", method: "GET",
-      run: async () => failedOutcome({ category: "connection_refused", code: "ECONNREFUSED", message: "refused" }),
-      responseContract: { expectedStatuses: [200] },
-    }, "case-transport-reject");
-
-    expect(result.transport).toBe("failed");
-    expect(result.status).toBe(null);
-    expect(result.http).toBe("not_received");
-    expect(result.assertion).toBe("not_run");
-    expect(result.assertionNotRunReason).toBe("transport_failed");
-    expect(result.error).toEqual({ category: "connection_refused", name: "Error", code: "ECONNREFUSED", message: "refused" });
-    expect(record).toEqual({
-      logicalOperationId: "case-transport-reject", attemptId: "case-transport-reject:1", attemptNumber: 1,
-      kind: "c5", method: "GET",
-      transport: "failed", http: "not_received", assertion: "not_run",
-      status: null,
-      body: { state: "not_read", value: null, error: null },
-      error: { category: "connection_refused", name: "Error", code: "ECONNREFUSED", message: "refused" },
-      assertionError: null, assertionNotRunReason: "transport_failed",
-      durationMs: EXPECTED_DURATION_MS,
-      retryable: false, final: true, outcome: "failed",
-    });
-    expect(report.attempts.transportFailed).toBe(1);
-    expect(report.attempts.responseReceived).toBe(0);
-    expect(report.logical.failed).toBe(1);
-  });
-
-  it("case 6: timeout → failed", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c6", method: "GET",
-      run: async () => failedOutcome({ category: "timeout", code: "ETIMEDOUT", message: "timed out" }),
-      responseContract: { expectedStatuses: [200] },
-    }, "case-timeout");
-
-    expect(result.error).toEqual({ category: "timeout", name: "Error", code: "ETIMEDOUT", message: "timed out" });
-    expect(record.outcome).toBe("failed");
-    expect(report.attempts.transportFailed).toBe(1);
-  });
-
-  it("case 7: abort → failed", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c7", method: "GET",
-      run: async () => failedOutcome({ category: "abort", code: "ABORT_ERR", message: "aborted" }),
-      responseContract: { expectedStatuses: [200] },
-    }, "case-abort");
-
-    expect(result.error).toEqual({ category: "abort", name: "Error", code: "ABORT_ERR", message: "aborted" });
-    expect(record.outcome).toBe("failed");
-    expect(report.attempts.transportFailed).toBe(1);
-  });
-
-  it("case 8: body parse failure + explicit body-parsed assertion → failed", async () => {
-    // A response with body.state=parse_failed would derive as "succeeded"
-    // under the auto outcome rule. The case pins an explicit assert that
-    // requires body.state=parsed, so the parse failure surfaces as
-    // assertion=failed.
-    const { result, record, report } = await runAndAccount({
-      kind: "c8", method: "GET",
-      run: async () => ({
-        transport: "completed", status: 200,
+describe("functional response contracts — record-producing cases (exact full outputs)", () => {
+  const cases = [
+    {
+      label: "case 1: expected status + assertion passes → succeeded",
+      lid: "case-expected-pass",
+      op: () => ({
+        kind: "c1", method: "GET",
+        run: async () => completedOutcome(200, { state: "parsed", value: { ok: true }, error: null }),
+        responseContract: {
+          expectedStatuses: [200],
+          assert: ({ body }) => body.value && body.value.ok
+            ? { passed: true }
+            : { passed: false, code: "BODY_NO_OK", message: "missing ok" },
+        },
+      }),
+      // Expected full result + record + counters.
+      expectedResultShape: { transport: "completed", status: 200, http: "expected", assertion: "passed",
+        body: { state: "parsed", value: { ok: true }, error: null }, error: null,
+        assertionError: null, assertionNotRunReason: null },
+      expectedRecord: { outcome: "succeeded" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 1, failed: 0 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1, expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 1, assertionFailed: 0, assertionNotRun: 0 },
+    },
+    {
+      label: "case 2: expected status + assertion fails → failed",
+      lid: "case-expected-fail",
+      op: () => ({
+        kind: "c2", method: "GET",
+        run: async () => completedOutcome(200, { state: "parsed", value: { ok: false }, error: null }),
+        responseContract: {
+          expectedStatuses: [200],
+          assert: ({ body }) => body.value && body.value.ok
+            ? { passed: true }
+            : { passed: false, code: "BODY_NO_OK", message: "missing ok" },
+        },
+      }),
+      expectedResultShape: { transport: "completed", status: 200, http: "expected", assertion: "failed",
+        body: { state: "parsed", value: { ok: false }, error: null }, error: null,
+        assertionError: { code: "BODY_NO_OK", message: "missing ok" }, assertionNotRunReason: null },
+      expectedRecord: { outcome: "failed" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1, expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 1, assertionNotRun: 0 },
+    },
+    {
+      label: "case 3: expected status + no assertion → not_run, succeeded (status-only)",
+      lid: "case-expected-no-assert",
+      op: () => ({
+        kind: "c3", method: "GET",
+        run: async () => completedOutcome(200),
+        responseContract: { expectedStatuses: [200] },
+      }),
+      expectedResultShape: { transport: "completed", status: 200, http: "expected", assertion: "not_run",
+        body: { state: "empty", value: null, error: null }, error: null,
+        assertionError: null, assertionNotRunReason: "not_declared" },
+      expectedRecord: { outcome: "succeeded" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 1, failed: 0 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1, expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 0, assertionNotRun: 1 },
+    },
+    {
+      label: "case 4: unexpected status → failed",
+      lid: "case-unexpected",
+      op: () => ({
+        kind: "c4", method: "GET",
+        run: async () => completedOutcome(503, { state: "parsed", value: { error: "busy" }, error: null }),
+        responseContract: { expectedStatuses: [200] },
+      }),
+      expectedResultShape: { transport: "completed", status: 503, http: "unexpected", assertion: "not_run",
+        body: { state: "parsed", value: { error: "busy" }, error: null }, error: null,
+        assertionError: null, assertionNotRunReason: "not_declared" },
+      expectedRecord: { outcome: "failed" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1, expectedStatus: 0, unexpectedStatus: 1,
+        assertionPassed: 0, assertionFailed: 0, assertionNotRun: 1 },
+    },
+    {
+      label: "case 5: transport rejection (connection_refused) → failed",
+      lid: "case-transport-reject",
+      op: () => ({
+        kind: "c5", method: "GET",
+        run: async () => failedOutcome({ category: "connection_refused", code: "ECONNREFUSED", message: "refused" }),
+        responseContract: { expectedStatuses: [200] },
+      }),
+      expectedResultShape: { transport: "failed", status: null, http: "not_received", assertion: "not_run",
+        body: { state: "not_read", value: null, error: null },
+        error: { category: "connection_refused", name: "Error", code: "ECONNREFUSED", message: "refused" },
+        assertionError: null, assertionNotRunReason: "transport_failed" },
+      expectedRecord: { outcome: "failed" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 1, responseReceived: 0, expectedStatus: 0, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 0, assertionNotRun: 1 },
+    },
+    {
+      label: "case 6: timeout → failed",
+      lid: "case-timeout",
+      op: () => ({
+        kind: "c6", method: "GET",
+        run: async () => failedOutcome({ category: "timeout", code: "ETIMEDOUT", message: "timed out" }),
+        responseContract: { expectedStatuses: [200] },
+      }),
+      expectedResultShape: { transport: "failed", status: null, http: "not_received", assertion: "not_run",
+        body: { state: "not_read", value: null, error: null },
+        error: { category: "timeout", name: "Error", code: "ETIMEDOUT", message: "timed out" },
+        assertionError: null, assertionNotRunReason: "transport_failed" },
+      expectedRecord: { outcome: "failed" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 1, responseReceived: 0, expectedStatus: 0, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 0, assertionNotRun: 1 },
+    },
+    {
+      label: "case 7: abort → failed",
+      lid: "case-abort",
+      op: () => ({
+        kind: "c7", method: "GET",
+        run: async () => failedOutcome({ category: "abort", code: "ABORT_ERR", message: "aborted" }),
+        responseContract: { expectedStatuses: [200] },
+      }),
+      expectedResultShape: { transport: "failed", status: null, http: "not_received", assertion: "not_run",
+        body: { state: "not_read", value: null, error: null },
+        error: { category: "abort", name: "Error", code: "ABORT_ERR", message: "aborted" },
+        assertionError: null, assertionNotRunReason: "transport_failed" },
+      expectedRecord: { outcome: "failed" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 1, responseReceived: 0, expectedStatus: 0, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 0, assertionNotRun: 1 },
+    },
+    {
+      label: "case 8: body parse failure + explicit body-parsed assertion → failed",
+      lid: "case-body-parse-fail",
+      op: () => ({
+        kind: "c8", method: "GET",
+        run: async () => ({
+          transport: "completed", status: 200,
+          body: { state: "parse_failed", value: null, error: { category: "body_parse", message: "invalid JSON" } },
+          error: null,
+        }),
+        responseContract: {
+          expectedStatuses: [200],
+          assert: ({ body }) => body.state === "parsed"
+            ? { passed: true }
+            : { passed: false, code: "BODY_NOT_PARSED", message: "response body was not parsed" },
+        },
+      }),
+      expectedResultShape: { transport: "completed", status: 200, http: "expected", assertion: "failed",
         body: { state: "parse_failed", value: null, error: { category: "body_parse", message: "invalid JSON" } },
         error: null,
+        assertionError: { code: "BODY_NOT_PARSED", message: "response body was not parsed" },
+        assertionNotRunReason: null },
+      expectedRecord: { outcome: "failed" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1, expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 1, assertionNotRun: 0 },
+    },
+    {
+      label: "case 11: empty body where allowed (status-only contract) → succeeded",
+      lid: "case-empty-allowed",
+      op: () => ({
+        kind: "c11", method: "GET",
+        run: async () => completedOutcome(200),
+        responseContract: { expectedStatuses: [200] },
       }),
-      responseContract: {
-        expectedStatuses: [200],
-        assert: ({ body }) => body.state === "parsed"
-          ? { passed: true }
-          : { passed: false, code: "BODY_NOT_PARSED", message: "response body was not parsed" },
-      },
-    }, "case-body-parse-fail");
+      expectedResultShape: { transport: "completed", status: 200, http: "expected", assertion: "not_run",
+        body: { state: "empty", value: null, error: null }, error: null,
+        assertionError: null, assertionNotRunReason: "not_declared" },
+      expectedRecord: { outcome: "succeeded" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 1, failed: 0 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1, expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 0, assertionNotRun: 1 },
+    },
+    {
+      label: "case 12: empty body where prohibited (assert requires parsed) → failed",
+      lid: "case-empty-prohibited",
+      op: () => ({
+        kind: "c12", method: "GET",
+        run: async () => completedOutcome(200),
+        responseContract: {
+          expectedStatuses: [200],
+          assert: ({ body }) => body.state === "parsed"
+            ? { passed: true }
+            : { passed: false, code: "BODY_REQUIRED", message: "response body required" },
+        },
+      }),
+      expectedResultShape: { transport: "completed", status: 200, http: "expected", assertion: "failed",
+        body: { state: "empty", value: null, error: null }, error: null,
+        assertionError: { code: "BODY_REQUIRED", message: "response body required" },
+        assertionNotRunReason: null },
+      expectedRecord: { outcome: "failed" },
+      expectedLogical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      expectedAttempts: { total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1, expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 1, assertionNotRun: 0 },
+    },
+  ];
 
-    expect(result.http).toBe("expected");
-    expect(result.assertion).toBe("failed");
-    expect(result.body).toEqual({ state: "parse_failed", value: null, error: { category: "body_parse", message: "invalid JSON" } });
-    expect(record).toEqual({
-      logicalOperationId: "case-body-parse-fail", attemptId: "case-body-parse-fail:1", attemptNumber: 1,
-      kind: "c8", method: "GET",
-      transport: "completed", http: "expected", assertion: "failed",
-      status: 200,
-      body: { state: "parse_failed", value: null, error: { category: "body_parse", message: "invalid JSON" } },
-      error: null,
-      assertionError: { code: "BODY_NOT_PARSED", message: "response body was not parsed" },
-      assertionNotRunReason: null,
-      durationMs: EXPECTED_DURATION_MS,
-      retryable: false, final: true, outcome: "failed",
+  for (const c of cases) {
+    it(c.label, async () => {
+      const { result, record, report } = await runAndAccount(c.op(), c.lid);
+
+      // 1. Exact full engine result. Combine the pinned identity fields
+      //    (id/kind/method from the op; durationMs from the deterministic
+      //    clock) with the per-case shape.
+      expect(result).toEqual({
+        id: 0,
+        kind: c.op().kind,
+        method: "GET",
+        durationMs: DURATION_MS,
+        ...c.expectedResultShape,
+      });
+
+      // 2. Exact full normalized record. Identity fields are pinned by the
+      //    adapter call; engine fields come from the result above.
+      expect(record).toEqual({
+        logicalOperationId: c.lid,
+        attemptId: `${c.lid}:1`,
+        attemptNumber: 1,
+        kind: c.op().kind,
+        method: "GET",
+        transport: c.expectedResultShape.transport,
+        http: c.expectedResultShape.http,
+        assertion: c.expectedResultShape.assertion,
+        status: c.expectedResultShape.status,
+        body: c.expectedResultShape.body,
+        error: c.expectedResultShape.error,
+        assertionError: c.expectedResultShape.assertionError,
+        assertionNotRunReason: c.expectedResultShape.assertionNotRunReason,
+        durationMs: DURATION_MS,
+        retryable: false,
+        final: true,
+        outcome: c.expectedRecord.outcome,
+      });
+
+      // 3. Exact complete counters.
+      expect(report.violations).toEqual([]);
+      expect(report.logical).toEqual(c.expectedLogical);
+      expect(report.attempts).toEqual(c.expectedAttempts);
+
+      // 4. logicalOperations entry + attemptsById entry.
+      expect(report.logicalOperations).toEqual([
+        {
+          logicalOperationId: c.lid,
+          attemptIds: [`${c.lid}:1`],
+          attemptCount: 1,
+          finalAttemptId: `${c.lid}:1`,
+          outcome: c.expectedRecord.outcome,
+        },
+      ]);
+      expect(Object.keys(report.attemptsById)).toEqual([`${c.lid}:1`]);
+      expect(report.attemptsById[`${c.lid}:1`]).toEqual(record);
     });
-    expect(report.attempts.assertionFailed).toBe(1);
-    expect(report.logical.failed).toBe(1);
-  });
-
-  it("case 11: empty body where allowed (status-only contract) → succeeded", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c11", method: "GET",
-      run: async () => completedOutcome(200), // no body → state:"empty"
-      responseContract: { expectedStatuses: [200] },
-    }, "case-empty-allowed");
-
-    expect(result.body).toEqual({ state: "empty", value: null, error: null });
-    expect(record.body).toEqual({ state: "empty", value: null, error: null });
-    expect(record.outcome).toBe("succeeded");
-    expect(report.logical.succeeded).toBe(1);
-  });
-
-  it("case 12: empty body where prohibited (assert requires parsed) → failed", async () => {
-    const { result, record, report } = await runAndAccount({
-      kind: "c12", method: "GET",
-      run: async () => completedOutcome(200), // body.state="empty"
-      responseContract: {
-        expectedStatuses: [200],
-        assert: ({ body }) => body.state === "parsed"
-          ? { passed: true }
-          : { passed: false, code: "BODY_REQUIRED", message: "response body required" },
-      },
-    }, "case-empty-prohibited");
-
-    expect(result.body).toEqual({ state: "empty", value: null, error: null });
-    expect(record).toEqual({
-      logicalOperationId: "case-empty-prohibited", attemptId: "case-empty-prohibited:1", attemptNumber: 1,
-      kind: "c12", method: "GET",
-      transport: "completed", http: "expected", assertion: "failed",
-      status: 200,
-      body: { state: "empty", value: null, error: null },
-      error: null,
-      assertionError: { code: "BODY_REQUIRED", message: "response body required" },
-      assertionNotRunReason: null,
-      durationMs: EXPECTED_DURATION_MS,
-      retryable: false, final: true, outcome: "failed",
-    });
-    expect(report.logical.failed).toBe(1);
-  });
+  }
 });
 
 // ─── 2 fatal harness-defect cases ─────────────────────────────────────────
@@ -366,11 +357,9 @@ describe("functional response contracts — fatal harness-defect cases", () => {
       caught = err;
     }
     expect(caught).not.toBeNull();
-    // Full safe-error contract.
     expect(caught.code).toBe("BURST_OPERATION_REJECTED");
     expect(caught.message).toBe("operation 0 assertion callback threw");
     expect(caught.operation).toEqual({ id: 0, kind: "c9", method: "GET" });
-    // Sanitized reason — the assertion's thrown message, bounded and cleaned.
     expect(caught.reason).toBe("assertion boom");
   });
 
@@ -380,7 +369,6 @@ describe("functional response contracts — fatal harness-defect cases", () => {
       run: async () => completedOutcome(200, { state: "parsed", value: {}, error: null }),
       responseContract: {
         expectedStatuses: [200],
-        // passed must be exactly true|false; 42 is malformed.
         assert: () => ({ passed: 42 }),
       },
     };
@@ -395,9 +383,6 @@ describe("functional response contracts — fatal harness-defect cases", () => {
     expect(caught.code).toBe("BURST_OPERATION_REJECTED");
     expect(caught.message).toBe("operation 0 assertion callback returned unknown passed value");
     expect(caught.operation).toEqual({ id: 0, kind: "c10", method: "GET" });
-    // Sanitized reason uses typeof (a fixed, bounded string) — never
-    // interpolates the raw passed value, which could be excessively long
-    // or secret-bearing.
     expect(caught.reason).toBe("passed must be exactly true or false; received number");
   });
 });
@@ -406,12 +391,6 @@ describe("functional response contracts — fatal harness-defect cases", () => {
 
 describe("functional response contracts — counter reconciliation", () => {
   it("aggregate invariants hold for a mixed-case batch", async () => {
-    // Build a single batch from one record of each non-fatal classification
-    // family and verify the canonical invariants from the spec section 5:
-    //   attempts.transportFailed + attempts.responseReceived === attempts.completed
-    //   attempts.expectedStatus + attempts.unexpectedStatus === attempts.responseReceived
-    //   attempts.assertionPassed + attempts.assertionFailed + attempts.assertionNotRun === attempts.completed
-    //   logical.succeeded + logical.failed === logical.completed
     const cases = [
       { lid: "b1", run: async () => completedOutcome(200, { state: "parsed", value: { ok: 1 }, error: null }),
         contract: { expectedStatuses: [200], assert: () => ({ passed: true }) } },
@@ -440,11 +419,12 @@ describe("functional response contracts — counter reconciliation", () => {
 
     const a = report.attempts;
     const l = report.logical;
+    // Canonical invariants.
     expect(a.transportFailed + a.responseReceived).toBe(a.completed);
     expect(a.expectedStatus + a.unexpectedStatus).toBe(a.responseReceived);
     expect(a.assertionPassed + a.assertionFailed + a.assertionNotRun).toBe(a.completed);
     expect(l.succeeded + l.failed).toBe(l.completed);
-    // Specifics: 1 passed + 1 failed-assert + 1 unexpected + 1 transport-failed + 1 status-only.
+    // Exact totals.
     expect(a).toEqual({
       total: 5, started: 5, completed: 5, inFlight: 0,
       transportFailed: 1, responseReceived: 4,
@@ -452,5 +432,13 @@ describe("functional response contracts — counter reconciliation", () => {
       assertionPassed: 1, assertionFailed: 1, assertionNotRun: 3,
     });
     expect(l).toEqual({ total: 5, started: 5, completed: 5, inFlight: 0, succeeded: 2, failed: 3 });
+    // logicalOperations sorted by logicalOperationId; each carries its outcome.
+    expect(report.logicalOperations.map((op) => [op.logicalOperationId, op.outcome])).toEqual([
+      ["b1", "succeeded"],
+      ["b2", "failed"],
+      ["b3", "failed"],
+      ["b4", "failed"],
+      ["b5", "succeeded"],
+    ]);
   });
 });

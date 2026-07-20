@@ -166,8 +166,11 @@ export function createAttemptRecord(engineResult, metadata) {
 
 /**
  * Validate a single normalized record's shape and engine-result consistency.
- * Returns an array of violations; NEVER throws for malformed record data
- * (only throws for non-object input, which is a programming error).
+ * Returns an array of violations; NEVER throws — a null, primitive, or array
+ * record produces a Phase-1 INVALID_ATTEMPT_RECORD violation rather than
+ * throwing. (The only throw site in this module is buildOperationReport when
+ * its top-level argument is not an array, which is a caller programming
+ * error rather than malformed record data.)
  *
  * Phase 1 — record shape: identity fields, classifications, durations,
  *   retryable/final booleans.
@@ -354,8 +357,13 @@ function validateLogicalSequences(records, groupsWithRecordDefects) {
   for (const r of records) {
     // Non-object records are already flagged by Phase 1; skip them so
     // accessing r.logicalOperationId cannot throw on null/primitives.
+    // Also skip records whose logicalOperationId fails the Phase-1 length
+    // rule — those groups are already flagged INVALID_LOGICAL_OPERATION_ID
+    // and must not be sequence-validated (would cascade NO_FINAL_ATTEMPT
+    // etc. from the Phase-1-invalid ID).
     if (!r || typeof r !== "object") continue;
     if (typeof r.logicalOperationId !== "string" || r.logicalOperationId.length === 0) continue;
+    if (r.logicalOperationId.length > MAX_ID_LENGTH) continue;
     if (groupsWithRecordDefects.has(r.logicalOperationId)) continue;
     if (!groups.has(r.logicalOperationId)) groups.set(r.logicalOperationId, []);
     groups.get(r.logicalOperationId).push(r);

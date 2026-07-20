@@ -4,9 +4,10 @@
 // do NOT invoke the burst engine — they prove the reducer's transactional
 // contract, phase ordering, cascade suppression, and C4-readiness directly.
 //
-// Every negative test asserts the EXACT sorted violation array — no
-// toContain looseness — so secondary cascade findings cannot appear
-// without failing the suite.
+// Every negative test asserts the EXACT sorted violation array — full
+// structured objects with code/message/attemptId/logicalOperationId/
+// attemptNumber/phase — so secondary cascade findings, attribution
+// drift, or message changes cannot appear without failing the suite.
 //
 // Companion file functional-response-contracts.test.js drives real engine
 // output through createAttemptRecord + buildOperationReport.
@@ -23,9 +24,7 @@ import {
 
 /**
  * Build a synthetic normalized attempt record directly, bypassing the
- * engine-result adapter. Used for invariant tests that need states C2's
- * single-attempt engine matrix cannot naturally produce (retry sequences,
- * malformed records, noncontiguous numbers, etc.).
+ * engine-result adapter.
  */
 function makeAttemptRecord(overrides = {}) {
   const base = {
@@ -50,11 +49,6 @@ function makeAttemptRecord(overrides = {}) {
   return { ...base, ...overrides };
 }
 
-// Exact sorted code array — the canonical assertion for negative tests.
-function codes(report) {
-  return report.violations.map((v) => v.code).sort();
-}
-
 // A failed-transport variant of makeAttemptRecord, for sequence tests that
 // need non-final failures (retry shapes).
 function failedTransport(overrides = {}) {
@@ -66,6 +60,30 @@ function failedTransport(overrides = {}) {
     outcome: "failed",
     ...overrides,
   });
+}
+
+// Short constructors for the canonical Phase-1/2/3/4 violation shapes.
+// Keep these in sync with operation-accounting.js's `violation()` helper:
+// fields are attached only when defined, so a violation without an
+// attemptNumber omits that key entirely.
+function v(code, message, { attemptId, logicalOperationId, attemptNumber, phase } = {}) {
+  const o = { code, message };
+  if (attemptId !== undefined) o.attemptId = attemptId;
+  if (logicalOperationId !== undefined) o.logicalOperationId = logicalOperationId;
+  if (attemptNumber !== undefined) o.attemptNumber = attemptNumber;
+  if (phase !== undefined) o.phase = phase;
+  return o;
+}
+
+const P1 = "phase_1_record_shape";
+const P2 = "phase_2_engine_consistency";
+const P3 = "phase_3_global_identity";
+const P4 = "phase_4_logical_sequence";
+
+// Exact violation-array comparison helper: violations are already sorted
+// by the reducer's compareViolations, so we compare the array as-is.
+function expectViolations(report, expectedSorted) {
+  expect(report.violations).toEqual(expectedSorted);
 }
 
 // ─── deriveAttemptOutcome unit tests ──────────────────────────────────────
@@ -91,7 +109,7 @@ describe("deriveAttemptOutcome — 3-rule order", () => {
 // ─── Valid reductions ─────────────────────────────────────────────────────
 
 describe("buildOperationReport — valid single-attempt reductions", () => {
-  it("single succeeded attempt → exact counters", () => {
+  it("single succeeded attempt → exact counters, logicalOperations, attemptsById", () => {
     const r = makeAttemptRecord();
     const report = buildOperationReport([r]);
     expect(report.violations).toEqual([]);
@@ -106,6 +124,7 @@ describe("buildOperationReport — valid single-attempt reductions", () => {
       { logicalOperationId: "op-1", attemptIds: ["op-1:1"], attemptCount: 1, finalAttemptId: "op-1:1", outcome: "succeeded" },
     ]);
     expect(Object.keys(report.attemptsById)).toEqual(["op-1:1"]);
+    expect(report.attemptsById["op-1:1"]).toMatchObject({ attemptId: "op-1:1", outcome: "succeeded" });
   });
 
   it("single transport-failed attempt → counters reflect failure", () => {
@@ -147,8 +166,6 @@ describe("buildOperationReport — multi-attempt retry shapes (C4-ready)", () =>
   });
 
   it("retry → exhausted failure: final attempt failed with retryable=true is valid", () => {
-    // retryable and final are independent. A final failed attempt may still
-    // represent an intrinsically retryable error whose budget was exhausted.
     const records = [
       failedTransport({ attemptId: "op-1:1", attemptNumber: 1, final: false, retryable: true }),
       failedTransport({ attemptId: "op-1:2", attemptNumber: 2, final: false, retryable: true }),
@@ -173,15 +190,10 @@ describe("buildOperationReport — multi-attempt retry shapes (C4-ready)", () =>
   });
 });
 
-// ─── Transactional contract ───────────────────────────────────────────────
+// ─── Transactional contract — exact violation arrays ─────────────────────
 
 describe("buildOperationReport — transactional: any violation → zero aggregates", () => {
-  it("duplicate attemptId → exact violation set, zero aggregates", () => {
-    // Two records with the SAME attemptId AND attemptNumber (1). Phase 3
-    // reports the duplicate identity; Phase 4 sees two finals and a
-    // duplicate attemptNumber in the same group. All three are genuine
-    // findings about the duplicate; the transactional contract zeroes the
-    // aggregates regardless.
+  it("duplicate attemptId → exact violation array, zero aggregates", () => {
     const records = [
       makeAttemptRecord({ attemptId: "op-1:1", attemptNumber: 1, final: true }),
       makeAttemptRecord({ attemptId: "op-1:1", attemptNumber: 1, final: true }),
@@ -190,7 +202,14 @@ describe("buildOperationReport — transactional: any violation → zero aggrega
     expect(report.logical.total).toBe(0);
     expect(report.attempts.total).toBe(0);
     expect(report.logicalOperations).toEqual([]);
-    expect(codes(report)).toEqual(["DUPLICATE_ATTEMPT_ID", "DUPLICATE_ATTEMPT_NUMBER", "MULTIPLE_FINAL_ATTEMPTS"]);
+    // Violations are sorted by compareViolations: phase → logicalOperationId
+    // → attemptNumber → attemptId → code. MULTIPLE_FINAL_ATTEMPTS has no
+    // attemptNumber (-1) so sorts before DUPLICATE_ATTEMPT_NUMBER (1).
+    expectViolations(report, [
+      v("DUPLICATE_ATTEMPT_ID", "attemptId must be globally unique; duplicate at input index 1", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P3 }),
+      v("MULTIPLE_FINAL_ATTEMPTS", "logical operation has 2 final attempts; expected exactly 1", { logicalOperationId: "op-1", phase: P4 }),
+      v("DUPLICATE_ATTEMPT_NUMBER", "duplicate attemptNumber 1 within logical operation", { attemptId: "op-1:1", logicalOperationId: "op-1", attemptNumber: 1, phase: P4 }),
+    ]);
   });
 
   it("non-array input throws INVALID_REPORT_ARG (only top-level arg throws)", () => {
@@ -203,238 +222,290 @@ describe("buildOperationReport — transactional: any violation → zero aggrega
 // ─── B-fix regressions: malformed records, impossible semantics, cascade, mutation ─
 
 describe("buildOperationReport — B-fix defect regressions", () => {
-  it("null record → INVALID_ATTEMPT_RECORD violation, zero aggregates (not a throw)", () => {
+  it("null record → exact INVALID_ATTEMPT_RECORD violation, zero aggregates", () => {
     const report = buildOperationReport([null]);
-    expect(codes(report)).toEqual(["INVALID_ATTEMPT_RECORD"]);
+    expectViolations(report, [
+      v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 }),
+    ]);
     expect(report.logical.total).toBe(0);
     expect(report.attempts.total).toBe(0);
   });
 
-  it("primitive record → INVALID_ATTEMPT_RECORD violation", () => {
-    expect(codes(buildOperationReport([42]))).toEqual(["INVALID_ATTEMPT_RECORD"]);
-    expect(codes(buildOperationReport(["str"]))).toEqual(["INVALID_ATTEMPT_RECORD"]);
+  it("primitive record → exact INVALID_ATTEMPT_RECORD violation", () => {
+    expectViolations(buildOperationReport([42]), [
+      v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 }),
+    ]);
+    expectViolations(buildOperationReport(["str"]), [
+      v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 }),
+    ]);
   });
 
-  it("array record → INVALID_ATTEMPT_RECORD violation", () => {
-    expect(codes(buildOperationReport([[]]))).toEqual(["INVALID_ATTEMPT_RECORD"]);
+  it("array record → exact INVALID_ATTEMPT_RECORD violation", () => {
+    expectViolations(buildOperationReport([[]]), [
+      v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 }),
+    ]);
   });
 
-  it("transport=completed + http=not_received → SEMANTIC_COMPLETED_HTTP (no silent inconsistent counters)", () => {
+  it("transport=completed + http=not_received → exact SEMANTIC_COMPLETED_HTTP", () => {
     const r = makeAttemptRecord({ transport: "completed", http: "not_received", outcome: "failed" });
     const report = buildOperationReport([r]);
-    expect(codes(report)).toEqual(["SEMANTIC_COMPLETED_HTTP"]);
-    expect(report.attempts.total).toBe(0); // transactional — no authoritative counters
+    expectViolations(report, [
+      v("SEMANTIC_COMPLETED_HTTP", 'transport=completed requires http=expected|unexpected, got "not_received"', { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
+    expect(report.attempts.total).toBe(0);
   });
 
-  it("cascade suppression is whole-group: a Phase-1 defect sibling suppresses Phase 4 for the entire logical op", () => {
-    // Attempt 2 has INVALID_DURATION (Phase 1). Attempt 1 is valid but
-    // non-final. Without whole-group suppression, the reducer would also
-    // emit NO_FINAL_ATTEMPT (because attempt 2 is omitted from sequencing).
+  it("cascade suppression is whole-group: a Phase-1 defect sibling suppresses Phase 4", () => {
     const records = [
-      makeAttemptRecord({ attemptId: "op-1:1", attemptNumber: 1, final: false, retryable: true,
-        outcome: "failed", transport: "failed", http: "not_received", assertion: "not_run",
-        status: null, body: { state: "not_read", value: null, error: null },
-        error: { category: "timeout", name: "Error", code: "ETIMEDOUT", message: "m" },
-        assertionNotRunReason: "transport_failed" }),
-      makeAttemptRecord({ attemptId: "op-1:2", attemptNumber: 2, final: true, retryable: false,
-        durationMs: -1 }), // INVALID_DURATION (Phase 1)
+      failedTransport({ attemptId: "op-1:1", attemptNumber: 1, final: false, retryable: true }),
+      makeAttemptRecord({ attemptId: "op-1:2", attemptNumber: 2, final: true, retryable: false, durationMs: -1, outcome: "succeeded" }),
     ];
     const report = buildOperationReport(records);
-    expect(codes(report)).toEqual(["INVALID_DURATION"]);
-    expect(codes(report)).not.toContain("NO_FINAL_ATTEMPT");
-    expect(codes(report)).not.toContain("MULTIPLE_FINAL_ATTEMPTS");
+    expectViolations(report, [
+      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got -1", { attemptId: "op-1:2", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("cascade suppression includes Phase-2 defects, not only Phase-1", () => {
-    // Attempt 1 succeeds but is non-final → NONFINAL_SUCCEEDED_ATTEMPT (Phase 2).
-    // Attempt 2 has INVALID_DURATION (Phase 1). Both defects mark the group;
-    // no NO_FINAL_ATTEMPT cascade appears.
+  it("cascade suppression includes Phase-2 defects", () => {
     const records = [
-      makeAttemptRecord({ attemptId: "op-1:1", attemptNumber: 1, final: false, retryable: true,
-        outcome: "succeeded" }), // NONFINAL_SUCCEEDED_ATTEMPT
-      makeAttemptRecord({ attemptId: "op-1:2", attemptNumber: 2, final: true, retryable: false,
-        durationMs: -1, outcome: "succeeded" }), // INVALID_DURATION
+      makeAttemptRecord({ attemptId: "op-1:1", attemptNumber: 1, final: false, retryable: true, outcome: "succeeded" }),
+      makeAttemptRecord({ attemptId: "op-1:2", attemptNumber: 2, final: true, retryable: false, durationMs: -1, outcome: "succeeded" }),
     ];
     const report = buildOperationReport(records);
-    expect(codes(report)).toEqual(["INVALID_DURATION", "NONFINAL_SUCCEEDED_ATTEMPT"]);
-    expect(codes(report)).not.toContain("NO_FINAL_ATTEMPT");
+    expectViolations(report, [
+      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got -1", { attemptId: "op-1:2", logicalOperationId: "op-1", phase: P1 }),
+      v("NONFINAL_SUCCEEDED_ATTEMPT", "outcome=succeeded requires final=true (a later attempt after success is a defect)", { attemptId: "op-1:1", logicalOperationId: "op-1", attemptNumber: 1, phase: P2 }),
+    ]);
+  });
+
+  it("overlength logicalOperationId suppresses Phase 4 for its group (B2-fix regression)", () => {
+    // Use a SHORT attemptId so only the logicalOperationId length check fires.
+    // (A long attemptId would also trigger INVALID_ATTEMPT_ID, obscuring the
+    // target: the Phase-4 cascade suppression for the long logical op.)
+    const longId = "x".repeat(201);
+    const report = buildOperationReport([
+      failedTransport({ logicalOperationId: longId, attemptId: "short:1", attemptNumber: 1, final: false, retryable: true }),
+    ]);
+    expectViolations(report, [
+      v("INVALID_LOGICAL_OPERATION_ID", "logicalOperationId length must be ≤200", { attemptId: "short:1", logicalOperationId: longId, phase: P1 }),
+    ]);
   });
 
   it("empty reports do not share mutable arrays across calls", () => {
     const first = buildOperationReport([]);
     first.violations.push({ code: "CORRUPTED" });
     first.logicalOperations.push({ polluted: true });
-
     const second = buildOperationReport([]);
     expect(second.violations).toEqual([]);
     expect(second.logicalOperations).toEqual([]);
   });
 
-  it("transactional violation reports also use fresh arrays (not shared)", () => {
-    const r1 = buildOperationReport([null]); // produces INVALID_ATTEMPT_RECORD
+  it("transactional violation reports use fresh arrays", () => {
+    const r1 = buildOperationReport([null]);
     const beforeLen = r1.violations.length;
     r1.violations.push({ code: "EXTRA" });
     const r2 = buildOperationReport([null]);
     expect(r2.violations.length).toBe(beforeLen);
-    expect(codes(r2)).toEqual(["INVALID_ATTEMPT_RECORD"]);
+    expectViolations(r2, [v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 })]);
   });
 });
 
 // ─── Phase 1: record-shape violations (exact arrays) ─────────────────────
 
 describe("validateAttemptRecord — Phase 1 record shape", () => {
-  it("missing logicalOperationId → [MISSING_LOGICAL_OPERATION_ID]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ logicalOperationId: "" })).map((v) => v.code)).toEqual(["MISSING_LOGICAL_OPERATION_ID"]);
+  it("missing logicalOperationId → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ logicalOperationId: "" }))).toEqual([
+      v("MISSING_LOGICAL_OPERATION_ID", "logicalOperationId must be a non-empty string", { attemptId: "op-1:1", phase: P1 }),
+    ]);
   });
 
-  it("missing attemptId → [MISSING_ATTEMPT_ID]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ attemptId: "" })).map((v) => v.code)).toEqual(["MISSING_ATTEMPT_ID"]);
+  it("missing attemptId → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ attemptId: "" }))).toEqual([
+      v("MISSING_ATTEMPT_ID", "attemptId must be a non-empty string", { logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("non-positive attemptNumber → [INVALID_ATTEMPT_NUMBER]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ attemptNumber: 0 })).map((v) => v.code)).toEqual(["INVALID_ATTEMPT_NUMBER"]);
-    expect(validateAttemptRecord(makeAttemptRecord({ attemptNumber: -1 })).map((v) => v.code)).toEqual(["INVALID_ATTEMPT_NUMBER"]);
-    expect(validateAttemptRecord(makeAttemptRecord({ attemptNumber: 1.5 })).map((v) => v.code)).toEqual(["INVALID_ATTEMPT_NUMBER"]);
+  it("non-positive attemptNumber → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ attemptNumber: 0 }))).toEqual([
+      v("INVALID_ATTEMPT_NUMBER", "attemptNumber must be a positive integer, got 0", { attemptId: "op-1:1", logicalOperationId: "op-1", attemptNumber: 0, phase: P1 }),
+    ]);
+    expect(validateAttemptRecord(makeAttemptRecord({ attemptNumber: -1 }))).toEqual([
+      v("INVALID_ATTEMPT_NUMBER", "attemptNumber must be a positive integer, got -1", { attemptId: "op-1:1", logicalOperationId: "op-1", attemptNumber: -1, phase: P1 }),
+    ]);
+    expect(validateAttemptRecord(makeAttemptRecord({ attemptNumber: 1.5 }))).toEqual([
+      v("INVALID_ATTEMPT_NUMBER", "attemptNumber must be a positive integer, got 1.5", { attemptId: "op-1:1", logicalOperationId: "op-1", attemptNumber: 1.5, phase: P1 }),
+    ]);
   });
 
-  it("unknown transport → [UNKNOWN_TRANSPORT]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ transport: "purple" })).map((v) => v.code)).toEqual(["UNKNOWN_TRANSPORT"]);
+  it("unknown transport → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ transport: "purple" }))).toEqual([
+      v("UNKNOWN_TRANSPORT", 'transport must be one of completed|failed, got "purple"', { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("unknown http → [UNKNOWN_HTTP]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ http: "purple" })).map((v) => v.code)).toEqual(["UNKNOWN_HTTP"]);
+  it("unknown http → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ http: "purple" }))).toEqual([
+      v("UNKNOWN_HTTP", 'http must be one of expected|unexpected|not_received, got "purple"', { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("unknown assertion → [UNKNOWN_ASSERTION]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ assertion: "purple" })).map((v) => v.code)).toEqual(["UNKNOWN_ASSERTION"]);
+  it("unknown assertion → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ assertion: "purple" }))).toEqual([
+      v("UNKNOWN_ASSERTION", 'assertion must be one of passed|failed|not_run, got "purple"', { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("negative durationMs → [INVALID_DURATION]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ durationMs: -1 })).map((v) => v.code)).toEqual(["INVALID_DURATION"]);
+  it("negative durationMs → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ durationMs: -1 }))).toEqual([
+      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got -1", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("non-finite durationMs → [INVALID_DURATION]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ durationMs: Infinity })).map((v) => v.code)).toEqual(["INVALID_DURATION"]);
-    expect(validateAttemptRecord(makeAttemptRecord({ durationMs: NaN })).map((v) => v.code)).toEqual(["INVALID_DURATION"]);
+  it("non-finite durationMs → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ durationMs: Infinity }))).toEqual([
+      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got null", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
+    expect(validateAttemptRecord(makeAttemptRecord({ durationMs: NaN }))).toEqual([
+      v("INVALID_DURATION", "durationMs must be a non-negative finite number, got null", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("non-boolean retryable → [INVALID_RETRYABLE]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ retryable: "yes" })).map((v) => v.code)).toEqual(["INVALID_RETRYABLE"]);
+  it("non-boolean retryable → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ retryable: "yes" }))).toEqual([
+      v("INVALID_RETRYABLE", "retryable must be boolean, got string", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("non-boolean final → [INVALID_FINAL]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ final: "yes" })).map((v) => v.code)).toEqual(["INVALID_FINAL"]);
+  it("non-boolean final → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ final: "yes" }))).toEqual([
+      v("INVALID_FINAL", "final must be boolean, got string", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P1 }),
+    ]);
   });
 
-  it("non-object record → [INVALID_ATTEMPT_RECORD] (not a throw)", () => {
-    expect(validateAttemptRecord(null).map((v) => v.code)).toEqual(["INVALID_ATTEMPT_RECORD"]);
-    expect(validateAttemptRecord("string").map((v) => v.code)).toEqual(["INVALID_ATTEMPT_RECORD"]);
-    expect(validateAttemptRecord([]).map((v) => v.code)).toEqual(["INVALID_ATTEMPT_RECORD"]);
-    expect(validateAttemptRecord(null)[0].phase).toBe("phase_1_record_shape");
+  it("non-object record → exact INVALID_ATTEMPT_RECORD violation (not a throw)", () => {
+    expect(validateAttemptRecord(null)).toEqual([v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 })]);
+    expect(validateAttemptRecord("string")).toEqual([v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 })]);
+    expect(validateAttemptRecord([])).toEqual([v("INVALID_ATTEMPT_RECORD", "attempt record must be a non-null non-array object", { phase: P1 })]);
   });
 
-  it("Phase 1 defect suppresses Phase 2 cascade (no SEMANTIC_* findings)", () => {
-    const v = validateAttemptRecord(makeAttemptRecord({ transport: "purple" }));
-    expect(v.every((x) => x.phase === "phase_1_record_shape")).toBe(true);
+  it("Phase 1 defect suppresses Phase 2 cascade", () => {
+    const viols = validateAttemptRecord(makeAttemptRecord({ transport: "purple" }));
+    expect(viols.every((x) => x.phase === P1)).toBe(true);
   });
 });
 
 // ─── Phase 2: engine-result and semantic consistency (exact arrays) ──────
 
 describe("validateAttemptRecord — Phase 2 consistency", () => {
-  it("invalid engine outcome (transport=completed but status=null) → [INVALID_ENGINE_OUTCOME]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ status: null })).map((v) => v.code)).toEqual(["INVALID_ENGINE_OUTCOME"]);
+  it("invalid engine outcome (transport=completed but status=null) → exact violation", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ status: null }))).toEqual([
+      v("INVALID_ENGINE_OUTCOME", expect.stringContaining("engine outcome validation failed"), { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
   });
 
-  it("transport=failed but http=expected → [SEMANTIC_TRANSPORT_HTTP]", () => {
-    const v = validateAttemptRecord(failedTransport({ http: "expected" }));
-    expect(v.map((x) => x.code)).toEqual(["SEMANTIC_TRANSPORT_HTTP"]);
+  it("transport=failed but http=expected → exact SEMANTIC_TRANSPORT_HTTP", () => {
+    expect(validateAttemptRecord(failedTransport({ http: "expected" }))).toEqual([
+      v("SEMANTIC_TRANSPORT_HTTP", "transport=failed requires http=not_received, got expected", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
   });
 
-  it("assertion=passed but assertionError set → [SEMANTIC_PASSED_ERROR]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ assertion: "passed", assertionError: { code: "X", message: "y" } })).map((v) => v.code)).toEqual(["SEMANTIC_PASSED_ERROR"]);
+  it("assertion=passed but assertionError set → exact SEMANTIC_PASSED_ERROR", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ assertion: "passed", assertionError: { code: "X", message: "y" } }))).toEqual([
+      v("SEMANTIC_PASSED_ERROR", "assertion=passed requires assertionError=null", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
   });
 
-  it("assertion=failed but assertionError missing → [SEMANTIC_FAILED_ERROR] (+ OUTCOME_MISMATCH if outcome not updated)", () => {
-    // Self-consistent test data: assertion=failed implies outcome=failed.
-    expect(validateAttemptRecord(makeAttemptRecord({ assertion: "failed", assertionError: null, outcome: "failed" })).map((v) => v.code)).toEqual(["SEMANTIC_FAILED_ERROR"]);
+  it("assertion=failed but assertionError missing → exact SEMANTIC_FAILED_ERROR", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ assertion: "failed", assertionError: null, outcome: "failed" }))).toEqual([
+      v("SEMANTIC_FAILED_ERROR", "assertion=failed requires assertionError with non-empty code and message", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
   });
 
-  it("assertion=not_run but assertionError set → [SEMANTIC_NOT_RUN_ERROR]", () => {
-    const v = validateAttemptRecord(makeAttemptRecord({
+  it("assertion=not_run but assertionError set → exact SEMANTIC_NOT_RUN_ERROR", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({
       transport: "completed", http: "expected", assertion: "not_run",
-      assertionNotRunReason: "not_declared",
-      assertionError: { code: "X", message: "y" },
-    }));
-    expect(v.map((x) => x.code)).toEqual(["SEMANTIC_NOT_RUN_ERROR"]);
+      assertionNotRunReason: "not_declared", assertionError: { code: "X", message: "y" },
+    }))).toEqual([
+      v("SEMANTIC_NOT_RUN_ERROR", "assertion=not_run requires assertionError=null", { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
   });
 
-  it("transport=completed + http=not_received → [SEMANTIC_COMPLETED_HTTP]", () => {
-    const v = validateAttemptRecord(makeAttemptRecord({ transport: "completed", http: "not_received", outcome: "failed" }));
-    expect(v.map((x) => x.code)).toEqual(["SEMANTIC_COMPLETED_HTTP"]);
+  it("transport=completed + http=not_received → exact SEMANTIC_COMPLETED_HTTP", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ transport: "completed", http: "not_received", outcome: "failed" }))).toEqual([
+      v("SEMANTIC_COMPLETED_HTTP", 'transport=completed requires http=expected|unexpected, got "not_received"', { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
   });
 
-  it("outcome mismatches classifications → [OUTCOME_MISMATCH]", () => {
-    // Self-consistent except for outcome: http=unexpected implies failed,
-    // but outcome says succeeded. assertion=not_run needs a reason; supply
-    // one so SEMANTIC_NOT_RUN_REASON doesn't fire and obscure the target.
-    const v = validateAttemptRecord(makeAttemptRecord({
+  it("outcome mismatches classifications → exact OUTCOME_MISMATCH", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({
       transport: "completed", http: "unexpected", assertion: "not_run",
       assertionNotRunReason: "status_not_applicable", outcome: "succeeded",
-    }));
-    expect(v.map((x) => x.code)).toEqual(["OUTCOME_MISMATCH"]);
+    }))).toEqual([
+      v("OUTCOME_MISMATCH", 'outcome="succeeded" but classifications imply failed', { attemptId: "op-1:1", logicalOperationId: "op-1", phase: P2 }),
+    ]);
   });
 
-  it("succeeded attempt with final=false → [NONFINAL_SUCCEEDED_ATTEMPT]", () => {
-    expect(validateAttemptRecord(makeAttemptRecord({ final: false })).map((v) => v.code)).toEqual(["NONFINAL_SUCCEEDED_ATTEMPT"]);
+  it("succeeded attempt with final=false → exact NONFINAL_SUCCEEDED_ATTEMPT", () => {
+    expect(validateAttemptRecord(makeAttemptRecord({ final: false }))).toEqual([
+      v("NONFINAL_SUCCEEDED_ATTEMPT", "outcome=succeeded requires final=true (a later attempt after success is a defect)", { attemptId: "op-1:1", logicalOperationId: "op-1", attemptNumber: 1, phase: P2 }),
+    ]);
   });
 });
 
 // ─── Phase 4: per-logical-operation sequence violations (exact arrays) ───
 
 describe("buildOperationReport — Phase 4 logical sequence", () => {
-  it("noncontiguous attempt numbers (1, 3) → [NONCONTIGUOUS_ATTEMPT_NUMBERS]", () => {
+  it("noncontiguous attempt numbers (1, 3) → exact violation", () => {
     const records = [
       failedTransport({ attemptId: "op-1:1", attemptNumber: 1, final: false, retryable: true }),
-      makeAttemptRecord({ attemptId: "op-1:3", attemptNumber: 3, final: true, retryable: false }), // gap at 2
+      makeAttemptRecord({ attemptId: "op-1:3", attemptNumber: 3, final: true, retryable: false }),
     ];
     const report = buildOperationReport(records);
-    expect(codes(report)).toEqual(["NONCONTIGUOUS_ATTEMPT_NUMBERS"]);
+    expectViolations(report, [
+      v("NONCONTIGUOUS_ATTEMPT_NUMBERS", 'attemptNumbers must be contiguous starting at 1; got [1,3] for logical operation', { logicalOperationId: "op-1", phase: P4 }),
+    ]);
     expect(report.logical.total).toBe(0);
   });
 
-  it("multiple final attempts → [MULTIPLE_FINAL_ATTEMPTS]", () => {
+  it("multiple final attempts → exact violation", () => {
     const records = [
       makeAttemptRecord({ attemptId: "op-1:1", attemptNumber: 1, final: true }),
       failedTransport({ attemptId: "op-1:2", attemptNumber: 2, final: true }),
     ];
-    expect(codes(buildOperationReport(records))).toEqual(["MULTIPLE_FINAL_ATTEMPTS"]);
+    expectViolations(buildOperationReport(records), [
+      v("MULTIPLE_FINAL_ATTEMPTS", "logical operation has 2 final attempts; expected exactly 1", { logicalOperationId: "op-1", phase: P4 }),
+    ]);
   });
 
-  it("no final attempt → [NO_FINAL_ATTEMPT]", () => {
+  it("no final attempt → exact violation", () => {
     const records = [
       failedTransport({ attemptId: "op-1:1", attemptNumber: 1, final: false, retryable: true }),
     ];
-    expect(codes(buildOperationReport(records))).toEqual(["NO_FINAL_ATTEMPT"]);
+    expectViolations(buildOperationReport(records), [
+      v("NO_FINAL_ATTEMPT", "logical operation has no final attempt", { logicalOperationId: "op-1", phase: P4 }),
+    ]);
   });
 
-  it("duplicate attemptNumber within one logical op → [DUPLICATE_ATTEMPT_NUMBER]", () => {
+  it("duplicate attemptNumber within one logical op → exact violation", () => {
     const records = [
       failedTransport({ attemptId: "op-1:1a", attemptNumber: 1, final: false, retryable: true }),
       makeAttemptRecord({ attemptId: "op-1:1b", attemptNumber: 1, final: true }),
     ];
-    expect(codes(buildOperationReport(records))).toEqual(["DUPLICATE_ATTEMPT_NUMBER"]);
+    expectViolations(buildOperationReport(records), [
+      v("DUPLICATE_ATTEMPT_NUMBER", "duplicate attemptNumber 1 within logical operation", { logicalOperationId: "op-1", attemptId: "op-1:1b", attemptNumber: 1, phase: P4 }),
+    ]);
   });
 
-  it("final attempt with a later sibling → [FINAL_NOT_HIGHEST, FINAL_NOT_LAST]", () => {
-    // attemptNumber 2 is final, 3 follows. Both codes apply inseparably:
-    // FINAL_NOT_LAST (3 follows 2) and FINAL_NOT_HIGHEST (2 != max=3).
+  it("final attempt with a later sibling → exact FINAL_NOT_HIGHEST + FINAL_NOT_LAST", () => {
     const records = [
       failedTransport({ attemptId: "op-1:1", attemptNumber: 1, final: false, retryable: true }),
       makeAttemptRecord({ attemptId: "op-1:2", attemptNumber: 2, final: true, retryable: false }),
       failedTransport({ attemptId: "op-1:3", attemptNumber: 3, final: false, retryable: true }),
     ];
-    expect(codes(buildOperationReport(records))).toEqual(["FINAL_NOT_HIGHEST", "FINAL_NOT_LAST"]);
+    expectViolations(buildOperationReport(records), [
+      v("FINAL_NOT_HIGHEST", "final attempt number 2 is not the highest (3)", { logicalOperationId: "op-1", attemptId: "op-1:2", phase: P4 }),
+      v("FINAL_NOT_LAST", "attempt 3 follows the final attempt 2", { logicalOperationId: "op-1", attemptId: "op-1:3", attemptNumber: 3, phase: P4 }),
+    ]);
   });
 });
 
