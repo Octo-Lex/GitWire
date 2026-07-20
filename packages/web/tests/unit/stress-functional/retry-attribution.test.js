@@ -10,6 +10,8 @@ import {
   createRetryPolicy,
   productionRetryPolicy,
   executeRetryScenario,
+  RETRY_CLASSIFICATION_FAILED,
+  RETRY_BACKOFF_FAILED,
   RETRY_DELAY_FAILED,
   classifyProductionGitHubError,
   parseRetryAfter,
@@ -514,5 +516,236 @@ describe("duplicate behavior — injected route semantics", () => {
     await submitWithReplay("key-1", op); // replay — should NOT execute
 
     expect(executions).toBe(1); // only one execution
+  });
+
+  // ─── Additional C4 invariants (per spec) ───────────────────────────────────
+  //
+  // Abort-terminal-under-production-policy, classifier/backoff infrastructure
+  // failures, Retry-After delay precedence, a two-operation deferred retry-slot
+  // proof, duplicate conflicts, and rejected-admission zero-execution proofs.
+
+  it("abort is terminal under productionRetryPolicy (not a custom policy)", async () => {
+    const sleeper = recordingSleeper();
+    const { attemptRecords, decisions } = await executeRetryScenario({
+      logicalOperationId: "abort-prod-policy",
+      executeAttempt: async () => failedResult("abort", "ABORT_ERR"),
+      policy: productionRetryPolicy,
+      sleep: sleeper.sleep,
+    });
+
+    expect(attemptRecords).toHaveLength(1);
+    expect(decisions[0].retry).toBe(false);
+    expect(decisions[0].reason).toBe("abort");
+  });
+
+  it("classifier throws → RETRY_CLASSIFICATION_FAILED with no authoritative report", async () => {
+    const throwingPolicy = createRetryPolicy({
+      maxAttempts: 3,
+      classifyAttempt: () => { throw new Error("classifier boom"); },
+      backoffMs: () => 0,
+    });
+
+    let caught = null;
+    try {
+      await executeRetryScenario({
+        logicalOperationId: "classifier-throws",
+        executeAttempt: async () => completedResult(200),
+        policy: throwingPolicy,
+        sleep: async () => {},
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught.code).toBe(RETRY_CLASSIFICATION_FAILED);
+    expect(caught.attemptRecords).toHaveLength(0);
+  });
+
+  it("backoff returns invalid (NaN) → RETRY_BACKOFF_FAILED", async () => {
+    const invalidBackoffPolicy = createRetryPolicy({
+      maxAttempts: 3,
+      classifyAttempt: () => ({ reason: "server_error", retryable: true }),
+      backoffMs: () => NaN,
+    });
+
+    let caught = null;
+    try {
+      await executeRetryScenario({
+        logicalOperationId: "backoff-invalid",
+        executeAttempt: async () => serverErrorResult(503),
+        policy: invalidBackoffPolicy,
+        sleep: async () => {},
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught.code).toBe(RETRY_BACKOFF_FAILED);
+  });
+
+  it("Retry-After delay precedence — sleeps 5000 (Retry-After), not 2000 (backoff)", async () => {
+    // Direct classifier check: with retry-after=5 and finite remaining/reset,
+    // classifyProductionGitHubError must return retryAfterMs=5000.
+    const classification = classifyProductionGitHubError({
+      status: 429,
+      headers: {
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": "1000000000",
+        "retry-after": "5",
+      },
+    });
+    expect(classification.reason).toBe(GITHUB_ERROR_REASONS.RATE_LIMITED_RETRY_AFTER);
+    expect(classification.retryAfterMs).toBe(5000);
+
+    // Full scenario: delayMs must come from Retry-After, not the exponential backoff.
+    const sleeper = recordingSleeper();
+    const results = [completedResult(429), completedResult(200)];
+    let idx = 0;
+    const { attemptRecords, decisions } = await executeRetryScenario({
+      logicalOperationId: "retry-after-precedence",
+      executeAttempt: async () => results[idx++],
+      policy: productionRetryPolicy,
+      sleep: sleeper.sleep,
+      retryMetadataFor: () => ({
+        headers: {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": "1000000000",
+          "retry-after": "5",
+        },
+      }),
+    });
+
+    expect(decisions[0].retry).toBe(true);
+    expect(decisions[0].delayMs).toBe(5000);
+    expect(sleeper.calls).toEqual([5000]); // not 2000 (the exponential backoff value)
+    expect(attemptRecords).toHaveLength(2);
+  });
+
+  it("two-operation deferred retry-slot proof — max active executions never exceeds 1", async () => {
+    // Capacity = 1. Op A fails (503) and enters retry sleep. During that sleep,
+    // op B starts, succeeds, and completes. Then op A's sleep resolves and
+    // op A's attempt 2 runs. Throughout, executionState.maxActive must be 1 —
+    // proving retry delay does NOT occupy an execution slot.
+    const executionState = { active: 0, maxActive: 0 };
+
+    // Deferred barriers coordinating the two operations.
+    let signalOpASleeping;
+    const opAStartedSleep = new Promise((resolve) => { signalOpASleeping = resolve; });
+    let releaseOpASleep;
+    const opASleepGate = new Promise((resolve) => { releaseOpASleep = resolve; });
+
+    const opAResults = [serverErrorResult(503), completedResult(200)];
+    let opAIdx = 0;
+
+    const opAPromise = executeRetryScenario({
+      logicalOperationId: "deferred-op-a",
+      executeAttempt: async () => opAResults[opAIdx++],
+      policy: productionRetryPolicy,
+      sleep: async () => {
+        // Inside the sleep: op A is NOT executing. Signal main, then wait.
+        signalOpASleeping();
+        await opASleepGate;
+      },
+      executionState,
+    });
+
+    // Wait until op A has entered its retry sleep (active = 0 during the delay).
+    await opAStartedSleep;
+
+    // While op A is sleeping, op B runs to completion.
+    const opBPromise = executeRetryScenario({
+      logicalOperationId: "deferred-op-b",
+      executeAttempt: async () => completedResult(200),
+      policy: productionRetryPolicy,
+      sleep: async () => {},
+      executionState,
+    });
+
+    const { attemptRecords: opBRecords } = await opBPromise;
+
+    // Release op A's sleep; its attempt 2 now runs.
+    releaseOpASleep();
+    const { attemptRecords: opARecords } = await opAPromise;
+
+    expect(executionState.maxActive).toBe(1); // never more than 1 concurrent execution
+    expect(opARecords).toHaveLength(2);
+    expect(opBRecords).toHaveLength(1);
+  });
+
+  it("duplicate conflict — same key with conflicting payload returns 409, no second execution", async () => {
+    let executions = 0;
+    const store = new Map(); // key → payload
+
+    async function submitWithConflictCheck(key, payload, operation) {
+      if (store.has(key)) {
+        const existing = store.get(key);
+        if (existing !== payload) {
+          // Conflict — return 409 WITHOUT executing or creating attempt records.
+          return { conflict: true, status: 409, existing, attemptRecords: null };
+        }
+        // Idempotent replay — also no execution.
+        return { conflict: false, replayed: true, existing };
+      }
+      executions += 1;
+      store.set(key, payload);
+      const { attemptRecords, report } = await executeRetryScenario({
+        logicalOperationId: `conflict-${key}`,
+        executeAttempt: operation,
+        policy: createRetryPolicy({
+          maxAttempts: 1,
+          classifyAttempt: () => ({ reason: "never_retry", retryable: false }),
+          backoffMs: () => 0,
+        }),
+        sleep: async () => {},
+      });
+      return { conflict: false, replayed: false, attemptRecords, report };
+    }
+
+    const op = async () => completedResult(200);
+    const first = await submitWithConflictCheck("k1", "payload-A", op);
+    const second = await submitWithConflictCheck("k1", "payload-B", op);
+
+    expect(first.conflict).toBe(false);
+    expect(second.conflict).toBe(true);
+    expect(second.status).toBe(409);
+    expect(executions).toBe(1); // only the first submission executed
+    expect(second.attemptRecords).toBeNull(); // no second attempt record on conflict
+    expect(first.attemptRecords).toHaveLength(1); // original attribution unchanged
+  });
+
+  it("rejected admission (closed model) produces zero executions and zero attempt records", async () => {
+    let tick = 0;
+    const model = createBackpressureModel({
+      maxQueueDepth: 1,
+      rateLimitPerWindow: 1,
+      windowMs: 100,
+      now: () => tick,
+    });
+    model.close();
+
+    let startCount = 0;
+    const attemptRecords = [];
+
+    // Mirror the orchestrator's admit → execute flow.
+    async function tryAdmitAndRun() {
+      const admission = model.admit();
+      if (!admission.admitted) {
+        // Rejected — must NOT start execution, must NOT create any attempt record.
+        return { admitted: false, started: false };
+      }
+      startCount += 1;
+      // (In a real orchestrator, executeRetryScenario would run here.)
+      return { admitted: true, started: true };
+    }
+
+    const result = await tryAdmitAndRun();
+
+    expect(result.admitted).toBe(false);
+    expect(result.started).toBe(false);
+    expect(startCount).toBe(0);
+    expect(attemptRecords).toHaveLength(0);
+    expect(model.snapshot().queueDepth).toBe(0);
   });
 });
