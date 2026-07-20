@@ -80,10 +80,17 @@ function describeValue(value) {
 
 function violation(code, message, detail = {}) {
   const v = { code, message };
-  if (detail.attemptId !== undefined) v.attemptId = detail.attemptId;
-  if (detail.logicalOperationId !== undefined) v.logicalOperationId = detail.logicalOperationId;
-  if (detail.attemptNumber !== undefined) v.attemptNumber = detail.attemptNumber;
-  if (detail.phase !== undefined) v.phase = detail.phase;
+  // Only attach attribution fields when they match the declared schema type.
+  // A malformed record may carry a BigInt attemptNumber, a Symbol attemptId,
+  // or a circular object in any field — those values must NOT enter
+  // structured violation fields where they would crash the sorter (BigInt
+  // subtraction) or the dedup key (implicit Symbol/string coercion). The
+  // malformed value is already represented safely in the bounded `message`
+  // via describeValue; it does not need to appear as a typed field.
+  if (typeof detail.attemptId === "string") v.attemptId = detail.attemptId;
+  if (typeof detail.logicalOperationId === "string") v.logicalOperationId = detail.logicalOperationId;
+  if (typeof detail.attemptNumber === "number" && Number.isFinite(detail.attemptNumber)) v.attemptNumber = detail.attemptNumber;
+  if (typeof detail.phase === "string") v.phase = detail.phase;
   return v;
 }
 
@@ -301,8 +308,21 @@ export function validateAttemptRecord(record) {
   // object; the accounting contract requires a classified transport-error
   // (the engine's classifyTransportError always attaches one on real
   // transport failures). A failed transport with error=null is rejected.
+  // The accounting contract requires the COMPLETE classified-error shape
+  // (the engine's classifyTransportError always attaches one): category is
+  // a string; name and code are string-or-null; message is a non-empty
+  // string. An incomplete object like { category: "timeout" } is rejected.
   if (record.transport === "failed") {
-    if (!record.error || typeof record.error !== "object" || typeof record.error.category !== "string") {
+    const e = record.error;
+    const hasClassifiedShape = e
+      && typeof e === "object"
+      && !Array.isArray(e)
+      && typeof e.category === "string"
+      && (typeof e.name === "string" || e.name === null)
+      && (typeof e.code === "string" || e.code === null)
+      && typeof e.message === "string"
+      && e.message.length > 0;
+    if (!hasClassifiedShape) {
       v.push(violation("INVALID_TRANSPORT_ERROR", "transport=failed requires a classified transport-error object", { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
     }
   }
