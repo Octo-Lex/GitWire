@@ -142,7 +142,7 @@ jobs:
       # github-token. Extract outside the repository workspace to avoid
       # polluting the working tree.
       - name: Download release manifest
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: production-release-manifest
           run-id: ${{ github.event.workflow_run.id }}
