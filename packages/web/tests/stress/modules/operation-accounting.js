@@ -44,13 +44,19 @@ const ZERO_ATTEMPTS = Object.freeze({
   assertionPassed: 0, assertionFailed: 0, assertionNotRun: 0,
 });
 
-const EMPTY_REPORT = Object.freeze({
-  logical: ZERO_LOGICAL,
-  attempts: ZERO_ATTEMPTS,
-  logicalOperations: [],
-  attemptsById: Object.freeze(Object.create(null)),
-  violations: [],
-});
+// Fresh empty-report factory. Each call returns a new object with fresh
+// empty arrays/objects so cross-call mutation of one report's violations or
+// logicalOperations cannot corrupt a later empty reduction. The zero-counter
+// objects themselves are frozen and safe to share.
+function emptyReport() {
+  return {
+    logical: ZERO_LOGICAL,
+    attempts: ZERO_ATTEMPTS,
+    logicalOperations: [],
+    attemptsById: Object.create(null),
+    violations: [],
+  };
+}
 
 // ─── Violation helper ─────────────────────────────────────────────────────
 
@@ -174,11 +180,16 @@ export function createAttemptRecord(engineResult, metadata) {
  * @returns {Array<{code, message, ...}>} violations (empty if valid)
  */
 export function validateAttemptRecord(record) {
+  // Per the agreed transactional contract: malformed record data produces
+  // structured violations; only buildOperationReport's top-level non-array
+  // argument throws. A null/primitive/array record therefore surfaces as a
+  // Phase-1 violation rather than throwing.
   if (!record || typeof record !== "object" || Array.isArray(record)) {
-    // Programming error — a non-object record cannot be attributed to a
-    // logical operation. Throw so the caller fixes the call site rather
-    // than silently producing an unattributable violation.
-    throw Object.assign(new Error("validateAttemptRecord: record must be a non-null object"), { code: "INVALID_RECORD_ARG" });
+    return [violation(
+      "INVALID_ATTEMPT_RECORD",
+      "attempt record must be a non-null non-array object",
+      { phase: "phase_1_record_shape" }
+    )];
   }
 
   const v = [];
@@ -254,6 +265,14 @@ export function validateAttemptRecord(record) {
       v.push(violation("SEMANTIC_TRANSPORT_REASON", `transport=failed requires assertionNotRunReason=transport_failed, got ${JSON.stringify(record.assertionNotRunReason)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
     }
   }
+  // Converse: a completed transport MUST have received an HTTP response
+  // (expected or unexpected). transport=completed + http=not_received is
+  // semantically impossible and would otherwise let a record slip into the
+  // aggregates where responseReceived counts it but expected+unexpected do
+  // not — producing inconsistent counters with no violation.
+  if (record.transport === "completed" && record.http !== "expected" && record.http !== "unexpected") {
+    v.push(violation("SEMANTIC_COMPLETED_HTTP", `transport=completed requires http=expected|unexpected, got ${JSON.stringify(record.http)}`, { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
+  }
   if (record.assertion === "passed") {
     if (record.assertionError !== null && record.assertionError !== undefined) {
       v.push(violation("SEMANTIC_PASSED_ERROR", "assertion=passed requires assertionError=null", { attemptId: record.attemptId, logicalOperationId: record.logicalOperationId, phase: phase2 }));
@@ -306,6 +325,9 @@ function validateGlobalIdentity(records) {
   const seenIds = new Map();
   for (let i = 0; i < records.length; i++) {
     const r = records[i];
+    // A non-object record is already flagged by Phase 1; skip it here so
+    // accessing r.attemptId cannot throw on null/primitives.
+    if (!r || typeof r !== "object") continue;
     if (typeof r.attemptId !== "string" || r.attemptId.length === 0) continue; // Phase 1 already flagged
     if (seenIds.has(r.attemptId)) {
       v.push(violation("DUPLICATE_ATTEMPT_ID", `attemptId must be globally unique; duplicate at input index ${i}`, { attemptId: r.attemptId, logicalOperationId: r.logicalOperationId, phase: phase3 }));
@@ -318,16 +340,23 @@ function validateGlobalIdentity(records) {
 
 // ─── Phase 4: per-logical-operation sequence ──────────────────────────────
 
-function validateLogicalSequences(records, recordsWithPhase1Defects) {
+function validateLogicalSequences(records, groupsWithRecordDefects) {
   const v = [];
   const phase4 = "phase_4_logical_sequence";
 
-  // Group records by logicalOperationId. Skip groups that contain ANY
-  // record-level defect — their sequence findings would be cascade noise.
+  // Group records by logicalOperationId. Skip ENTIRE groups that contain
+  // ANY record-level defect (Phase 1 or Phase 2) — otherwise a defective
+  // record's omission from sequencing would generate cascade findings
+  // (e.g. NO_FINAL_ATTEMPT caused only by the missing defective record).
+  // The suppression set is keyed by logicalOperationId so all siblings of
+  // a defective record are also suppressed for sequence checks.
   const groups = new Map();
   for (const r of records) {
+    // Non-object records are already flagged by Phase 1; skip them so
+    // accessing r.logicalOperationId cannot throw on null/primitives.
+    if (!r || typeof r !== "object") continue;
     if (typeof r.logicalOperationId !== "string" || r.logicalOperationId.length === 0) continue;
-    if (recordsWithPhase1Defects.has(r)) continue;
+    if (groupsWithRecordDefects.has(r.logicalOperationId)) continue;
     if (!groups.has(r.logicalOperationId)) groups.set(r.logicalOperationId, []);
     groups.get(r.logicalOperationId).push(r);
   }
@@ -502,17 +531,25 @@ export function buildOperationReport(attemptRecords) {
   }
 
   if (attemptRecords.length === 0) {
-    return EMPTY_REPORT;
+    return emptyReport();
   }
 
   // ── Pass 1: per-record validation (Phases 1 + 2) ──
-  const recordsWithPhase1Defects = new Set();
+  // Track logical-operation IDs that contain ANY record-level defect so the
+  // whole group can be skipped in Phase 4 sequence validation (otherwise a
+  // defective record's omission would cascade into NO_FINAL_ATTEMPT etc.).
+  const groupsWithRecordDefects = new Set();
   let allRecordViolations = [];
   for (const r of attemptRecords) {
     const recordViolations = validateAttemptRecord(r);
     if (recordViolations.length > 0) {
-      if (recordViolations.some((v) => v.phase === "phase_1_record_shape")) {
-        recordsWithPhase1Defects.add(r);
+      // Mark the group for suppression if the record has a usable
+      // logicalOperationId. Records with unusable identity never enter
+      // grouping anyway, so no suppression is needed for them.
+      const lid = r && typeof r === "object" && typeof r.logicalOperationId === "string"
+        ? r.logicalOperationId : null;
+      if (lid && lid.length > 0 && lid.length <= MAX_ID_LENGTH) {
+        groupsWithRecordDefects.add(lid);
       }
       allRecordViolations = allRecordViolations.concat(recordViolations);
     }
@@ -522,7 +559,7 @@ export function buildOperationReport(attemptRecords) {
   const identityViolations = validateGlobalIdentity(attemptRecords);
 
   // ── Pass 2: per-logical-operation sequences (Phase 4) ──
-  const sequenceViolations = validateLogicalSequences(attemptRecords, recordsWithPhase1Defects);
+  const sequenceViolations = validateLogicalSequences(attemptRecords, groupsWithRecordDefects);
 
   const violations = dedupViolations(
     [...allRecordViolations, ...identityViolations, ...sequenceViolations].sort(compareViolations)
