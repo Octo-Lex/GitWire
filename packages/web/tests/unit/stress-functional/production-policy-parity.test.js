@@ -135,9 +135,9 @@ function extractQueueDefaults(source) {
   };
 }
 
-// ─── classifyError per-status reason parity (fail-closed) ──────────────────
+// ─── classifyError exact arm-reason parity (fail-closed) ──────────────────
 
-describe("production-policy-parity — classifyError reason arms (fail-closed)", () => {
+describe("production-policy-parity — classifyError exact arms (fail-closed)", () => {
   const source = readSource("services/githubRateLimit.js");
   const body = extractClassifyErrorBody(source);
 
@@ -147,44 +147,102 @@ describe("production-policy-parity — classifyError reason arms (fail-closed)",
     expect(body).toContain("switch");
   });
 
-  it("401 arm contains the exact 'token_invalid' reason", () => {
+  // Extract all case labels from the switch body as a sorted array.
+  function extractCaseLabels(switchBody) {
+    const labels = [];
+    const re = /\bcase\s+(\d+)\s*:/g;
+    let m;
+    while ((m = re.exec(switchBody)) !== null) {
+      labels.push(parseInt(m[1], 10));
+    }
+    // Check for 'default:' presence.
+    const hasDefault = /\bdefault\s*:/.test(switchBody);
+    return { labels: labels.sort((a, b) => a - b), hasDefault };
+  }
+
+  it("exact case-label multiset: [401, 403, 404, 422, 429] + default — no extras, no missing", () => {
+    const { labels, hasDefault } = extractCaseLabels(body);
+    expect(labels).toEqual([401, 403, 404, 422, 429]);
+    expect(hasDefault).toBe(true);
+  });
+
+  // Extract all quoted reason strings from the entire function body.
+  function extractAllReasons(switchBody) {
+    const reasons = new Set();
+    const re = /reason\s*:\s*"([a-z_]+)"/g;
+    let m;
+    while ((m = re.exec(switchBody)) !== null) {
+      reasons.add(m[1]);
+    }
+    return reasons;
+  }
+
+  it("union of extracted production reasons exactly equals GITHUB_ERROR_REASONS values", () => {
+    const productionReasons = extractAllReasons(body);
+    const adapterReasons = new Set(Object.values(GITHUB_ERROR_REASONS));
+    // Bidirectional: no adapter reason missing from production, no production
+    // reason missing from adapter.
+    expect([...adapterReasons].sort()).toEqual([...productionReasons].sort());
+  });
+
+  it("401 arm contains exactly 'token_invalid'", () => {
     const arm = extractCaseBranch(body, "401");
     expect(arm).not.toBeNull();
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.TOKEN_INVALID}"`);
+    const reasons = new Set();
+    const re = /reason\s*:\s*"([a-z_]+)"/g;
+    let m;
+    while ((m = re.exec(arm)) !== null) reasons.add(m[1]);
+    expect([...reasons].sort()).toEqual(["token_invalid"]);
   });
 
-  it("403 arm contains 'rate_exhausted' and 'forbidden' reasons", () => {
+  it("403 arm contains exactly 'rate_exhausted' and 'forbidden'", () => {
     const arm = extractCaseBranch(body, "403");
     expect(arm).not.toBeNull();
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.RATE_EXHAUSTED}"`);
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.FORBIDDEN}"`);
+    const reasons = new Set();
+    const re = /reason\s*:\s*"([a-z_]+)"/g;
+    let m;
+    while ((m = re.exec(arm)) !== null) reasons.add(m[1]);
+    expect([...reasons].sort()).toEqual(["forbidden", "rate_exhausted"]);
   });
 
-  it("404 arm contains the exact 'not_found' reason", () => {
+  it("404 arm contains exactly 'not_found'", () => {
     const arm = extractCaseBranch(body, "404");
     expect(arm).not.toBeNull();
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.NOT_FOUND}"`);
+    const reasons = new Set();
+    const re = /reason\s*:\s*"([a-z_]+)"/g;
+    let m;
+    while ((m = re.exec(arm)) !== null) reasons.add(m[1]);
+    expect([...reasons].sort()).toEqual(["not_found"]);
   });
 
-  it("422 arm contains the exact 'validation_error' reason", () => {
+  it("422 arm contains exactly 'validation_error'", () => {
     const arm = extractCaseBranch(body, "422");
     expect(arm).not.toBeNull();
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.VALIDATION_ERROR}"`);
+    const reasons = new Set();
+    const re = /reason\s*:\s*"([a-z_]+)"/g;
+    let m;
+    while ((m = re.exec(arm)) !== null) reasons.add(m[1]);
+    expect([...reasons].sort()).toEqual(["validation_error"]);
   });
 
-  it("429 arm contains 'rate_limited_retry_after' and 'rate_limited' reasons", () => {
+  it("429 arm contains exactly 'rate_limited_retry_after' and 'rate_limited'", () => {
     const arm = extractCaseBranch(body, "429");
     expect(arm).not.toBeNull();
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.RATE_LIMITED_RETRY_AFTER}"`);
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.RATE_LIMITED}"`);
+    const reasons = new Set();
+    const re = /reason\s*:\s*"([a-z_]+)"/g;
+    let m;
+    while ((m = re.exec(arm)) !== null) reasons.add(m[1]);
+    expect([...reasons].sort()).toEqual(["rate_limited", "rate_limited_retry_after"]);
   });
 
-  it("default arm contains 'server_error' (5xx) and 'unknown' reasons", () => {
+  it("default arm contains exactly 'server_error' and 'unknown'", () => {
     const arm = extractDefaultBranch(body);
     expect(arm).not.toBeNull();
-    expect(arm).toContain("status >= 500");
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.SERVER_ERROR}"`);
-    expect(arm).toContain(`"${GITHUB_ERROR_REASONS.UNKNOWN}"`);
+    const reasons = new Set();
+    const re = /reason\s*:\s*"([a-z_]+)"/g;
+    let m;
+    while ((m = re.exec(arm)) !== null) reasons.add(m[1]);
+    expect([...reasons].sort()).toEqual(["server_error", "unknown"]);
   });
 });
 

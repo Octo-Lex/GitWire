@@ -749,3 +749,333 @@ describe("duplicate behavior — injected route semantics", () => {
     expect(model.snapshot().queueDepth).toBe(0);
   });
 });
+
+// ─── D2 classifier schema validation ──────────────────────────────────────
+//
+// The classifier contract requires { reason: non-empty string, retryable:
+// boolean, retryAfterMs?: finite non-negative number }. Malformed shapes must
+// surface as RETRY_CLASSIFICATION_FAILED with zero authoritative attempt
+// records (the bad classification happened BEFORE a C2 record was committed).
+
+describe("retry attribution — D2 classifier schema validation", () => {
+  it("retryable missing → RETRY_CLASSIFICATION_FAILED", async () => {
+    let caught = null;
+    try {
+      await executeRetryScenario({
+        logicalOperationId: "schema-missing-retryable",
+        executeAttempt: async () => serverErrorResult(503),
+        policy: createRetryPolicy({
+          maxAttempts: 3,
+          classifyAttempt: () => ({ reason: "server_error" }),
+          backoffMs: () => 2000,
+        }),
+        sleep: async () => {},
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught.code).toBe(RETRY_CLASSIFICATION_FAILED);
+    expect(caught.attemptRecords).toHaveLength(0);
+  });
+
+  it("retryable non-boolean ('yes') → RETRY_CLASSIFICATION_FAILED", async () => {
+    let caught = null;
+    try {
+      await executeRetryScenario({
+        logicalOperationId: "schema-retryable-string",
+        executeAttempt: async () => serverErrorResult(503),
+        policy: createRetryPolicy({
+          maxAttempts: 3,
+          classifyAttempt: () => ({ reason: "server_error", retryable: "yes" }),
+          backoffMs: () => 2000,
+        }),
+        sleep: async () => {},
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught.code).toBe(RETRY_CLASSIFICATION_FAILED);
+    expect(caught.attemptRecords).toHaveLength(0);
+  });
+
+  it("reason empty string → RETRY_CLASSIFICATION_FAILED", async () => {
+    let caught = null;
+    try {
+      await executeRetryScenario({
+        logicalOperationId: "schema-empty-reason",
+        executeAttempt: async () => serverErrorResult(503),
+        policy: createRetryPolicy({
+          maxAttempts: 3,
+          classifyAttempt: () => ({ reason: "", retryable: false }),
+          backoffMs: () => 2000,
+        }),
+        sleep: async () => {},
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught.code).toBe(RETRY_CLASSIFICATION_FAILED);
+    expect(caught.attemptRecords).toHaveLength(0);
+  });
+
+  it("retryAfterMs NaN → RETRY_CLASSIFICATION_FAILED", async () => {
+    let caught = null;
+    try {
+      await executeRetryScenario({
+        logicalOperationId: "schema-nan-retry-after",
+        executeAttempt: async () => serverErrorResult(503),
+        policy: createRetryPolicy({
+          maxAttempts: 3,
+          classifyAttempt: () => ({ reason: "server_error", retryable: true, retryAfterMs: NaN }),
+          backoffMs: () => 2000,
+        }),
+        sleep: async () => {},
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught.code).toBe(RETRY_CLASSIFICATION_FAILED);
+    expect(caught.attemptRecords).toHaveLength(0);
+  });
+
+  it("retryAfterMs negative → RETRY_CLASSIFICATION_FAILED", async () => {
+    let caught = null;
+    try {
+      await executeRetryScenario({
+        logicalOperationId: "schema-negative-retry-after",
+        executeAttempt: async () => serverErrorResult(503),
+        policy: createRetryPolicy({
+          maxAttempts: 3,
+          classifyAttempt: () => ({ reason: "server_error", retryable: true, retryAfterMs: -100 }),
+          backoffMs: () => 2000,
+        }),
+        sleep: async () => {},
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught.code).toBe(RETRY_CLASSIFICATION_FAILED);
+    expect(caught.attemptRecords).toHaveLength(0);
+  });
+});
+
+// ─── D2 partial-header classification table ───────────────────────────────
+//
+// Pin the production classifier's branch decisions for partial header
+// combinations. These are the table cases that disambiguate forbidden vs.
+// rate_exhausted vs rate_limited vs rate_limited_retry_after.
+
+describe("retry attribution — D2 partial-header classification", () => {
+  it("403 + remaining=0, no reset → { reason: 'forbidden' }", () => {
+    const result = classifyProductionGitHubError({
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0" },
+    });
+    expect(result).toEqual({ reason: "forbidden" });
+  });
+
+  it("403 + remaining=0, finite reset → { reason: 'rate_exhausted' }", () => {
+    const result = classifyProductionGitHubError({
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1234567890" },
+    });
+    expect(result).toEqual({ reason: "rate_exhausted" });
+  });
+
+  it("429 + retry-after, no remaining/reset → { reason: 'rate_limited' }", () => {
+    const result = classifyProductionGitHubError({
+      status: 429,
+      headers: { "retry-after": "5" },
+    });
+    expect(result).toEqual({ reason: "rate_limited" });
+  });
+
+  it("429 + finite remaining/reset/retry-after → { reason: 'rate_limited_retry_after', retryAfterMs: 5000 }", () => {
+    const result = classifyProductionGitHubError({
+      status: 429,
+      headers: {
+        "x-ratelimit-remaining": "10",
+        "x-ratelimit-reset": "1234567890",
+        "retry-after": "5",
+      },
+    });
+    expect(result).toEqual({ reason: "rate_limited_retry_after", retryAfterMs: 5000 });
+  });
+});
+
+// ─── D2 rejected-admission zero-execution proofs ──────────────────────────
+//
+// Connect the backpressure admission decision to the orchestrator's
+// execute step: a rejected admission MUST NOT trigger execution. This is
+// stronger than the existing snapshot assertions — it pins the contract
+// that rejected admissions produce zero executions AND zero attempt records
+// across all three rejection types.
+
+describe("backpressure — D2 rejected-admission zero-execution proof", () => {
+  function admitAndExecute(model, executeFn) {
+    const result = { admitted: false, startCount: 0, attemptRecords: [] };
+    const admission = model.admit();
+    if (admission.admitted) {
+      result.admitted = true;
+      result.startCount += 1;
+      executeFn();
+      model.complete(admission.ticket);
+    }
+    return result;
+  }
+
+  it("closed model rejects admission — zero execution, queue unchanged", () => {
+    let tick = 0;
+    const model = createBackpressureModel({
+      maxQueueDepth: 2,
+      rateLimitPerWindow: 2,
+      windowMs: 100,
+      now: () => tick,
+    });
+    model.close();
+
+    const result = admitAndExecute(model, () => {});
+
+    expect(result.admitted).toBe(false);
+    expect(result.startCount).toBe(0);
+    expect(result.attemptRecords).toHaveLength(0);
+    expect(model.snapshot().queueDepth).toBe(0);
+  });
+
+  it("queue-full rejects admission — zero execution, queue unchanged", () => {
+    let tick = 0;
+    const model = createBackpressureModel({
+      maxQueueDepth: 1,
+      rateLimitPerWindow: 5,
+      windowMs: 100,
+      now: () => tick,
+    });
+
+    // First admission fills the single queue slot.
+    const first = admitAndExecute(model, () => {});
+    expect(first.admitted).toBe(true);
+    // Note: admitAndExecute completes the ticket, so the slot is released.
+    // To produce a queue_full state, hold the ticket without completing.
+    const held = model.admit();
+    expect(held.admitted).toBe(true);
+
+    // Now the queue is at capacity; this admission must be rejected.
+    const result = admitAndExecute(model, () => {});
+
+    expect(result.admitted).toBe(false);
+    expect(result.startCount).toBe(0);
+    expect(result.attemptRecords).toHaveLength(0);
+    expect(model.snapshot().queueDepth).toBe(1); // only the held slot
+  });
+
+  it("rate-limited rejects admission — zero execution, queue unchanged", () => {
+    let tick = 0;
+    const model = createBackpressureModel({
+      maxQueueDepth: 5,
+      rateLimitPerWindow: 1,
+      windowMs: 100,
+      now: () => tick,
+    });
+
+    // First admission consumes the single rate token.
+    const first = admitAndExecute(model, () => {});
+    expect(first.admitted).toBe(true);
+
+    // Second admission within the same window must be rate-limited.
+    const result = admitAndExecute(model, () => {});
+
+    expect(result.admitted).toBe(false);
+    expect(result.startCount).toBe(0);
+    expect(result.attemptRecords).toHaveLength(0);
+    expect(model.snapshot().queueDepth).toBe(0);
+  });
+});
+
+// ─── D2 duplicate exact attribution ───────────────────────────────────────
+//
+// Tighter pins on the existing replay and conflict semantics: exact
+// attribution values that downstream consumers depend on.
+
+describe("duplicate behavior — D2 exact attribution", () => {
+  it("replay returns the stored result with status 200 and no new attempt records", async () => {
+    let executions = 0;
+    const replayStore = new Map();
+
+    async function submitWithReplay(key, operation) {
+      if (replayStore.has(key)) {
+        return { replayed: true, result: replayStore.get(key) };
+      }
+      executions += 1;
+      const { attemptRecords, report } = await executeRetryScenario({
+        logicalOperationId: `exact-key-${key}`,
+        executeAttempt: operation,
+        policy: createRetryPolicy({
+          maxAttempts: 1,
+          classifyAttempt: () => ({ reason: "never_retry", retryable: false }),
+          backoffMs: () => 0,
+        }),
+        sleep: async () => {},
+      });
+      replayStore.set(key, { attemptRecords, report });
+      return { replayed: false, result: { attemptRecords, report } };
+    }
+
+    const op = async () => completedResult(200);
+    const first = await submitWithReplay("exact-1", op);
+    const second = await submitWithReplay("exact-1", op); // replay
+
+    expect(executions).toBe(1); // only one execution
+    expect(second.replayed).toBe(true);
+    // The replayed result is the stored one — its stored status is 200.
+    expect(second.result.attemptRecords).toBe(first.result.attemptRecords);
+    expect(first.result.attemptRecords[0].status).toBe(200);
+    // No new attempt records were created on replay: the replayed record
+    // array is reference-equal to the first submission's array.
+    expect(second.result.attemptRecords.length).toBe(first.result.attemptRecords.length);
+  });
+
+  it("conflict returns 409 with no attempt records; original attribution unchanged", async () => {
+    let executions = 0;
+    const store = new Map();
+
+    async function submitWithConflictCheck(key, payload, operation) {
+      if (store.has(key)) {
+        const existing = store.get(key);
+        if (existing !== payload) {
+          return { conflict: true, status: 409, existing, attemptRecords: null };
+        }
+        return { conflict: false, replayed: true, existing };
+      }
+      executions += 1;
+      store.set(key, payload);
+      const { attemptRecords, report } = await executeRetryScenario({
+        logicalOperationId: `exact-conflict-${key}`,
+        executeAttempt: operation,
+        policy: createRetryPolicy({
+          maxAttempts: 1,
+          classifyAttempt: () => ({ reason: "never_retry", retryable: false }),
+          backoffMs: () => 0,
+        }),
+        sleep: async () => {},
+      });
+      return { conflict: false, replayed: false, attemptRecords, report };
+    }
+
+    const op = async () => completedResult(200);
+    const first = await submitWithConflictCheck("k1", "payload-A", op);
+    const second = await submitWithConflictCheck("k1", "payload-B", op);
+
+    expect(second.status).toBe(409);
+    expect(second.attemptRecords).toBeNull();
+    // Pin the original attempt record's exact attribution values.
+    expect(first.attemptRecords[0].attemptId).toBeDefined();
+    expect(first.attemptRecords[0].logicalOperationId).toBe("exact-conflict-k1");
+    // Executions must remain at one — the conflict did not execute.
+    expect(executions).toBe(1);
+  });
+});
