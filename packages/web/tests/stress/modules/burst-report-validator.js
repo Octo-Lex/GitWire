@@ -108,21 +108,17 @@ function validateLogicalBlock(logical) {
   if (logical.completed > logical.started) {
     v.push(makeViolation(REPORT_VIOLATION_CODES.COMPLETED_GT_STARTED, `logical.completed (${logical.completed}) > logical.started (${logical.started})`, { field: "logical" }));
   }
-  if (logical.succeeded + logical.failed > logical.total) {
-    // succeeded + failed can be < total (in-flight logical ops with no
-    // terminal outcome yet) but never > total. Reported under
-    // RESPONSE_TOTALS_MISMATCH-equivalent for logical scope; spec bullet
-    // "response totals that do not reconcile" covers the attempts block; the
-    // logical equivalent uses MISSING/unknown where appropriate. This check
-    // uses UNKNOWN_CLASSIFICATION as the closest fit per spec intent
-    // (a logical op that is neither succeeded nor failed but is also not
-    // in-flight is unclassified).
-    const inFlight = logical.inFlight || 0;
-    if (logical.succeeded + logical.failed + inFlight !== logical.total) {
-      v.push(makeViolation(REPORT_VIOLATION_CODES.UNKNOWN_CLASSIFICATION,
-        `logical total=${logical.total} not reconciled by succeeded+failed+inFlight (${logical.succeeded}+${logical.failed}+${inFlight})`,
-        { field: "logical" }));
-    }
+  // Reconciliation invariant (spec bullet: "unclassified results"). Every
+  // logical operation must be accounted for: succeeded + failed + inFlight
+  // must equal total. The previous implementation gated this check on
+  // `succeeded + failed > total`, which let under-classification
+  // (e.g. total=2, succeeded=1, failed=0, inFlight=0 — one op disappeared)
+  // pass silently. The equality is now checked unconditionally.
+  const inFlight = logical.inFlight || 0;
+  if (logical.succeeded + logical.failed + inFlight !== logical.total) {
+    v.push(makeViolation(REPORT_VIOLATION_CODES.UNKNOWN_CLASSIFICATION,
+      `logical total=${logical.total} not reconciled by succeeded+failed+inFlight (${logical.succeeded}+${logical.failed}+${inFlight})`,
+      { field: "logical" }));
   }
   return v;
 }
@@ -188,19 +184,132 @@ function validateLogicalOperationsList(logicalOperations) {
   }
   for (const op of logicalOperations) {
     if (!op || typeof op !== "object") continue;
-    if (op.outcome === "succeeded") {
-      if (!op.finalAttemptId) {
-        v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL,
-          `logicalOperationId=${op.logicalOperationId} outcome=succeeded but finalAttemptId is null`,
-          { logicalOperationId: op.logicalOperationId }));
-      }
+    // outcome/terminal-classification sanity (the deeper finalAttemptId
+    // resolution against attemptsById happens in validateFinalAttemptResolution,
+    // which needs both structures in scope).
+    if (op.outcome !== "succeeded" && op.outcome !== "failed" && op.outcome !== null && op.outcome !== undefined) {
+      v.push(makeViolation(REPORT_VIOLATION_CODES.UNKNOWN_CLASSIFICATION,
+        `logicalOperationId=${op.logicalOperationId} has unrecognized outcome=${op.outcome}`,
+        { logicalOperationId: op.logicalOperationId }));
     }
+  }
+  return v;
+}
+
+// ─── Final-attempt resolution ─────────────────────────────────────────────
+// For every terminal logical operation (outcome is succeeded or failed),
+// resolve finalAttemptId against attemptsById and verify the reference is
+// internally consistent. This is the cross-structural check the previous
+// implementation deferred. Findings covered:
+//
+//   - LOGICAL_SUCCESS_WITHOUT_FINAL: outcome=succeeded but finalAttemptId
+//     missing/null, OR the referenced record does not exist in attemptsById,
+//     OR the referenced record belongs to a different logical operation,
+//     OR the referenced record is not marked final,
+//     OR the referenced record's outcome is not succeeded.
+//   - LOGICAL_FAILURE_WITHOUT_REASON: outcome=failed and finalAttemptId
+//     resolves to a record that carries neither `error` nor `assertionError`
+//     (the same defect the previous narrower check caught, now strengthened
+//     by first confirming the reference resolves). Also fires when
+//     outcome=failed and finalAttemptId is null/missing, or the referenced
+//     record does not exist, belongs to another op, is not final, or has a
+//     non-failed outcome.
+
+function validateFinalAttemptResolution(logicalOperations, attemptsById) {
+  const v = [];
+  if (!Array.isArray(logicalOperations)) return v;
+  if (!attemptsById || typeof attemptsById !== "object") return v;
+
+  for (const op of logicalOperations) {
+    if (!op || typeof op !== "object") continue;
+    if (op.outcome !== "succeeded" && op.outcome !== "failed") continue;
+
+    const lid = typeof op.logicalOperationId === "string" ? op.logicalOperationId : null;
+    const fid = op.finalAttemptId;
+
+    // Missing/null finalAttemptId on a terminal op.
+    if (fid === null || fid === undefined || (typeof fid === "string" && fid.length === 0)) {
+      if (op.outcome === "succeeded") {
+        v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL,
+          `logicalOperationId=${lid} outcome=succeeded but finalAttemptId is null`,
+          { logicalOperationId: lid }));
+      } else {
+        v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON,
+          `logicalOperationId=${lid} outcome=failed but finalAttemptId is null (no final record to carry the reason)`,
+          { logicalOperationId: lid }));
+      }
+      continue;
+    }
+    // Non-string finalAttemptId is itself a shape defect.
+    if (typeof fid !== "string") {
+      v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL,
+        `logicalOperationId=${lid} finalAttemptId must be a string, got ${typeof fid}`,
+        { logicalOperationId: lid }));
+      continue;
+    }
+
+    const finalRec = attemptsById[fid];
+    if (!finalRec || typeof finalRec !== "object") {
+      // finalAttemptId references a record that does not exist.
+      const code = op.outcome === "succeeded"
+        ? REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+        : REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON;
+      v.push(makeViolation(code,
+        `logicalOperationId=${lid} finalAttemptId=${fid} does not resolve in attemptsById`,
+        { logicalOperationId: lid, attemptId: fid }));
+      continue;
+    }
+
+    // The resolved record must belong to this logical operation.
+    if (typeof finalRec.logicalOperationId === "string" && lid !== null && finalRec.logicalOperationId !== lid) {
+      const code = op.outcome === "succeeded"
+        ? REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+        : REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON;
+      v.push(makeViolation(code,
+        `logicalOperationId=${lid} finalAttemptId=${fid} belongs to a different logicalOperationId=${finalRec.logicalOperationId}`,
+        { logicalOperationId: lid, attemptId: fid }));
+      continue;
+    }
+
+    // The resolved record must be marked final.
+    if (finalRec.final !== true) {
+      const code = op.outcome === "succeeded"
+        ? REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+        : REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON;
+      v.push(makeViolation(code,
+        `logicalOperationId=${lid} finalAttemptId=${fid} is not marked final=true`,
+        { logicalOperationId: lid, attemptId: fid }));
+      continue;
+    }
+
+    // Outcome compatibility: succeeded logical op → succeeded final record;
+    // failed logical op → failed final record. A mismatch is an accounting
+    // defect (the reducer would never produce this, but the validator is
+    // prescriptive over shape, not reducer-clean input).
+    if (op.outcome === "succeeded" && finalRec.outcome !== "succeeded") {
+      v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL,
+        `logicalOperationId=${lid} outcome=succeeded but finalAttemptId=${fid} outcome=${finalRec.outcome}`,
+        { logicalOperationId: lid, attemptId: fid }));
+      continue;
+    }
+    if (op.outcome === "failed" && finalRec.outcome !== "failed") {
+      v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON,
+        `logicalOperationId=${lid} outcome=failed but finalAttemptId=${fid} outcome=${finalRec.outcome}`,
+        { logicalOperationId: lid, attemptId: fid }));
+      continue;
+    }
+
+    // Failure-reason presence (failed ops only). The reason can live in
+    // EITHER `error` (transport failures) OR `assertionError` (assertion
+    // failures). A failed final attempt with neither is a defect.
     if (op.outcome === "failed") {
-      // The failure reason is carried on the final attempt's error field,
-      // surfaced via attemptsById. We do not have it inline here; the
-      // attemptsById pass cross-checks this. Mark for the second pass by
-      // recording an attribution-only violation IF the final attempt exists
-      // and lacks an error. Done in validateAttemptsById.
+      const hasTransportReason = finalRec.error !== null && finalRec.error !== undefined;
+      const hasAssertionReason = finalRec.assertionError !== null && finalRec.assertionError !== undefined;
+      if (!hasTransportReason && !hasAssertionReason) {
+        v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON,
+          `logicalOperationId=${lid} outcome=failed but final attempt ${fid} has no error or assertionError`,
+          { logicalOperationId: lid, attemptId: fid }));
+      }
     }
   }
   return v;
@@ -213,33 +322,89 @@ function validateAttemptsById(attemptsById, logicalOperations) {
     return v;
   }
 
-  const seenIds = new Set();
   const byLogical = new Map(); // logicalOperationId → [{attemptNumber, ...}]
+  // attemptId → list of attemptsById keys that claim it. Under the reducer's
+  // contract each key matches its record.attemptId exactly once, so any value
+  // length > 1 indicates a duplicate identity defect.
+  const attemptIdClaimants = Object.create(null);
 
-  for (const [attemptId, record] of Object.entries(attemptsById)) {
-    if (seenIds.has(attemptId)) {
-      // Object.entries already dedupes by key, but if a prototype-injected
-      // twin appeared (shouldn't, since buildOperationReport uses
-      // Object.create(null)), surface it.
-      v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
-        `duplicate attemptId=${attemptId}`,
-        { attemptId }));
-      continue;
-    }
-    seenIds.add(attemptId);
-
+  for (const [key, record] of Object.entries(attemptsById)) {
     if (!record || typeof record !== "object") continue;
+
+    // Canonical identity check #1: each attemptsById key must equal the
+    // record.attemptId it holds. The reducer always produces this invariant
+    // (key === record.attemptId); a mismatch indicates a hand-built or
+    // tampered report. Detected as DUPLICATE_ATTEMPT_ID because the canonical
+    // identity is the record.attemptId — a key/record mismatch means the
+    // key is not a reliable identity and the canonical identity is being
+    // shared or shadowed.
+    const canonicalId = typeof record.attemptId === "string" ? record.attemptId : null;
+    if (canonicalId === null) {
+      // record.attemptId missing or non-string — record shape defect, but
+      // also an identity defect (no canonical claim). Surface under
+      // ATTEMPT_WITHOUT_LOGICAL_ID's sibling: there is no ATTEMPT_WITHOUT_ID
+      // code in the spec, so use DUPLICATE_ATTEMPT_ID with a clear message.
+      v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
+        `attemptsById key=${key} holds a record with no valid attemptId (got ${typeof record.attemptId})`,
+        { attemptId: key }));
+    } else if (canonicalId !== key) {
+      v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
+        `attemptsById key=${key} holds record.attemptId=${canonicalId} (key must match record.attemptId)`,
+        { attemptId: canonicalId }));
+    }
+
+    // Track claimants of each canonical attemptId for the cross-key shared-
+    // identity check below.
+    if (canonicalId !== null) {
+      if (!attemptIdClaimants[canonicalId]) attemptIdClaimants[canonicalId] = [];
+      attemptIdClaimants[canonicalId].push(key);
+    }
 
     if (typeof record.logicalOperationId !== "string" || record.logicalOperationId.length === 0) {
       v.push(makeViolation(REPORT_VIOLATION_CODES.ATTEMPT_WITHOUT_LOGICAL_ID,
-        `attemptId=${attemptId} has no logicalOperationId`,
-        { attemptId }));
+        `attemptId=${canonicalId || key} has no logicalOperationId`,
+        { attemptId: canonicalId || key }));
     } else {
       if (!byLogical.has(record.logicalOperationId)) byLogical.set(record.logicalOperationId, []);
       byLogical.get(record.logicalOperationId).push(record);
     }
+  }
 
-    // NONCONTIGUOUS_ATTEMPT_NUMBERS — handled per-logical below.
+  // Canonical identity check #2: two records under different keys must not
+  // share one record.attemptId. Object.entries dedupes literal keys, so the
+  // only way this fires is two different keys holding records that both
+  // claim the same canonical attemptId (a real identity collision the old
+  // seenIds check could not detect).
+  for (const [canonicalId, claimants] of Object.entries(attemptIdClaimants)) {
+    if (claimants.length > 1) {
+      v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
+        `record.attemptId=${canonicalId} is claimed by multiple attemptsById keys=${JSON.stringify(claimants)}`,
+        { attemptId: canonicalId }));
+    }
+  }
+
+  // Canonical identity check #3: logical-operation attempt references must
+  // resolve consistently. Each attemptId listed in a logical op's
+  // attemptIds[] must be a key in attemptsById AND its record.attemptId
+  // must match. A dangling or mismatched reference is reported under
+  // DUPLICATE_ATTEMPT_ID (the identity contract is broken).
+  if (Array.isArray(logicalOperations)) {
+    for (const op of logicalOperations) {
+      if (!op || typeof op !== "object" || !Array.isArray(op.attemptIds)) continue;
+      for (const refId of op.attemptIds) {
+        if (typeof refId !== "string") continue;
+        const rec = attemptsById[refId];
+        if (!rec || typeof rec !== "object") {
+          v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
+            `logicalOperationId=${op.logicalOperationId} references attemptId=${refId} not present in attemptsById`,
+            { attemptId: refId, logicalOperationId: op.logicalOperationId }));
+        } else if (typeof rec.attemptId === "string" && rec.attemptId !== refId) {
+          v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
+            `logicalOperationId=${op.logicalOperationId} references attemptId=${refId} but the record claims attemptId=${rec.attemptId}`,
+            { attemptId: refId, logicalOperationId: op.logicalOperationId }));
+        }
+      }
+    }
   }
 
   // Per-logical contiguity check: attemptNumbers must form 1..N.
@@ -258,27 +423,9 @@ function validateAttemptsById(attemptsById, logicalOperations) {
     }
   }
 
-  // LOGICAL_FAILURE_WITHOUT_REASON: for each logical op with outcome=failed,
-  // the final attempt must carry a non-null failure reason. The reason can
-  // live in EITHER `error` (transport failures) OR `assertionError`
-  // (assertion failures). A failed logical op with neither is a defect —
-  // the consumer cannot diagnose why the operation failed.
-  if (Array.isArray(logicalOperations)) {
-    for (const op of logicalOperations) {
-      if (op && op.outcome === "failed" && op.finalAttemptId) {
-        const finalRec = attemptsById[op.finalAttemptId];
-        if (finalRec) {
-          const hasTransportReason = finalRec.error !== null && finalRec.error !== undefined;
-          const hasAssertionReason = finalRec.assertionError !== null && finalRec.assertionError !== undefined;
-          if (!hasTransportReason && !hasAssertionReason) {
-            v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON,
-              `logicalOperationId=${op.logicalOperationId} outcome=failed but final attempt ${op.finalAttemptId} has no error or assertionError`,
-              { logicalOperationId: op.logicalOperationId, attemptId: op.finalAttemptId }));
-          }
-        }
-      }
-    }
-  }
+  // LOGICAL_FAILURE_WITHOUT_REASON and full final-attempt resolution are
+  // handled by validateFinalAttemptResolution (called by the entry point
+  // with both logicalOperations and attemptsById in scope).
 
   return v;
 }
@@ -469,7 +616,7 @@ function compareViolations(a, b) {
   const anB = b.attemptNumber ?? -1;
   if (anA !== anB) return anA - anB;
   const aiA = a.attemptId || "";
-  const aiB = a.attemptId || "";
+  const aiB = b.attemptId || "";
   if (aiA !== aiB) return aiA < aiB ? -1 : 1;
   if (a.code !== b.code) return a.code < b.code ? -1 : 1;
   return 0;
@@ -479,7 +626,12 @@ function dedupViolations(violations) {
   const seen = new Set();
   const out = [];
   for (const vlt of violations) {
-    const key = `${vlt.phase || ""}|${vlt.logicalOperationId || ""}|${vlt.attemptNumber ?? ""}|${vlt.attemptId || ""}|${vlt.code}|${vlt.field || ""}|${vlt.population || ""}`;
+    // Dedup key includes the message because multiple distinct defects can
+    // share every structured field (e.g. two different DUPLICATE_ATTEMPT_ID
+    // subcategories on the same attemptId: key-mismatch vs cross-key-shared
+    // vs dangling-logical-ref). Without the message in the key, the second
+    // distinct defect would be silently dropped.
+    const key = `${vlt.phase || ""}|${vlt.logicalOperationId || ""}|${vlt.attemptNumber ?? ""}|${vlt.attemptId || ""}|${vlt.code}|${vlt.field || ""}|${vlt.population || ""}|${vlt.message || ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(vlt);
@@ -521,6 +673,7 @@ export function validateBurstReport(report, opts = {}) {
   violations.push(...validateAttemptsBlock(report.attempts));
   violations.push(...validateLogicalOperationsList(report.logicalOperations));
   violations.push(...validateAttemptsById(report.attemptsById, report.logicalOperations));
+  violations.push(...validateFinalAttemptResolution(report.logicalOperations, report.attemptsById));
 
   // FINAL_IN_FLIGHT: no attempt may be in-flight in a completed report.
   // The reducer always sets inFlight=0, but if a hand-built report claims
