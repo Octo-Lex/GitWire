@@ -9,8 +9,8 @@
 
 | Document | Purpose |
 |---|---|
-| [`current-state-inventory.md`](./current-state-inventory.md) | Disk-verified map of every authority surface today (W0-A). Every claim cites `file:line`. |
-| [`permission-model.md`](./permission-model.md) | Proposed canonical principal / resource / action / permission model (W0-B). |
+| [`current-state-inventory.md`](./current-state-inventory.md) | Disk-verified map of every authority surface today (W0-A). Every claim cites `file:line`. 51 database tables, 174 HTTP endpoints, 14 workers, 15 ranked findings. |
+| [`permission-model.md`](./permission-model.md) | Proposed canonical principal / resource / action / permission model (W0-B). Includes evaluation algebra, job-authorization capabilities, and decision-example matrix. |
 | `schema-migration-plan.md` *(W0-C, not yet written)* | No-execution schema design for the proposed model. |
 | `wave-validation-plan.md` *(W0-D, not yet written)* | Defect-sensitive validation plan for Waves 1–4. |
 
@@ -77,7 +77,8 @@ Findings in the inventory are rated by **severity** and **confidence**.
 - **Base SHA:** `7b8cdc62b4262b5913dbebaedcb4401f2acef29a` (the Lane A / P2
   frozen baseline — see PR #69).
 - The Wave 0 branch is 0 commits ahead / 0 behind that baseline at the start
-  of W0-A. Each W0-* checkpoint advances the branch by exactly one commit.
+  of W0-A. Each W0-* checkpoint advances the branch by one or more commits
+  (review corrections may require additional commits within a checkpoint).
 
 ## Out of scope for Wave 0
 
@@ -91,7 +92,7 @@ Per the assignment:
 - The CI-hardening workstream (issue #78) proceeds in parallel on a separate
   branch.
 - `.ouroboros/`, `.zcode/`, `rewrite-rules.txt`, detached `trial_repo_*`
-- worktrees, and stale `gitwire/heal-*` branches are not touched.
+  worktrees, and stale `gitwire/heal-*` branches are not touched.
 
 ## Next checkpoints
 
