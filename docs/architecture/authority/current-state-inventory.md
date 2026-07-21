@@ -171,9 +171,12 @@ There is **no role-based access control**, **no per-resource ownership check**, 
 
 **Tenant definition:** the GitHub App installation. Each installation row in
 `installations` is the scoping unit. A single installation can span multiple
-repositories; per-repo scoping within an installation is enforced only by
-application-layer `.gitwire.yml` policy, not by token narrowing or query
-filtering.
+repositories; per-repo scoping within an installation is enforced primarily
+by application-layer `.gitwire.yml` pillar policy, not by token narrowing or
+query filtering. **This is not universal:** the fleet policy reconciler
+(phase3Worker, F-10a) bypasses pillar gates entirely and uses the
+`policy_repo_configs.reconcile_skip` DB column as its per-repo control
+instead.
 
 **Enforcement layer:** **application memory**, not the database. Most list
 endpoints (`/api/issues`, `/api/pull-requests`, `/api/ci`, etc.) default to
@@ -273,7 +276,7 @@ Every worker that needs GitHub access calls `getInstallationClient(installationI
 
 ### 6.2 Scheduled jobs
 
-All schedulers enqueue with **no human principal**. The job carries only the system identity; the worker re-derives an installation token from `installation_id`.
+Most schedulers enqueue jobs with **no human principal**; the worker re-derives an installation token from `installation_id`. **Exception:** the reconciliation timer (`setInterval` at `index.js:71,78`) does not enqueue a BullMQ job or mint an installation token — it invokes DB-only cleanup directly in-process.
 
 | Schedule | Job | Authority | Mutations |
 |---|---|---|---|
