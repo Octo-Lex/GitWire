@@ -268,21 +268,21 @@ Each permission carries a scope:
 | `operator` | `read` + `create` + `update` + `github:act` + `enqueue` on repositories; `read` on policy/waiver/gate | installation | Human operators |
 | `reviewer` | `read` + `approve` on rollouts, repairs, gates | installation | Human reviewers |
 | `viewer` | `read` only | installation | Human viewers |
-| `service:webhook-worker` | `create` + `update` on installations, repositories | installation | P-4 webhook worker |
-| `service:triage-worker` | `github:act` on repository; `update` on issues, managed_actions, decision_log | installation | P-4 triage worker |
-| `service:heal-worker` | `github:act` on repository; `update` on ci_runs, heal_prs, managed_actions | installation | P-4 CI heal worker |
-| `service:evidence-worker` | `update` on repair_proposals; `enqueue` diagnosis | installation | P-4 evidence worker |
-| `service:diagnosis-worker` | `update` on repair_proposal_event; `enqueue` patch | fleet ceiling | P-4 diagnosis worker — resource boundary from delegation |
-| `service:patch-worker` | `update` on patch_artifact, repair_proposal_event; `enqueue` verification | fleet ceiling | P-4 patch worker — resource boundary from delegation |
-| `service:verification-worker` | `github:read` on repository; `create` on execution_receipt, source_snapshot | fleet ceiling | P-4 verification worker — resource boundary from delegation |
-| `service:critic-worker` | `update` on repair_proposal_event | fleet ceiling | P-4 critic worker — resource boundary from delegation |
+| `service:webhook-worker` | `create` + `update` on installation, repository | ceiling | P-4 webhook worker |
+| `service:triage-worker` | `github:act` on repository; `update` on issue, managed_action, decision_log | ceiling | P-4 triage worker |
+| `service:heal-worker` | `github:act` on repository; `update` on ci_run, heal_pr, managed_action | ceiling | P-4 CI heal worker |
+| `service:evidence-worker` | `update` on repair_proposal; `enqueue` diagnosis | ceiling | P-4 evidence worker |
+| `service:diagnosis-worker` | `update` on repair_proposal_event; `enqueue` patch | ceiling | P-4 diagnosis worker |
+| `service:patch-worker` | `update` on patch_artifact, repair_proposal_event; `enqueue` verification | ceiling | P-4 patch worker |
+| `service:verification-worker` | `github:read` on repository; `create` on execution_receipt, source_snapshot | ceiling | P-4 verification worker |
+| `service:critic-worker` | `update` on repair_proposal_event | ceiling | P-4 critic worker |
 | `service:sync-worker` | `create` + `update` on installations, repositories, issues, pull_requests, ci_runs, members, collaborators, branch_rules; `github:read` | fleet | P-2 sync worker |
-| `service:maintainer-worker` | `github:act` on repository; `update` on maintainer_actions, maintainer_settings | installation | P-4 maintainer worker |
-| `service:issue-fix-worker` | `github:act` on repository; `update` on fix_attempts, managed_actions | installation | P-4 issue fix worker |
-| `service:merge-queue-worker` | `github:act` on repository (merge); `update` on merge_queue_entries, rollback_events | installation | P-4 phase2 worker |
-| `service:policy-worker` | `github:act` on repository; `update` on policy_repo_configs, dependency_*, flaky_tests, vulnerability_advisories | installation | P-4 phase3 dependency/scan worker |
-| `service:fleet-reconciler` | `github:act` on repository (branch protection, labels, repo settings); `update` on policy_repo_configs, reconciliation_runs | fleet | P-4 phase3 fleet reconciler (separated from dependency worker) |
-| `service:review-worker` | `github:act` on repository (reviews, check-runs); `update` on ai_reviews, audit_exports | installation | P-4 phase4 worker |
+| `service:maintainer-worker` | `github:act` on repository; `update` on maintainer_action, maintainer_setting | ceiling | P-4 maintainer worker |
+| `service:issue-fix-worker` | `github:act` on repository; `update` on fix_attempt, managed_action | ceiling | P-4 issue fix worker |
+| `service:merge-queue-worker` | `github:act` on repository (merge); `update` on merge_queue_entry, rollback_event | ceiling | P-4 phase2 worker |
+| `service:policy-worker` | `github:act` on repository; `update` on policy_repo_config, dependency_manifest, dependency_update_batch, flaky_test, vulnerability_advisory | ceiling | P-4 phase3 dependency/scan worker |
+| `service:fleet-reconciler` | `github:act` on repository (branch protection, labels, repo settings); `update` on policy_repo_config, reconciliation_run | ceiling | P-4 phase3 fleet reconciler |
+| `service:review-worker` | `github:act` on repository (reviews, check-runs); `update` on ai_review, audit_export | ceiling | P-4 phase4 worker |
 | `service:reconciler` | `read` on managed_actions, heal_prs; `update` on managed_actions reconciliation fields only | fleet | `setInterval` reconciliation timer — operates on installation-scoped tables, so scope is `fleet` not `system` |
 | `installation` | (webhook ingress) `enqueue` to all worker queues; `create` on `webhook_delivery` | installation | P-3 GitHub App installation (HMAC-verified webhook) |
 | `system:scheduler` | (scheduled jobs) `enqueue` on all worker queues; triggers sync, reconciliation, dependency scan, graduation, audit export | fleet | Cron timers that initiate fleet-wide scheduled operations |
@@ -365,31 +365,66 @@ so a permission appearing in multiple branches is evaluated once.
 
 ### evaluate_leaf(leaf, context)
 
-Each leaf carries its own `resource_type` and `action`. The context
-provides the authenticated principal, credential, scope, and the
-resolved resource for the leaf's `resource_type` (or NULL for list/create).
+Each leaf carries `resource_type`, `action`, and `selector`. The selector
+defines how the target resource is resolved:
+
+| Selector | Meaning | target.id |
+|----------|---------|-----------|
+| `instance` | A specific resource by ID from route params | non-NULL |
+| `list` | Enumeration — no specific instance | NULL |
+| `create` | Creation — no existing instance | NULL |
+| `route-root` | The resource identified by the route itself (e.g., installation from webhook) | route-dependent |
+| `inherited` | Resource resolved via parent inheritance chain | parent's ID |
 
 ```
 function evaluate_leaf(leaf, context):
-  resource = context.resolve(leaf.resource_type)  -- may be NULL for list/create
-  action = leaf.action
+  -- Resolve target based on selector
+  if leaf.selector == 'instance':
+    target = context.resolve_by_id(leaf.resource_type, route_params)
+    if target is NULL: return DENY(resource_not_found)
+  elif leaf.selector in ('list', 'create'):
+    target = NULL  -- no specific instance
+  elif leaf.selector == 'route-root':
+    target = context.resolve_route_root(leaf.resource_type)
+  elif leaf.selector == 'inherited':
+    target = context.resolve_inherited(leaf.resource_type)
 
-  -- Step 5: Load active, non-expired roles matching this resource type
-  roles = active_roles WHERE scope matches resource
+  -- Role permission check
+  roles = context.active_roles WHERE scope matches target and leaf.resource_type
   if roles is empty: return DENY(no_active_role)
-  -- Step 6: Role permission check
-  if action not in union(roles.permissions): return DENY(role_permission_missing)
-  -- Step 7: Explicit deny (same filters as allow: revocation, expiry, action, scope, inheritance)
-  denies = grants WHERE effect='deny' AND action matches AND not revoked AND not expired
-  if any deny matches: return DENY(explicit_deny)
-  -- Step 8: Credential scope
-  if action not in credential.scopes: return DENY(credential_scope_denied)
-  if resource restricted: return DENY(credential_resource_restricted)
-  -- Step 9: Explicit allow (required for ALL scopes)
-  allows = grants WHERE effect='allow' AND (action matches OR '*')
-    AND not revoked AND not expired AND scope matches
-    AND (resource_id = target OR resource_id IS NULL within scope)
-  if no allow matches: return DENY(resource_grant_missing)
+  if leaf.action not in union(roles.permissions): return DENY(role_permission_missing)
+
+  -- Explicit deny (identical filters to allow)
+  denies = SELECT FROM auth_resource_grants
+    WHERE principal_id = context.principal.id
+    AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+    AND resource_type matches (exact OR parent via inheritance)
+    AND effect = 'deny'
+    AND (action = leaf.action OR action = '*')
+    AND (resource_id = target.id OR resource_id IS NULL within scope)
+  if denies is not empty: return DENY(explicit_deny)
+
+  -- Credential scope + expiry + environment
+  if credential.expired: return DENY(expired)
+  if credential.environment != current_environment: return DENY(wrong_environment)
+  if credential.scopes not empty AND leaf.action not in credential.scopes:
+    return DENY(credential_scope_denied)
+  if target is not NULL AND credential restricts to resources not including target:
+    return DENY(credential_resource_restricted)
+
+  -- Explicit allow (identical filters to deny, minus effect)
+  allows = SELECT FROM auth_resource_grants
+    WHERE principal_id = context.principal.id
+    AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+    AND resource_type matches (exact OR parent via inheritance)
+    AND effect = 'allow'
+    AND (action = leaf.action OR action = '*')
+    AND (
+      (resource_id IS NOT NULL AND resource_id = target.id)
+      OR (resource_id IS NULL AND scope_type matches scope)
+    )
+  if allows is empty: return DENY(resource_grant_missing)
+
   return ALLOW
 ```
 
@@ -411,11 +446,12 @@ STEP 2: Derive tenant scope (tri-state dimensions)
     AND (expires_at IS NULL OR expires_at > now())
 
   -- Each dimension is tri-state: ALL (unrestricted) | NONE (empty) | SET(ids)
+  -- DEFAULT IS NONE — a principal with no tenant roles gets no visibility.
   scope = {
-    installation: ALL,   -- default: no restriction
-    repository:  ALL,
-    fleet:       false,  -- boolean: fleet-wide visibility for inst-scoped tables
-    system:      false   -- boolean: system/identity-scoped resource access
+    installation: NONE,  -- default: no installations visible
+    repository:  NONE,   -- default: no repositories visible
+    fleet:       false,  -- default: no fleet-wide visibility
+    system:      false   -- default: no system-scoped access
   }
 
   -- Collect installation and repository IDs from roles.
@@ -430,28 +466,36 @@ STEP 2: Derive tenant scope (tri-state dimensions)
       parent_inst = resolve_parent_installation(role.scope_id)
       role_inst_ids.add(parent_inst)
 
-  -- If any installation-scoped roles exist, narrow from ALL to SET.
+  -- If any installation-scoped roles exist, narrow from NONE to SET.
   if role_inst_ids is not empty: scope.installation = SET(role_inst_ids)
   if role_repo_ids is not empty: scope.repository = SET(role_repo_ids)
+  -- fleet role grants ALL visibility for installation-scoped tables
+  -- (but only if no finite credential restriction collapses it below)
 
   -- Credential narrows at every level via INTERSECTION.
-  -- A finite credential restriction automatically narrows fleet:
-  -- fleet and ALL are incompatible with finite credential sets.
+  -- ANY finite credential restriction collapses fleet to the finite set.
   if credential has finite installation restriction:
     cred_inst = SET(credential.installation_ids)
-    scope.installation = scope.installation ∩ cred_inst
-    scope.fleet = false  -- finite credential cannot retain fleet
+    if scope.installation == ALL or scope.installation == NONE:
+      scope.installation = cred_inst
+    else:  -- SET
+      scope.installation = scope.installation ∩ cred_inst
+    scope.fleet = false  -- any finite credential collapses fleet
   if credential has finite repository restriction:
     cred_repo = SET(credential.repository_ids)
-    scope.repository = scope.repository ∩ cred_repo
+    if scope.repository == ALL or scope.repository == NONE:
+      scope.repository = cred_repo
+    else:
+      scope.repository = scope.repository ∩ cred_repo
+    scope.fleet = false
   if credential denies fleet: scope.fleet = false
   if credential denies system: scope.system = false
 
   -- Fail-closed: no visible scope at all.
-  -- NONE means the intersection yielded nothing.
-  inst_ok = scope.installation != NONE OR scope.fleet
-  repo_ok = scope.repository != NONE OR scope.fleet
-  if not inst_ok AND not repo_ok AND not scope.system:
+  -- NONE means no authority; ALL means unrestricted.
+  inst_visible = scope.installation != NONE OR scope.fleet
+  repo_visible = scope.repository != NONE OR scope.fleet
+  if not inst_visible AND not repo_visible AND not scope.system:
     return DENY_AND_RECORD(reason=no_installation_scope)
 
 STEP 3: Install data-access boundary
@@ -685,36 +729,46 @@ Each link in the chain creates its own delegation record. The
 `authorization_decision_id` links to the specific decision that authorized
 this delegation.
 
-### Worker role model: durable fleet-scoped ceilings
+### Worker role model: separate ceiling assignments
 
-Worker service roles are **durable, fleet-scoped permission ceilings**.
-They define what actions the worker is *capable* of performing. The
-**resource boundary** (which installations, repositories, and specific
-resources the worker may touch) comes from the delegation, not from the
-worker's role assignment.
-
-Workers are NOT assigned installation-scoped roles. Their `auth_principal_roles`
-entries use `scope_type='fleet'` as a permission ceiling only. This fleet
-scope does NOT grant tenant visibility — it grants permission to *act*,
-contingent on a valid delegation providing the resource boundary.
-
-**Worker evaluation order (separate from tenant visibility):**
+Worker service roles use a **separate assignment kind** — `auth_worker_ceilings` —
+not `auth_principal_roles`. This prevents `scope_type='fleet'` from simultaneously
+meaning "global tenant visibility" (for human principals) and "action-only ceiling"
+(for workers).
 
 ```text
-1. Authenticate worker (capability token verification)
+auth_worker_ceilings
+  id              UUID primary key
+  principal_id    UUID FK → auth_principals (type='service')
+  role_name       text          -- e.g., 'service:heal-worker'
+  permissions     text[]        -- action ceiling, e.g., ['repository:github:act', 'managed_action:update']
+  granted_at      timestamptz
+  granted_by      UUID FK
+  revoked_at      timestamptz NULL
+```
+
+Worker ceilings are **never consulted during tenant scope derivation** (step 2).
+They are consulted only during worker evaluation (below), after delegation
+validation provides the resource boundary.
+
+**Worker evaluation order:**
+
+```text
+1. Authenticate worker (capability token)
 2. Validate capability: signature, audience, payload hash, JTI lease
 3. Validate delegation: not revoked, not expired, execution_status pending
 4. Derive gateway scope SOLELY from the delegation's resource boundary
-   (NOT from the worker's fleet ceiling — the ceiling grants actions, not visibility)
-5. Evaluate worker action ceiling: does the worker's role include the action?
+5. Evaluate worker action ceiling: does auth_worker_ceilings for this
+   worker include the required action? (does NOT use auth_principal_roles)
 6. Evaluate initiating authority: does the delegation authorize this
    specific operation + resource?
 Both 5 and 6 must independently ALLOW.
 ```
 
-This ordering prevents the fleet ceiling from granting tenant visibility
-before delegation validation. The worker's fleet role never enters the
-scope-derivation step (step 2 of the main algorithm).
+The worker principal has no `auth_principal_roles` entries at all. Its
+authority comes exclusively from `auth_worker_ceilings` (action ceiling)
+and `auth_delegations` (resource boundary). This cleanly separates the
+two concerns and prevents the fleet-scope ambiguity.
 
 ### Two-principal intersection: two independent evaluations
 
@@ -892,13 +946,14 @@ model. Summary:
 - The verified GitHub permission is modeled as a **bounded external
   attestation** (see below), not an implicit role bypass.
 
-### Bounded external attestation (evidence leaf in the algebra)
+### Bounded external attestation (transient authority source)
 
 A GitHub user's `authorAssociation` on a repository is an external
-permission that GitWire cannot revoke but must verify. It is modeled
-as a **transient operation-policy evidence leaf** — a fourth factor
-in the authorization intersection, specific to GitHub-comment-command
-routes.
+permission that GitWire cannot revoke but must verify. For
+GitHub-comment-command routes (`/gitwire fix`, `/gitwire close`), the
+attestation is the **primary authority source** — not evidence attached
+to standing role/grant authority that does not exist for a newly
+resolved GitHub user.
 
 **Attestation record:**
 ```text
@@ -910,57 +965,65 @@ auth_external_attestations
   subject_id      bigint        -- GitHub user ID
   repository_id   bigint        -- GitHub repo ID
   permission      text          -- 'OWNER', 'MEMBER', 'COLLABORATOR'
-  command         text          -- 'fix-issue', 'close-issue', etc.
+  command         text          -- 'fix-issue', 'close-issue'
   delegation_id   UUID FK → auth_delegations
   verified_at     timestamptz
   expires_at      timestamptz  -- short (e.g., 5 minutes)
 ```
 
-**How it connects to the algebra:**
+**How it authorizes F-07:**
 
-GitHub-comment-command routes compile to an expression that includes
-an attestation leaf:
+GitHub-comment-command routes compile to an expression where the
+attestation leaf IS the authority — not an additional factor alongside
+role and grant leaves that would deny for a user with no standing
+authority:
 
 ```text
-all_of([
-  -- Standard factors
-  repository:read,
-  repository:github:act,
-  -- External attestation evidence
-  evidence:github_attestation
-])
+-- F-07 route expression: attestation is the SOLE authority source
+attestation:github_attestation(command='fix-issue', repository=route.repo)
 ```
 
-The `evidence:github_attestation` leaf is evaluated by `evaluate_leaf`
-using a **different evaluation path** from role/credential/grant:
+This leaf evaluates via a **dedicated evaluation path** that does NOT
+require role permissions or resource grants:
 
 ```text
 function evaluate_attestation_leaf(leaf, context):
-  -- Check: valid attestation exists for this principal, repository,
-  -- command, and delegation, not expired.
   attestation = SELECT FROM auth_external_attestations
-    WHERE principal_id = context.principal.id
+    WHERE subject_id = context.principal.github_user_id
     AND repository_id = context.resource.repository_id
-    AND command = context.operation
-    AND delegation_id = context.delegation.id
+    AND command = leaf.command
     AND expires_at > now()
   if attestation is empty:
     return DENY(attestation_not_found)
-  -- At execution time (not just ingress): re-query GitHub API for
-  -- the user's current authorAssociation.
+
+  -- Re-verify GitHub permission at execution time.
   current_role = github.get_author_association(
     context.principal.github_login,
-    context.resource.owner,
-    context.resource.name
+    context.resource.owner, context.resource.name
   )
   if current_role not in ('OWNER', 'MEMBER', 'COLLABORATOR'):
     return DENY(attestation_revoked_on_github)
+  if current_role != attestation.permission:
+    return DENY(attestation_permission_changed)
+
   return ALLOW
 ```
 
-This is NOT an implicit bypass of the standard evaluator. It is an
-**additional required factor** — the route expression includes both
-standard leaves AND the attestation leaf, all must independently allow.
+This is a **concrete transient authority source** — it replaces
+role+grant for the specific case of GitHub comment commands. The
+attestation is created at ingress (when the webhook carries a verified
+`authorAssociation`), is operation-specific (has `command`), is
+repository-bound, is short-lived, and is rechecked against GitHub at
+every execution.
+
+**F-07 decision examples:**
+
+| # | Scenario | Result | Reason |
+|---|----------|--------|--------|
+| F07-P1 | GitHub OWNER issues `/gitwire fix` on repo X; attestation created at ingress | ALLOW | Attestation valid; current GitHub role = OWNER |
+| F07-N1 | GitHub NONE (demoted after ingress) issues `/gitwire fix`; attestation exists but GitHub recheck fails | DENY | `attestation_revoked_on_github` |
+| F07-N2 | Attestation expired (6 minutes passed) | DENY | `attestation_not_found` (expired) |
+| F07-N3 | User issues `/gitwire fix` on repo Y (different from attestation's repo X) | DENY | `attestation_not_found` (repository mismatch) |
 
 ---
 
@@ -1064,17 +1127,18 @@ workers cannot forge capabilities:
 consumer holding the shared key to forge capabilities for other audiences.
 Asymmetric signing is the only architecture; there is no MAC fallback.
 
-### JTI consumption protocol (owner-bound lease with deadline)
+### JTI consumption protocol (strict at-most-once with fencing token)
 
-Capabilities use an **owner-bound lease** storing owner, version, and
-deadline. This supports safe retry after crashes without permitting
-concurrent execution or premature takeover of long-running jobs.
+The model chooses **strict at-most-once execution**: a job that begins
+processing cannot be retried until its lease is released or expired.
+This is simpler and safer than fencing-token-based coordination, which
+would require every mutable sink to validate a monotonic token.
 
 **Lease value stored in Redis (JSON):**
 ```json
 {
   "owner": "<attempt_uuid>",
-  "version": 1,
+  "acquired_at": "<ISO timestamp>",
   "deadline": "<ISO timestamp>",
   "status": "active"
 }
@@ -1086,29 +1150,26 @@ concurrent execution or premature takeover of long-running jobs.
    ```text
    SET gitwire:jti:{jti} {lease_json} NX EX {ttl_seconds}
    ```
-   - `NX` ensures atomic first-acquire.
-   - `deadline` = now + max_execution_time (e.g., 120s).
-   - If SET fails (key exists): check the stored lease for takeover.
+   - `deadline` = acquired_at + max_execution_time.
+   - If SET fails (key exists): check stored lease.
 
-2. **Heartbeat renewal (during long execution):**
-   ```text
-   Lua: if redis.call('GET', key) and json_decode.owner == attempt_id
-        and json_decode.status == 'active'
-        then SET key with updated deadline = now + max_execution_time
-   ```
-   - Only the current owner can renew.
-   - Prevents premature takeover of long-running jobs.
+2. **During execution:** the worker holds the lease. No heartbeat
+   renewal — the deadline is absolute. If the job exceeds
+   max_execution_time, the lease expires and the job is considered
+   crashed. No side effects are protected by fencing tokens; instead,
+   the job is designed to be **idempotent** at the application layer
+   (each mutation checks for prior completion via a unique operation
+   identifier before executing).
 
 3. **Finalize (on completion):**
    ```text
    Lua: if json_decode.owner == attempt_id then
-          SET status='consumed', retain until cleanup_ttl
+          SET status='consumed', EX {retention_ttl}
    ```
 
 4. **Release (on failure before completion):**
    ```text
-   Lua: if json_decode.owner == attempt_id then
-          DEL key  -- fully releases for immediate retry
+   Lua: if json_decode.owner == attempt_id then DEL key
    ```
 
 **Takeover (after crash, when deadline has passed):**
@@ -1117,22 +1178,25 @@ Lua: stored = GET(key)
      if stored and json_decode.status == 'active'
         and json_decode.deadline < now then
        -- Deadline expired: safe to take over
-       SET key with new owner, version = stored.version + 1,
-           new deadline = now + max_execution_time, status = 'active'
+       new_owner = generate_uuid()
+       SET key with new lease_json (new owner, new deadline, status=active)
      else
-       return nil  -- cannot take over
+       return nil
 ```
-- Takeover only after `deadline` has passed (not heartbeat timeout).
-- An old owner that lost its lease (version mismatch) cannot finalize
-  or publish side effects — the finalize Lua checks `owner == attempt_id`.
-- Two concurrent takeovers cannot both succeed (Lua is single-threaded).
 
-**States:**
-- `active` with valid deadline — leased; takeover rejected
-- `active` with expired deadline — eligible for takeover
-- `consumed` — completed; all retries rejected
-- Key expired (TTL) — rejected with `capability_expired`
-- Key absent after release — retry may acquire via SET NX
+**Side-effect safety:** because the model is strict at-most-once (not
+retryable-during-execution), a live lease prevents any concurrent
+execution. An old owner that crashes simply stops — its lease expires
+after the deadline, and a new owner takes over. The application layer
+must implement idempotency (operation-id deduplication) for the case
+where a crash occurs after a side effect but before finalization.
+
+**Why not fencing tokens:** fencing tokens require every mutable sink
+(database, GitHub API, Redis) to validate a monotonic counter. This
+is impractical for GitHub API mutations (GitHub has no fencing token
+support) and adds complexity to every database write. Strict
+at-most-once with application-layer idempotency is simpler and
+sufficient for the job sizes involved (seconds to minutes).
 
 ### Delegation binding
 
@@ -1268,6 +1332,92 @@ expected decision with reason code.
 | N8 | Worker job with consumed JTI (replay attempt) | any | any | `missing_job_authorization` (JTI already consumed) |
 | N9 | `legacy-key` with fleet role + `manage` action | auth_principal | `auth_principal:manage` | `role_permission_missing` (legacy-key role excludes `manage`) |
 | N10 | `user` with `viewer` role, compound any_of policy requiring approve permission | policy_rollout_plan | `rollout_plan:approve` | `operation_policy_denied` (compound any_of: no alternative allowed; reason is operation_policy_denied per §6 deterministic failure rule) |
+
+---
+
+## 17. Canonical resource registry
+
+Every resource token used in roles, grants, delegations, operation
+policies, examples, and findings MUST appear in this registry.
+Tokens are singular. The hierarchy and category lists in §3 are
+derived from this table.
+
+### Installation-scoped resources
+
+| Token | Parent | Identifier type | Backing table(s) | Actions |
+|-------|--------|----------------|-------------------|---------|
+| `installation` | — | bigint | `installations` | read, update |
+| `repository` | `installation` | bigint (github_id) | `repositories` | read, update, github:act, github:read, enqueue |
+| `pull_request` | `repository` | bigint | `pull_requests` | read |
+| `issue` | `repository` | bigint | `issues` | read, update |
+| `ci_run` | `repository` | bigint | `ci_runs` | read, update |
+| `branch_rule` | `repository` | bigint | `branch_rules` | read |
+| `repo_config` | `repository` | bigint | `repo_config`, `config_history` | read, update, delete |
+| `config_validation_result` | `repository` | bigint | `config_validation_results` | read |
+| `heal_pr` | `repository` | bigint | `heal_prs` | read, update |
+| `repair_proposal` | `installation` | bigint | `repair_proposals` | read |
+| `repair_proposal_event` | `repair_proposal` | bigint | `repair_proposal_events` | read, create, update |
+| `patch_artifact` | `repair_proposal` | text (hash) | `patch_artifacts` | read, create |
+| `execution_receipt` | `repair_proposal` | text (hash) | `execution_receipts` | read, create |
+| `source_snapshot` | `repair_proposal` | text (hash) | `source_snapshots` | read, create |
+| `backend_isolation_evidence` | `repair_proposal` | bigint | `backend_isolation_evidence` | read, create |
+| `managed_action` | `installation` | bigint | `managed_actions` | read, create, update |
+| `action_reconciliation_log` | `installation` | bigint | `action_reconciliation_log` | read |
+| `decision_log` | `installation` | bigint | `decision_log` | read, create |
+| `pipeline_event` | `installation` | bigint | `pipeline_events` | read |
+| `fix_attempt` | `repository` | bigint | `fix_attempts` | read, create, update |
+| `ai_review` | `repository` | bigint | `ai_reviews` | read, create |
+| `duplicate_signal` | `repository` | bigint | `duplicate_signals` | read |
+| `dependency_manifest` | `repository` | bigint | `dependency_manifests` | read |
+| `dependency_update_batch` | `repository` | bigint | `dependency_update_batches` | read, create |
+| `vulnerability_advisory` | `repository` | bigint | `vulnerability_advisories` | read, update |
+| `flaky_test` | `repository` | bigint | `flaky_tests` | read, update |
+| `test_result` | `repository` | bigint | `test_results` | read, create |
+| `gate_evaluation` | `repository` | bigint | `gate_evaluations` | read |
+| `issue_embedding` | `repository` | bigint | `issue_embeddings` | read |
+| `member` | `installation` | bigint | `members` | read |
+| `repo_collaborator` | `repository` | bigint | `repo_collaborators` | read |
+| `policy_definition` | `installation` | bigint | `policy_definitions` | read, create, update, delete |
+| `policy_waiver` | `installation` | bigint | `policy_waivers` | read, create, revoke |
+| `policy_repo_config` | `repository` | bigint | `policy_repo_configs` | read, update |
+| `reconciliation_run` | `installation` | bigint | `reconciliation_runs` | read |
+| `policy_rollout_plan` | `installation` | bigint | `policy_rollout_plans` | read, create, update, approve |
+| `quality_gate` | `repository` | bigint | `quality_gates` | read, create, delete |
+| `feedback_rule` | `installation` | bigint | `feedback_rules` | read, create, update, delete |
+| `merge_queue_entry` | `repository` | bigint | `merge_queue_entries` | read, create, update |
+| `merge_queue_config` | `repository` | bigint | `merge_queue_config` | read, update |
+| `rollback_event` | `installation` | bigint | `rollback_events` | read, create |
+| `maintainer_setting` | `repository` | bigint | `maintainer_settings` | read, update |
+| `maintainer_action` | `repository` | bigint | `maintainer_actions` | read, create |
+| `webhook_delivery` | `installation` | text (delivery_id) | `webhook_deliveries` | read, create |
+| `external_attestation` | `installation` | UUID | `auth_external_attestations` | read, create |
+
+### System-scoped resources
+
+| Token | Parent | Identifier type | Backing table(s) | Actions |
+|-------|--------|----------------|-------------------|---------|
+| `auth_principal` | — | UUID | `auth_principals` | read, manage |
+| `auth_role` | — | UUID | `auth_roles` | read, manage |
+| `auth_credential` | `auth_principal` | UUID | `auth_credentials` | read, manage, revoke |
+| `auth_delegation` | — | UUID | `auth_delegations` | read, create, revoke |
+| `auth_resource_grant` | — | UUID | `auth_resource_grants` | read, manage, revoke |
+| `auth_worker_ceiling` | `auth_principal` | UUID | `auth_worker_ceilings` | read, manage |
+| `auth_bootstrap_allow` | — | UUID | `auth_bootstrap_allow` | (operator DB only) |
+| `auth_bootstrap_state` | — | text | `auth_bootstrap_state` | (stored function only) |
+| `audit_trail_entry` | — | text (hash) | `audit_trail_entries` | read, create, audit:read |
+| `audit_export` | — | bigint | `audit_exports` | read, create, audit:export |
+| `compliance_report` | — | bigint | `compliance_reports` | read, create |
+| `queue_job` | — | text | (Redis) | enqueue |
+
+### Naming rules
+
+- Permission tokens are always `<resource_type>:<action>` using the
+  exact `Token` from the registry.
+- `policy_rollout_plan` (not `rollout_plan`), `policy_waiver` (not
+  `waiver`), `webhook_delivery` (not `webhook_deliveries`).
+- Actions from the §4 vocabulary only: read, list, create, update,
+  delete, github:act, github:read, enqueue, approve, revoke, manage,
+  audit:read, audit:export.
 
 ---
 
