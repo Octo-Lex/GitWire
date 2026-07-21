@@ -240,9 +240,15 @@ function validateFinalAttemptResolution(logicalOperations, attemptsById) {
       }
       continue;
     }
-    // Non-string finalAttemptId is itself a shape defect.
+    // Non-string finalAttemptId is itself a shape defect. Classify by the
+    // logical outcome so the violation code matches what the consumer needs
+    // to fix: succeeded ops missing their final → LOGICAL_SUCCESS_WITHOUT_FINAL;
+    // failed ops missing their final → LOGICAL_FAILURE_WITHOUT_REASON.
     if (typeof fid !== "string") {
-      v.push(makeViolation(REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL,
+      const code = op.outcome === "failed"
+        ? REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON
+        : REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL;
+      v.push(makeViolation(code,
         `logicalOperationId=${lid} finalAttemptId must be a string, got ${typeof fid}`,
         { logicalOperationId: lid }));
       continue;
@@ -384,23 +390,58 @@ function validateAttemptsById(attemptsById, logicalOperations) {
   }
 
   // Canonical identity check #3: logical-operation attempt references must
-  // resolve consistently. Each attemptId listed in a logical op's
-  // attemptIds[] must be a key in attemptsById AND its record.attemptId
-  // must match. A dangling or mismatched reference is reported under
-  // DUPLICATE_ATTEMPT_ID (the identity contract is broken).
+  // resolve consistently AND be unique within the op AND belong to the op.
+  // For each attemptId listed in a logical op's attemptIds[]:
+  //   - reject repeated references within the same op (DUPLICATE_ATTEMPT_ID)
+  //   - require the referenced record to exist (DUPLICATE_ATTEMPT_ID)
+  //   - require record.attemptId === refId (DUPLICATE_ATTEMPT_ID)
+  //   - require record.logicalOperationId === op.logicalOperationId
+  //     (DUPLICATE_ATTEMPT_ID — an attempt owned by another logical op is
+  //     an identity theft, not just a misclassification)
   if (Array.isArray(logicalOperations)) {
     for (const op of logicalOperations) {
       if (!op || typeof op !== "object" || !Array.isArray(op.attemptIds)) continue;
+      const seenInThisOp = new Set();
       for (const refId of op.attemptIds) {
         if (typeof refId !== "string") continue;
+        // Per-op uniqueness: the same attemptId may not appear twice in one
+        // logical operation's attemptIds[].
+        if (seenInThisOp.has(refId)) {
+          v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
+            `logicalOperationId=${op.logicalOperationId} lists attemptId=${refId} more than once in attemptIds[]`,
+            { attemptId: refId, logicalOperationId: op.logicalOperationId }));
+          // Don't re-check the duplicate's record fields — the duplicate
+          // itself is the defect; we already reported the record's identity
+          // on its first occurrence.
+          continue;
+        }
+        seenInThisOp.add(refId);
+
         const rec = attemptsById[refId];
         if (!rec || typeof rec !== "object") {
           v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
             `logicalOperationId=${op.logicalOperationId} references attemptId=${refId} not present in attemptsById`,
             { attemptId: refId, logicalOperationId: op.logicalOperationId }));
-        } else if (typeof rec.attemptId === "string" && rec.attemptId !== refId) {
+          continue;
+        }
+        if (typeof rec.attemptId === "string" && rec.attemptId !== refId) {
           v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
             `logicalOperationId=${op.logicalOperationId} references attemptId=${refId} but the record claims attemptId=${rec.attemptId}`,
+            { attemptId: refId, logicalOperationId: op.logicalOperationId }));
+          // Don't also fire the cross-logical check on a record whose own
+          // identity is already inconsistent — the message above is the
+          // actionable defect.
+          continue;
+        }
+        // Cross-logical ownership: the referenced record must belong to THIS
+        // logical operation. An attempt owned by another op (whether final
+        // or non-final) is identity theft — the op is claiming work it did
+        // not do.
+        if (typeof rec.logicalOperationId === "string"
+            && typeof op.logicalOperationId === "string"
+            && rec.logicalOperationId !== op.logicalOperationId) {
+          v.push(makeViolation(REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID,
+            `logicalOperationId=${op.logicalOperationId} references attemptId=${refId} but the record belongs to logicalOperationId=${rec.logicalOperationId}`,
             { attemptId: refId, logicalOperationId: op.logicalOperationId }));
         }
       }
@@ -509,8 +550,12 @@ function validateLatencyMap(latency, attempts) {
         }
       }
     } else {
-      // MALFORMED_PERCENTILE_ORDERING: min ≤ p50 ≤ p90 ≤ p95 ≤ p99 ≤ max.
-      // mean is unrestricted in position (skew can push it above p99).
+      // Non-empty population: percentile sequence must be a chain of finite
+      // numbers in non-decreasing order (MALFORMED_PERCENTILE_ORDERING).
+      // min ≤ p50 ≤ p90 ≤ p95 ≤ p99 ≤ max. mean is unrestricted in
+      // position (skew can push it above p99) BUT must still be a finite
+      // number — a null or NaN mean in a non-empty population is a
+      // computing/reducer defect.
       const order = ["min", "p50", "p90", "p95", "p99", "max"];
       let prev = null;
       let prevName = null;
@@ -530,6 +575,25 @@ function validateLatencyMap(latency, attempts) {
         }
         prev = val;
         prevName = f;
+      }
+      // mean must be a finite number for non-empty populations. It can lie
+      // outside the [min, max] sequence? No — for a finite sample of finite
+      // values, the arithmetic mean is always within [min, max]. A mean
+      // outside that range is a reducer/computation defect. The check below
+      // verifies finiteness first (catches null/NaN), then range.
+      const meanVal = pop.mean;
+      const minVal = pop.min;
+      const maxVal = pop.max;
+      if (typeof meanVal !== "number" || !Number.isFinite(meanVal)) {
+        v.push(makeViolation(REPORT_VIOLATION_CODES.MALFORMED_PERCENTILE_ORDERING,
+          `latency.${name}.mean must be a finite number for non-empty population, got ${meanVal}`,
+          { population: name, field: "mean" }));
+      } else if (typeof minVal === "number" && typeof maxVal === "number"
+                 && Number.isFinite(minVal) && Number.isFinite(maxVal)
+                 && (meanVal < minVal || meanVal > maxVal)) {
+        v.push(makeViolation(REPORT_VIOLATION_CODES.MALFORMED_PERCENTILE_ORDERING,
+          `latency.${name}.mean (${meanVal}) must be within [min (${minVal}), max (${maxVal})] for non-empty population`,
+          { population: name, field: "mean" }));
       }
     }
   }
