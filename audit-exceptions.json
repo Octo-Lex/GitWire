@@ -9,6 +9,24 @@
       "justification": "Transitive dependency via @anthropic-ai/sdk -> @types/node-fetch -> form-data@4.0.5. fixAvailable requires an upstream SDK bump or npm override. The affected code path (multipart field names/filenames CRLF injection) is not exercised by GitWire's server-side use of the Anthropic SDK. Time-bounded to force re-evaluation.",
       "owner": "Alajmah",
       "tracking_issue": "https://github.com/Octo-Lex/GitWire/issues/47"
+    },
+    {
+      "advisory": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp",
+      "package": "brace-expansion",
+      "range": ">=3.0.0 <5.0.7",
+      "expires": "2026-10-14T23:59:59Z",
+      "justification": "Transitive dependency via micromatch. Time-bounded exception pending upstream remediation or dependency update.",
+      "owner": "Alajmah",
+      "tracking_issue": "https://github.com/Octo-Lex/GitWire/issues/47"
+    },
+    {
+      "advisory": "https://github.com/advisories/GHSA-52cp-r559-cp3m",
+      "package": "js-yaml",
+      "range": ">=4.0.0 <4.3.0",
+      "expires": "2026-10-14T23:59:59Z",
+      "justification": "Transitive dependency used by configuration loaders. Time-bounded exception pending upstream remediation or dependency update.",
+      "owner": "Alajmah",
+      "tracking_issue": "https://github.com/Octo-Lex/GitWire/issues/47"
     }
   ]
 }
