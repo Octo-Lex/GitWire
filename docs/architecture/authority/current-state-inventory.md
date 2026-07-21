@@ -20,12 +20,10 @@ aggregate counts in §5.2 stand; the per-handler rows fill the gap.
 ### C-2 — Complete mutation-sink map (was omitted as "too long")
 
 §7.1 omitted the table-by-writer map with "regenerate by grep." The full
-51-table writer map is now in [§18](#18-full-database-writer-map). The count
+51-table writer map is now in [§18](#18-full-table-inventory-and-known-writer-map). The count
 in §7.1 was also wrong: the verified number is **51 tables**, not 50
 (`webhook_deliveries` was missed in the original count). The filesystem-site
 count in §7.2 was also wrong: the verified number is **11 sites** (not 8 — several `mkdir`/`writeFileSync` calls in `scripts/` were missed; not 12 — `sourceSnapshotProvider.js` was originally miscounted as a site, but its `fs/promises` imports are dead code that never executes, see C-2-rev). The full filesystem inventory is in [§18.2](#182-filesystem-mutation-sites).
-(several `mkdir`/`writeFileSync` calls in `scripts/` were missed). The full
-filesystem inventory is in [§18.2](#182-filesystem-mutation-sites).
 
 ### C-3 — Verification claims made consistent
 
@@ -112,7 +110,7 @@ matrix is in [§19](#19-securitymd-discrepancy-matrix).
 | P-5 | **`gitwire[bot]`** (the App's bot user on GitHub) | hardcoded actor string in audit writes | Inherits from P-3 | Used for attribution when a worker performs a GitHub mutation. |
 | P-6 | **executor-service** | `packages/executor-service/src/server.js:42-52` | `Bearer ${service_token}` env var (non-constant-time compare) | Minimum in the system: no DB, no GitHub, no network egress. Runs an allowlisted subset of `npm` commands in a `--network=none --read-only` container. |
 | P-7 | **Operator running a script** | `scripts/*.js`, `scripts/*.sh` | None — env-provided credentials only | Whatever the script does. Several scripts mint App JWTs from a local `.pem`. |
-| P-8 | **Anonymous** | n/a | n/a | 3 paths only: `/health`, `/webhooks/github` (HMAC), `/api/auth/{login,logout}`. See §5.2. |
+| P-8 | **Anonymous** | n/a | n/a | 5 paths: `/health`, `/webhooks/github` (HMAC), `/api/auth/{login,logout,check}`. Of these, 3 mutate state (`/webhooks/github`, `/api/auth/login`, `/api/auth/logout`). See §5.2 and §17.1. |
 
 **There is no per-user identity.** The "human dashboard user" principal collapses to "anyone holding the shared API key." There is no `users` table, no per-user credential, no role assignment per user.
 
@@ -188,7 +186,7 @@ verification that the caller's authority covers that repo**.
 - **List endpoints** (`routes/issues.js`, `routes/pullRequests.js`, `routes/ciRuns.js`, `routes/healHistory.js`, etc.) — global by default. **[F-09 REPORTED]**
 - **`revokeWaiver(waiverId)`** (`waiverService.js:126-133`) — `UPDATE policy_waivers SET active=FALSE WHERE id=$1`. No `repo_id`, no `installation_id`. Any API-key holder can revoke any waiver by ID. **[F-02 CRITICAL VERIFIED]**
 - **`DELETE /api/repairs/:id/transition`, `PATCH /api/repairs/:id/evidence`** — currently hard-403'd (`routes/repairs.js:84-102`) but the route exists and accepts IDs.
-- **Worker→installation binding** — workers mint installation tokens purely from `job.data.payload.installation.id`. A queue-injected job for installation A is indistinguishable from a real one. **[F-06 CRITICAL VERIFIED]**
+- **Worker→installation binding** — workers mint installation tokens purely from `job.data.payload.installation.id`. A queue-injected job for installation A is indistinguishable from a real one. **[F-06 HIGH VERIFIED]**
 
 ## 5. HTTP surface
 
@@ -217,7 +215,7 @@ Notable mount quirks:
 
 ### 5.2 Per-route inventory
 
-**29 route files, 173 route-file handlers** (plus 1 app-level `/health` handler at `app.js:88`, counted separately — see §17.4). Full per-handler table is in [§17](#17-full-http-handler-inventory); the structural summary:
+**29 route files, 173 route-file handlers** (4 anonymous + 169 authenticated; plus 1 app-level `/health` handler at `app.js:88`, counted separately — see §17.4). 27 route files contain authenticated handlers (`auth.js` and `webhooks.js` are the 2 fully anonymous files). Full per-handler table is in [§17](#17-full-http-handler-inventory); the structural summary:
 
 | Mutation type | Handler count | Notes |
 |---|---|---|
@@ -300,7 +298,7 @@ All schedulers enqueue with **no human principal**. The job carries only the sys
 4. Worker pops the job, reads `job.data.payload.installation.id`, calls `getInstallationClient(installationId)`.
 5. The signed-webhook authority is **reduced to "this installation's App token"** the moment the queue accepts the job.
 
-Anyone with Redis write access can inject a job that will execute with the full authority of any installation whose id they put in the payload. **[F-06 CRITICAL VERIFIED]**. The `webhook_deliveries` audit row (`webhooks.js:175`) is write-only — no worker reads it back to verify the job came from a tracked delivery.
+Anyone with Redis write access can inject a job that will execute with the full authority of any installation whose id they put in the payload. **[F-06 HIGH VERIFIED]** (originally CRITICAL; re-rated to HIGH in C-5 because exploitation requires Redis write access, which is documented as internal-Docker-network-only). The `webhook_deliveries` audit row (`webhooks.js:175`) is write-only — no worker reads it back to verify the job came from a tracked delivery.
 
 ### 6.4 Comment-command authority discard
 
@@ -310,7 +308,7 @@ Anyone with Redis write access can inject a job that will execute with the full 
 
 ### 7.1 Database
 
-**51 tables** receive writes (count corrected in C-2; the original "50" missed `webhook_deliveries`). The full table-by-writer map is in [§18.1](#18-full-database-writer-map); highlights:
+**51 tables** receive writes (count corrected in C-2; the original "50" missed `webhook_deliveries`). The full table-by-writer map is in [§18.1](#18-full-table-inventory-and-known-writer-map); highlights:
 
 - **`audit_trail_entries`** (`auditTrailService.js:63`) — append-only, no UPDATE/DELETE per the module header. Tamper-evident chain via `prev_hash`. **Race-fork risk (F-11, mechanism corrected in C-4):** the chain is computed via an unsynchronized `SELECT payload_hash ... ORDER BY seq DESC LIMIT 1` then a separate `INSERT` — no Redis lock, no transaction. Two concurrent writers can both read the same `prev_hash` and produce a forked chain. **[F-11 MEDIUM VERIFIED]**
 - **`managed_actions`** — reconciled later by `reconciliationWorker`. The reconciliation step compares recorded actions against actual GitHub state. If an action was forged (via queue injection), reconciliation will *detect the drift* but cannot *prevent* it.
@@ -564,6 +562,12 @@ The next checkpoint (W0-B) will reference these findings by ID (F-01 through F-1
 >   + 1 app-level handler (GET /health, anonymous, read-only)
 >   = 174 total HTTP endpoints
 > ```
+>
+> The 4 anonymous route-file handlers live in 2 files (`auth.js`: 3,
+> `webhooks.js`: 1). The remaining **27 route files** contain 169
+> authenticated handlers. `app.js` imports 29 route modules total;
+> excluding `auth.js` and `webhooks.js` leaves 27 authenticated route
+> files.
 
 | file:line | method | path | mutate | auth | principal | sink |
 |---|---|---|---|---|---|---|
@@ -572,9 +576,9 @@ The next checkpoint (W0-B) will reference these findings by ID (F-01 through F-1
 | `auth.js:76` | POST | `/api/auth/logout` | R2 | pre-`apiKeyAuth` mount | anon | `redis.del` (`auth.js:81`) |
 | `auth.js:96` | GET | `/api/auth/check` | R | pre-`apiKeyAuth` mount | anon | Redis GET only |
 
-### 17.2 Authenticated handlers (169 across 28 files)
+### 17.2 Authenticated handlers (169 across 27 files)
 
-The 28 authenticated route files are all files in `packages/web/src/routes/`
+The 27 authenticated route files are all files in `packages/web/src/routes/`
 except `auth.js` (whose 3 handlers are all anonymous, per §17.1) and
 `webhooks.js` (whose single handler is anonymous, per §17.1). Every
 authenticated handler inherits `apiKeyAuth` (`app.js:85`); no per-route auth
