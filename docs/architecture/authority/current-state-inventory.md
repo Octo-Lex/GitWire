@@ -14,7 +14,7 @@ appendix sections (§17, §18, §19).
 ### C-1 — Complete handler inventory (was a placeholder)
 
 §5.2 referred to a "long-form inventory" via a `#` placeholder. The full
-173-handler table is now in [§17](#17-full-http-handler-inventory). The
+173-handler route-file table (plus the app-level `/health` handler) is now in [§17](#17-full-http-handler-inventory). The
 aggregate counts in §5.2 stand; the per-handler rows fill the gap.
 
 ### C-2 — Complete mutation-sink map (was omitted as "too long")
@@ -23,7 +23,7 @@ aggregate counts in §5.2 stand; the per-handler rows fill the gap.
 51-table writer map is now in [§18](#18-full-database-writer-map). The count
 in §7.1 was also wrong: the verified number is **51 tables**, not 50
 (`webhook_deliveries` was missed in the original count). The filesystem-site
-count in §7.2 was also wrong: the verified number is **12 sites**, not 8
+count in §7.2 was also wrong: the verified number is **11 sites** (not 8 — several `mkdir`/`writeFileSync` calls in `scripts/` were missed; not 12 — `sourceSnapshotProvider.js` was originally miscounted as a site, but its `fs/promises` imports are dead code that never executes, see C-2-rev). The full filesystem inventory is in [§18.2](#182-filesystem-mutation-sites).
 (several `mkdir`/`writeFileSync` calls in `scripts/` were missed). The full
 filesystem inventory is in [§18.2](#182-filesystem-mutation-sites).
 
@@ -41,12 +41,9 @@ independently rechecked") honest.
   full name but does not verify the caller's authority over that repo. Same
   shape applies to `pullRequests.js`, `ciRuns.js`, `healHistory.js`,
   `activity.js`, `decisions.js`. VERIFIED.
-- **C-3b (F-10 upgrade):** `phase3Worker.js:124` enqueues `policy-reconcile-fleet` nightly; the handler at `:55-58` reads only the enforcement pillar gate
-  and passes `"scheduler"` as the actor. `policyReconcilerService.js:228,263,278`
-  perform GitHub `PUT .../branches/{branch}/protection`, `POST .../labels`,
-  and `PATCH /repos/...` (repo settings). `mergeQueueService.js:208` performs
-  `PUT .../pulls/{n}/merge`. All execute on every repo on every cron tick.
-  No human-in-the-loop. VERIFIED.
+- **C-3b (F-10 upgrade, re-corrected in W0-A-rev2):** F-10 conflated two distinct authority paths and misstated the gate mechanism. Split:
+  - **F-10a (fleet policy reconciler):** `phase3Worker.js:124` enqueues `policy-reconcile-fleet` nightly (`0 2 * * *`). The handler at `:55-58` contains the comment "Gate: enforcement pillar only" but **does not call `isPillarEnabled`** — it directly awaits `runFleetReconciliation("scheduler")`. `policyReconcilerService.js:84-86` iterates every installation and every repository; the per-repo bypass is `policy_repo_configs.reconcile_skip` (a DB column set via `PUT /api/phase3/reconciler/repos/:owner/:repo`), **NOT `.gitwire.yml`** — no `getConfigForRepo` or `isPillarEnabled` check runs on this path. The reconciler then performs GitHub `PUT .../branches/{branch}/protection` (`policyReconcilerService.js:228`), `POST .../labels` (`:263`), and `PATCH /repos/...` (`:278`) on every non-skipped repo on every cron tick, with actor hardcoded `"scheduler"`. No human-in-the-loop. VERIFIED.
+  - **F-10b (merge queue, separate path):** the merge queue is **event-driven**, not cron-driven. Jobs arrive via `handlePullRequest.js:50,55`, `handlePullRequestReview.js:7`, `handleCheckSuite.js:7`, `handleWorkflowRun.js:53,56`. `phase2Worker.js:26` gates on `isPillarEnabled("merge_queue", repoConfig)` (a real `.gitwire.yml` pillar check, unlike the reconciler). `mergeQueueService.js:208` performs `PUT .../pulls/{n}/merge` — but only on the front-of-queue entry when eligibility checks pass; it does not execute on every reconciliation cron tick. F-10b's risk profile is materially different from F-10a's and should not have been bundled.
 
 ### C-4 — F-11 mechanism correction
 
@@ -99,7 +96,7 @@ matrix is in [§19](#19-securitymd-discrepancy-matrix).
 15. [Unknowns and unresolved questions](#15-unknowns-and-unresolved-questions)
 16. [Coverage accounting](#16-coverage-accounting)
 17. [Full HTTP handler inventory (W0-A correction C-1)](#17-full-http-handler-inventory)
-18. [Full database writer map (W0-A correction C-2)](#18-full-database-writer-map)
+18. [Full table inventory and known-writer map (W0-A correction C-2)](#18-full-table-inventory-and-known-writer-map)
 19. [`security.md` discrepancy matrix (W0-A correction C-6)](#19-securitymd-discrepancy-matrix)
 
 ---
@@ -220,7 +217,7 @@ Notable mount quirks:
 
 ### 5.2 Per-route inventory
 
-**29 route files, 173 handlers.** Full per-handler table (with method, path, read/mutate tag, auth, principal, mutation sink) is in the [synthesis commit's long-form inventory](#); the structural summary:
+**29 route files, 173 route-file handlers** (plus 1 app-level `/health` handler at `app.js:88`, counted separately — see §17.4). Full per-handler table is in [§17](#17-full-http-handler-inventory); the structural summary:
 
 | Mutation type | Handler count | Notes |
 |---|---|---|
@@ -291,7 +288,7 @@ All schedulers enqueue with **no human principal**. The job carries only the sys
 | nightly `0 1 * * *` | `nightly-audit-export` | none (DB only) | DB: `INSERT INTO audit_exports` |
 | 6h + 5min post-boot | `reconciliation` (setInterval) | system identity | DB: cleanup stale `managed_actions`, update `heal_prs` |
 
-**[F-10 HIGH REPORTED]** `policy-reconcile-fleet` performs branch-protection PUTs and repo-settings PATCHes on every repo on every cron tick, with actor `"scheduler"` and no human-in-the-loop. The only gate is per-repo `.gitwire.yml`.
+**[F-10a HIGH VERIFIED]** `policy-reconcile-fleet` performs branch-protection PUTs and repo-settings PATCHes on every non-skipped repo on every cron tick, with actor `"scheduler"` and no human-in-the-loop. The per-repo bypass is `policy_repo_configs.reconcile_skip` (a DB column), **not `.gitwire.yml`** — no `getConfigForRepo` or `isPillarEnabled` check runs on this path despite the misleading comment at `phase3Worker.js:57`. (The merge queue, F-10b, is a separate event-driven path with a real pillar gate — see §13.)
 
 ### 6.3 Webhook authority propagation
 
@@ -322,17 +319,18 @@ Anyone with Redis write access can inject a job that will execute with the full 
 
 ### 7.2 Filesystem
 
-**12 filesystem mutation sites** (count corrected in C-2; the original "8" missed several `mkdir` / `writeFileSync` calls in `scripts/`). The full inventory is in [§18.2](#182-filesystem-mutation-sites). All production-path writes are ephemeral sandbox tempdirs; the rest are admin/build scripts. Summary:
+**11 filesystem mutation sites** (count corrected in C-2 and re-corrected in W0-A-rev2: originally claimed 8, then 12, now 11 after dropping `sourceSnapshotProvider.js` whose `fs/promises` imports are dead code — the module fetches blobs into memory and persists metadata via `storeSourceSnapshot`, never invoking `mkdtemp`/`mkdir`/`writeFile`/`rm`). The full inventory is in [§18.2](#182-filesystem-mutation-sites). All production-path writes are ephemeral sandbox tempdirs; the rest are admin/build scripts. Summary:
 
 | file:line | What's written | Notes |
 |---|---|---|
 | `packages/web/src/lib/sandboxExecutor.js:201,222-224` | `mkdtemp`, `mkdir`, `writeFile` for sandbox | Ephemeral |
 | `packages/web/src/lib/dockerExecutorBackend.js:370,390-391` | same | Ephemeral |
-| `packages/web/src/lib/sourceSnapshotProvider.js:20` | imports `mkdtemp, mkdir, writeFile, rm` (delegates to sandboxExecutor) | Ephemeral |
 | `packages/executor-service/src/validatorRunner.js:182,195-198` | `mkdtemp`, `chmod`, `mkdir`, `writeFile` | Ephemeral under `/workspace-tmp` |
 | `scripts/benchmark.js:336-337` | `writeFileSync` results JSON | Admin, isolated env only |
 | `scripts/generate-build-info.js:64` | overwrites `packages/core/src/buildInfo.js` | Build-time only |
 | `scripts/backup.sh:25`, `scripts/deploy-release.sh:597`, `scripts/prepare-immutable-compose-transition.sh:195,253` | `mkdir -p` for staging dirs and marker file | Admin |
+
+`packages/web/src/lib/sourceSnapshotProvider.js:20` is **excluded**: it imports `mkdtemp, mkdir, writeFile, rm` but never calls them — dead imports, not a mutation site.
 
 No production-path filesystem mutation outside ephemeral sandbox tempdirs.
 
@@ -425,17 +423,23 @@ Most scripts have **no auth of their own** — they execute with whatever creden
 | **F-07** | HIGH | VERIFIED | Comment-command authority discard — **reframed (C-5) as provenance loss dependent on F-06**: the `OWNER/MEMBER/COLLABORATOR` check at `commentRouter.js:27` is discarded when the job is enqueued (`handleIssueComment.js:40-47` carries only `authorLogin`). Once a job is in the queue (via F-06 or otherwise), the worker executes `/gitwire fix`, `/gitwire close`, etc. with the App's installation authority regardless of the original author's role. The role check exists only on the HTTP ingress path. | `commentRouter.js:27`; `handleIssueComment.js:40-47`; `handleFixCommand.js:5-10` |
 | **F-08** | MEDIUM | VERIFIED | Non-production auto-generated API key is logged. In a staging environment that is accidentally reachable, anyone with log read has the key. | `middleware/auth.js:50-54` |
 | **F-09** | HIGH | ~~REPORTED~~ → **VERIFIED (C-3a)** | List endpoints default to global scope — cross-tenant data leakage. Re-verified: `GET /api/issues` builds its WHERE from optional query params with **no installation_id condition and no caller-scope filter** (`routes/issues.js:44-75`). The `repo` filter matches by exact full name but does not verify the caller's authority over that repo. Same shape in `pullRequests.js`, `ciRuns.js`, `healHistory.js`, `activity.js`, `decisions.js`. | `routes/issues.js:44-75` (and siblings) |
-| **F-10** | HIGH | ~~REPORTED~~ → **VERIFIED (C-3b)** | Fleet-wide scheduled authority without a human principal. `policy-reconcile-fleet` enqueued nightly at `phase3Worker.js:124`; handler reads only the enforcement-pillar gate and passes `"scheduler"` as actor (`:55-58`). `policyReconcilerService.js:228,263,278` perform PUT branch-protection / POST labels / PATCH repo-settings. `mergeQueueService.js:208` performs `PUT .../pulls/{n}/merge`. All execute on every repo on every cron tick; only gate is `.gitwire.yml`. No human-in-the-loop. | `phase3Worker.js:124,55-58`; `policyReconcilerService.js:228,263,278`; `mergeQueueService.js:208` |
+| **F-10** | HIGH | ~~REPORTED~~ → **VERIFIED (C-3b, re-corrected in W0-A-rev2)** | Originally conflated two distinct authority paths. **Split:** **F-10a** — the fleet policy reconciler is cron-driven (`phase3Worker.js:124` nightly), the "Gate: enforcement pillar only" comment at `:57` is just a comment (no `isPillarEnabled` call), it directly awaits `runFleetReconciliation("scheduler")`, the per-repo bypass is `policy_repo_configs.reconcile_skip` (a DB column, NOT `.gitwire.yml`), and it performs GitHub PUT branch-protection / POST labels / PATCH repo-settings on every non-skipped repo nightly with actor `"scheduler"`. **F-10b** — the merge queue is event-driven (PR/check-suite/workflow triggers, not cron), gates on `isPillarEnabled("merge_queue", repoConfig)` at `phase2Worker.js:26` (a real `.gitwire.yml` check), and merges only the front-of-queue entry when eligibility passes (`mergeQueueService.js:208`); it does NOT execute on every reconciliation cron tick. F-10a carries the bulk of the risk. | F-10a: `phase3Worker.js:55-58,124`; `policyReconcilerService.js:84-86,228,263,278`. F-10b: `phase2Worker.js:26`; `mergeQueueService.js:208` |
 | **F-11** | MEDIUM | VERIFIED | Audit hash chain can race-fork under concurrent writers. **Mechanism corrected (C-4):** `auditTrailService.js:59-78` performs an unsynchronized `SELECT payload_hash ... ORDER BY seq DESC LIMIT 1` then a separate `INSERT`. **No Redis lock** (the module imports no Redis client). The race is real; the original "computed under a Redis lock" wording was wrong. | `auditTrailService.js:59-78` |
 | **F-12** | MEDIUM | VERIFIED | `audit_exports` INSERT stores `file_path` and `file_hash` but no file is ever written. DB claims a file that does not exist. | `auditTrailService.js:476-491` |
 | **F-13** | LOW | VERIFIED | Adjacent SQL syntax bug at `routes/ciRuns.js:183` (`WHERE cr.id = ` with no placeholder). Out of Wave 0 authority scope; separated into issue #79. | `routes/ciRuns.js:183` |
 | **F-14** | LOW | VERIFIED | `apiKeyAuth`'s `Set.has` is not provably constant-time. Practical timing-attack risk is low (short tokens, network jitter dominates). | `middleware/auth.js:100` |
+| **F-15** | LOW | VERIFIED | Operator hygiene: a local-tree App private key exists at repo root (`gitwire-hq.2026-05-15.private-key.pem`). NOT tracked by git, NEVER committed, IS gitignored. Local-disk exfiltration target only, not a repo-distribution risk. Originally reported by an agent as a CRITICAL "committed private key" — see §14 (D-1) for the dispute and reclassification. | working-tree only; `.gitignore:*.pem`; `git ls-files` empty |
 
 ## 14. Disputed findings
 
+> **Accounting convention (W0-A-rev2):** D-1 is the dispute path; F-15 is
+> the resulting ranked finding. They are NOT two independent findings. The
+> ledger is 15 ranked findings (F-01 through F-15) + 1 dispute resolution
+> (D-1 → F-15).
+
 One finding was reported by an exploration agent with a framing the local assistant **disagrees with** after re-verification.
 
-### D-1: "Committed GitHub App private key" (originally CRITICAL)
+### D-1: "Committed GitHub App private key" (originally CRITICAL) → resolved into F-15
 
 **Agent's claim:** `gitwire-hq.2026-05-15.private-key.pem` is a committed GitHub App private key in the repo root, giving anyone with repo read access the App's full installation authority.
 
@@ -473,7 +477,7 @@ These are flagged for follow-up within Wave 0 or for Wave 1 to resolve:
 | U-3 | MEDIUM | Writers to the `audit_log` table (migration 005) were not exhaustively traced. Likely `branchEnforcementService.js` or `policyReconcilerService.js`. |
 | U-4 | LOW | Does `getInstallationClient(null)` at `routes/gates.js:173` return an unauthenticated Octokit or throw? |
 | U-5 | LOW | `forEachInstallation` installation-list source — App-level (sees all installations) or scoped? If App-level, any code calling it acts on every installation simultaneously. |
-| U-6 | MEDIUM | Per-handler read-endpoint tenant scoping (F-09) was reported at the structural level; the full list of which list endpoints accept a tenant filter vs which default to global needs one more pass. |
+| U-6 | MEDIUM | F-09's existence is VERIFIED (`routes/issues.js:44-75` confirms no installation_id condition), but exhaustive per-handler tenant-scoping classification remains incomplete: the inventory confirms the pattern for `issues.js`, `pullRequests.js`, `ciRuns.js`, `healHistory.js`, `activity.js`, `decisions.js` but does not classify every read endpoint in the remaining ~21 route files. One more pass would close this. |
 | U-7 | LOW | Does a `gitwire-session` cookie grant exactly the same authority as the API key, or a narrower scope? (`auth.js:82-97` reads the session but doesn't attach any scope flag — appears identical to the key.) |
 | U-8 | MEDIUM | CORS `origin` in production — `app.js:54-57` uses `config.server.baseUrl` as a single string. Worth verifying it is never falsy in any deployment. |
 
@@ -482,13 +486,13 @@ These are flagged for follow-up within Wave 0 or for Wave 1 to resolve:
 | Surface | Covered | Skipped and why |
 |---|---|---|
 | Route files | 29/29 | all handlers enumerated; full per-handler table in §17 |
-| Route handlers | 173 | 5 anonymous + 168 authenticated |
+| Route handlers | 173 route-file (4 anon + 169 auth) + 1 app-level `/health` = **174 endpoints** | convention: route-file handlers counted in §17; `/health` counted separately in §17.4 |
 | Middleware modules | 3/3 | `auth.js`, `pagination.js`, `rateLimiter.js` fully read |
 | Worker modules | 14/14 + `reconciliationWorker` | — |
 | Scheduled jobs | 8 | — |
 | DB tables with writes | **51** (corrected in C-2; was 50) | full writer map in §18.1 |
 | DB write sites | 179 raw matches across 42 files | individual service-by-service audit not exhaustive; 27 service modules sampled (~20 fully traced, ~7 spot-checked) |
-| Filesystem mutation sites | **12** (corrected in C-2; was 8) | full inventory in §18.2 |
+| Filesystem mutation sites | **11** (re-corrected; was 8, then 12 — `sourceSnapshotProvider.js` removed as dead imports) | full inventory in §18.2 |
 | Scripts with mutation capability | 9 | — |
 | Service-to-service auth boundaries | 1 | app ↔ executor-service |
 | Principal types | 8 | — |
@@ -548,11 +552,21 @@ The next checkpoint (W0-B) will reference these findings by ID (F-01 through F-1
 > Principal: `api-key` (any holder of the shared key) · `session` (cookie
 > holder, equivalent to api-key) · `anon` (no auth) · `webhook` (HMAC).
 
-### 17.1 Anonymous handlers (4)
+### 17.1 Anonymous handlers (4 route-file handlers)
+
+> Convention (applied across README, §5.2, §16, §17, and checkpoint totals):
+> **route-file handlers** are those declared in `packages/web/src/routes/*.js`.
+> The app-level `GET /health` handler at `app.js:88` is reported separately
+> in §17.4 because it lives in `app.js`, not in a route file. This gives:
+>
+> ```text
+> 29 route files / 173 route-file handlers (4 anonymous + 169 authenticated)
+>   + 1 app-level handler (GET /health, anonymous, read-only)
+>   = 174 total HTTP endpoints
+> ```
 
 | file:line | method | path | mutate | auth | principal | sink |
 |---|---|---|---|---|---|---|
-| `app.js:88` | GET | `/health` | R | skip | anon | DB SELECT |
 | `webhooks.js:29` | POST | `/webhooks/github` | DB+GH+Q+R2 | HMAC | webhook | see §2.3 + `webhookHandlers/index.js:61` |
 | `auth.js:41` | POST | `/api/auth/login` | R2 | pre-`apiKeyAuth` mount | anon | `redis.setex` (`auth.js:55`) |
 | `auth.js:76` | POST | `/api/auth/logout` | R2 | pre-`apiKeyAuth` mount | anon | `redis.del` (`auth.js:81`) |
@@ -560,7 +574,11 @@ The next checkpoint (W0-B) will reference these findings by ID (F-01 through F-1
 
 ### 17.2 Authenticated handlers (169 across 28 files)
 
-Counts verified: 5 anonymous + 168 authenticated = 173 total. Below, grouped by file. Every authenticated handler inherits `apiKeyAuth` (`app.js:85`); no per-route auth overrides exist.
+The 28 authenticated route files are all files in `packages/web/src/routes/`
+except `auth.js` (whose 3 handlers are all anonymous, per §17.1) and
+`webhooks.js` (whose single handler is anonymous, per §17.1). Every
+authenticated handler inherits `apiKeyAuth` (`app.js:85`); no per-route auth
+overrides exist.
 
 #### `routes/actions.js` (7)
 
@@ -834,6 +852,8 @@ Counts verified: 5 anonymous + 168 authenticated = 173 total. Below, grouped by 
 
 ### 17.3 Aggregate counts (re-verified)
 
+Applies to the 173 route-file handlers only. The app-level `/health` handler (§17.4) is counted separately.
+
 | Mutation type | Count |
 |---|---|
 | Read-only (DB SELECT only) | ~127 |
@@ -841,15 +861,26 @@ Counts verified: 5 anonymous + 168 authenticated = 173 total. Below, grouped by 
 | GitHub mutation | 13 |
 | Queue enqueue | 8 |
 | File write (claimed-but-never-written, see F-12) | 2 |
-| **Total handlers** | **173** (5 anonymous + 168 authenticated) |
+| **Total route-file handlers** | **173** (4 anonymous + 169 authenticated) |
+
+### 17.4 App-level handler (outside route files)
+
+| file:line | method | path | mutate | auth | principal | sink |
+|---|---|---|---|---|---|---|
+| `app.js:88` | GET | `/health` | R | `apiKeyAuth` skip list (`auth.js:68`) | anon | DB SELECT |
+
+**Grand total: 173 route-file handlers + 1 app-level handler = 174 HTTP endpoints.**
 
 ---
 
-## 18. Full database writer map
+## 18. Full table inventory and known-writer map
 
-> W0-A correction C-2. The original §7.1 omitted this with "regenerate by
-> grep." Verified count: **51 tables** receive writes (not 50; the original
-> count missed `webhook_deliveries`).
+> W0-A correction C-2. Renamed from "Full database writer map" in W0-A-rev2:
+> `audit_log` writers are explicitly untraced (U-3), so this is a table
+> inventory with known-writer mapping, not a complete writer map. The
+> original §7.1 omitted this with "regenerate by grep." Verified count:
+> **51 tables** receive writes (not 50; the original count missed
+> `webhook_deliveries`).
 >
 > Writers are route handlers (`routes/`), workers (`workers/`), or services
 > called by either (`services/`). SQL is parameterized throughout; no string
@@ -913,10 +944,13 @@ Counts verified: 5 anonymous + 168 authenticated = 173 total. Below, grouped by 
 
 ### 18.2 Filesystem mutation sites
 
-> Original §7.2 said 8 sites; re-verification found **12** (several `mkdir` /
-> `writeFileSync` calls in `scripts/` were missed). Sites outside
-> `node_modules`, tests, and docs. All production-path writes are ephemeral
-> sandbox tempdirs; the rest are admin/build scripts.
+> Original §7.2 said 8 sites; first re-verification said 12; second
+> re-verification says **11** after excluding `sourceSnapshotProvider.js`
+> (its `fs/promises` imports are dead code — the module fetches blobs into
+> memory and persists metadata via `storeSourceSnapshot`; it never calls
+> `mkdtemp`/`mkdir`/`writeFile`/`rm`). Sites outside `node_modules`, tests,
+> and docs. All production-path writes are ephemeral sandbox tempdirs; the
+> rest are admin/build scripts.
 
 | file:line | what's written | category |
 |---|---|---|
@@ -924,7 +958,6 @@ Counts verified: 5 anonymous + 168 authenticated = 173 total. Below, grouped by 
 | `packages/web/src/lib/sandboxExecutor.js:222-224` | `mkdir` + `writeFile(filePath, file.content)` | ephemeral sandbox |
 | `packages/web/src/lib/dockerExecutorBackend.js:370` | `mkdtemp(join(tmpdir(), "gitwire-docker-"))` | ephemeral sandbox |
 | `packages/web/src/lib/dockerExecutorBackend.js:390-391` | `mkdir` + `writeFile` | ephemeral sandbox |
-| `packages/web/src/lib/sourceSnapshotProvider.js:20` | imports `mkdtemp, mkdir, writeFile, rm` (call sites delegate to sandboxExecutor) | ephemeral sandbox |
 | `packages/executor-service/src/validatorRunner.js:182` | `mkdtemp(join(WORKSPACE_TMP, "gitwire-validator-"))` | ephemeral sandbox |
 | `packages/executor-service/src/validatorRunner.js:195-198` | `chmod`, `mkdir`, `writeFile` | ephemeral sandbox |
 | `scripts/benchmark.js:336-337` | `writeFileSync(outPath, JSON.stringify(...))` | admin (isolated env only) |
@@ -933,7 +966,9 @@ Counts verified: 5 anonymous + 168 authenticated = 173 total. Below, grouped by 
 | `scripts/deploy-release.sh:597` | `mkdir -p "$staging_dir"` | admin |
 | `scripts/prepare-immutable-compose-transition.sh:195,253` | `mkdir -p` for staging + marker file | admin |
 
-**Total: 12 filesystem mutation sites** (7 production-path ephemeral; 5 admin/build).
+**Excluded:** `packages/web/src/lib/sourceSnapshotProvider.js:20` — imports `mkdtemp, mkdir, writeFile, rm` but never calls them. Dead imports, not a mutation site.
+
+**Total: 11 filesystem mutation sites** (6 production-path ephemeral; 5 admin/build).
 
 ---
 
