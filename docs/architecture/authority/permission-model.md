@@ -94,16 +94,12 @@ auth_principals
 
 ### Bootstrap state machine
 
-Bootstrap has three states:
+Bootstrap has two states:
 
-| State | Meaning | Transition to enabled | Transition to disabled |
-|-------|---------|----------------------|----------------------|
-| `enabled` | Bootstrap endpoint is mounted and accepts the operational secret | Initial state (fresh deploy with no admins); or `disabled` → `enabled` when `auth_bootstrap_allow` marker detected | After successful bootstrap → `disabled` |
-| `disabled` | Bootstrap endpoint is removed from the route table | Only via `auth_bootstrap_allow` DB marker detected by the application on next startup/health check | n/a (terminal unless re-enabled via DB marker) |
-
-**Note:** there is no separate `consumed` state. Successful bootstrap
-transitions `enabled` → `disabled` in a single step. The marker in
-`auth_bootstrap_allow` is deleted as part of the same transition.
+| State | Meaning | How to reach |
+|-------|---------|-------------|
+| `enabled` | Bootstrap endpoint is mounted and accepts the operational secret | Initial state (fresh deploy with no admins); or `disabled` → `enabled` when application detects `auth_bootstrap_allow` marker |
+| `disabled` | Bootstrap endpoint is removed from the route table | After successful bootstrap; marker consumed |
 
 **State transitions:**
 1. Fresh deployment starts in `enabled` (zero admin principals).
@@ -112,25 +108,27 @@ transitions `enabled` → `disabled` in a single step. The marker in
 3. If all admins are disabled (lockout), an operator with production DB
    credentials inserts into `auth_bootstrap_allow(consumer_secret_hash,
    created_by_db_session, created_at)`.
-4. The application checks `auth_bootstrap_allow` on startup and during
-   periodic health checks. If a marker exists and state is `disabled`,
-   transition to `enabled`.
-5. On successful bootstrap, the marker is consumed (deleted) and state
-   transitions to `disabled`.
-6. State is stored in the `auth_bootstrap_state` table.
+4. The application detects the marker on startup/health check and
+   transitions to `enabled` via the stored function.
+5. On successful bootstrap, the stored function transitions to `disabled`
+   and consumes (deletes) the marker in the same transaction.
 
-**Privilege boundary (consistent):**
-- **Operator DB role:** can write to `auth_bootstrap_allow` and
-  `auth_bootstrap_state`. Cannot authenticate to the application API.
-- **Application DB role:** can READ `auth_bootstrap_allow` and can
-  READ `auth_bootstrap_state`. Can transition state via a dedicated
-  stored function `transition_bootstrap_state(new_state text)` that
-  only accepts `disabled` as the new state (the application can only
-  disable bootstrap, never enable it — enabling happens implicitly when
-  it detects the marker on startup).
-- The application DB role CANNOT directly INSERT/UPDATE/DELETE rows in
-  `auth_bootstrap_allow` or `auth_bootstrap_state`. The stored function
-  is the only write path available to the application.
+**Privilege boundary:**
+- **Operator DB role:** can INSERT into `auth_bootstrap_allow`. Cannot
+  authenticate to the application API.
+- **Application DB role:** cannot INSERT/UPDATE/DELETE
+  `auth_bootstrap_allow` or `auth_bootstrap_state` directly. All
+  transitions go through stored functions:
+  - `transition_bootstrap_state(new_state text)` — accepts `'enabled'`
+    or `'disabled'`. When transitioning to `'enabled'`, it verifies a
+    marker exists in `auth_bootstrap_allow`. When transitioning to
+    `'disabled'` after bootstrap, it deletes the marker in the same
+    transaction.
+  - The application calls `transition_bootstrap_state('enabled')` when
+    it detects a marker, and `transition_bootstrap_state('disabled')`
+    after successful bootstrap.
+  - Neither function accepts arbitrary SQL; they are SECURITY DEFINER
+    functions owned by the operator DB role.
 
 ---
 
@@ -167,7 +165,8 @@ system (fleet-wide)
 │   ├── merge_queue_entry
 │   ├── merge_queue_config
 │   ├── maintainer_setting
-│   └── reconciliation_run
+│   ├── reconciliation_run
+│   └── webhook_delivery
 ├── auth_principal
 ├── auth_role
 ├── auth_credential
@@ -272,10 +271,10 @@ Each permission carries a scope:
 | `service:triage-worker` | `github:act` on repository; `update` on issues, managed_actions, decision_log | installation | P-4 triage worker |
 | `service:heal-worker` | `github:act` on repository; `update` on ci_runs, heal_prs, managed_actions | installation | P-4 CI heal worker |
 | `service:evidence-worker` | `update` on repair_proposals; `enqueue` diagnosis | installation | P-4 evidence worker |
-| `service:diagnosis-worker` | `update` on repair_proposal_events; `enqueue` patch | none (no GitHub) | P-4 diagnosis worker |
-| `service:patch-worker` | `update` on patch_artifacts, repair_proposal_events; `enqueue` verification | none (no GitHub) | P-4 patch worker |
+| `service:diagnosis-worker` | `update` on repair_proposal_event; `enqueue` patch | installation (via delegation) | P-4 diagnosis worker — scope is installation because it mutates installation-scoped records; delegation provides the installation context |
+| `service:patch-worker` | `update` on patch_artifact, repair_proposal_event; `enqueue` verification | installation (via delegation) | P-4 patch worker — same reasoning |
 | `service:verification-worker` | `github:read` on repository; `create` on execution_receipts, source_snapshots | installation (read-only) | P-4 verification worker |
-| `service:critic-worker` | `update` on repair_proposal_events | none (no GitHub) | P-4 critic worker |
+| `service:critic-worker` | `update` on repair_proposal_event | installation (via delegation) | P-4 critic worker — mutates installation-scoped records |
 | `service:sync-worker` | `create` + `update` on installations, repositories, issues, pull_requests, ci_runs, members, collaborators, branch_rules; `github:read` | fleet | P-2 sync worker |
 | `service:maintainer-worker` | `github:act` on repository; `update` on maintainer_actions, maintainer_settings | installation | P-4 maintainer worker |
 | `service:issue-fix-worker` | `github:act` on repository; `update` on fix_attempts, managed_actions | installation | P-4 issue fix worker |
@@ -284,7 +283,7 @@ Each permission carries a scope:
 | `service:fleet-reconciler` | `github:act` on repository (branch protection, labels, repo settings); `update` on policy_repo_configs, reconciliation_runs | fleet | P-4 phase3 fleet reconciler (separated from dependency worker) |
 | `service:review-worker` | `github:act` on repository (reviews, check-runs); `update` on ai_reviews, audit_exports | installation | P-4 phase4 worker |
 | `service:reconciler` | `read` on managed_actions, heal_prs; `update` on managed_actions reconciliation fields only | fleet | `setInterval` reconciliation timer — operates on installation-scoped tables, so scope is `fleet` not `system` |
-| `installation` | (webhook ingress) `enqueue` to all worker queues; `create` on webhook_deliveries | installation | P-3 GitHub App installation (HMAC-verified webhook) |
+| `installation` | (webhook ingress) `enqueue` to all worker queues; `create` on `webhook_delivery` | installation | P-3 GitHub App installation (HMAC-verified webhook) |
 | `system:scheduler` | (scheduled jobs) `enqueue` on all worker queues; triggers sync, reconciliation, dependency scan, graduation, audit export | fleet | Cron timers that initiate fleet-wide scheduled operations |
 | `system` | (migration/bootstrap) `manage` on identity resources during migration; `create` on auth_principal during bootstrap; `manage` on auth_bootstrap_state transitions | system | Migration runner, bootstrap mechanism |
 | `service:executor` | (executor-service) no DB, no GitHub, no network egress. Executes allowlisted npm commands in isolated container. Returns results to caller. | none (no resource access) | P-6 executor-service |
@@ -327,8 +326,11 @@ Role assignments are durable — revocation sets `revoked_at`, never deletes.
 ### Evaluation algorithm (deterministic)
 
 The algorithm evaluates a request through eleven steps. Each step either
-returns `DENY` with a deterministic reason or continues. The first
-applicable `DENY` terminates evaluation.
+returns `DENY_AND_RECORD` with a deterministic reason or continues. The
+first applicable `DENY_AND_RECORD` terminates evaluation. **Every denial
+produces a decision record** with a `decision_id`, just as allows do —
+the record includes the step that denied, the reason code, and all inputs
+evaluated up to that point.
 
 ### Compound operation policies
 
@@ -354,31 +356,47 @@ permission evaluation).
 STEP 1: Authenticate principal
   authenticated_principal = authenticate(token_or_session_or_hmac)
   if not authenticated_principal:
-    return DENY(reason=no_authenticated_principal)
+    return DENY_AND_RECORD(reason=no_authenticated_principal)
 
 STEP 2: Derive candidate tenant scopes (INTERSECTION, not union)
-  -- Roles define the ceiling; credentials can only narrow.
+  -- Roles define the ceiling; credentials can only narrow at every level.
+
+  -- Installation-scoped roles
   role_installation_ids = SELECT scope_id FROM auth_principal_roles
     WHERE principal_id = authenticated_principal.id
-    AND revoked_at IS NULL
-    AND (expires_at IS NULL OR expires_at > now())
     AND scope_type = 'installation'
+
+  -- Repository-scoped roles (derive their parent installation)
+  role_repo_installation_ids = SELECT i.id FROM auth_principal_roles r
+    JOIN repositories repo ON repo.github_id = r.scope_id
+    JOIN installations i ON i.id = repo.installation_id
+    WHERE r.principal_id = authenticated_principal.id
+    AND r.scope_type = 'repository'
+
+  -- All role-derived installations (union of installation + repo-derived)
+  all_role_installation_ids = role_installation_ids ∪ role_repo_installation_ids
 
   has_fleet_role = EXISTS role WHERE scope_type = 'fleet'
 
-  -- Credential restrictions narrow the role-derived set.
+  -- Credentials narrow at every level. A credential with installation
+  -- restrictions narrows the installation set. A credential with
+  -- repository restrictions narrows which repositories are visible
+  -- WITHIN the installation set. A fleet credential restriction does
+  -- NOT expand authority — if the credential is installation-restricted,
+  -- fleet_role is effectively false for this request.
   if credential has installation restrictions:
-    candidate_installation_ids = role_installation_ids INTERSECT credential.installation_ids
+    candidate_installation_ids = all_role_installation_ids INTERSECT credential.installation_ids
+    has_fleet_role = has_fleet_role AND credential.allows_fleet
   else:
-    candidate_installation_ids = role_installation_ids
-
-  -- Fleet scope is an explicit sentinel, not a NULL installation ID.
-  -- When has_fleet_role is true, the query gateway does not filter by
-  -- installation_id for installation-scoped tables (all visible).
-  -- When false, only candidate_installation_ids are visible.
+    candidate_installation_ids = all_role_installation_ids
+    -- Credential may still narrow by repository
+    if credential has repository restrictions:
+      candidate_repo_ids = role_repo_ids INTERSECT credential.repository_ids
+    else:
+      candidate_repo_ids = all role_repo_ids
 
   if candidate_installation_ids is empty AND not has_fleet_role AND not has_system_role:
-    return DENY(reason=no_installation_scope)
+    return DENY_AND_RECORD(reason=no_installation_scope)
 
 STEP 3: Install data-access boundary
   -- The query gateway is the normative enforcement boundary.
@@ -391,25 +409,33 @@ STEP 4: Resolve resource within boundary
   resource = resolve_resource(route_params, resource_type)
   -- The resolver runs through the query gateway, so resources outside
   -- the principal's tenant scope are invisible (not found, not denied).
-  if resource_type is installation-scoped and resource not found:
-    return DENY(reason=resource_not_found)
+  -- For list/create actions (no :id param), resource_id is NULL;
+  -- the resource_type is still known from the route, and the query
+  -- gateway handles scoping. No resource_not_found for list/create.
+  if resource_type is installation-scoped AND action != 'list' AND action != 'create':
+    if resource not found:
+      return DENY_AND_RECORD(reason=resource_not_found)
 
-STEP 5: Load active roles (matching the resolved resource)
+STEP 5: Load active, non-expired roles (matching the resolved resource)
   roles = SELECT FROM auth_principal_roles
     WHERE principal_id = authenticated_principal.id
     AND revoked_at IS NULL
+    AND (expires_at IS NULL OR expires_at > now())
     AND scope matches resource:
       - scope_type='fleet' → matches installation-scoped and fleet resources
       - scope_type='system' → matches ONLY system/identity-scoped resources
       - scope_type='installation' → matches if resource.installation_id = scope_id
       - scope_type='repository' → matches if resource.repository_id = scope_id
+      -- For list/create (resource_id IS NULL): fleet matches all;
+      -- installation matches scope_id in candidate_installation_ids;
+      -- repository matches scope_id in candidate_repo_ids.
   if roles is empty:
-    return DENY(reason=no_active_role)
+    return DENY_AND_RECORD(reason=no_active_role)
 
 STEP 6: Compute role permission set and check action
   role_perms = union of all role.permissions for each role in roles
   if action not in role_perms:
-    return DENY(reason=role_permission_missing)
+    return DENY_AND_RECORD(reason=role_permission_missing)
 
 STEP 7: Check explicit denies
   denies = SELECT FROM auth_resource_grants
@@ -417,17 +443,17 @@ STEP 7: Check explicit denies
     AND resource_type matches (considering inheritance)
     AND effect = 'deny'
   if any deny matches (resource_type, action):
-    return DENY(reason=explicit_deny)
+    return DENY_AND_RECORD(reason=explicit_deny)
 
 STEP 8: Check credential scope
   if credential.scopes is not empty AND action not in credential.scopes:
-    return DENY(reason=credential_scope_denied)
+    return DENY_AND_RECORD(reason=credential_scope_denied)
   if credential.resource_restriction does not include resource:
-    return DENY(reason=credential_resource_restricted)
+    return DENY_AND_RECORD(reason=credential_resource_restricted)
   if credential.environment_restriction != current_environment:
-    return DENY(reason=wrong_environment)
+    return DENY_AND_RECORD(reason=wrong_environment)
   if credential.expired:
-    return DENY(reason=expired)
+    return DENY_AND_RECORD(reason=expired)
 
 STEP 9: Check resource grants (explicit allows — required for ALL scopes)
   grants = SELECT FROM auth_resource_grants
@@ -439,18 +465,18 @@ STEP 9: Check resource grants (explicit allows — required for ALL scopes)
     -- Installation scope is NOT satisfied by role alone.
     -- An explicit allow grant is required at every scope level.
     -- This makes resource_grants part of EVERY authorization intersection.
-    return DENY(reason=resource_grant_missing)
+    return DENY_AND_RECORD(reason=resource_grant_missing)
 
 STEP 10: Check operation policy (compound if needed)
   for each required permission in operation_policy:
     run steps 5-9 for that permission
     apply all_of / any_of composition
   if compound policy denies:
-    return DENY(reason=operation_policy_denied)
+    return DENY_AND_RECORD(reason=operation_policy_denied)
   if operation_policy requires re-authorization (sensitive operation):
     re-read roles and grants from DB (do not use cached session claims)
     if any step 5-9 check fails on re-read:
-      return DENY(reason=reauthorization_failed)
+      return DENY_AND_RECORD(reason=reauthorization_failed)
 
 STEP 11: Issue decision
   decision_id = generate UUID
@@ -645,6 +671,24 @@ Delegations are not limited to human → worker. The full chain includes:
 Each link in the chain creates its own delegation record. The
 `authorization_decision_id` links to the specific decision that authorized
 this delegation.
+
+### Two-principal intersection
+
+When a worker executes under delegation, its effective authority is the
+**intersection** of two principals:
+
+```text
+effective_authority =
+  initiating_principal's permissions (via delegation)
+  ∩ worker_service_principal's permissions (via its role)
+```
+
+The worker can only do what **both** principals permit. If the initiating
+principal has `repository:github:act` but the worker's service role does
+not include it, the action is denied. If the worker's role includes it but
+the delegation does not authorize this specific resource, the action is
+denied. This prevents a delegated worker from exceeding either the
+initiator's intent or its own service-role ceiling.
 
 ### Revocation-after-enqueue
 
@@ -852,20 +896,42 @@ Every job enqueued into BullMQ carries a signed capability token:
 - **One-time consumption:** after the worker processes the job, the JTI is
   marked consumed. Any replay attempt is denied.
 
-### Worker verification
+### Worker verification (reservation protocol)
 
 At dequeue time, the worker:
 1. Extracts the capability token from `job.data.__capability`.
-2. Verifies the signature using the identified key.
+2. Verifies the Ed25519 signature using the identified public key.
+   - Failure: `capability_invalid_signature`.
 3. Checks `audience` matches its own service principal ID.
+   - Failure: `capability_audience_mismatch`.
 4. Checks `expires_at` has not passed.
-5. Checks `payload_hash` matches `sha256(job.data)` (excluding the token itself).
+   - Failure: `capability_expired`.
+5. Checks `payload_hash` matches the canonical hash of the job payload.
+   - Failure: `capability_payload_mismatch`.
 6. Checks `queue_name` and `job_name` match the current queue and job.
-7. Checks `jti` has not been consumed (Redis lookup).
-8. Marks `jti` as consumed.
-9. If all checks pass, executes with the delegated authority.
+   - Failure: `capability_queue_mismatch`.
+7. **Reserves the JTI atomically:** `SET gitwire:jti:{jti} "reserved" NX EX {ttl}`
+   - If SET fails (key exists): check the current value.
+     - If `"consumed"`: reject with `capability_jti_consumed`.
+     - If `"failed"`: allow retry — DELETE the key and re-attempt SET NX.
+     - If `"reserved"` (previous crash): allow retry — DELETE the key
+       and re-attempt SET NX.
+     - If key not found (TTL expired): reject with `capability_jti_expired`.
+   - If SET succeeds: proceed to step 8.
+8. Executes the job under the delegated authority (two-principal
+   intersection, §9).
+9. On completion: `SET gitwire:jti:{jti} "consumed" EX {retention}`.
+10. On failure before completion: `SET gitwire:jti:{jti} "failed" EX {cleanup}`.
 
-If any check fails, the job is rejected with `denied:missing_job_authorization`.
+**Retry semantics:** BullMQ retries carry the same JTI. Steps 7-10 handle
+retries:
+- `"reserved"` from a previous crash → retry allowed (lease re-acquired).
+- `"failed"` from a clean failure → retry allowed (reservation re-acquired).
+- `"consumed"` → retry rejected (already completed).
+- Key expired → retry rejected (capability TTL elapsed).
+
+Each failure produces a specific denial code from the capability denial
+table, not a generic `missing_job_authorization`.
 
 ### Signing architecture
 
@@ -943,34 +1009,40 @@ Node.js versions and implementations.
 | `capability_jti_expired` | JTI key has expired (TTL elapsed) |
 | `capability_key_not_found` | `key_id` references an unknown signing key |
 
-### F-07 resolution: GitHub user resolved at ingress
+### F-07 resolution: command-specific expiring delegation with GitHub recheck
 
-The capability token requires an `initiating_principal_id` at enqueue
-time. For GitHub comment commands (`/gitwire fix`, `/gitwire close`):
+GitHub comment commands (`/gitwire fix`, `/gitwire close`) are mutating
+operations triggered by a GitHub user on a specific repository. The
+authority model resolves and binds this at webhook ingress — not at
+dequeue time.
 
-1. At webhook ingress, `commentRouter.js:27` verifies
+**At webhook ingress:**
+1. `commentRouter.js:27` verifies
    `authorAssociation ∈ {OWNER, MEMBER, COLLABORATOR}`.
 2. The webhook payload's GitHub user identity is resolved to a `user`
-   principal via `github_user_id` lookup.
-3. If the user has no principal, one is created with `operator` role
-   scoped to the installation. This role grants sufficient authority
-   for `/gitwire` mutating commands. The role is scoped to the
-   installation and linked to the GitHub identity for later revocation.
-4. The capability token is issued with this `user` as the initiating
-   principal. The verified GitHub role (`OWNER`, `MEMBER`, or
-   `COLLABORATOR`) is encoded in the authorization decision, not
-   discarded.
-5. At dequeue, the worker verifies the capability and executes under
-   the user's delegated authority.
+   principal via `github_user_id` lookup (created if absent).
+3. **No durable installation-wide role is auto-assigned.** Instead, a
+   **command-specific, repository-bound, expiring delegation** is created:
+   - `operation`: the specific command (e.g., `fix-issue`, `close-issue`).
+   - `resource_type`: `repository`, `resource_id`: the repo's github_id.
+   - `expires_at`: short (e.g., 5 minutes from ingress).
+   - `authorization_decision_id`: the decision that verified the
+     GitHub `authorAssociation` at this moment.
+4. The capability token binds this delegation. The verified GitHub role
+   is part of the decision record, not discarded.
 
-**Post-enqueue GitHub authority check:** for sensitive operations
-requiring re-authorization (step 10), the re-authorization does NOT
-re-read internal roles. Instead, it re-queries the GitHub API for the
-user's current `authorAssociation` on the repository. If the user has
-been demoted from `COLLABORATOR`/`MEMBER`/`OWNER` to `NONE` or
-removed, the re-authorization fails with `reauthorization_failed`.
-This catches the case where the user loses GitHub authority between
-enqueue and execution.
+**At dequeue (worker execution):**
+5. The worker verifies the capability (signature, audience, payload hash,
+   JTI reservation).
+6. For **every mutating command**, the worker rechecks the GitHub API
+   for the user's current `authorAssociation` on the repository:
+   - If still `OWNER`/`MEMBER`/`COLLABORATOR`: proceed.
+   - If demoted or removed: reject with `reauthorization_failed`.
+   This is NOT limited to "sensitive operations" — every `/gitwire`
+   mutating command rechecks, because GitHub association can change
+   between enqueue and execution.
+7. The delegation expires after its short TTL. A replayed capability
+   after expiry is rejected with `capability_expired`.
 
 ---
 
