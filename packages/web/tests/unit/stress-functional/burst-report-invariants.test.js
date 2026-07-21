@@ -234,28 +234,91 @@ describe("burst-report-validator — spec bullet: final in-flight work", () => {
   });
 });
 
-describe("burst-report-validator — spec bullet: duplicate attempt IDs", () => {
-  it("two records sharing an attemptId in attemptsById is rejected", () => {
-    // We construct an attemptsById object that already has the duplicate
-    // (this cannot happen via the reducer, but the validator must be
-    // prescriptive over shape, not assume reducer-clean input).
+describe("burst-report-validator — spec bullet: duplicate attempt IDs (canonical identity)", () => {
+  // Three defect-sensitive cases that actually emit DUPLICATE_ATTEMPT_ID.
+  // The previous implementation's seenIds check could never fire because
+  // Object.entries already deduplicates literal keys; the only detection
+  // path that matters is the canonical-identity one (record.attemptId).
+
+  it("rejects when an attemptsById key holds a record.attemptId that does not match the key", () => {
+    // Key=a1 but the record inside claims attemptId=a2. The canonical
+    // identity is the record.attemptId; the key mismatch means the key is
+    // unreliable as an identity.
+    const attemptsById = Object.create(null);
+    attemptsById.a1 = goodRecord({ attemptId: "a2" });
     const r = goodReport({
-      attemptsById: { a1: goodRecord({ attemptId: "a1" }) },
       logicalOperations: [
-        { logicalOperationId: "L1", attemptIds: ["a1", "a1"], attemptCount: 2, finalAttemptId: "a1", outcome: "succeeded" },
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: "a1", outcome: "succeeded" },
+      ],
+      attemptsById,
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID
+      && v.attemptId === "a2"
+      && /key=a1 holds record.attemptId=a2/.test(v.message))).toBe(true);
+  });
+
+  it("rejects when two different keys hold records claiming the same canonical attemptId", () => {
+    // Construct two records under different keys BOTH holding the same
+    // canonical record.attemptId. To avoid the key-mismatch check firing
+    // first (and masking this check), use keys that are themselves NOT
+    // valid canonical ids — e.g. "rec1" and "rec2" — both holding records
+    // with attemptId="a-dup". The key-mismatch check fires for BOTH records
+    // (key=rec1≠a-dup, key=rec2≠a-dup), AND the cross-key-shared check
+    // fires once for the shared canonical "a-dup".
+    const attemptsById = Object.create(null);
+    attemptsById.rec1 = goodRecord({ attemptId: "a-dup", logicalOperationId: "L1" });
+    attemptsById.rec2 = goodRecord({ attemptId: "a-dup", logicalOperationId: "L1", attemptNumber: 2 });
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["rec1", "rec2"], attemptCount: 2, finalAttemptId: "rec1", outcome: "succeeded" },
+      ],
+      attemptsById,
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    // The cross-key-shared check fires for the canonical id "a-dup".
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID
+      && v.attemptId === "a-dup"
+      && /claimed by multiple attemptsById keys/.test(v.message))).toBe(true);
+  });
+
+  it("rejects when a logical operation references an attemptId not in attemptsById", () => {
+    // op.attemptIds=[a1, a99] but attemptsById only has a1. The dangling
+    // reference breaks the identity contract.
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1", "a99"], attemptCount: 2, finalAttemptId: "a1", outcome: "succeeded" },
       ],
     });
-    // Object literal dedupes keys, so we cannot directly produce a dup via
-    // literal. Instead test the contiguity path: two logicalOperations
-    // referencing the same attemptId across different logical ops is fine;
-    // the duplicate check fires only on literal key dup. We use a proxy
-    // object to simulate.
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID
+      && v.attemptId === "a99"
+      && /not present in attemptsById/.test(v.message))).toBe(true);
+  });
+
+  it("rejects when a logical reference points at a record whose own attemptId disagrees", () => {
+    // op.attemptIds=["a1"] but the record under a1 claims attemptId="a-other".
     const attemptsById = Object.create(null);
-    attemptsById.a1 = goodRecord({ attemptId: "a1" });
-    const r2 = goodReport({ attemptsById });
-    const result = validateBurstReport(r2);
-    // No duplicate in this construction — sanity that the dup code does not
-    // fire falsely.
+    attemptsById.a1 = goodRecord({ attemptId: "a-other" });
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: "a1", outcome: "succeeded" },
+      ],
+      attemptsById,
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID
+      && /references attemptId=a1 but the record claims attemptId=a-other/.test(v.message))).toBe(true);
+  });
+
+  it("a clean reducer-produced report does NOT emit DUPLICATE_ATTEMPT_ID", () => {
+    // Sanity floor: key===record.attemptId and logical refs resolve.
+    const report = buildOperationReport([goodRecord({ attemptId: "a1" })]);
+    const result = validateBurstReport(report);
     expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID)).toBe(false);
   });
 });
@@ -329,6 +392,76 @@ describe("burst-report-validator — spec bullet: logical success without valid 
     expect(result.ok).toBe(false);
     expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL)).toBe(true);
   });
+
+  // ── Final-attempt resolution regressions (review finding #3) ──────────
+  it("succeeded operation → finalAttemptId does not resolve in attemptsById is rejected", () => {
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: "a-missing", outcome: "succeeded" },
+      ],
+      attemptsById: { a1: goodRecord({ attemptId: "a1" }) },
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+      && v.attemptId === "a-missing"
+      && /does not resolve in attemptsById/.test(v.message))).toBe(true);
+  });
+
+  it("succeeded operation → final record belongs to another logical op is rejected", () => {
+    const attemptsById = Object.create(null);
+    attemptsById.a1 = goodRecord({ attemptId: "a1", logicalOperationId: "L2" });
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: "a1", outcome: "succeeded" },
+      ],
+      attemptsById,
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+      && /belongs to a different logicalOperationId=L2/.test(v.message))).toBe(true);
+  });
+
+  it("succeeded operation → referenced final record is not marked final is rejected", () => {
+    const attemptsById = Object.create(null);
+    attemptsById.a1 = goodRecord({ attemptId: "a1", final: false });
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: "a1", outcome: "succeeded" },
+      ],
+      attemptsById,
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+      && /is not marked final=true/.test(v.message))).toBe(true);
+  });
+
+  it("succeeded operation → final record outcome is not succeeded is rejected", () => {
+    const attemptsById = Object.create(null);
+    attemptsById.a1 = goodRecord({
+      attemptId: "a1", final: true, outcome: "failed",
+      assertion: "failed",
+      assertionError: { code: "X", message: "y" }, assertionNotRunReason: null,
+    });
+    const r = goodReport({
+      logical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 1, failed: 0 },
+      attempts: {
+        total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1, expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 1, assertionNotRun: 0,
+      },
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: "a1", outcome: "succeeded" },
+      ],
+      attemptsById,
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+      && /outcome=succeeded but finalAttemptId=a1 outcome=failed/.test(v.message))).toBe(true);
+  });
 });
 
 describe("burst-report-validator — spec bullet: logical failure without failure reason", () => {
@@ -357,6 +490,86 @@ describe("burst-report-validator — spec bullet: logical failure without failur
     const result = validateBurstReport(r);
     expect(result.ok).toBe(false);
     expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON)).toBe(true);
+  });
+
+  // ── Final-attempt resolution regressions (review finding #3) ──────────
+  it("failed operation → missing final record (null finalAttemptId) is rejected", () => {
+    const r = goodReport({
+      logical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      attempts: {
+        total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1,
+        expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 1, assertionNotRun: 0,
+      },
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: null, outcome: "failed" },
+      ],
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON
+      && /finalAttemptId is null/.test(v.message))).toBe(true);
+  });
+
+  it("failed operation → finalAttemptId references a missing record is rejected", () => {
+    const r = goodReport({
+      logical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      attempts: {
+        total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1,
+        expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 1, assertionNotRun: 0,
+      },
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: "a-ghost", outcome: "failed" },
+      ],
+      attemptsById: { a1: goodRecord({ attemptId: "a1" }) },
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON
+      && v.attemptId === "a-ghost"
+      && /does not resolve in attemptsById/.test(v.message))).toBe(true);
+  });
+});
+
+describe("burst-report-validator — spec bullet: under-classification (review finding #1)", () => {
+  // Regression for the gating defect: the previous implementation only ran
+  // the succeeded+failed+inFlight===total check when succeeded+failed>total,
+  // letting under-classification (a disappeared logical op) pass silently.
+  it("total=2/succeeded=1/failed=0/inFlight=0 emits UNKNOWN_CLASSIFICATION", () => {
+    const r = goodReport({
+      logical: { total: 2, started: 2, completed: 2, inFlight: 0, succeeded: 1, failed: 0 },
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.UNKNOWN_CLASSIFICATION
+      && /logical total=2 not reconciled by succeeded\+failed\+inFlight \(1\+0\+0\)/.test(v.message))).toBe(true);
+  });
+
+  it("a reconciling logical block (succeeded+failed+inFlight===total) passes", () => {
+    const r = goodReport({
+      logical: { total: 3, started: 3, completed: 3, inFlight: 0, succeeded: 2, failed: 1 },
+    });
+    const result = validateBurstReport(r);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.UNKNOWN_CLASSIFICATION
+      && v.field === "logical")).toBe(false);
+  });
+
+  it("inFlight absorbs unstarted ops without firing UNKNOWN_CLASSIFICATION", () => {
+    // total=1, inFlight=1, succeeded=0, failed=0 — the single op is
+    // legitimately still in-flight; the reconciliation (0+0+1 === 1) holds
+    // and UNKNOWN_CLASSIFICATION must NOT fire.
+    // (Note: inFlight=1 on a completed report DOES fire FINAL_IN_FLIGHT,
+    // which is a separate violation — this test scopes only to the
+    // reconciliation check.)
+    const r = goodReport({
+      logical: { total: 1, started: 0, completed: 0, inFlight: 1, succeeded: 0, failed: 0 },
+    });
+    const result = validateBurstReport(r);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.UNKNOWN_CLASSIFICATION
+      && v.field === "logical")).toBe(false);
   });
 });
 
@@ -540,6 +753,39 @@ describe("burst-report-validator — fail-closed transactional contract", () => 
     // Deterministic: same input always produces same output order.
     const result2 = validateBurstReport(r);
     expect(result2.violations).toEqual(result.violations);
+  });
+
+  // ── Comparator typo regression (review finding #4) ─────────────────────
+  // The previous compareViolations read `aiB = a.attemptId` instead of
+  // `b.attemptId`, so when phase/logical/attemptNumber tied, attemptId was
+  // never used as a tiebreaker. This test forces the tiebreaker to fire by
+  // producing two violations that share all preceding sort keys and differ
+  // only in attemptId, supplied in REVERSE order. If the comparator were
+  // still broken, both would compare equal and either order could come out
+  // (the assertion catches the wrong one deterministically).
+  it("attemptId is used as a tiebreaker when phase/logical/attemptNumber tie (review #4)", () => {
+    // Two dangling references inside the same logical op's attemptIds[]:
+    // both fire DUPLICATE_ATTEMPT_ID with identical phase=undefined,
+    // logicalOperationId="L1", attemptNumber=undefined — only attemptId
+    // differs. Listed in reverse order ["zzz", "aaa"]; the sorted output
+    // must place "aaa" before "zzz".
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["zzz", "aaa"], attemptCount: 2, finalAttemptId: "a1", outcome: "succeeded" },
+      ],
+      // attemptsById has only a1, so both zzz and aaa are dangling refs.
+      attemptsById: { a1: goodRecord({ attemptId: "a1" }) },
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    const dups = result.violations.filter(
+      (v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID
+        && (v.attemptId === "aaa" || v.attemptId === "zzz")
+    );
+    expect(dups.length).toBe(2);
+    const ids = dups.map((v) => v.attemptId);
+    // Exact-order assertion: "aaa" must precede "zzz" in the sorted output.
+    expect(ids).toEqual(["aaa", "zzz"]);
   });
 });
 
