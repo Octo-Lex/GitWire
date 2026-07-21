@@ -65,7 +65,7 @@ by this correction.
 | **F-05** | HIGH (wording) | HIGH (reworded) | Original said "replayed-and-resigned delivery." The realistic attack is GitHub's own **redelivery** of an already-valid signed request (same payload, same signature, same `X-GitHub-Delivery`), or capture-and-replay of a valid signed body by anyone who observed it. Re-signing requires the secret, which collapses into F-01. Reworded in §13. |
 | **F-07** | HIGH (framing) | HIGH (reframed) | Original framed downstream non-reverification as an independent bypass. The accurate framing is **provenance loss dependent on the F-06 queue-trust defect**: the role check at `commentRouter.js:27` is discarded when the job is enqueued, so once a job is in the queue (via F-06 or otherwise), the worker executes it with the App's authority regardless of the original author's role. The role check exists only on the HTTP ingress path. |
 
-Net severity change after corrections: 2 CRITICAL → 1 CRITICAL + 1 HIGH; 5 HIGH → 1 LOW + 4 HIGH (with one reworded and one reframed).
+Net severity after all corrections (final §13 ledger): **1 CRITICAL** (F-01) · **7 HIGH** (F-02, F-03, F-05, F-06, F-07, F-09, F-10) · **3 MEDIUM** (F-08, F-11, F-12) · **4 LOW** (F-04, F-13, F-14, F-15).
 
 ### C-6 — Source-of-truth discrepancy matrix (`docs/architecture/security.md`)
 
@@ -158,7 +158,7 @@ The decision logic in this codebase is overwhelmingly **"authenticated → allow
 | Decision type | Sites | Notes |
 |---|---|---|
 | **`apiKeyAuth` only** (no further check) | 41 of ~46 mutating route handlers | "Any API-key holder can do this." |
-| **Pillar config gate** (`.gitwire.yml`) | every worker entry point (e.g., `triageWorker.js:67`, `phase4Worker.js:35`, `maintainerWorker.js:53`) | Per-repo policy. Checked in workers, not in HTTP routes. |
+| **Pillar config gate** (`.gitwire.yml`) | most worker entry points (e.g., `triageWorker.js:67`, `phase4Worker.js:35`, `maintainerWorker.js:53`) | Per-repo policy. Checked in workers, not in HTTP routes. **Not universal:** the fleet policy reconciler (`phase3Worker.js:55-58`) has no pillar gate — see F-10a. |
 | **Trigger filter** (branch, author, file) | `ciHealWorker.js:275`, `triageWorker.js:248`, etc. | Policy, not authority. |
 | **Idempotency key** | `issueFix/helpers.js:20`, `maintainerWorker.js:115`, `phase4Worker.js:57` | Correctness, not authority. |
 | **Author role check** (OWNER/MEMBER/COLLABORATOR) | `commentRouter.js:27` (upstream of comment commands) | **DISCARDED after queueing** — the queued job carries only `authorLogin`, not the role. **[F-07 HIGH VERIFIED]** |
@@ -353,9 +353,9 @@ App ↔ executor-service only.
 
 **What is audited:**
 
-- Every worker decision logs to `decision_log` (why this action was taken / not taken).
-- Every GitHub mutation records a `managed_actions` row for later reconciliation.
-- Every policy/waiver/config change records an `audit_log` row (migration 005).
+- Most worker decisions log to `decision_log` (why this action was taken / not taken).
+- Most GitHub mutations performed by heal/fix/maintainer/merge workers record a `managed_actions` row for later reconciliation. **Not all:** the fleet policy reconciler (`policyReconcilerService.js`) performs GitHub PUT/POST/PATCH mutations but records `reconciliation_runs` entries instead of `managed_actions`. Its GitHub mutations are not individually tracked in the `managed_actions` reconciliation system.
+- Policy/waiver/config changes record `audit_log` entries (migration 005), though `audit_log` writers are not fully traced (U-3).
 - A tamper-evident hash chain in `audit_trail_entries` (write-once, `prev_hash` link).
 
 **What is NOT audited:**
@@ -400,7 +400,7 @@ Most scripts have **no auth of their own** — they execute with whatever creden
 | P-1 (session cookie holder) | same as API-key holder | same | session OR API key (cookie is equivalent to key) | same |
 | P-4 (queue-injected job) | execute as any installation | any installation | **none** — `job.data.payload.installation.id` trusted | GitHub + DB across the installation |
 | P-4 (comment-command) | execute `/gitwire fix`, `/gitwire close`, etc. | repo | role check **discarded** at queue time | GitHub: branch, commit, PR, comment |
-| P-3 (worker cron, e.g. policy-reconcile) | PUT branch protection, PATCH repo settings | every repo | per-repo `.gitwire.yml` only; actor hardcoded `"scheduler"` | GitHub + DB |
+| P-3 (worker cron, e.g. policy-reconcile) | PUT branch protection, PATCH repo settings | every repo | per-repo `policy_repo_configs.reconcile_skip` DB column only — **no `.gitwire.yml` pillar gate** (F-10a); actor hardcoded `"scheduler"` | GitHub + DB |
 | P-2 (App itself) | mint installation tokens | every installation | App private key | n/a (token source) |
 | P-6 (executor-service) | run allowlisted npm in sandbox | caller-provided files | bearer token + private network | ephemeral tmpdir |
 | P-7 (script operator) | migrate, restore, deploy, mint App JWTs | production | none beyond env | DB, Redis, GitHub, Docker |
