@@ -141,13 +141,13 @@ matrix is in [§19](#19-securitymd-discrepancy-matrix).
 - **Algorithm:** HMAC-SHA256, verified by `webhookApp.webhooks.verifyAndReceive({ signature, payload })` (`webhooks.js:49`). The `@octokit/app` library delegates to `@octokit/webhooks-methods`, which in the Node build uses `crypto.createHmac("sha256", secret)` and `timingSafeEqual` — **constant-time compare confirmed** (`node_modules/@octokit/webhooks-methods/dist-src/node/verify.js`).
 - **Secret source:** `process.env.GITHUB_WEBHOOK_SECRET` (`packages/web/config/index.js:170`).
 - **Default if unset:** `parsed.data.GITHUB_WEBHOOK_SECRET || "dev-secret"` (`config/index.js:170`). **No production fail-closed check.** **[F-01 CRITICAL VERIFIED]**
-- **Replay protection:** **WEAK.** No timestamp tolerance, no nonce. The only dedupe is `INSERT INTO webhook_deliveries ... ON CONFLICT (delivery_id) DO NOTHING` at `webhooks.js:175` — but that INSERT runs **AFTER** all side effects (queue dispatch `:109`, custom-rule eval `:114`, quality-gate eval `:142`). A replayed-and-resigned delivery with the same ID re-executes all side effects before the no-op insert. **[F-05 HIGH VERIFIED]**
+- **Replay protection:** **WEAK.** No timestamp tolerance, no nonce. The only dedupe is `INSERT INTO webhook_deliveries ... ON CONFLICT (delivery_id) DO NOTHING` at `webhooks.js:175` — but that INSERT runs **AFTER** all side effects (queue dispatch `:109`, custom-rule eval `:114`, quality-gate eval `:142`). A replayed delivery — GitHub's own redelivery of an already-valid signed request (same payload, same signature, same `X-GitHub-Delivery`), or capture-and-replay of a valid signed body by anyone who observed it — re-executes all side effects before the no-op insert. (Re-signing requires the webhook secret, which collapses into F-01.) **[F-05 HIGH VERIFIED]**
 - **Headers required:** `x-github-event`, `x-github-delivery`, `x-hub-signature-256`, non-empty body (`webhooks.js:33-40`).
 
 ### 2.4 executor-service bearer (P-6)
 
 - **Check site:** `packages/executor-service/src/server.js:42-52`.
-- **Comparison:** `if (auth !== \`Bearer ${config.service_token}\`)` at `server.js:48` — **non-constant-time**. **[F-04 HIGH VERIFIED]**
+- **Comparison:** `if (auth !== \`Bearer ${config.service_token}\`)` at `server.js:48` — **non-constant-time**. **[F-04 LOW VERIFIED]** (re-rated from HIGH to LOW in C-5: executor-service is private-compose-network-only; no timing oracle demonstrated; defense-in-depth only).
 - **Mitigation:** the executor-service is on a private compose network only (`server.js:38-41`); the token is "a second layer." Network boundary is the primary defense.
 - **Fail mode:** token unset → every `/v1/validate` returns 503 (fail-closed).
 
@@ -162,7 +162,7 @@ The decision logic in this codebase is overwhelmingly **"authenticated → allow
 | **Trigger filter** (branch, author, file) | `ciHealWorker.js:275`, `triageWorker.js:248`, etc. | Policy, not authority. |
 | **Idempotency key** | `issueFix/helpers.js:20`, `maintainerWorker.js:115`, `phase4Worker.js:57` | Correctness, not authority. |
 | **Author role check** (OWNER/MEMBER/COLLABORATOR) | `commentRouter.js:27` (upstream of comment commands) | **DISCARDED after queueing** — the queued job carries only `authorLogin`, not the role. **[F-07 HIGH VERIFIED]** |
-| **Per-tenant filter on DB ops** | **essentially nowhere** | List endpoints default to global; mutations accept `:owner/:repo` without verifying installation scope. `revokeWaiver(waiverId)` has no `repo_id` filter (`waiverService.js:126-133`). **[F-02 CRITICAL VERIFIED]** |
+| **Per-tenant filter on DB ops** | **essentially nowhere** | List endpoints default to global; mutations accept `:owner/:repo` without verifying installation scope. `revokeWaiver(waiverId)` has no `repo_id` filter (`waiverService.js:126-133`). **[F-02 HIGH VERIFIED]** |
 | **Rate-limit-as-authz** | `rateLimiter.js:15-56` | 120 req/60s per identity (token or IP). Fail-open on Redis error (`rateLimiter.js:51-55`). |
 
 There is **no role-based access control**, **no per-resource ownership check**, **no per-installation scope check on the HTTP path**, and **no policy enforcement point** that intercepts mutations.
@@ -183,8 +183,8 @@ verification that the caller's authority covers that repo**.
 
 **Leakage surfaces:**
 
-- **List endpoints** (`routes/issues.js`, `routes/pullRequests.js`, `routes/ciRuns.js`, `routes/healHistory.js`, etc.) — global by default. **[F-09 REPORTED]**
-- **`revokeWaiver(waiverId)`** (`waiverService.js:126-133`) — `UPDATE policy_waivers SET active=FALSE WHERE id=$1`. No `repo_id`, no `installation_id`. Any API-key holder can revoke any waiver by ID. **[F-02 CRITICAL VERIFIED]**
+- **List endpoints** (`routes/issues.js`, `routes/pullRequests.js`, `routes/ciRuns.js`, `routes/healHistory.js`, etc.) — global by default. **[F-09 HIGH VERIFIED]**
+- **`revokeWaiver(waiverId)`** (`waiverService.js:126-133`) — `UPDATE policy_waivers SET active=FALSE WHERE id=$1`. No `repo_id`, no `installation_id`. Any API-key holder can revoke any waiver by ID. **[F-02 HIGH VERIFIED]**
 - **`DELETE /api/repairs/:id/transition`, `PATCH /api/repairs/:id/evidence`** — currently hard-403'd (`routes/repairs.js:84-102`) but the route exists and accepts IDs.
 - **Worker→installation binding** — workers mint installation tokens purely from `job.data.payload.installation.id`. A queue-injected job for installation A is indistinguishable from a real one. **[F-06 HIGH VERIFIED]**
 
@@ -266,7 +266,7 @@ Every worker that needs GitHub access calls `getInstallationClient(installationI
 | maintainerWorker | `workers/maintainerWorker.js:23` | `maintainer` | pillar + dry-run + idempotency; **comment-command path discards role** | installation | GitHub: warn, close, label, delete branch, post comment; DB: maintainer_actions, maintainer_settings |
 | issueFixWorker | `workers/issueFixWorker.js:20` | `issue-fix` | pillar + idempotency; trusts `triggeredBy` field for telemetry only | installation | GitHub: branch, commit, PR, label, comment; DB: fix_attempts, managed_actions |
 | phase2Worker (mergeQueue) | `workers/phase2Worker.js:15` | `phase2` | pillar + dry-run | installation | **GitHub: merge PRs** (`mergeQueueService.js:208`), delete branches, open revert PRs; DB: merge_queue_entries, rollback_events |
-| phase3Worker | `workers/phase3Worker.js:17` | `phase3` | pillar + dry-run | installation (per-repo + fleet) | GitHub: PUT branch protection, PATCH repo settings, POST labels, open dependency PRs; DB: policy_repo_configs, dependency_*, flaky_tests, vulnerability_advisories |
+| phase3Worker | `workers/phase3Worker.js:17` | `phase3` | per-handler: dependency/scan paths use pillar + dry-run; **fleet reconciler has NO pillar gate** — uses `reconcile_skip` DB column only (F-10a) | installation (per-repo + fleet) | GitHub: PUT branch protection, PATCH repo settings, POST labels, open dependency PRs; DB: policy_repo_configs, dependency_*, flaky_tests, vulnerability_advisories |
 | phase4Worker | `workers/phase4Worker.js:22` | `phase4` | pillar + waiver + idempotency + dry-run | installation | GitHub: review comments, check-runs; DB: ai_reviews, audit_exports |
 
 **Plus** `reconciliationWorker` — not one of the 14 (no `startXxxWorker` export); invoked by `setInterval` at `index.js:71,78`. Runs every 6h with system identity.
@@ -337,7 +337,7 @@ No production-path filesystem mutation outside ephemeral sandbox tempdirs.
 App ↔ executor-service only.
 
 - **App → executor-service:** HTTP `POST /v1/validate` with optional `Authorization: Bearer ${token}` (`executorServiceClient.js:55,116`). The client does not fail-closed if the token is absent.
-- **executor-service auth:** `Bearer ${service_token}` exact-string compare, non-constant-time (`server.js:48`). **[F-04 HIGH VERIFIED]**
+- **executor-service auth:** `Bearer ${service_token}` exact-string compare, non-constant-time (`server.js:48`). **[F-04 LOW VERIFIED]** (re-rated HIGH→LOW in C-5: private-network-only, no timing oracle).
 - **Primary defense:** private compose network only. Token is "a second layer."
 - **executor-service authority:** minimal — no DB, no GitHub, no network egress, runs an allowlisted subset of `npm` commands in a `--network=none --read-only --user=1000:1000 --pids-limit --memory --tmpfs` container with no `--privileged` and no Docker socket (`validatorRunner.js:10-14,208-220`). Image pinned by digest (`validatorRunner.js:124-166`). **Smallest authority surface in the system.**
 
