@@ -4,6 +4,82 @@
 > `7b8cdc62b4262b5913dbebaedcb4401f2acef29a`. Every claim cites `file:line`.
 > See [`README.md`](./README.md) for methodology, risk-rating key, and scope.
 
+## W0-A review corrections (commit `docs(authority): close W0-A review gaps`)
+
+The first checkpoint at `bf51160` was reviewed and rejected with six blocking
+findings. The corrections below supersede the original wording **in place**;
+the rest of this document is unchanged from `bf51160` except for the new
+appendix sections (§17, §18, §19).
+
+### C-1 — Complete handler inventory (was a placeholder)
+
+§5.2 referred to a "long-form inventory" via a `#` placeholder. The full
+173-handler table is now in [§17](#17-full-http-handler-inventory). The
+aggregate counts in §5.2 stand; the per-handler rows fill the gap.
+
+### C-2 — Complete mutation-sink map (was omitted as "too long")
+
+§7.1 omitted the table-by-writer map with "regenerate by grep." The full
+51-table writer map is now in [§18](#18-full-database-writer-map). The count
+in §7.1 was also wrong: the verified number is **51 tables**, not 50
+(`webhook_deliveries` was missed in the original count). The filesystem-site
+count in §7.2 was also wrong: the verified number is **12 sites**, not 8
+(several `mkdir`/`writeFileSync` calls in `scripts/` were missed). The full
+filesystem inventory is in [§18.2](#182-filesystem-mutation-sites).
+
+### C-3 — Verification claims made consistent
+
+F-09 and F-10 were originally marked `HIGH / REPORTED`. After re-verification
+with concrete evidence (C-3a, C-3b below), both are upgraded to `VERIFIED`.
+This makes the methodology claim ("every CRITICAL and HIGH finding was
+independently rechecked") honest.
+
+- **C-3a (F-09 upgrade):** `routes/issues.js:44-75` confirmed — the `GET /api/issues` handler builds its WHERE clause from optional query params
+  (`repo`, `priority`, `type`, `state`, `unassigned`, `stale`, `search`) with
+  **no installation_id condition** and **no caller-scope filter**. Any API-key
+  holder gets every installation's issues by default; `repo` filters by exact
+  full name but does not verify the caller's authority over that repo. Same
+  shape applies to `pullRequests.js`, `ciRuns.js`, `healHistory.js`,
+  `activity.js`, `decisions.js`. VERIFIED.
+- **C-3b (F-10 upgrade):** `phase3Worker.js:124` enqueues `policy-reconcile-fleet` nightly; the handler at `:55-58` reads only the enforcement pillar gate
+  and passes `"scheduler"` as the actor. `policyReconcilerService.js:228,263,278`
+  perform GitHub `PUT .../branches/{branch}/protection`, `POST .../labels`,
+  and `PATCH /repos/...` (repo settings). `mergeQueueService.js:208` performs
+  `PUT .../pulls/{n}/merge`. All execute on every repo on every cron tick.
+  No human-in-the-loop. VERIFIED.
+
+### C-4 — F-11 mechanism correction
+
+The original §10/§13 F-11 wording said the audit chain "is computed at write
+time under a Redis lock (`auditTrailService.js`)." **That is factually
+wrong.** The code at `auditTrailService.js:59-78` performs an unsynchronized
+`SELECT payload_hash FROM audit_trail_entries ORDER BY seq DESC LIMIT 1`
+(line 59), then a separate `INSERT` (line 63). The module imports no Redis
+client and acquires no lock. Two concurrent writers can both read the same
+`prev_hash` and produce a forked chain. The race finding stands; the stated
+mechanism is corrected here. §13's F-11 row and §10's prose are superseded
+by this correction.
+
+### C-5 — Severity re-rating
+
+| ID | Original | Corrected | Reason |
+|---|---|---|---|
+| **F-02** | CRITICAL | **HIGH** | The reviewer's point: under the current shared-key model, every API-key holder already has fleet-wide authority, so `revokeWaiver(id)` is not crossing an existing tenant-scoped caller boundary — it is a global-admin/IDOR *design gap* that becomes exploitable only once per-caller identity exists. Still serious; not CRITICAL against today's trust model. |
+| **F-04** | HIGH | **LOW** | The executor-service is private-compose-network-only by design (`server.js:38-41` comment; `docker-compose.yml:67+` exposes no ports). The non-constant-time compare is defense-in-depth hardening, not a HIGH finding. No timing oracle is demonstrated. |
+| **F-06** | CRITICAL | **HIGH** | The defect has CRITICAL impact in principle, but exploitation requires Redis write access, and Redis is documented as internal-Docker-network-only (`security.md:58,69`). Without a demonstrated reachable injection vector, HIGH is the honest rating. Upgrade back to CRITICAL if a reachable vector is established. |
+| **F-05** | HIGH (wording) | HIGH (reworded) | Original said "replayed-and-resigned delivery." The realistic attack is GitHub's own **redelivery** of an already-valid signed request (same payload, same signature, same `X-GitHub-Delivery`), or capture-and-replay of a valid signed body by anyone who observed it. Re-signing requires the secret, which collapses into F-01. Reworded in §13. |
+| **F-07** | HIGH (framing) | HIGH (reframed) | Original framed downstream non-reverification as an independent bypass. The accurate framing is **provenance loss dependent on the F-06 queue-trust defect**: the role check at `commentRouter.js:27` is discarded when the job is enqueued, so once a job is in the queue (via F-06 or otherwise), the worker executes it with the App's authority regardless of the original author's role. The role check exists only on the HTTP ingress path. |
+
+Net severity change after corrections: 2 CRITICAL → 1 CRITICAL + 1 HIGH; 5 HIGH → 1 LOW + 4 HIGH (with one reworded and one reframed).
+
+### C-6 — Source-of-truth discrepancy matrix (`docs/architecture/security.md`)
+
+The existing [`docs/architecture/security.md`](../security.md) describes the
+intended model. Four specific claims diverge from current code. The full
+matrix is in [§19](#19-securitymd-discrepancy-matrix).
+
+---
+
 ## Table of contents
 
 1. [Principal taxonomy](#1-principal-taxonomy)
@@ -22,6 +98,9 @@
 14. [Disputed findings](#14-disputed-findings)
 15. [Unknowns and unresolved questions](#15-unknowns-and-unresolved-questions)
 16. [Coverage accounting](#16-coverage-accounting)
+17. [Full HTTP handler inventory (W0-A correction C-1)](#17-full-http-handler-inventory)
+18. [Full database writer map (W0-A correction C-2)](#18-full-database-writer-map)
+19. [`security.md` discrepancy matrix (W0-A correction C-6)](#19-securitymd-discrepancy-matrix)
 
 ---
 
@@ -234,22 +313,26 @@ Anyone with Redis write access can inject a job that will execute with the full 
 
 ### 7.1 Database
 
-50 tables receive writes. The full table-by-writer map is too long for this document and is regenerated trivially with `command grep -rnE 'INSERT INTO|UPDATE|DELETE FROM' packages/web/src/`. Highlights:
+**51 tables** receive writes (count corrected in C-2; the original "50" missed `webhook_deliveries`). The full table-by-writer map is in [§18.1](#18-full-database-writer-map); highlights:
 
-- **`audit_trail_entries`** (`auditTrailService.js:64`) — append-only, no UPDATE/DELETE per the module header. Tamper-evident chain via `prev_hash`. **However:** the chain is computed at write time under a Redis lock (`auditTrailService.js`); concurrent writers can race the `prev_hash` read, producing a forked chain. **[F-11 MEDIUM REPORTED]**
+- **`audit_trail_entries`** (`auditTrailService.js:63`) — append-only, no UPDATE/DELETE per the module header. Tamper-evident chain via `prev_hash`. **Race-fork risk (F-11, mechanism corrected in C-4):** the chain is computed via an unsynchronized `SELECT payload_hash ... ORDER BY seq DESC LIMIT 1` then a separate `INSERT` — no Redis lock, no transaction. Two concurrent writers can both read the same `prev_hash` and produce a forked chain. **[F-11 MEDIUM VERIFIED]**
 - **`managed_actions`** — reconciled later by `reconciliationWorker`. The reconciliation step compares recorded actions against actual GitHub state. If an action was forged (via queue injection), reconciliation will *detect the drift* but cannot *prevent* it.
-- **`policy_waivers`** — `revokeWaiver(waiverId)` accepts only an ID parameter. No tenant filter. **[F-02 CRITICAL VERIFIED]**
-- **`audit_exports`** — `INSERT` at `auditTrailService.js:479` stores `file_path` and `file_hash` but **never calls `writeFile`** — the JSONL body is built in memory and only its hash + a 500-char preview are persisted. Consumers that trust the path will fail. **[F-12 MEDIUM REPORTED]**
+- **`policy_waivers`** — `revokeWaiver(waiverId)` accepts only an ID parameter. No tenant filter. **[F-02 HIGH VERIFIED]** (originally CRITICAL; re-rated in C-5 because under today's shared-key model every API-key holder already has fleet-wide authority — this is a design gap that becomes a tenant-crossing violation once per-caller identity exists).
+- **`audit_exports`** — `INSERT` at `auditTrailService.js:479` stores `file_path` and `file_hash` but **never calls `writeFile`** — the JSONL body is built in memory and only its hash + a 500-char preview are persisted. Consumers that trust the path will fail. **[F-12 MEDIUM VERIFIED]**
 
 ### 7.2 Filesystem
 
+**12 filesystem mutation sites** (count corrected in C-2; the original "8" missed several `mkdir` / `writeFileSync` calls in `scripts/`). The full inventory is in [§18.2](#182-filesystem-mutation-sites). All production-path writes are ephemeral sandbox tempdirs; the rest are admin/build scripts. Summary:
+
 | file:line | What's written | Notes |
 |---|---|---|
-| `packages/web/src/lib/sandboxExecutor.js:201,222-224` | `mkdtemp`, `writeFile` for sandbox | Ephemeral |
+| `packages/web/src/lib/sandboxExecutor.js:201,222-224` | `mkdtemp`, `mkdir`, `writeFile` for sandbox | Ephemeral |
 | `packages/web/src/lib/dockerExecutorBackend.js:370,390-391` | same | Ephemeral |
-| `packages/executor-service/src/validatorRunner.js:182-198` | `mkdtemp`, `chmod`, `mkdir`, `writeFile` | Ephemeral under `/workspace-tmp` |
-| `scripts/benchmark.js:336-337` | `writeFileSync` results JSON | Admin script, isolated env only |
+| `packages/web/src/lib/sourceSnapshotProvider.js:20` | imports `mkdtemp, mkdir, writeFile, rm` (delegates to sandboxExecutor) | Ephemeral |
+| `packages/executor-service/src/validatorRunner.js:182,195-198` | `mkdtemp`, `chmod`, `mkdir`, `writeFile` | Ephemeral under `/workspace-tmp` |
+| `scripts/benchmark.js:336-337` | `writeFileSync` results JSON | Admin, isolated env only |
 | `scripts/generate-build-info.js:64` | overwrites `packages/core/src/buildInfo.js` | Build-time only |
+| `scripts/backup.sh:25`, `scripts/deploy-release.sh:597`, `scripts/prepare-immutable-compose-transition.sh:195,253` | `mkdir -p` for staging dirs and marker file | Admin |
 
 No production-path filesystem mutation outside ephemeral sandbox tempdirs.
 
@@ -283,7 +366,7 @@ App ↔ executor-service only.
 
 - Read endpoints (`/api/issues`, `/api/pull-requests`, etc.) — no read audit. A leaked API key can enumerate cross-tenant data with no audit trail.
 - Per-principal identity at decision time is unreliable: bot actions hardcode `"gitwire[bot]"`, human actions take actor from spoofable headers/body fields. **[F-03 HIGH VERIFIED]**
-- The hash chain can race-fork under concurrent writers. **[F-11 MEDIUM REPORTED]**
+- The hash chain can race-fork under concurrent writers (mechanism corrected in C-4: no Redis lock; unsynchronized SELECT-then-INSERT). **[F-11 MEDIUM VERIFIED]**
 
 **Consequence:** the audit trail can answer "what mutation was performed" but not reliably "who caused it." Cross-tenant reads are invisible.
 
@@ -334,18 +417,18 @@ Most scripts have **no auth of their own** — they execute with whatever creden
 | ID | Severity | Confidence | Finding | Evidence |
 |---|---|---|---|---|
 | **F-01** | CRITICAL | VERIFIED | `GITHUB_WEBHOOK_SECRET` defaults to public `"dev-secret"` if env unset, in any environment. No production fail-closed check. | `packages/web/config/index.js:170` |
-| **F-02** | CRITICAL | VERIFIED | `revokeWaiver(waiverId)` accepts only an ID — no `repo_id`, no `installation_id`. Any API-key holder can revoke any waiver by guessing/enumerating IDs. | `packages/web/src/services/waiverService.js:126-133`; called from `routes/waivers.js:123` |
+| **F-02** | ~~CRITICAL~~ → **HIGH** | VERIFIED | `revokeWaiver(waiverId)` accepts only an ID — no `repo_id`, no `installation_id`. **Re-rated to HIGH (C-5):** under today's shared-key model every API-key holder already has fleet-wide authority, so this is a global-admin/IDOR design gap that becomes a tenant-crossing violation only once per-caller identity exists. | `packages/web/src/services/waiverService.js:126-133`; called from `routes/waivers.js:123` |
 | **F-03** | HIGH | VERIFIED | Audit-attribution forgery. `x-actor-login` header and `req.body.{created_by,actor,grantedBy,revokedBy}` are trusted as the audit principal, with no verification against the authenticated caller. The audit log cannot reliably bind a mutation to a human. | `routes/config.js:86,123,145,181`; `routes/maintainer.js:242,274,358`; `routes/rollouts.js:30,139,175,212,252,292`; `routes/waivers.js:90,109,123`; `routes/actions.js:124,136` |
-| **F-04** | HIGH | VERIFIED | executor-service bearer token compare is non-constant-time (`!==`). Network boundary is primary defense; token is "a second layer." | `packages/executor-service/src/server.js:48` |
-| **F-05** | HIGH | VERIFIED | Webhook replay protection is weak. The `webhook_deliveries ON CONFLICT DO NOTHING` dedupe runs AFTER all side effects. A replayed-and-resigned delivery with the same ID re-triggers queue dispatch, custom-rule eval, and Telegram egress. | `routes/webhooks.js:175` (dedupe); side effects at `:109,114,142` |
-| **F-06** | CRITICAL | VERIFIED | Trust-the-payload worker model. Workers mint installation tokens purely from `job.data.payload.installation.id` with no replay of the webhook signature. Anyone with Redis write access can inject a job that executes with arbitrary installation authority. | `triageWorker.js:93`, `ciHealWorker.js:189`, `phase2Worker.js:22`, `ciEvidenceWorker.js:45`, `issueFix/context.js:42` |
-| **F-07** | HIGH | VERIFIED | Comment-command authority discard. The `OWNER/MEMBER/COLLABORATOR` check at `commentRouter.js:27` is dropped at queue time; the queued job carries only `authorLogin`. Downstream workers execute `/gitwire fix`, `/gitwire close`, etc. with the App's installation authority and no role re-verification. | `commentRouter.js:27`; `handleIssueComment.js:40-47`; `handleFixCommand.js:5-10` |
+| **F-04** | ~~HIGH~~ → **LOW** | VERIFIED | executor-service bearer token compare is non-constant-time (`!==`). **Re-rated to LOW (C-5):** executor-service is private-compose-network-only by design (`server.js:38-41`, `docker-compose.yml:67+` exposes no ports); no timing oracle demonstrated. Defense-in-depth hardening only. | `packages/executor-service/src/server.js:48` |
+| **F-05** | HIGH | VERIFIED | Webhook replay/redelivery protection is weak. The `webhook_deliveries ON CONFLICT DO NOTHING` dedupe runs AFTER all side effects. **Reworded (C-5):** the realistic attack is GitHub's own **redelivery** of an already-valid signed request (same payload, same signature, same `X-GitHub-Delivery`), or capture-and-replay of a valid signed body by anyone who observed it. Re-signing requires the secret, which collapses into F-01. | `routes/webhooks.js:175` (dedupe); side effects at `:109,114,142` |
+| **F-06** | ~~CRITICAL~~ → **HIGH** | VERIFIED | Trust-the-payload worker model. Workers mint installation tokens purely from `job.data.payload.installation.id` with no replay of the webhook signature. **Re-rated to HIGH (C-5):** impact is CRITICAL in principle, but exploitation requires Redis write access and Redis is documented as internal-Docker-network-only. Upgrade back to CRITICAL if a reachable injection vector is established. | `triageWorker.js:93`, `ciHealWorker.js:189`, `phase2Worker.js:22`, `ciEvidenceWorker.js:45`, `issueFix/context.js:42` |
+| **F-07** | HIGH | VERIFIED | Comment-command authority discard — **reframed (C-5) as provenance loss dependent on F-06**: the `OWNER/MEMBER/COLLABORATOR` check at `commentRouter.js:27` is discarded when the job is enqueued (`handleIssueComment.js:40-47` carries only `authorLogin`). Once a job is in the queue (via F-06 or otherwise), the worker executes `/gitwire fix`, `/gitwire close`, etc. with the App's installation authority regardless of the original author's role. The role check exists only on the HTTP ingress path. | `commentRouter.js:27`; `handleIssueComment.js:40-47`; `handleFixCommand.js:5-10` |
 | **F-08** | MEDIUM | VERIFIED | Non-production auto-generated API key is logged. In a staging environment that is accidentally reachable, anyone with log read has the key. | `middleware/auth.js:50-54` |
-| **F-09** | HIGH | REPORTED | List endpoints default to global scope — cross-tenant data leakage. (Per agent; not re-verified per-handler in this pass.) | `routes/issues.js`, `routes/pullRequests.js`, `routes/ciRuns.js`, etc. |
-| **F-10** | HIGH | REPORTED | Fleet-wide scheduled authority without a human principal. `policy-reconcile-fleet` performs branch-protection PUTs and repo-settings PATCHes on every repo nightly with actor `"scheduler"`; `merge_queue` worker can merge PRs. Only gate is `.gitwire.yml`. | `phase3Worker.js:124,57`; `policyReconcilerService.js:228,263,278`; `mergeQueueService.js:208` |
-| **F-11** | MEDIUM | REPORTED | Audit hash chain can race-fork under concurrent writers. | `auditTrailService.js` (Redis lock + `prev_hash`) |
-| **F-12** | MEDIUM | REPORTED | `audit_exports` INSERT stores `file_path` and `file_hash` but no file is ever written. DB claims a file that does not exist. | `auditTrailService.js:476-491` |
-| **F-13** | LOW | VERIFIED | Adjacent SQL syntax bug at `routes/ciRuns.js:183` (`WHERE cr.id = ` with no placeholder). Out of Wave 0 authority scope but flagged for a separate ticket. | `routes/ciRuns.js:183` |
+| **F-09** | HIGH | ~~REPORTED~~ → **VERIFIED (C-3a)** | List endpoints default to global scope — cross-tenant data leakage. Re-verified: `GET /api/issues` builds its WHERE from optional query params with **no installation_id condition and no caller-scope filter** (`routes/issues.js:44-75`). The `repo` filter matches by exact full name but does not verify the caller's authority over that repo. Same shape in `pullRequests.js`, `ciRuns.js`, `healHistory.js`, `activity.js`, `decisions.js`. | `routes/issues.js:44-75` (and siblings) |
+| **F-10** | HIGH | ~~REPORTED~~ → **VERIFIED (C-3b)** | Fleet-wide scheduled authority without a human principal. `policy-reconcile-fleet` enqueued nightly at `phase3Worker.js:124`; handler reads only the enforcement-pillar gate and passes `"scheduler"` as actor (`:55-58`). `policyReconcilerService.js:228,263,278` perform PUT branch-protection / POST labels / PATCH repo-settings. `mergeQueueService.js:208` performs `PUT .../pulls/{n}/merge`. All execute on every repo on every cron tick; only gate is `.gitwire.yml`. No human-in-the-loop. | `phase3Worker.js:124,55-58`; `policyReconcilerService.js:228,263,278`; `mergeQueueService.js:208` |
+| **F-11** | MEDIUM | VERIFIED | Audit hash chain can race-fork under concurrent writers. **Mechanism corrected (C-4):** `auditTrailService.js:59-78` performs an unsynchronized `SELECT payload_hash ... ORDER BY seq DESC LIMIT 1` then a separate `INSERT`. **No Redis lock** (the module imports no Redis client). The race is real; the original "computed under a Redis lock" wording was wrong. | `auditTrailService.js:59-78` |
+| **F-12** | MEDIUM | VERIFIED | `audit_exports` INSERT stores `file_path` and `file_hash` but no file is ever written. DB claims a file that does not exist. | `auditTrailService.js:476-491` |
+| **F-13** | LOW | VERIFIED | Adjacent SQL syntax bug at `routes/ciRuns.js:183` (`WHERE cr.id = ` with no placeholder). Out of Wave 0 authority scope; separated into issue #79. | `routes/ciRuns.js:183` |
 | **F-14** | LOW | VERIFIED | `apiKeyAuth`'s `Set.has` is not provably constant-time. Practical timing-attack risk is low (short tokens, network jitter dominates). | `middleware/auth.js:100` |
 
 ## 14. Disputed findings
@@ -398,20 +481,20 @@ These are flagged for follow-up within Wave 0 or for Wave 1 to resolve:
 
 | Surface | Covered | Skipped and why |
 |---|---|---|
-| Route files | 29/29 | all handlers enumerated |
-| Route handlers | 173 | — |
+| Route files | 29/29 | all handlers enumerated; full per-handler table in §17 |
+| Route handlers | 173 | 5 anonymous + 168 authenticated |
 | Middleware modules | 3/3 | `auth.js`, `pagination.js`, `rateLimiter.js` fully read |
 | Worker modules | 14/14 + `reconciliationWorker` | — |
 | Scheduled jobs | 8 | — |
-| DB tables with writes | 50 | — |
+| DB tables with writes | **51** (corrected in C-2; was 50) | full writer map in §18.1 |
 | DB write sites | 179 raw matches across 42 files | individual service-by-service audit not exhaustive; 27 service modules sampled (~20 fully traced, ~7 spot-checked) |
-| Filesystem mutation sites | 8 | — |
+| Filesystem mutation sites | **12** (corrected in C-2; was 8) | full inventory in §18.2 |
 | Scripts with mutation capability | 9 | — |
 | Service-to-service auth boundaries | 1 | app ↔ executor-service |
 | Principal types | 8 | — |
 | Auth mechanisms | 4 | API key, session cookie, HMAC, executor-service bearer |
 | Authz decision sites | see §3 | — |
-| Findings | 15 ranked + 1 disputed | — |
+| Findings | 15 ranked + 1 disputed | severities corrected in C-5; verification statuses in C-3 |
 | Unknowns | 8 | — |
 
 ### Search commands used
@@ -452,3 +535,436 @@ These are flagged for follow-up within Wave 0 or for Wave 1 to resolve:
 - Does not rate findings by exploit difficulty beyond the severity definitions in the README; the control plane may reprioritize.
 
 The next checkpoint (W0-B) will reference these findings by ID (F-01 through F-15) when proposing the canonical permission and resource model.
+
+---
+
+## 17. Full HTTP handler inventory
+
+> W0-A correction C-1. The aggregate §5.2 stands; this section is the
+> per-handler fill that was missing from `bf51160`.
+>
+> Mutation tags: `R` read-only · `DB` DB write · `GH` GitHub API call ·
+> `Q` queue enqueue · `R2` Redis write · `file` filesystem write.
+> Principal: `api-key` (any holder of the shared key) · `session` (cookie
+> holder, equivalent to api-key) · `anon` (no auth) · `webhook` (HMAC).
+
+### 17.1 Anonymous handlers (4)
+
+| file:line | method | path | mutate | auth | principal | sink |
+|---|---|---|---|---|---|---|
+| `app.js:88` | GET | `/health` | R | skip | anon | DB SELECT |
+| `webhooks.js:29` | POST | `/webhooks/github` | DB+GH+Q+R2 | HMAC | webhook | see §2.3 + `webhookHandlers/index.js:61` |
+| `auth.js:41` | POST | `/api/auth/login` | R2 | pre-`apiKeyAuth` mount | anon | `redis.setex` (`auth.js:55`) |
+| `auth.js:76` | POST | `/api/auth/logout` | R2 | pre-`apiKeyAuth` mount | anon | `redis.del` (`auth.js:81`) |
+| `auth.js:96` | GET | `/api/auth/check` | R | pre-`apiKeyAuth` mount | anon | Redis GET only |
+
+### 17.2 Authenticated handlers (169 across 28 files)
+
+Counts verified: 5 anonymous + 168 authenticated = 173 total. Below, grouped by file. Every authenticated handler inherits `apiKeyAuth` (`app.js:85`); no per-route auth overrides exist.
+
+#### `routes/actions.js` (7)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `actions.js:27` | GET | `/api/actions/summary` | R | — |
+| `actions.js:39` | GET | `/api/actions/abstentions` | R | — |
+| `actions.js:76` | GET | `/api/actions` | R | — |
+| `actions.js:96` | GET | `/api/actions/:id` | R | — |
+| `actions.js:108` | POST | `/api/actions/:id/retry` | DB | `actionStateMachine.retry` |
+| `actions.js:122` | POST | `/api/actions/:id/cancel` | DB | `actionStateMachine.cancel` |
+| `actions.js:134` | POST | `/api/actions/:id/reconcile` | DB | `actionStateMachine.reconcile` |
+
+#### `routes/activity.js` (2, read-only)
+
+| file:line | method | path |
+|---|---|---|
+| `activity.js:33` | GET | `/api/activity` |
+| `activity.js:108` | GET | `/api/activity/summary` |
+
+#### `routes/auditBundles.js` (1, read-only)
+
+| file:line | method | path |
+|---|---|---|
+| `auditBundles.js:26` | GET | `/api/audit-bundles/export` |
+
+#### `routes/ciRuns.js` (5)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `ciRuns.js:18` | GET | `/api/ci/stats` | R | — |
+| `ciRuns.js:73` | GET | `/api/ci` | R | — |
+| `ciRuns.js:121` | GET | `/api/ci/:owner/:repo` | R | — |
+| `ciRuns.js:150` | POST | `/api/ci/:runId/retry` | GH | `octokit POST .../actions/runs/{run_id}/rerun` (`:165`) |
+| `ciRuns.js:177` | POST | `/api/ci/:runId/heal` | Q | `ciHealQueue.add("heal-run")` (`:190`). **Note:** the SELECT at `:181-185` has a SQL bug — see F-13. |
+
+#### `routes/config.js` (12)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `config.js:23` | GET | `/api/config/:owner/:repo` | R | — |
+| `config.js:58` | PUT | `/api/config/:owner/:repo` | DB | `setConfigOverrides` → `repo_config` + `config_history` (actor from `x-actor-login`, F-03) |
+| `config.js:101` | PATCH | `/api/config/:owner/:repo` | DB | same |
+| `config.js:140` | DELETE | `/api/config/:owner/:repo` | DB | `deleteConfigOverrides` |
+| `config.js:161` | GET | `/api/config/:owner/:repo/history` | R | — |
+| `config.js:176` | POST | `/api/config/:owner/:repo/restore/:historyId` | DB | `restoreConfigVersion` |
+| `config.js:195` | GET | `/api/config/:owner/:repo/custom-rules` | R | — |
+| `config.js:235` | POST | `/api/config/playground` | R | in-memory eval only |
+| `config.js:305` | POST | `/api/config/validate` | R | in-memory only |
+| `config.js:342` | POST | `/api/config/simulate` | R | in-memory only |
+| `config.js:378` | POST | `/api/config/diff-impact` | R | in-memory only |
+| `config.js:415` | POST | `/api/config/recommendations` | R | in-memory only |
+
+#### `routes/decisions.js` (2, read-only)
+
+`decisions.js:15` GET `/api/decisions`; `decisions.js:44` GET `/api/decisions/summary`.
+
+#### `routes/duplicates.js` (7)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `duplicates.js:27` | GET | `/api/duplicates/stats` | R | — |
+| `duplicates.js:66` | GET | `/api/duplicates` | R | — |
+| `duplicates.js:119` | GET | `/api/duplicates/:owner/:repo` | R | — |
+| `duplicates.js:153` | GET | `/api/duplicates/issue/:githubIssueId` | R | — |
+| `duplicates.js:176` | POST | `/api/duplicates/:id/confirm` | DB+GH | `updateDuplicateStatus` + octokit via `resolveSignalAndAct` |
+| `duplicates.js:185` | POST | `/api/duplicates/:id/dismiss` | DB+GH | same |
+| `duplicates.js:195` | POST | `/api/duplicates/backfill/:owner/:repo` | DB | `backfillEmbeddings` |
+
+#### `routes/enforcement.js` (11)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `enforcement.js:20` | GET | `/api/enforcement/stats` | R | — |
+| `enforcement.js:72` | GET | `/api/enforcement/policies` | R | — |
+| `enforcement.js:87` | POST | `/api/enforcement/policies` | DB | INSERT `policy_definitions` (`:102`) |
+| `enforcement.js:120` | PUT | `/api/enforcement/policies/:id` | DB | UPDATE `policy_definitions` (`:140`) |
+| `enforcement.js:149` | DELETE | `/api/enforcement/policies/:id` | DB | DELETE `policy_definitions` (`:151`) |
+| `enforcement.js:160` | GET | `/api/enforcement/violations` | R | — |
+| `enforcement.js:194` | GET | `/api/enforcement/violations/:owner/:repo` | R | — |
+| `enforcement.js:210` | POST | `/api/enforcement/violations/:id/suppress` | DB | UPDATE `enforcement_violations` status='suppressed' (`:212`) |
+| `enforcement.js:225` | POST | `/api/enforcement/run` | GH+DB | `enforceRepo` / `runEnforcementForAll` |
+| `enforcement.js:257` | GET | `/api/enforcement/config-results` | R | — |
+| `enforcement.js:296` | GET | `/api/enforcement/config-results/:owner/:repo` | R | — |
+
+#### `routes/fix.js` (3)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `fix.js:16` | POST | `/api/fix/:owner/:repo/issues/:number` | Q | `issueFixQueue.add("fix-issue")` (`:29`) |
+| `fix.js:51` | GET | `/api/fix/:owner/:repo/issues/:number` | R | — |
+| `fix.js:80` | GET | `/api/fix/:owner/:repo/attempts` | R | — |
+
+#### `routes/gates.js` (8)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `gates.js:31` | GET | `/api/gates` | R | — |
+| `gates.js:42` | GET | `/api/gates/:owner/:repo` | R | — |
+| `gates.js:94` | POST | `/api/gates/:owner/:repo` | DB | `saveGate` → `quality_gates` |
+| `gates.js:138` | DELETE | `/api/gates/:owner/:repo/:name` | DB | `deleteGate` |
+| `gates.js:158` | POST | `/api/gates/:owner/:repo/evaluate` | DB+GH | `evaluateGatesForRepo`/`evaluateGatesForPR`; note `getInstallationClient(null)` at `:173` (U-4) |
+| `gates.js:205` | GET | `/api/gates/:owner/:repo/history` | R | — |
+| `gates.js:245` | GET | `/api/gates/:owner/:repo/metrics` | R | — |
+| `gates.js:263` | GET | `/api/gates/:owner/:repo/trends` | R | — |
+
+#### `routes/githubRelay.js` (3, read-only)
+
+`githubRelay.js:17` GET `/api/github-relay/stats`; `:35` `/rate-limits`; `:50` `/cooldowns`.
+
+#### `routes/healHistory.js` (4, read-only)
+
+`healHistory.js:17` GET `/api/heal/stats`; `:52` `/api/heal`; `:98` `/api/heal/:owner/:repo`; `:127` `/api/heal/run/:githubRunId`.
+
+#### `routes/insights.js` (4, read-only)
+
+`insights.js:14` GET `/api/insights/overview`; `:64` `/repos`; `:129` `/velocity`; `:171` `/ci-trend`.
+
+#### `routes/issues.js` (3, read-only)
+
+| file:line | method | path | Note |
+|---|---|---|---|
+| `issues.js:14` | GET | `/api/issues/stats` | global scope (F-09) |
+| `issues.js:43` | GET | `/api/issues` | global scope; optional `repo` filter, no installation check (F-09 VERIFIED via `:44-75`) |
+| `issues.js:108` | GET | `/api/issues/:owner/:repo` | path-scoped, no authority check |
+
+#### `routes/maintainer.js` (17)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `maintainer.js:67` | GET | `/api/maintainer/members` | R | — |
+| `maintainer.js:116` | POST | `/api/maintainer/members/sync` | DB+GH | `syncMembers` |
+| `maintainer.js:138` | GET | `/api/maintainer/members/:login` | R | — |
+| `maintainer.js:167` | GET | `/api/maintainer/collaborators` | R | — |
+| `maintainer.js:215` | GET | `/api/maintainer/collaborators/:owner/:repo` | R | — |
+| `maintainer.js:235` | PUT | `/api/maintainer/collaborators/:owner/:repo/:login` | GH+DB | octokit `PUT .../collaborators/{username}` (`:254`); actor from `x-actor-login` (F-03) |
+| `maintainer.js:271` | DELETE | `/api/maintainer/collaborators/:owner/:repo/:login` | GH+DB | octokit `DELETE .../collaborators/{username}` (`:279`) |
+| `maintainer.js:301` | GET | `/api/maintainer/branch-rules` | R | — |
+| `maintainer.js:338` | GET | `/api/maintainer/branch-rules/:owner/:repo` | R | — |
+| `maintainer.js:354` | PUT | `/api/maintainer/branch-rules/:owner/:repo/:pattern` | GH+DB | octokit `PUT .../branches/{branch}/protection` (`:382`); actor from `x-actor-login` (F-03) |
+| `maintainer.js:408` | GET | `/api/maintainer/audit` | R | — |
+| `maintainer.js:449` | GET | `/api/maintainer/:owner/:repo/settings` | R | — |
+| `maintainer.js:467` | PATCH | `/api/maintainer/:owner/:repo/settings` | DB | `maintainerService.upsertSettings` → `maintainer_settings` |
+| `maintainer.js:480` | GET | `/api/maintainer/:owner/:repo/actions` | R | — |
+| `maintainer.js:492` | GET | `/api/maintainer/:owner/:repo/stats` | R | — |
+| `maintainer.js:505` | POST | `/api/maintainer/:owner/:repo/stale-scan` | Q | `maintainerQueue.add("stale-scan")` (`:511`) |
+| `maintainer.js:520` | POST | `/api/maintainer/:owner/:repo/branch-cleanup` | Q | `maintainerQueue.add("branch-cleanup")` (`:526`) |
+
+#### `routes/phase2.js` (14)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `phase2.js:20` | GET | `/api/phase2/queue` | R | — |
+| `phase2.js:49` | GET | `/api/phase2/queue/:owner/:repo` | R | — |
+| `phase2.js:63` | POST | `/api/phase2/queue/:owner/:repo/config` | DB | UPSERT `merge_queue_config` (`:71`) |
+| `phase2.js:91` | POST | `/api/phase2/queue/:owner/:repo/:pr/admit` | DB+GH | `admitToQueue` + octokit `GET .../pulls/{pull_number}` (`:98`) |
+| `phase2.js:106` | POST | `/api/phase2/queue/:owner/:repo/:pr/remove` | DB | `removeFromQueue` |
+| `phase2.js:119` | GET | `/api/phase2/feedback` | R | — |
+| `phase2.js:128` | POST | `/api/phase2/feedback` | DB | INSERT `feedback_rules` (`:137`); actor from body (F-03) |
+| `phase2.js:147` | PUT | `/api/phase2/feedback/:id` | DB | UPDATE `feedback_rules` (`:157`) |
+| `phase2.js:165` | DELETE | `/api/phase2/feedback/:id` | DB | DELETE `feedback_rules` (`:167`) |
+| `phase2.js:176` | GET | `/api/phase2/telemetry/summary` | R | — |
+| `phase2.js:198` | GET | `/api/phase2/telemetry/events` | R | — |
+| `phase2.js:225` | GET | `/api/phase2/telemetry/throughput` | R | — |
+| `phase2.js:235` | GET | `/api/phase2/telemetry/ci-health` | R | — |
+| `phase2.js:250` | GET | `/api/phase2/rollbacks` | R | — |
+
+#### `routes/phase3.js` (15)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `phase3.js:34` | GET | `/api/phase3/flaky/stats` | R | — |
+| `phase3.js:49` | GET | `/api/phase3/flaky` | R | — |
+| `phase3.js:83` | GET | `/api/phase3/flaky/:owner/:repo` | R | — |
+| `phase3.js:100` | POST | `/api/phase3/flaky/:id/graduate` | DB | UPDATE `flaky_tests` (`:102`) |
+| `phase3.js:111` | POST | `/api/phase3/flaky/:id/dismiss` | DB | UPDATE `flaky_tests` (`:113`) |
+| `phase3.js:126` | GET | `/api/phase3/reconciler/runs` | R | — |
+| `phase3.js:137` | GET | `/api/phase3/reconciler/repos` | R | — |
+| `phase3.js:166` | POST | `/api/phase3/reconciler/run` | GH+DB | `reconcileRepo` / `runFleetReconciliation` |
+| `phase3.js:189` | PUT | `/api/phase3/reconciler/repos/:owner/:repo` | DB | UPDATE `policy_repo_configs` (`:196`) |
+| `phase3.js:208` | GET | `/api/phase3/dependencies/stats` | R | — |
+| `phase3.js:223` | GET | `/api/phase3/dependencies/vulnerabilities` | R | — |
+| `phase3.js:257` | GET | `/api/phase3/dependencies/:owner/:repo` | R | — |
+| `phase3.js:271` | POST | `/api/phase3/dependencies/:owner/:repo/scan` | GH+DB | `scanRepo` |
+| `phase3.js:281` | POST | `/api/phase3/dependencies/:owner/:repo/batch-pr` | GH+DB | `openBatchUpdatePR` (opens a PR) |
+| `phase3.js:294` | POST | `/api/phase3/dependencies/vuln/:id/dismiss` | DB | UPDATE `vulnerability_advisories` (`:297`) |
+
+#### `routes/phase4.js` (13; mounted at `/api`, not `/api/phase4`)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `phase4.js:50` | GET | `/api/review/stats` | R | — |
+| `phase4.js:91` | GET | `/api/review/results` | R | — |
+| `phase4.js:132` | GET | `/api/review/results/:owner/:repo` | R | — |
+| `phase4.js:157` | GET | `/api/review/config/:owner/:repo` | R | — |
+| `phase4.js:169` | POST | `/api/review/config/:owner/:repo` | DB | UPSERT `ai_review_config` (`:181`) |
+| `phase4.js:227` | POST | `/api/review/trigger/:owner/:repo/:pr` | GH+DB | octokit `GET .../pulls/{pull_number}` (`:235`); `reviewPR` |
+| `phase4.js:252` | GET | `/api/audit/stats` | R | — |
+| `phase4.js:307` | GET | `/api/audit/entries` | R | — |
+| `phase4.js:347` | GET | `/api/audit/verify` | R | `verifyChain` |
+| `phase4.js:356` | POST | `/api/audit/export` | DB+file* | `exportNightly` → `audit_exports` (file is never written — F-12) |
+| `phase4.js:368` | GET | `/api/audit/reports` | R | — |
+| `phase4.js:384` | POST | `/api/audit/reports` | DB+file* | `generateReport` → `compliance_reports` |
+| `phase4.js:405` | GET | `/api/audit/reports/:id` | R | — |
+
+#### `routes/pullRequests.js` (3, read-only; global scope — F-09)
+
+`pullRequests.js:14` GET `/api/pull-requests/stats`; `:41` `/api/pull-requests`; `:96` `/api/pull-requests/:owner/:repo`.
+
+#### `routes/readiness.js` (2, read-only)
+
+`readiness.js:191` GET `/api/readiness`; `:269` GET `/api/readiness/:owner/:repo`.
+
+#### `routes/repairs.js` (6)
+
+| file:line | method | path | mutate | Note |
+|---|---|---|---|---|
+| `repairs.js:33` | GET | `/api/repairs` | R | — |
+| `repairs.js:52` | GET | `/api/repairs/:id` | R | — |
+| `repairs.js:67` | GET | `/api/repairs/:id/events` | R | — |
+| `repairs.js:84` | POST | `/api/repairs` | **none** | hard-coded 403 (`:84-88`) |
+| `repairs.js:91` | PATCH | `/api/repairs/:id/evidence` | **none** | hard-coded 403 (`:91-95`) |
+| `repairs.js:98` | POST | `/api/repairs/:id/transition` | **none** | hard-coded 403 (`:98-102`) |
+
+#### `routes/repos.js` (3)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `repos.js:15` | GET | `/api/repos` | R | — |
+| `repos.js:90` | GET | `/api/repos/:owner/:repo` | R | — |
+| `repos.js:126` | POST | `/api/repos/:owner/:repo/sync` | Q | `syncQueue.add("sync-repo")` (`:136`) |
+
+#### `routes/rollouts.js` (9)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `rollouts.js:28` | POST | `/api/rollouts` | DB | `createRolloutPlan`; actor from body (F-03) |
+| `rollouts.js:59` | GET | `/api/rollouts` | R | — |
+| `rollouts.js:83` | GET | `/api/rollouts/:id` | R | — |
+| `rollouts.js:108` | PATCH | `/api/rollouts/:id/evidence` | DB | `attachEvidence` |
+| `rollouts.js:136` | POST | `/api/rollouts/:id/transition` | DB | `transitionRolloutPlan`; actor from body |
+| `rollouts.js:172` | POST | `/api/rollouts/:id/approve` | DB | `approveRolloutPlan`; actor from body |
+| `rollouts.js:209` | POST | `/api/rollouts/:id/reject` | DB | `rejectRolloutPlan`; actor from body |
+| `rollouts.js:248` | POST | `/api/rollouts/:id/promote` | DB | `promoteRolloutPlan` — "the ONLY path that writes policy" (source comment) |
+| `rollouts.js:289` | POST | `/api/rollouts/:id/rollback` | DB | `rollbackRolloutPlan` |
+
+#### `routes/setup.js` (3, read-only)
+
+`setup.js:17` GET `/api/setup`; `:29` GET `/api/setup/templates`; `:39` GET `/api/setup/templates/:id`.
+
+#### `routes/transfers.js` (3; mounted at `/api/repos`)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `transfers.js:15` | GET | `/api/repos/reconcile` | R | `detectOrphans` |
+| `transfers.js:26` | POST | `/api/repos/reconcile/merge` | DB | `mergeOrphan` |
+| `transfers.js:43` | POST | `/api/repos/reconcile/discard` | DB | `discardOrphan` |
+
+#### `routes/waivers.js` (4)
+
+| file:line | method | path | mutate | sink |
+|---|---|---|---|---|
+| `waivers.js:16` | GET | `/api/waivers` | R | — |
+| `waivers.js:58` | GET | `/api/waivers/check` | R | — |
+| `waivers.js:88` | POST | `/api/waivers` | DB | `grantWaiver` (waivers table); `grantedBy` from body (F-03) |
+| `waivers.js:121` | DELETE | `/api/waivers/:id` | DB | `revokeWaiver(id)` — **no tenant filter (F-02)**; `revokedBy` from body |
+
+#### `routes/webhookDeliveries.js` (5, read-only; mounted at `/api/webhooks/deliveries`)
+
+`webhookDeliveries.js:19` GET `/api/webhooks/deliveries/stats`; `:55` `/events`; `:76` `/timeline`; `:100` `` (list); `:157` `/:id`.
+
+### 17.3 Aggregate counts (re-verified)
+
+| Mutation type | Count |
+|---|---|
+| Read-only (DB SELECT only) | ~127 |
+| DB write | 31 |
+| GitHub mutation | 13 |
+| Queue enqueue | 8 |
+| File write (claimed-but-never-written, see F-12) | 2 |
+| **Total handlers** | **173** (5 anonymous + 168 authenticated) |
+
+---
+
+## 18. Full database writer map
+
+> W0-A correction C-2. The original §7.1 omitted this with "regenerate by
+> grep." Verified count: **51 tables** receive writes (not 50; the original
+> count missed `webhook_deliveries`).
+>
+> Writers are route handlers (`routes/`), workers (`workers/`), or services
+> called by either (`services/`). SQL is parameterized throughout; no string
+> interpolation of user input was found.
+
+| table | writers (file:line) | what it stores |
+|---|---|---|
+| `action_reconciliation_log` | `services/actionStateMachine.js:300` | drift-detection results |
+| `ai_review_config` | `routes/phase4.js:181` | per-repo AI-review config |
+| `ai_reviews` | `services/aiReviewService.js` (via `phase4Worker.js`) | AI PR-review results |
+| `audit_exports` | `services/auditTrailService.js:479` | nightly JSONL export metadata (file_path never written — F-12) |
+| `audit_log` | governance writers not fully traced (U-3) | permission/rule change history |
+| `audit_trail_entries` | `services/auditTrailService.js:63` (append-only, race-prone — F-11 corrected mechanism) | tamper-evident event chain |
+| `backend_isolation_evidence` | `services/backendEvidenceStore.js:111` | sandbox isolation proof |
+| `branch_rules` | `services/maintainerService.js` (`syncBranchRules`); `routes/maintainer.js:382` | repo branch-protection rules |
+| `ci_runs` | `workers/ciHealWorker.js:944,771`; `workers/syncWorker.js:298`; `services/ciService.saveHealResult` | workflow runs + heal status |
+| `compliance_reports` | `services/auditTrailService.js:415` | compliance report artifacts |
+| `config_history` | `services/configService.js` | `.gitwire.yml` change history |
+| `config_validation_results` | `services/configValidationService.js` | `.gitwire.yml` validation outcomes |
+| `decision_log` | `services/decisionLogService.js` (called from `triageWorker.js:115`, `ciHealWorker.js:219`, `phase4Worker.js`) | per-worker decision rationale |
+| `dependency_manifests` | `services/dependencyService.js` | SBOM per repo |
+| `dependency_update_batches` | `services/dependencyService.js:281-289` | dep-update PR batches |
+| `duplicate_signals` | `services/duplicateDetectionService.js` | duplicate-issue matches |
+| `enforcement_violations` | `routes/enforcement.js:213`; `services/branchEnforcementService.js` | branch-protection violations |
+| `execution_receipts` | `services/executionReceiptStore.js:49,158` | write-once sandbox receipts |
+| `feedback_rules` | `routes/phase2.js:138,158,167` | feedback-rule definitions |
+| `fix_attempts` | `issueFix/helpers.js` (`upsertFixAttempt`); `issueFix/submit.js:125,131` | autonomous-fix attempt tracking |
+| `flaky_tests` | `services/flakyTestService.js`; `routes/phase3.js:103,114` | quarantined tests + graduation |
+| `gate_evaluations` | `services/qualityGateService.js` | per-PR quality-gate results |
+| `heal_prs` | `workers/ciHealWorker.js:760`; `workers/reconciliationWorker.js:207` | auto-heal PRs + outcome |
+| `installations` | `workers/webhookWorker.js:30,42`; `workers/syncWorker.js:224` | App installations |
+| `issue_embeddings` | `services/embeddingService.js` | vector embeddings |
+| `issues` | `workers/syncWorker.js:256`; `services/issueService.saveTriage` | issue state + triage |
+| `maintainer_actions` | `services/maintainerService.recordAction` (called across `maintainerWorker.js`) | stale/cleanup action audit |
+| `maintainer_settings` | `services/maintainerService.upsertSettings` | per-repo maintainer config |
+| `managed_actions` | `services/actionStateMachine.js:73,81,172,271,277,424`; `services/managedActionService.js:56,63,96,208`; `workers/ciHealWorker.js:1111,1136`; `workers/reconciliationWorker.js:34,40,231,246` | every GitHub mutation (reconciled later) |
+| `members` | `services/maintainerService.js` (`syncMembers`) | org members |
+| `merge_queue_config` | `routes/phase2.js:71` | per-repo merge-queue config |
+| `merge_queue_entries` | `services/mergeQueueService.js` (`admitToQueue`, `removeFromQueue`) | PR merge queue |
+| `patch_artifacts` | `services/patchArtifactStore.js` | candidate patches |
+| `pipeline_events` | `services/pipelineEvents.js` | CI pipeline events |
+| `policy_definitions` | `routes/enforcement.js:103,141,151` | policy-as-code definitions |
+| `policy_repo_configs` | `services/policyReconcilerService.js`; `routes/phase3.js:197` | per-repo policy overrides |
+| `policy_rollout_plans` | `services/policyRolloutService.js`; `routes/rollouts.js` | staged policy rollout |
+| `policy_waivers` | `services/waiverService.grantWaiver`; `revokeWaiver` (F-02) | time-limited pillar exceptions |
+| `pull_requests` | `workers/syncWorker.js:277` | PR state |
+| `quality_gates` | `routes/gates.js:94` (`saveGate`); DELETE at `routes/gates.js:138` | gate definitions |
+| `reconciliation_runs` | `services/policyReconcilerService.js` | reconciliation audit |
+| `repair_proposal_events` | `services/repairProposalService.js:838,879,1136,1156,1300,1319,1441,1462,1851,1874,2264,2286,3212,3233` | governed CI repair workflow |
+| `repair_proposals` | `services/repairProposalService.js` (multiple) | repair proposals (`can_write_repository` hard-coded false per migration 031) |
+| `repo_collaborators` | `services/maintainerService.js` (`syncCollaborators`); `routes/maintainer.js:282` (DELETE) | repo collaborators |
+| `repo_config` | `routes/config.js` via `setConfigOverrides`/`deleteConfigOverrides` | per-repo config overrides |
+| `repositories` | `workers/webhookWorker.js:62`; `workers/syncWorker.js:235,131`; `reconcileRepository.js` | one row per repo |
+| `rollback_events` | `services/errorRecoveryService.js:97-127` | auto-revert events |
+| `source_snapshots` | `services/sourceSnapshotStore.js` | immutable source snapshot hashes |
+| `test_results` | `services/flakyTestService.js` (`ingestTestResults`) | per-run test outcomes |
+| `vulnerability_advisories` | `services/dependencyService.js`; `routes/phase3.js:298` | vuln scan results |
+| `webhook_deliveries` | `routes/webhooks.js:175` (with `ON CONFLICT DO NOTHING`) | delivery audit (dedupe site — F-05) |
+
+**Total: 51 tables receiving writes.**
+
+### 18.2 Filesystem mutation sites
+
+> Original §7.2 said 8 sites; re-verification found **12** (several `mkdir` /
+> `writeFileSync` calls in `scripts/` were missed). Sites outside
+> `node_modules`, tests, and docs. All production-path writes are ephemeral
+> sandbox tempdirs; the rest are admin/build scripts.
+
+| file:line | what's written | category |
+|---|---|---|
+| `packages/web/src/lib/sandboxExecutor.js:201` | `mkdtemp(join(tmpdir(), "gitwire-sandbox-"))` | ephemeral sandbox |
+| `packages/web/src/lib/sandboxExecutor.js:222-224` | `mkdir` + `writeFile(filePath, file.content)` | ephemeral sandbox |
+| `packages/web/src/lib/dockerExecutorBackend.js:370` | `mkdtemp(join(tmpdir(), "gitwire-docker-"))` | ephemeral sandbox |
+| `packages/web/src/lib/dockerExecutorBackend.js:390-391` | `mkdir` + `writeFile` | ephemeral sandbox |
+| `packages/web/src/lib/sourceSnapshotProvider.js:20` | imports `mkdtemp, mkdir, writeFile, rm` (call sites delegate to sandboxExecutor) | ephemeral sandbox |
+| `packages/executor-service/src/validatorRunner.js:182` | `mkdtemp(join(WORKSPACE_TMP, "gitwire-validator-"))` | ephemeral sandbox |
+| `packages/executor-service/src/validatorRunner.js:195-198` | `chmod`, `mkdir`, `writeFile` | ephemeral sandbox |
+| `scripts/benchmark.js:336-337` | `writeFileSync(outPath, JSON.stringify(...))` | admin (isolated env only) |
+| `scripts/generate-build-info.js:64` | `writeFile(corePath, coreContent)` — overwrites `packages/core/src/buildInfo.js` | build-time only |
+| `scripts/backup.sh:25` | `mkdir -p "${BACKUP_DIR}"` | admin |
+| `scripts/deploy-release.sh:597` | `mkdir -p "$staging_dir"` | admin |
+| `scripts/prepare-immutable-compose-transition.sh:195,253` | `mkdir -p` for staging + marker file | admin |
+
+**Total: 12 filesystem mutation sites** (7 production-path ephemeral; 5 admin/build).
+
+---
+
+## 19. `security.md` discrepancy matrix
+
+> W0-A correction C-6. The existing [`docs/architecture/security.md`](../security.md)
+> (80 lines) describes the intended model. Four specific claims diverge
+> from current code. This matrix reconciles them; resolving the divergences
+> (update docs vs. update code) is a control-plane decision, not a Wave 0
+> design output.
+
+| # | `security.md` claim | location | Actual code behavior | Evidence | Authority finding |
+|---|---|---|---|---|---|
+| SD-1 | "All API endpoints require a Bearer token" | `security.md:7-11` | Two auth mechanisms exist (Bearer **or** `gitwire-session` cookie), and 3 anonymous routes mutate state (`/webhooks/github` by HMAC design; `/api/auth/login`, `/api/auth/logout` because they mount before `apiKeyAuth`). | `middleware/auth.js:64-105`; `app.js:82,85,112` | §2.1, §2.2, §5.3 |
+| SD-2 | "If no key is set, a random key is generated on startup and logged once" | `security.md:15` | Production THROWS at module load if no key is configured (fail-closed); auto-generation happens only in non-production. | `middleware/auth.js:43-54` | §2.1, F-08 |
+| SD-3 | "Max requests: 100 per IP per window" + "Key: Client IP address" | `security.md:25,27` | Actual limit is **120** per window; the identity key is the Bearer token if present, else IP, else literal `"unknown"`; Redis errors fail-**open** (request allowed, logged). | `middleware/rateLimiter.js:8-9,22-25,51-55` | §2 (rate limiter) |
+| SD-4 | Webhook verification section omits any mention of the `dev-secret` fallback | `security.md:31-39` | `GITHUB_WEBHOOK_SECRET` defaults to the public string `"dev-secret"` if the env var is unset, in any environment. No production fail-closed check. | `config/index.js:170` | §2.3, F-01 (CRITICAL VERIFIED) |
+
+### Additional divergences noted but not blocking
+
+These are accuracy gaps in `security.md` that don't rise to the level of the four above; recorded for completeness:
+
+- `security.md:42-47` "GitHub App Token Scope" describes installation scoping as the boundary. The inventory's §9 confirms token-level scoping is installation-wide — but the doc does not mention that per-repo narrowing is **application-layer policy only** (`.gitwire.yml`), bypassable by any code path that calls `octokit.request` directly.
+- `security.md:53-58` "Data Storage" says Redis has "No password (internal Docker network only)." The inventory's F-06 (corrected to HIGH) shows that Redis write access yields installation-wide authority via the trust-the-payload worker model — the "internal network only" mitigation is the only barrier, and a single compromised in-network service yields that barrier.
+- `security.md:71-78` "Recommendations" lists strong-key/rotation guidance but does not mention that the audit log cannot reliably bind a mutation to a human (F-03 corrected scope).
+
+### Resolution options (for control plane; not Wave 0 design)
+
+Each discrepancy has two possible resolutions:
+
+1. **Update `security.md`** to match current code (cheapest; documents the gap honestly).
+2. **Update the code** to match `security.md`'s claim (closes the gap; may overlap with Wave 1+ work).
+
+Wave 0 does not pick. W0-B's permission model will reference these discrepancies by SD-* ID when proposing which claims should become enforceable invariants.
