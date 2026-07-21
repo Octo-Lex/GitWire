@@ -10,7 +10,7 @@
 | Document | Purpose |
 |---|---|
 | [`current-state-inventory.md`](./current-state-inventory.md) | Disk-verified map of every authority surface today (W0-A). Every claim cites `file:line`. |
-| `permission-model.md` *(W0-B, not yet written)* | Proposed canonical principal / resource / action / permission model. |
+| [`permission-model.md`](./permission-model.md) | Proposed canonical principal / resource / action / permission model (W0-B). |
 | `schema-migration-plan.md` *(W0-C, not yet written)* | No-execution schema design for the proposed model. |
 | `wave-validation-plan.md` *(W0-D, not yet written)* | Defect-sensitive validation plan for Waves 1–4. |
 
