@@ -321,6 +321,57 @@ describe("burst-report-validator — spec bullet: duplicate attempt IDs (canonic
     const result = validateBurstReport(report);
     expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID)).toBe(false);
   });
+
+  // ── Per-logical attempt-reference integrity (review finding residual #1) ─
+  it("rejects when a logical operation lists the same attemptId twice in attemptIds[]", () => {
+    const attemptsById = Object.create(null);
+    attemptsById.a1 = goodRecord({ attemptId: "a1", logicalOperationId: "L1" });
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1", "a1"], attemptCount: 2, finalAttemptId: "a1", outcome: "succeeded" },
+      ],
+      attemptsById,
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID
+      && v.attemptId === "a1"
+      && /lists attemptId=a1 more than once/.test(v.message))).toBe(true);
+  });
+
+  it("rejects when L1 references an attempt whose record.logicalOperationId is L2", () => {
+    // The referenced record exists, its attemptId matches the reference, but
+    // it belongs to a different logical operation. This is identity theft.
+    const attemptsById = Object.create(null);
+    attemptsById.a1 = goodRecord({ attemptId: "a1", logicalOperationId: "L2", final: false });
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: "a1", outcome: "succeeded" },
+      ],
+      attemptsById,
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.DUPLICATE_ATTEMPT_ID
+      && v.attemptId === "a1"
+      && /the record belongs to logicalOperationId=L2/.test(v.message))).toBe(true);
+  });
+
+  it("a clean multi-attempt logical reference set passes the integrity checks", () => {
+    // Two attempts in L1, both owned by L1, contiguous attemptNumbers, no
+    // dup refs. This is the positive floor — the new per-op checks must NOT
+    // fire on reducer-clean input.
+    const report = buildOperationReport([
+      goodRecord({ attemptId: "a1", logicalOperationId: "L1", attemptNumber: 1, final: false, outcome: "failed",
+        transport: "failed", http: "not_received", assertion: "not_run", assertionNotRunReason: "transport_failed",
+        error: { category: "timeout", name: "T", code: "ETIMEDOUT", message: "x" },
+        status: null, body: { state: "not_read", value: null, error: null }, retryable: true }),
+      goodRecord({ attemptId: "a2", logicalOperationId: "L1", attemptNumber: 2, final: true }),
+    ]);
+    const result = validateBurstReport(report);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
 });
 
 describe("burst-report-validator — spec bullet: attempts without logical-operation IDs", () => {
@@ -462,6 +513,22 @@ describe("burst-report-validator — spec bullet: logical success without valid 
     expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
       && /outcome=succeeded but finalAttemptId=a1 outcome=failed/.test(v.message))).toBe(true);
   });
+
+  // ── Non-string finalAttemptId classification (review finding residual #2) ─
+  it("succeeded operation with a non-string finalAttemptId emits LOGICAL_SUCCESS_WITHOUT_FINAL", () => {
+    // The previous implementation hard-coded LOGICAL_SUCCESS_WITHOUT_FINAL
+    // for ALL non-string finalAttemptId cases. For outcome=succeeded that
+    // is correct — this test pins it.
+    const r = goodReport({
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: 42, outcome: "succeeded" },
+      ],
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+      && /finalAttemptId must be a string, got number/.test(v.message))).toBe(true);
+  });
 });
 
 describe("burst-report-validator — spec bullet: logical failure without failure reason", () => {
@@ -531,6 +598,33 @@ describe("burst-report-validator — spec bullet: logical failure without failur
     expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON
       && v.attemptId === "a-ghost"
       && /does not resolve in attemptsById/.test(v.message))).toBe(true);
+  });
+
+  // ── Non-string finalAttemptId classification (review finding residual #2) ─
+  it("failed operation with a non-string finalAttemptId emits LOGICAL_FAILURE_WITHOUT_REASON", () => {
+    // The previous implementation hard-coded LOGICAL_SUCCESS_WITHOUT_FINAL
+    // for ALL non-string finalAttemptId cases, misclassifying failed ops.
+    // A failed op needs a reason-carrying final record; a non-string
+    // finalAttemptId means no such record can be resolved.
+    const r = goodReport({
+      logical: { total: 1, started: 1, completed: 1, inFlight: 0, succeeded: 0, failed: 1 },
+      attempts: {
+        total: 1, started: 1, completed: 1, inFlight: 0,
+        transportFailed: 0, responseReceived: 1,
+        expectedStatus: 1, unexpectedStatus: 0,
+        assertionPassed: 0, assertionFailed: 1, assertionNotRun: 0,
+      },
+      logicalOperations: [
+        { logicalOperationId: "L1", attemptIds: ["a1"], attemptCount: 1, finalAttemptId: 42, outcome: "failed" },
+      ],
+    });
+    const result = validateBurstReport(r);
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_FAILURE_WITHOUT_REASON
+      && /finalAttemptId must be a string, got number/.test(v.message))).toBe(true);
+    // And NOT the wrong code:
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.LOGICAL_SUCCESS_WITHOUT_FINAL
+      && /finalAttemptId must be a string/.test(v.message))).toBe(false);
   });
 });
 
@@ -712,6 +806,64 @@ describe("burst-report-validator — latency shape violations", () => {
     const result = validateBurstReport(report, { latency: tampered });
     expect(result.ok).toBe(false);
     expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.MISSING_COUNTER && v.population === "all_completed_attempts" && v.field === "p99")).toBe(true);
+  });
+
+  // ── Non-empty latency mean validation (review finding residual #3) ──────
+  it("MALFORMED_PERCENTILE_ORDERING fires when a non-empty population has mean=null", () => {
+    const records = [goodRecord({ attemptId: "a1" })];
+    const report = buildOperationReport(records);
+    const latency = computeLatencyPopulations(records);
+    const tampered = {
+      ...latency,
+      all_completed_attempts: { ...latency.all_completed_attempts, mean: null },
+    };
+    const result = validateBurstReport(report, { latency: tampered });
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.MALFORMED_PERCENTILE_ORDERING
+      && v.population === "all_completed_attempts"
+      && v.field === "mean"
+      && /mean must be a finite number/.test(v.message))).toBe(true);
+  });
+
+  it("MALFORMED_PERCENTILE_ORDERING fires when a non-empty population has mean=NaN", () => {
+    const records = [goodRecord({ attemptId: "a1" })];
+    const report = buildOperationReport(records);
+    const latency = computeLatencyPopulations(records);
+    const tampered = {
+      ...latency,
+      all_completed_attempts: { ...latency.all_completed_attempts, mean: Number.NaN },
+    };
+    const result = validateBurstReport(report, { latency: tampered });
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.MALFORMED_PERCENTILE_ORDERING
+      && v.field === "mean"
+      && /mean must be a finite number/.test(v.message))).toBe(true);
+  });
+
+  it("a valid skewed mean within [min,max] but above p99 passes", () => {
+    // Review regression: a heavy-tailed sample can have mean greater than
+    // p99 — that is a legitimate skew, not a defect. The validator must
+    // accept it as long as mean is a finite number within [min,max].
+    // Build a population with min=0, p50=1, p90=2, p95=3, p99=4, max=1000,
+    // and a mean of 500 (within [0,1000], far above p99=4). All finite.
+    const records = [goodRecord({ attemptId: "a1", durationMs: 0 })];
+    const report = buildOperationReport(records);
+    const latency = computeLatencyPopulations(records);
+    const tampered = {
+      ...latency,
+      all_completed_attempts: {
+        count: 1000, min: 0, max: 1000, mean: 500,
+        p50: 1, p90: 2, p95: 3, p99: 4,
+      },
+    };
+    const result = validateBurstReport(report, { latency: tampered });
+    // No MALFORMED_PERCENTILE_ORDERING violation on the mean field — the
+    // percentile chain is internally consistent and the mean is finite and
+    // within [min,max]. (Other LATENCY_COUNT_MISMATCH violations may fire
+    // because the tampered count no longer reconciles; this test scopes to
+    // the mean field via the field discriminator.)
+    expect(result.violations.some((v) => v.code === REPORT_VIOLATION_CODES.MALFORMED_PERCENTILE_ORDERING
+      && v.field === "mean")).toBe(false);
   });
 });
 
