@@ -276,7 +276,7 @@ Each permission carries a scope:
 | `service:patch-worker` | `update` on patch_artifact, repair_proposal_event; `enqueue` verification | ceiling | P-4 patch worker |
 | `service:verification-worker` | `github:read` on repository; `create` on execution_receipt, source_snapshot | ceiling | P-4 verification worker |
 | `service:critic-worker` | `update` on repair_proposal_event | ceiling | P-4 critic worker |
-| `service:sync-worker` | `create` + `update` on installations, repositories, issues, pull_requests, ci_runs, members, collaborators, branch_rules; `github:read` | fleet | P-2 sync worker |
+| `service:sync-worker` | `create` + `update` on installation, repository, issue, pull_request, ci_run, member, repo_collaborator, branch_rule; `github:read` | ceiling | P-2 sync worker |
 | `service:maintainer-worker` | `github:act` on repository; `update` on maintainer_action, maintainer_setting | ceiling | P-4 maintainer worker |
 | `service:issue-fix-worker` | `github:act` on repository; `update` on fix_attempt, managed_action | ceiling | P-4 issue fix worker |
 | `service:merge-queue-worker` | `github:act` on repository (merge); `update` on merge_queue_entry, rollback_event | ceiling | P-4 phase2 worker |
@@ -401,7 +401,7 @@ function evaluate_leaf(leaf, context):
     AND resource_type matches (exact OR parent via inheritance)
     AND effect = 'deny'
     AND (action = leaf.action OR action = '*')
-    AND (resource_id = target.id OR resource_id IS NULL within scope)
+    AND grant_matches_target(resource_id, target, leaf.selector, scope)
   if denies is not empty: return DENY(explicit_deny)
 
   -- Credential scope + expiry + environment
@@ -419,16 +419,29 @@ function evaluate_leaf(leaf, context):
     AND resource_type matches (exact OR parent via inheritance)
     AND effect = 'allow'
     AND (action = leaf.action OR action = '*')
-    AND (
-      (resource_id IS NOT NULL AND resource_id = target.id)
-      OR (resource_id IS NULL AND scope_type matches scope)
-    )
+    AND grant_matches_target(resource_id, target, leaf.selector, scope)
   if allows is empty: return DENY(resource_grant_missing)
 
   return ALLOW
 ```
 
-Step 10 in the main algorithm calls `evaluate_expression(root, context)`
+**`grant_matches_target(resource_id, target, selector, scope)` resolution:**
+
+| Selector | resource_id IS NOT NULL | resource_id IS NULL |
+|----------|------------------------|---------------------|
+| `instance` | `resource_id = target.id` | `scope_type matches scope` (wildcard within allowed scope) |
+| `list` | never matches (no instance) | `scope_type matches scope` (the principal can list resources within their scope) |
+| `create` | never matches (no instance) | `scope_type matches scope` (the principal can create within their scope) |
+| `route-root` | `resource_id = target.id` | `scope_type matches scope` |
+| `inherited` | `resource_id = target.id OR parent matches` | `scope_type matches scope` |
+
+For `list` and `create`, `target` is NULL, so no `resource_id` dereference
+occurs. A wildcard grant (`resource_id IS NULL` with matching scope) is
+sufficient. This is fail-closed: if no wildcard grant exists within the
+principal's scope, the result is `resource_grant_missing`.
+```
+
+Step 5 in the main algorithm calls `evaluate_expression(root, context)`
 which traverses the tree and calls `evaluate_leaf` for each leaf. There
 is no separate "rerun steps 5-9 for each permission" loop.
 
@@ -472,21 +485,32 @@ STEP 2: Derive tenant scope (tri-state dimensions)
   -- fleet role grants ALL visibility for installation-scoped tables
   -- (but only if no finite credential restriction collapses it below)
 
-  -- Credential narrows at every level via INTERSECTION.
-  -- ANY finite credential restriction collapses fleet to the finite set.
+  -- Credential narrows via INTERSECTION. Credentials CANNOT create authority.
+  -- Tri-state intersection rules:
+  --   NONE ∩ ANY  = NONE  (no authority cannot be expanded)
+  --   ALL  ∩ SET  = SET   (unrestricted narrowed to finite)
+  --   SET  ∩ SET  = SET(a ∩ b)
   if credential has finite installation restriction:
     cred_inst = SET(credential.installation_ids)
-    if scope.installation == ALL or scope.installation == NONE:
-      scope.installation = cred_inst
+    if scope.installation == NONE:
+      scope.installation = NONE  -- NONE ∩ SET = NONE
+    elif scope.installation == ALL:
+      scope.installation = cred_inst  -- ALL ∩ SET = SET
     else:  -- SET
       scope.installation = scope.installation ∩ cred_inst
-    scope.fleet = false  -- any finite credential collapses fleet
+    scope.fleet = false  -- finite credential collapses fleet
   if credential has finite repository restriction:
     cred_repo = SET(credential.repository_ids)
-    if scope.repository == ALL or scope.repository == NONE:
+    if scope.repository == NONE:
+      scope.repository = NONE
+    elif scope.repository == ALL:
       scope.repository = cred_repo
     else:
       scope.repository = scope.repository ∩ cred_repo
+    -- Repository restriction also constrains parent installations
+    if scope.installation != NONE and scope.installation != ALL:
+      repo_parents = SET(parent installations of cred_repo)
+      scope.installation = scope.installation ∩ repo_parents
     scope.fleet = false
   if credential denies fleet: scope.fleet = false
   if credential denies system: scope.system = false
@@ -627,14 +651,13 @@ Tenant isolation requires a two-phase sequence to avoid a resolution cycle:
 **Phase A: Derive tenant scope (before resource resolution)**
 1. Authenticate the principal.
 2. Query `auth_principal_roles` for active role assignments to derive
-   `candidate_installation_ids` (step 2 of the evaluation algebra).
-3. Intersect with credential resource restrictions.
+   `scope` (step 2 of the evaluation algebra).
+   Intersect with credential resource restrictions.
 
 **Phase B: Install the data-access boundary**
 4. The **mandatory query gateway** is the normative enforcement boundary.
-   It is a Node.js query-builder wrapper that intercepts every SQL query
-   against installation-scoped tables and injects
-   `WHERE installation_id = ANY($candidate_installation_ids)`.
+   It receives the full tri-state `scope` object from step 2 and applies
+   it to every SQL query against installation-scoped tables.
 5. Resource resolution (step 4) runs through this gateway — resources
    outside the principal's tenant scope are invisible.
 6. Operation policy evaluation (steps 5-11) then proceeds within the
@@ -649,7 +672,7 @@ is the normative enforcement mechanism because:
 RLS may be added as defense-in-depth later, but the query gateway is the
 authoritative boundary.
 
-**Fail-closed behavior:** if `candidate_installation_ids` is empty AND
+**Fail-closed behavior:** if `scope` is all-NONE with no fleet/system,
 the principal has no fleet/system role, the gateway returns empty result
 sets for all installation-scoped queries. A route that forgets to request
 tenant filtering gets nothing — the gateway applies unconditionally to
@@ -989,9 +1012,11 @@ require role permissions or resource grants:
 ```text
 function evaluate_attestation_leaf(leaf, context):
   attestation = SELECT FROM auth_external_attestations
-    WHERE subject_id = context.principal.github_user_id
+    WHERE provider = 'github'
+    AND subject_id = context.principal.github_user_id
     AND repository_id = context.resource.repository_id
     AND command = leaf.command
+    AND delegation_id = context.delegation.id
     AND expires_at > now()
   if attestation is empty:
     return DENY(attestation_not_found)
@@ -1008,6 +1033,10 @@ function evaluate_attestation_leaf(leaf, context):
 
   return ALLOW
 ```
+
+The `delegation_id` filter ensures the attestation authorizes only the
+specific delegation that created it. A valid attestation cannot be
+reused for a different delegation, even within its TTL.
 
 This is a **concrete transient authority source** — it replaces
 role+grant for the specific case of GitHub comment commands. The
@@ -1090,23 +1119,22 @@ At dequeue time, the worker:
    - Failure: `capability_payload_mismatch`.
 6. Checks `queue_name` and `job_name` match the current queue and job.
    - Failure: `capability_queue_mismatch`.
-7. **Acquires the JTI lease atomically:** see JTI consumption protocol
-   (owner-bound lease with attempt_id, atomic Lua takeover for stale
-   reservations).
-   - If `"consumed"`: reject with `capability_jti_consumed`.
-   - If stale lease (age > heartbeat_timeout): attempt atomic takeover.
-   - If active lease (age ≤ heartbeat_timeout): reject with
-     `capability_jti_in_use`.
-   - If key expired: reject with `capability_jti_expired`.
-   - If `"released"`: re-acquire via SET NX (clean failure, safe retry).
+7. **Consumes the JTI permanently:** `SET gitwire:jti:{jti} "consumed" NX EX {retention_ttl}`
+   — see JTI consumption protocol (true at-most-once).
+   - If SET succeeds: JTI is permanently consumed; proceed.
+   - If SET fails (key exists): reject with `capability_jti_consumed`.
 8. Resolves the delegation via `delegation_id` (checks not revoked,
    not expired, execution_status pending). Reject with
    `capability_delegation_invalid` if invalid.
 9. Executes the job under the delegated authority (two independent
    evaluations, §9). The query gateway is configured from the
-   delegation's resource boundary.
-10. On completion: finalize JTI to `"consumed"` (owner-bound atomic).
-    On failure: finalize JTI to `"released"` (owner-bound atomic).
+   delegation's resource boundary. No finalization needed — JTI was
+   consumed at step 7.
+
+**Retry semantics:** BullMQ retries carry the same JTI. Since the JTI
+is permanently consumed at step 7, all retries are rejected with
+`capability_jti_consumed`. The caller must re-enqueue with a fresh
+capability if the job crashes.
 
 **Retry semantics:** BullMQ retries carry the same JTI and delegation_id.
 See the JTI consumption protocol for the complete state machine.
@@ -1127,76 +1155,55 @@ workers cannot forge capabilities:
 consumer holding the shared key to forge capabilities for other audiences.
 Asymmetric signing is the only architecture; there is no MAC fallback.
 
-### JTI consumption protocol (strict at-most-once with fencing token)
+### JTI consumption protocol (true at-most-once)
 
-The model chooses **strict at-most-once execution**: a job that begins
-processing cannot be retried until its lease is released or expired.
-This is simpler and safer than fencing-token-based coordination, which
-would require every mutable sink to validate a monotonic token.
-
-**Lease value stored in Redis (JSON):**
-```json
-{
-  "owner": "<attempt_uuid>",
-  "acquired_at": "<ISO timestamp>",
-  "deadline": "<ISO timestamp>",
-  "status": "active"
-}
-```
+The model chooses **true at-most-once**: once a job begins processing,
+its JTI is permanently consumed. No takeover, no retry of an acquired
+job. If the worker crashes mid-execution, the job is lost (BullMQ's
+own retry mechanism is disabled for capability-gated jobs). The caller
+must re-enqueue with a fresh capability if needed.
 
 **Protocol:**
 
-1. **Acquire lease (atomic):**
+1. **Acquire (atomic, permanent):**
    ```text
-   SET gitwire:jti:{jti} {lease_json} NX EX {ttl_seconds}
+   SET gitwire:jti:{jti} "consumed" NX EX {retention_ttl}
    ```
-   - `deadline` = acquired_at + max_execution_time.
-   - If SET fails (key exists): check stored lease.
+   - `NX` ensures only the first attempt acquires.
+   - The value is immediately `"consumed"` — there is no intermediate
+     `"reserved"` or `"active"` state.
+   - If SET fails: the JTI is already consumed → reject with
+     `capability_jti_consumed`.
 
-2. **During execution:** the worker holds the lease. No heartbeat
-   renewal — the deadline is absolute. If the job exceeds
-   max_execution_time, the lease expires and the job is considered
-   crashed. No side effects are protected by fencing tokens; instead,
-   the job is designed to be **idempotent** at the application layer
-   (each mutation checks for prior completion via a unique operation
-   identifier before executing).
+2. **Execute:** the worker processes the job. No lease, no deadline,
+   no heartbeat.
 
-3. **Finalize (on completion):**
-   ```text
-   Lua: if json_decode.owner == attempt_id then
-          SET status='consumed', EX {retention_ttl}
-   ```
+3. **No finalization needed:** the JTI was set to `"consumed"` at
+   acquisition. Whether the job succeeds or crashes, the JTI remains
+   consumed. A retried BullMQ job carrying the same JTI is rejected.
 
-4. **Release (on failure before completion):**
-   ```text
-   Lua: if json_decode.owner == attempt_id then DEL key
-   ```
+**Side-effect safety:** because the JTI is consumed before execution,
+no two attempts can ever execute the same job concurrently. If the
+worker crashes after some side effects but before completion, those
+side effects are partial. The caller must handle this:
+- For database mutations: transaction-based (commit atomically).
+- For GitHub mutations: each mutation carries a unique operation
+  identifier (e.g., branch name with request_id suffix) so a
+  re-enqueued job can detect prior partial execution.
+- For queue mutations (enqueue downstream): the downstream job's
+  capability references the original delegation, not the crashed
+  worker's state.
 
-**Takeover (after crash, when deadline has passed):**
-```text
-Lua: stored = GET(key)
-     if stored and json_decode.status == 'active'
-        and json_decode.deadline < now then
-       -- Deadline expired: safe to take over
-       new_owner = generate_uuid()
-       SET key with new lease_json (new owner, new deadline, status=active)
-     else
-       return nil
-```
-
-**Side-effect safety:** because the model is strict at-most-once (not
-retryable-during-execution), a live lease prevents any concurrent
-execution. An old owner that crashes simply stops — its lease expires
-after the deadline, and a new owner takes over. The application layer
-must implement idempotency (operation-id deduplication) for the case
-where a crash occurs after a side effect but before finalization.
-
-**Why not fencing tokens:** fencing tokens require every mutable sink
-(database, GitHub API, Redis) to validate a monotonic counter. This
-is impractical for GitHub API mutations (GitHub has no fencing token
-support) and adds complexity to every database write. Strict
-at-most-once with application-layer idempotency is simpler and
-sufficient for the job sizes involved (seconds to minutes).
+**Why true at-most-once instead of takeover or fencing tokens:**
+- **Takeover** allows a paused old worker to resume and overlap with
+  the new attempt — unsafe without fencing at every mutable sink.
+- **Fencing tokens** require every mutable sink (including GitHub API)
+  to validate a monotonic counter — impractical.
+- **True at-most-once** is the simplest model that guarantees no
+  concurrent execution. The cost is that a crashed job must be
+  re-enqueued manually, but this is acceptable for the job sizes
+  involved (seconds to minutes) and the operational visibility it
+  provides (the crash is observable, not silently retried).
 
 ### Delegation binding
 
@@ -1331,7 +1338,7 @@ expected decision with reason code.
 | N7 | `user` with expired credential | repository X | `repository:read` | `expired` (credential expired at step 8) |
 | N8 | Worker job with consumed JTI (replay attempt) | any | any | `missing_job_authorization` (JTI already consumed) |
 | N9 | `legacy-key` with fleet role + `manage` action | auth_principal | `auth_principal:manage` | `role_permission_missing` (legacy-key role excludes `manage`) |
-| N10 | `user` with `viewer` role, compound any_of policy requiring approve permission | policy_rollout_plan | `rollout_plan:approve` | `operation_policy_denied` (compound any_of: no alternative allowed; reason is operation_policy_denied per §6 deterministic failure rule) |
+| N10 | `user` with `viewer` role, compound any_of policy requiring approve permission | `policy_rollout_plan` | `policy_rollout_plan:approve` | `operation_policy_denied` (compound any_of: no alternative allowed; reason is operation_policy_denied per §6 deterministic failure rule) |
 
 ---
 
@@ -1339,6 +1346,9 @@ expected decision with reason code.
 
 Every resource token used in roles, grants, delegations, operation
 policies, examples, and findings MUST appear in this registry.
+Every resource token used in roles, grants, delegations, operation
+policies, examples, and findings MUST appear in this registry (45
+installation-scoped + 12 system-scoped = 57 total).
 Tokens are singular. The hierarchy and category lists in §3 are
 derived from this table.
 
@@ -1355,13 +1365,13 @@ derived from this table.
 | `repo_config` | `repository` | bigint | `repo_config`, `config_history` | read, update, delete |
 | `config_validation_result` | `repository` | bigint | `config_validation_results` | read |
 | `heal_pr` | `repository` | bigint | `heal_prs` | read, update |
-| `repair_proposal` | `installation` | bigint | `repair_proposals` | read |
+| `repair_proposal` | `repository` | bigint | `repair_proposals` | read |
 | `repair_proposal_event` | `repair_proposal` | bigint | `repair_proposal_events` | read, create, update |
 | `patch_artifact` | `repair_proposal` | text (hash) | `patch_artifacts` | read, create |
 | `execution_receipt` | `repair_proposal` | text (hash) | `execution_receipts` | read, create |
 | `source_snapshot` | `repair_proposal` | text (hash) | `source_snapshots` | read, create |
 | `backend_isolation_evidence` | `repair_proposal` | bigint | `backend_isolation_evidence` | read, create |
-| `managed_action` | `installation` | bigint | `managed_actions` | read, create, update |
+| `managed_action` | `repository` | bigint | `managed_actions` | read, create, update |
 | `action_reconciliation_log` | `installation` | bigint | `action_reconciliation_log` | read |
 | `decision_log` | `installation` | bigint | `decision_log` | read, create |
 | `pipeline_event` | `installation` | bigint | `pipeline_events` | read |

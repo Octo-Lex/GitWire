@@ -37,7 +37,7 @@ places where what the code does is weaker than what the docs claim.
    orthogonal surface:
    - HTTP entry points (29 route files, 3 middleware modules)
    - Workers and direct DB/filesystem/script mutation (14 workers + scheduled
-     jobs + 50 DB tables + scripts + executor-service)
+     jobs + 51 DB tables + scripts + executor-service)
    - Authentication mechanisms, identity, tenancy, and audit trail
 2. **Every claim cites `file:line`.** Names and comments are not trusted; the
    verifier traced actual callers, middleware, guards, and side effects.
