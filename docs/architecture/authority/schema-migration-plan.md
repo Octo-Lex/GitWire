@@ -414,7 +414,14 @@ CREATE TABLE auth_roles (
   retired_at  timestamptz,
   retired_by  uuid        REFERENCES auth_principals(id),
   created_at  timestamptz NOT NULL DEFAULT now(),
-  updated_at  timestamptz NOT NULL DEFAULT now()
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+
+  -- Retirement consistency:
+  -- active implies no retirement metadata; retired requires both fields
+  CONSTRAINT chk_role_retirement_active
+    CHECK (status != 'active' OR (retired_at IS NULL AND retired_by IS NULL)),
+  CONSTRAINT chk_role_retirement_retired
+    CHECK (status != 'retired' OR (retired_at IS NOT NULL AND retired_by IS NOT NULL))
 );
 ```
 
@@ -490,6 +497,9 @@ CREATE CONSTRAINT TRIGGER trg_no_service_tenant_roles
 ```
 
 **Active predicate:** `revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`.
+Additionally, the evaluator MUST join `auth_roles` and filter
+`status = 'active'` — retired roles do not contribute permissions even
+if the assignment is not revoked.
 **Retention:** durable — revocation sets `revoked_at`, never deletes.
 
 ---
@@ -712,21 +722,38 @@ CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
 The application does NOT directly UPDATE lifecycle columns. Instead,
 it calls stored functions that atomically check all preconditions.
 
-**Function-owner role.** All `SECURITY DEFINER` functions are owned by
-`gitwire_auth_fn_owner` — a dedicated **non-login** role created
-specifically for this purpose. Neither the application nor the operator
-can log in as this role. The function owner has narrow table UPDATE
-access on `auth_delegations` only. This ensures the no-direct-transition
-trigger bypass (`current_user = 'gitwire_auth_fn_owner'`) cannot be
-impersonated by any human-accessible session.
+**Function-owner role and locked schema.** All `SECURITY DEFINER`
+functions are owned by `gitwire_auth_fn_owner` — a dedicated **non-login**
+role. The functions use `SET search_path = gitwire_auth, pg_temp` where
+`gitwire_auth` is a dedicated schema that contains only the authority
+tables and functions. `REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC`
+prevents `pg_temp` shadow-object attacks:
 
 ```sql
+-- Dedicated locked schema for authority objects
+CREATE SCHEMA gitwire_auth;
+REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;
+GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_app, gitwire_operator;
+
 -- Non-login role for SECURITY DEFINER function ownership
 CREATE ROLE gitwire_auth_fn_owner NOLOGIN;
-GRANT UPDATE ON auth_delegations TO gitwire_auth_fn_owner;
-GRANT SELECT ON auth_delegations TO gitwire_auth_fn_owner;
--- NOTE: GRANT INSERT ON auth_reconciliation_log is deferred until after
--- the table is created later in this stage (§9 reconciliation_log DDL).
+GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner;
+
+-- All authority tables live in gitwire_auth schema (schema-qualified).
+-- Example: gitwire_auth.auth_delegations, gitwire_auth.auth_principals, etc.
+-- Functions reference schema-qualified names in SET search_path context.
+-- The search_path is set to 'gitwire_auth, pg_temp' in every SECURITY DEFINER
+-- function, so unqualified names resolve to the locked schema first.
+
+-- Delegation lifecycle grants to function owner:
+GRANT SELECT, UPDATE ON gitwire_auth.auth_delegations TO gitwire_auth_fn_owner;
+-- reconciliation_log INSERT deferred until table creation later in this stage.
+-- bootstrap grants (stage 042):
+-- GRANT SELECT, DELETE ON gitwire_auth.auth_bootstrap_allow TO gitwire_auth_fn_owner;
+-- GRANT UPDATE ON gitwire_auth.auth_bootstrap_state TO gitwire_auth_fn_owner;
+-- authority-source grants (stage 047):
+-- GRANT SELECT, UPDATE ON gitwire_auth.auth_authority_source_state TO gitwire_auth_fn_owner;
+-- GRANT INSERT ON gitwire_auth.auth_authority_source_log TO gitwire_auth_fn_owner;
 ```
 
 **Claim acquisition** — atomically checks status, version, revocation,
@@ -837,11 +864,13 @@ BEGIN
   IF affected = 1 THEN
     INSERT INTO auth_reconciliation_log (
       delegation_id, operator_principal_id, termination_evidence,
-      supervisor_session, prior_attempt_id, prior_version,
+      supervisor_session, db_session_user,
+      prior_attempt_id, prior_version,
       new_status, reconciled_at
     ) VALUES (
       p_delegation_id, p_operator_principal_id, p_termination_evidence,
-      p_supervisor_session, v_old_owner, v_old_ver,
+      p_supervisor_session, session_user,
+      v_old_owner, v_old_ver,
       'cancelled', now()
     );
   END IF;
@@ -860,9 +889,12 @@ GRANT EXECUTE ON FUNCTION operator_reconcile_execution(uuid, uuid, text, text) T
 CREATE TABLE auth_reconciliation_log (
   id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   delegation_id         uuid        NOT NULL REFERENCES auth_delegations(id),
+  -- Caller-supplied human metadata (supplemental, not proof of identity):
   operator_principal_id uuid        NOT NULL REFERENCES auth_principals(id),
   termination_evidence  text        NOT NULL,
   supervisor_session    text,
+  -- Immutable DB-session identity (the authoritative proof of who ran this):
+  db_session_user       text        NOT NULL,  -- session_user at execution time
   prior_attempt_id      uuid,
   prior_version         bigint,
   new_status            delegation_status NOT NULL,
@@ -1038,9 +1070,9 @@ CREATE TABLE auth_authorization_decisions (
   -- FKs to delegation/attestation (added in stage 041 via ALTER TABLE — tables do not exist at stage 040)
   capability_delegation_id    uuid,                  -- FK added in 041
   attestation_id              uuid,                  -- FK added in 041
-  -- Break-glass
+  -- Break-glass (FK added after auth_break_glass_activations is created)
   is_break_glass              boolean     NOT NULL DEFAULT false,
-  break_glass_activation_id   uuid        REFERENCES auth_break_glass_activations(id),
+  break_glass_activation_id   uuid,                  -- FK added in stage 040b
   -- Reauthorization (for sensitive operations)
   reauthorization_result      text        CHECK (reauthorization_result IS NULL OR reauthorization_result IN ('passed', 'failed')),
   -- Timestamp
@@ -1049,18 +1081,13 @@ CREATE TABLE auth_authorization_decisions (
   -- Outcome consistency: allow requires NULL reason; deny requires non-NULL reason
   CONSTRAINT chk_decision_outcome_consistency
     CHECK ((decision = 'allow' AND reason_code IS NULL)
-           OR (decision = 'deny' AND reason_code IS NOT NULL))
+           OR (decision = 'deny' AND reason_code IS NOT NULL)),
+  -- Break-glass flag consistency: flag and activation_id must agree
+  CONSTRAINT chk_break_glass_consistency
+    CHECK (is_break_glass = (break_glass_activation_id IS NOT NULL))
 );
 
 CREATE INDEX ix_auth_decisions_principal
-  ON auth_authorization_decisions (principal_id, evaluated_at DESC);
-
-CREATE INDEX ix_auth_decisions_resource
-  ON auth_authorization_decisions (target_resource_type, target_resource_id, evaluated_at DESC);
-
-CREATE INDEX ix_auth_decisions_deny
-  ON auth_authorization_decisions (decision, reason_code)
-  WHERE decision = 'deny';
   ON auth_authorization_decisions (principal_id, evaluated_at DESC);
 
 CREATE INDEX ix_auth_decisions_resource
@@ -1089,6 +1116,42 @@ CREATE TRIGGER trg_decisions_no_update
 CREATE TRIGGER trg_decisions_no_delete
   BEFORE DELETE ON auth_authorization_decisions
   FOR EACH ROW EXECUTE FUNCTION enforce_decisions_append_only();
+```
+
+**Decision action validation.** The `action` column must contain a
+concrete action from the global action vocabulary (not `'*'`), and when
+`target_resource_type` is non-NULL, the `(target_resource_type, action)`
+pair must exist in the action catalog:
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_decision_action_valid()
+RETURNS trigger AS $$
+BEGIN
+  -- Global action vocabulary check (no wildcards in decisions)
+  IF NEW.action NOT IN (
+    'read', 'list', 'create', 'update', 'delete',
+    'github:act', 'github:read', 'enqueue', 'approve', 'revoke',
+    'manage', 'audit:read', 'audit:export'
+  ) THEN
+    RAISE EXCEPTION 'Decision action % is not in the action vocabulary', NEW.action;
+  END IF;
+
+  -- Composite catalog check when target resource type is known
+  IF NEW.target_resource_type IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM auth_resource_actions
+    WHERE registry_token = NEW.target_resource_type AND action = NEW.action
+  ) THEN
+    RAISE EXCEPTION 'Decision action %:% is not in the resource action catalog',
+      NEW.target_resource_type, NEW.action;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_decision_action_valid
+  AFTER INSERT OR UPDATE ON auth_authorization_decisions
+  FOR EACH ROW EXECUTE FUNCTION enforce_decision_action_valid();
 ```
 
 **Reproducibility:** the `role_permissions_snapshot`,
@@ -1447,8 +1510,8 @@ It needs DELETE on `auth_bootstrap_allow` and UPDATE on
 `auth_bootstrap_state` — these are granted to the function owner:
 
 ```sql
-GRANT DELETE ON auth_bootstrap_allow TO gitwire_auth_fn_owner;
-GRANT UPDATE ON auth_bootstrap_state TO gitwire_auth_fn_owner;
+GRANT SELECT, DELETE ON auth_bootstrap_allow TO gitwire_auth_fn_owner;
+GRANT SELECT, UPDATE ON auth_bootstrap_state TO gitwire_auth_fn_owner;
 ```
 
 ---
@@ -1737,14 +1800,14 @@ Runs DDL only. Seeds catalog tables. Cannot create principals or grants.
 | `auth_authorization_decisions` | `auth_credentials` | `credential_id` | NO ACTION | Credentials never deleted |
 | `auth_authorization_decisions` | `auth_resource_registry` | `target_resource_type` | NO ACTION | Catalog never deleted |
 | `auth_authorization_decisions` | `auth_delegations` | `capability_delegation_id` | NO ACTION | Added in stage 041 |
-| `auth_authorization_decisions` | `auth_external_attestations` | `attestation_id` | NO ACTION | Added in stage 041 |
+| `auth_authorization_decisions` | `auth_external_attestations` | `attestation_id` | SET NULL | Attestation cleanup sets attestation_id=NULL; decision retains JSONB snapshot |
 | `auth_authorization_decisions` | `auth_operation_policy_versions` | `operation_policy_version` | NO ACTION (via version_hash) | Policy immutable |
 | `auth_external_attestations` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
 | `auth_external_attestations` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
 | `auth_sessions` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
 | `auth_break_glass_activations` | `auth_principals` | `break_glass_principal_id` | NO ACTION | Principals never deleted |
 | `auth_break_glass_activations` | `auth_principals` | `activated_by` | NO ACTION | Audit linkage preserved |
-| `auth_break_glass_activations` | `auth_sessions` | `session_id` | NO ACTION | Sessions durable |
+| `auth_break_glass_activations` | `auth_sessions` | `session_id` | SET NULL | Session cleanup sets session_id=NULL; activation retains metadata |
 | `auth_reconciliation_log` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
 | `auth_reconciliation_log` | `auth_principals` | `operator_principal_id` | NO ACTION | Audit linkage preserved |
 | `auth_resource_registry` | `auth_resource_registry` | `parent_token` | NO ACTION | Self-ref, catalog stable |
@@ -1806,17 +1869,43 @@ rolled back AFTER stages 040–047 that reference these tables.
 
 ### Stage 040: Authorization tables
 
-Creates `auth_resource_grants`, `auth_worker_ceilings`,
-`auth_authorization_decisions`, `auth_operation_policy_versions`,
-`auth_sessions` + triggers.
+Creates all authorization tables in dependency-safe order. Objects
+that reference tables created in this or later stages have their FKs
+deferred via `ALTER TABLE`.
+
+**Object creation order within stage 040:**
 
 ```sql
 -- 040_auth_authorization_tables.sql
+-- 1. auth_operation_policy_versions (no FKs to other 040 tables)
+-- 2. auth_resource_grants (+ transport-exclusion + action-valid triggers)
+-- 3. auth_worker_ceilings (+ service-only trigger)
+-- 4. auth_worker_ceiling_permissions (+ composite FK to auth_resource_actions)
+-- 5. auth_authorization_decisions (FKs to policy via version_hash;
+--    FKs to delegations/attestations/break-glass deferred to stages 041/040b)
+--    + append-only triggers + action-valid trigger
+-- 6. auth_sessions
+-- 7. auth_break_glass_activations (+ constraint trigger)
+-- Stage 040b: deferred FKs from decisions to break-glass activations
+ALTER TABLE auth_authorization_decisions
+  ADD CONSTRAINT fk_decision_break_glass
+  FOREIGN KEY (break_glass_activation_id) REFERENCES auth_break_glass_activations(id);
 ```
 
-**Rollback:** drop triggers, then `DROP TABLE` in reverse FK order.
-**Dependency check:** must be rolled back AFTER 041 (delegations FK to
-decisions).
+**Tables created:** `auth_operation_policy_versions`,
+`auth_resource_grants`, `auth_worker_ceilings`,
+`auth_worker_ceiling_permissions`, `auth_authorization_decisions`,
+`auth_sessions`, `auth_break_glass_activations`.
+
+**Deferred FKs (added later):**
+- Decisions → delegations: stage 041
+- Decisions → attestations: stage 041
+- Decisions → break-glass activations: stage 040b (within this stage, after the activation table is created)
+
+**Rollback:** drop triggers, then `DROP TABLE` in reverse FK order:
+break-glass activations, sessions, decisions, ceiling-permissions,
+ceilings, grants, policy-versions. **Dependency check:** must be rolled
+back AFTER 041 (delegations FK to decisions).
 
 ### Stage 041: Delegation and attestation tables
 
@@ -1881,22 +1970,25 @@ auth_bootstrap_allow; DROP TABLE auth_bootstrap_state`.
 
 ### Stage 043: Ownership backfill
 
-Adds `installation_id` to the 10 tables identified in §15 that lack it.
+Adds `installation_id` to the 8 tables identified in §15 that lack it.
+(`policy_definitions` and `feedback_rules` already have the column per
+disk-verified migrations 008 and 009 — excluded from this stage.)
 Backfills from known parent. Creates `migration_report`.
 
 ```sql
 -- 043_ownership_backfill.sql
 -- CREATE TABLE migration_report
+-- 8 tables requiring ADD COLUMN (policy_definitions and feedback_rules
+-- already have installation_id per disk-verified migrations 008/009):
 -- ALTER TABLE repair_proposals ADD COLUMN installation_id bigint; + backfill + report
 -- ALTER TABLE patch_artifacts ADD COLUMN installation_id bigint; + backfill
 -- ALTER TABLE execution_receipts ADD COLUMN installation_id bigint; + backfill
 -- ALTER TABLE source_snapshots ADD COLUMN installation_id bigint; + backfill
 -- ALTER TABLE backend_isolation_evidence ADD COLUMN installation_id bigint; + backfill
 -- ALTER TABLE decision_log ADD COLUMN installation_id bigint; + backfill
--- ALTER TABLE policy_definitions ADD COLUMN installation_id bigint; + backfill
--- ALTER TABLE policy_waivers ADD COLUMN installation_id bigint; + backfill
--- ALTER TABLE policy_rollout_plans ADD COLUMN installation_id bigint; + backfill
--- ALTER TABLE feedback_rules ADD COLUMN installation_id bigint; + backfill
+-- ALTER TABLE policy_waivers ADD COLUMN installation_id bigint; + backfill from repo_id
+-- ALTER TABLE policy_rollout_plans ADD COLUMN installation_id bigint; + backfill from repo_id
+-- (policy_definitions and feedback_rules EXCLUDED — column already exists)
 ```
 
 **Rollback:** `ALTER TABLE ... DROP COLUMN installation_id` for each
@@ -2060,7 +2152,26 @@ CREATE TABLE auth_authority_source_log (
   transitioned_by text        NOT NULL,  -- session_user (DB-authenticated, not caller-supplied)
   transitioned_at timestamptz NOT NULL DEFAULT now()
 );
--- Append-only (BEFORE UPDATE/DELETE triggers + INSERT-only privilege for function owner)
+
+-- Append-only enforcement:
+CREATE OR REPLACE FUNCTION enforce_authority_source_log_append_only()
+RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'auth_authority_source_log is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_authority_source_log_no_update
+  BEFORE UPDATE ON auth_authority_source_log
+  FOR EACH ROW EXECUTE FUNCTION enforce_authority_source_log_append_only();
+CREATE TRIGGER trg_authority_source_log_no_delete
+  BEFORE DELETE ON auth_authority_source_log
+  FOR EACH ROW EXECUTE FUNCTION enforce_authority_source_log_append_only();
+
+-- Privileges: only function owner can INSERT; application/operator get SELECT.
+GRANT INSERT ON auth_authority_source_log TO gitwire_auth_fn_owner;
+GRANT SELECT ON auth_authority_source_state TO gitwire_auth_fn_owner;
+GRANT UPDATE ON auth_authority_source_state TO gitwire_auth_fn_owner;
 ```
 
 **Identity binding.** The `transitioned_by` column records `session_user`
@@ -2071,7 +2182,13 @@ and `p_supervisor_session` parameters record the human operator's
 intent, but the DB session identity (`session_user`) is captured
 separately in the reconciliation log for forensic verification.
 
-**Rollback:** `DROP FUNCTION transition_authority_source; DROP TABLE auth_authority_source_state`.
+**Rollback:**
+1. `DROP FUNCTION transition_authority_source;`
+2. `DROP TRIGGER trg_authority_source_log_no_update ON auth_authority_source_log;`
+3. `DROP TRIGGER trg_authority_source_log_no_delete ON auth_authority_source_log;`
+4. `DROP FUNCTION enforce_authority_source_log_append_only;`
+5. `DROP TABLE auth_authority_source_log;`
+6. `DROP TABLE auth_authority_source_state;`
 
 ### Dependency-aware rollback graph
 
@@ -2188,11 +2305,18 @@ or function.
 | Operator reconciliation writes audit record | `operator_reconcile_execution()` inserts `auth_reconciliation_log` | STORE |
 | Decisions are append-only | BEFORE UPDATE/DELETE triggers + INSERT/SELECT-only privileges | REJECT |
 | Policy versions are append-only | BEFORE UPDATE/DELETE triggers | REJECT |
-| Policy leaves validated against catalog | `enforce_policy_leaves_valid()` trigger | REJECT |
+| Policy leaves validated against catalog | recursive `validate_policy_node()` in `enforce_policy_leaves_valid()` | REJECT |
+| Policy hash verified | `enforce_policy_hash_matches()` trigger | REJECT |
+| Decision action is concrete and catalog-valid | `enforce_decision_action_valid()` trigger | REJECT |
+| Decision outcome/reason consistency | `chk_decision_outcome_consistency` CHECK | REJECT |
+| Decision break-glass flag consistency | `chk_break_glass_consistency` CHECK | REJECT |
 | Delegation has persisted normalized boundary | `boundary_*` columns in `auth_delegations` | STORE |
 | Decision has immutable evaluated-input snapshot | JSONB snapshot columns in `auth_authorization_decisions` | STORE |
-| Break-glass has activation record | `auth_break_glass_activations` table | STORE |
-| Authority-source transitions are CAS + legal-only | `transition_authority_source()` function | STORE/REJECT |
+| Break-glass activation constraints | `enforce_break_glass_constraints()` trigger | REJECT |
+| Authority-source transitions are CAS + legal-only | `transition_authority_source()` operator-only function | STORE/REJECT |
+| Authority-source log is append-only | BEFORE UPDATE/DELETE triggers + INSERT-only privilege | REJECT |
+| Role retirement consistency | `chk_role_retirement_active`/`chk_role_retirement_retired` CHECKs | REJECT |
+| Reconciliation log captures DB session identity | `db_session_user` column set from `session_user` | STORE |
 
 ### Scope-product truth-table coverage (T1–T18)
 
@@ -2497,27 +2621,48 @@ belong to the authorized implementation wave after Wave 0 acceptance.
 
 ## 25. Retention and archival constraints
 
-**Partitioned tables.** The following high-volume tables must be created
-as range-partitioned tables from the outset (using `PARTITION BY RANGE
-(evaluated_at)`). A pre-enforcement partition-conversion stage converts
-the initial single-partition table to a partitioned table before
-volume increases:
+**Design choice: non-partitioned initial schema.** All authority tables
+are created as ordinary (non-partitioned) tables with single-column UUID
+primary keys. This avoids the PostgreSQL constraint that partitioned
+tables must include the partition key in every unique index, which would
+conflict with the single-column `id` primary keys and FKs used
+throughout this design.
 
-| Record type | Table | Partitioning | Minimum retention | Archival | Deletion |
-|---|---|---|---|---|---|
-| Authorization decisions | `auth_authorization_decisions` | `PARTITION BY RANGE (evaluated_at)`, monthly | 365 days | Detach+archive old partitions | Partition drop only |
-| Reconciliation log | `auth_reconciliation_log` | `PARTITION BY RANGE (reconciled_at)`, monthly | 365 days | Detach+archive | Partition drop only |
-| Break-glass activations | `auth_break_glass_activations` | `PARTITION BY RANGE (activated_at)`, monthly | 365 days | Detach+archive | Partition drop only |
-| Authority-source log | `auth_authority_source_log` | No partitioning (low volume) | Indefinite | Never | Never |
+High-volume tables use **bounded row-level archival** (scheduled DELETE
+jobs) instead of partition drops. If volume eventually requires
+partitioning, a later implementation wave can convert these tables to
+partitioned with a composite PK including the time column — but that is
+out of scope for Wave 0.
 
-**Non-partitioned tables** (low volume or lifecycle-managed):
+**Retention dependency resolution.** Several long-lived records have FKs
+to shorter-lived records. The decision snapshot (§11) already preserves
+immutable JSONB copies of grants, credential scopes, and policy inputs
+— so deleting the source records does not lose the evaluated context.
+The following dependency rules apply:
 
-| Record type | Table | Minimum retention | Deletion mechanism |
+| Long-lived record (365 days) | Short-lived dependency | Resolution |
+|---|---|---|
+| `auth_authorization_decisions` | `auth_external_attestations` (90 days) | Decision's `capability_snapshot` and JSONB snapshots contain the attestation inputs. FK is nullable (set to NULL when attestation is deleted); the snapshot retains the data. |
+| `auth_authorization_decisions` | `auth_sessions` (30 days) | No direct FK to sessions. Break-glass activation has nullable session FK. Decision's snapshot retains session context. |
+| `auth_break_glass_activations` (365 days) | `auth_sessions` (30 days) | `session_id` FK is nullable. When session is deleted, set `session_id = NULL` (via `ON DELETE SET NULL` on the FK); the activation record retains all other metadata. |
+
+**All FKs to short-lived tables use `ON DELETE SET NULL`** (not
+`NO ACTION`), so cleanup jobs can delete expired records without FK
+violations. The immutable JSONB snapshots in long-lived records
+preserve the audit trail.
+
+**Retention table (non-partitioned, row-level archival):**
+
+| Record type | Table | Min retention | Deletion mechanism |
 |---|---|---|---|
+| Authorization decisions | `auth_authorization_decisions` | 365 days | Scheduled job: `DELETE WHERE evaluated_at < now() - interval '365 days'` |
+| Reconciliation log | `auth_reconciliation_log` | 365 days | Scheduled job: `DELETE WHERE reconciled_at < now() - interval '365 days'` |
+| Break-glass activations | `auth_break_glass_activations` | 365 days | Scheduled job: `DELETE WHERE activated_at < now() - interval '365 days'` |
+| Authority-source log | `auth_authority_source_log` | Indefinite | Never deleted (low volume) |
 | External attestations | `auth_external_attestations` | 90 days | Scheduled job: `DELETE WHERE expires_at < now() - interval '90 days'` |
-| Sessions | `auth_sessions` | 30 days after expiry or revocation | Scheduled job: `DELETE WHERE expires_at < now() - interval '30 days'` (covers both revoked and never-revoked expired sessions) |
-| Capability keys | `auth_capability_keys` | Until all tokens signed with the key have expired | Set `retired_at`; manual DELETE after verified zero dependents |
-| Legacy key mappings | `auth_legacy_key_map` | Until all keys expired and migrated | Archive after `legacy-retired`; never DELETE until then |
+| Sessions | `auth_sessions` | 30 days after expiry/revocation | Scheduled job: `DELETE WHERE expires_at < now() - interval '30 days'` |
+| Capability keys | `auth_capability_keys` | Until zero dependents | Set `retired_at`; manual DELETE after verified zero dependents |
+| Legacy key mappings | `auth_legacy_key_map` | Until `legacy-retired` | Archive after state change; never DELETE until then |
 | Policy versions | `auth_operation_policy_versions` | Indefinite (immutable) | Never |
 | Bootstrap markers | `auth_bootstrap_allow` | Until consumed | `transition_bootstrap_state('disabled')` deletes them |
 | Migration reports | `migration_report` | Until resolved + 90 days | Archive resolved rows older than 90 days | DELETE where `resolved = true AND resolved_at < now() - interval '90 days'` |
