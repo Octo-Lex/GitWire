@@ -38,7 +38,8 @@
 22. [Authority-source state machine](#22-authority-source-state-machine)
 23. [Proof obligations and fixtures](#23-proof-obligations-and-fixtures)
 24. [Schema-smoke verification](#24-schema-smoke-verification)
-25. [Unresolved schema risks](#25-unresolved-schema-risks)
+25. [Retention and archival constraints](#25-retention-and-archival-constraints)
+26. [Unresolved schema risks](#26-unresolved-schema-risks)
 
 ---
 
@@ -64,6 +65,30 @@ Specifically:
   undeclared pairs are rejected at INSERT time.
 - **Worker-principal subtype boundaries** use constraint triggers
   (PostgreSQL CHECK cannot cross-table reference).
+
+### Extension prerequisites
+
+Two extensions are required before any W0-C migration runs. They are
+installed as migration `037a` (a pre-requisite step before `038`) or
+declared in the migration runner's bootstrap:
+
+```sql
+-- Required extensions (must run before stage 038)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;   -- provides gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; -- provides uuid_generate_v5()
+```
+
+`pgcrypto` provides `gen_random_uuid()` (used as DEFAULT for all
+primary keys). `uuid-ossp` provides `uuid_generate_v5(namespace, name)`
+(used for deterministic seed UUIDs in rollback-provenance, §21 stage 046).
+
+A fixed namespace UUID is declared for deterministic seed generation:
+
+```sql
+-- Fixed namespace for all deterministic seed UUIDs in GitWire migrations.
+-- This UUID is arbitrary but stable — never change it after first use.
+SELECT '6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid AS gitwire_seed_namespace;
+```
 
 ### Migration file naming
 
@@ -191,7 +216,7 @@ CREATE TYPE authority_source_state AS ENUM (
   'legacy-only',       -- existing path authoritative; new tables empty
   'shadow-evaluation', -- new evaluator runs but does not deny
   'dual-write',        -- both paths write; legacy still authoritative for reads
-  'enforce',           -- new evaluator authoritative; legacy path read-only fallback
+  'enforce',           -- new evaluator authoritative; legacy path disabled for authorization
   'legacy-retired'     -- legacy path removed
 );
 ```
@@ -236,7 +261,12 @@ CREATE OR REPLACE FUNCTION enforce_principal_type_bindings()
 RETURNS trigger AS $$
 BEGIN
   -- 'user': github_user_id is OPTIONAL (bootstrap admin may lack it).
-  --         If present, must be unique (enforced by index).
+  --         Must NOT have installation_id.
+  IF NEW.principal_type = 'user' THEN
+    IF NEW.installation_id IS NOT NULL THEN
+      RAISE EXCEPTION 'user principal cannot have installation_id';
+    END IF;
+  END IF;
   -- 'service': no github_user_id, no installation_id
   IF NEW.principal_type = 'service' THEN
     IF NEW.github_user_id IS NOT NULL THEN
@@ -278,6 +308,31 @@ $$ LANGUAGE plpgsql;
 CREATE CONSTRAINT TRIGGER trg_principal_bindings
   AFTER INSERT OR UPDATE ON auth_principals
   FOR EACH ROW EXECUTE FUNCTION enforce_principal_type_bindings();
+```
+
+**Retyping guard.** Prevents changing a service principal to a
+non-service type when ceilings or delegations reference it (and vice
+versa for non-service principals receiving ceilings/delegations):
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_no_subtype_retype_with_deps()
+RETURNS trigger AS $$
+BEGIN
+  IF OLD.principal_type = 'service' AND NEW.principal_type != 'service' THEN
+    IF EXISTS (SELECT 1 FROM auth_worker_ceilings WHERE principal_id = NEW.id) THEN
+      RAISE EXCEPTION 'cannot retype service principal % — worker ceilings exist', NEW.id;
+    END IF;
+    IF EXISTS (SELECT 1 FROM auth_delegations WHERE worker_service_principal_id = NEW.id) THEN
+      RAISE EXCEPTION 'cannot retype service principal % — delegations exist', NEW.id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_no_subtype_retype
+  AFTER UPDATE ON auth_principals
+  FOR EACH ROW EXECUTE FUNCTION enforce_no_subtype_retype_with_deps();
 ```
 
 **Active predicate:** `status = 'active'`.
@@ -476,6 +531,33 @@ CREATE INDEX ix_auth_resource_grants_specific
 
 **Active predicate:** `revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`.
 
+**Grant action validation trigger.** Validates that `(resource_type, action)`
+is a declared pair in the action catalog, except for `action = '*'`
+(wildcard, which is valid for any resource type):
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_grant_action_valid()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.action != '*' AND NOT EXISTS (
+    SELECT 1 FROM auth_resource_actions
+    WHERE registry_token = NEW.resource_type AND action = NEW.action
+  ) THEN
+    RAISE EXCEPTION 'Invalid action % for resource type % in auth_resource_grants',
+      NEW.action, NEW.resource_type;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_grant_action_valid
+  AFTER INSERT OR UPDATE ON auth_resource_grants
+  FOR EACH ROW EXECUTE FUNCTION enforce_grant_action_valid();
+```
+
+(The transport-resource exclusion trigger from §2 also fires on this
+table, rejecting `resource_type = 'queue_job'`.)
+
 ---
 
 ## 8. Worker ceiling tables
@@ -487,7 +569,6 @@ CREATE TABLE auth_worker_ceilings (
   id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   principal_id  uuid        NOT NULL REFERENCES auth_principals(id),
   role_name     text        NOT NULL,
-  permissions   text[]      NOT NULL,
   granted_at    timestamptz NOT NULL DEFAULT now(),
   granted_by    uuid        NOT NULL REFERENCES auth_principals(id),
   revoked_at    timestamptz,
@@ -498,6 +579,28 @@ CREATE TABLE auth_worker_ceilings (
 CREATE INDEX ix_auth_worker_ceilings_principal_active
   ON auth_worker_ceilings (principal_id)
   WHERE revoked_at IS NULL;
+```
+
+### `auth_worker_ceiling_permissions`
+
+Normalized junction table with composite FK to `auth_resource_actions`.
+This replaces the unvalidated `text[]` array. Every permission pair is
+catalog-validated. `queue_job:enqueue` is legal here (it is the
+transport ceiling permission); it is rejected in grants by the §2
+trigger.
+
+```sql
+CREATE TABLE auth_worker_ceiling_permissions (
+  ceiling_id         uuid   NOT NULL REFERENCES auth_worker_ceilings(id) ON DELETE CASCADE,
+  permission_resource text  NOT NULL,
+  permission_action   text  NOT NULL,
+  PRIMARY KEY (ceiling_id, permission_resource, permission_action),
+  FOREIGN KEY (permission_resource, permission_action)
+    REFERENCES auth_resource_actions (registry_token, action)
+);
+
+CREATE INDEX ix_ceiling_perms_lookup
+  ON auth_worker_ceiling_permissions (permission_resource, permission_action);
 ```
 
 **Worker-subtype enforcement** (constraint trigger — CHECK cannot
@@ -601,13 +704,31 @@ CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
 The application does NOT directly UPDATE lifecycle columns. Instead,
 it calls stored functions that atomically check all preconditions.
 
+**Function-owner role.** All `SECURITY DEFINER` functions are owned by
+`gitwire_auth_fn_owner` — a dedicated **non-login** role created
+specifically for this purpose. Neither the application nor the operator
+can log in as this role. The function owner has narrow table UPDATE
+access on `auth_delegations` only. This ensures the no-direct-transition
+trigger bypass (`current_user = 'gitwire_auth_fn_owner'`) cannot be
+impersonated by any human-accessible session.
+
 ```sql
--- Claim acquisition: atomically checks status, version, revocation, expiry, and worker identity.
+-- Non-login role for SECURITY DEFINER function ownership
+CREATE ROLE gitwire_auth_fn_owner NOLOGIN;
+GRANT UPDATE ON auth_delegations TO gitwire_auth_fn_owner;
+GRANT INSERT ON auth_reconciliation_log TO gitwire_auth_fn_owner;
+GRANT SELECT ON auth_delegations TO gitwire_auth_fn_owner;
+```
+
+**Claim acquisition** — atomically checks status, version, revocation,
+expiry, and worker identity:
+
+```sql
 CREATE OR REPLACE FUNCTION acquire_delegation_claim(
-  p_delegation_id      uuid,
+  p_delegation_id       uuid,
   p_worker_principal_id uuid,
-  p_attempt_id         uuid,
-  p_expected_version   bigint
+  p_attempt_id          uuid,
+  p_expected_version    bigint
 ) RETURNS boolean
 SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -616,9 +737,9 @@ DECLARE
   affected int;
 BEGIN
   UPDATE auth_delegations
-    SET execution_status   = 'executing',
+    SET execution_status     = 'executing',
         execution_attempt_id = p_attempt_id,
-        execution_version   = p_expected_version + 1,
+        execution_version    = p_expected_version + 1,
         execution_started_at = now()
     WHERE id                       = p_delegation_id
       AND worker_service_principal_id = p_worker_principal_id
@@ -631,12 +752,18 @@ BEGIN
   RETURN affected = 1;
 END;
 $$ LANGUAGE plpgsql;
+ALTER FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint) TO gitwire_app;
+```
 
--- Claim finalization: owner-checked, restricts target status.
+**Claim finalization** — owner-checked, restricts target status:
+
+```sql
 CREATE OR REPLACE FUNCTION finalize_delegation_claim(
-  p_delegation_id      uuid,
-  p_attempt_id         uuid,
-  p_final_status       delegation_status  -- must be 'completed' or 'cancelled'
+  p_delegation_id  uuid,
+  p_attempt_id     uuid,
+  p_final_status   delegation_status
 ) RETURNS boolean
 SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -659,24 +786,37 @@ BEGIN
   RETURN affected = 1;
 END;
 $$ LANGUAGE plpgsql;
+ALTER FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status) TO gitwire_app;
+```
 
--- Operator reconciliation: requires confirmed termination evidence.
--- This function is called ONLY by the operator DB role after
--- process-supervisor-confirmed termination. It is audited.
+**Operator reconciliation** — requires confirmed termination evidence,
+inserts a durable audit record atomically with the state transition:
+
+```sql
 CREATE OR REPLACE FUNCTION operator_reconcile_execution(
-  p_delegation_id      uuid,
+  p_delegation_id         uuid,
   p_operator_principal_id uuid,
-  p_termination_evidence text
+  p_termination_evidence  text,
+  p_supervisor_session    text
 ) RETURNS boolean
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  affected int;
+  affected     int;
+  v_old_owner  uuid;
+  v_old_ver    bigint;
 BEGIN
   IF p_termination_evidence IS NULL OR p_termination_evidence = '' THEN
     RAISE EXCEPTION 'operator_reconcile_execution requires non-empty termination evidence';
   END IF;
+
+  -- Capture prior owner/version for audit
+  SELECT execution_attempt_id, execution_version
+    INTO v_old_owner, v_old_ver
+    FROM auth_delegations WHERE id = p_delegation_id;
 
   UPDATE auth_delegations
     SET execution_status = 'cancelled'
@@ -684,15 +824,45 @@ BEGIN
       AND execution_status = 'executing';
 
   GET DIAGNOSTICS affected = ROW_COUNT;
-  -- Audit log entry would be inserted here in implementation.
+
+  IF affected = 1 THEN
+    INSERT INTO auth_reconciliation_log (
+      delegation_id, operator_principal_id, termination_evidence,
+      supervisor_session, prior_attempt_id, prior_version,
+      new_status, reconciled_at
+    ) VALUES (
+      p_delegation_id, p_operator_principal_id, p_termination_evidence,
+      p_supervisor_session, v_old_owner, v_old_ver,
+      'cancelled', now()
+    );
+  END IF;
+
   RETURN affected = 1;
 END;
 $$ LANGUAGE plpgsql;
+ALTER FUNCTION operator_reconcile_execution(uuid, uuid, text, text) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION operator_reconcile_execution(uuid, uuid, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION operator_reconcile_execution(uuid, uuid, text, text) TO gitwire_operator;
 ```
 
-**Denied-terminal enforcement:** the `acquire_delegation_claim` CAS
-condition explicitly excludes `'denied'`. A constraint trigger prevents
-direct UPDATE of `execution_status` from `denied` to any other state:
+**Reconciliation audit table:**
+
+```sql
+CREATE TABLE auth_reconciliation_log (
+  id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  delegation_id         uuid        NOT NULL REFERENCES auth_delegations(id),
+  operator_principal_id uuid        NOT NULL REFERENCES auth_principals(id),
+  termination_evidence  text        NOT NULL,
+  supervisor_session    text,
+  prior_attempt_id      uuid,
+  prior_version         bigint,
+  new_status            delegation_status NOT NULL,
+  reconciled_at         timestamptz NOT NULL DEFAULT now()
+);
+-- Append-only (application gets SELECT + INSERT; no UPDATE/DELETE)
+```
+
+**Denied-terminal enforcement:**
 
 ```sql
 CREATE OR REPLACE FUNCTION enforce_denied_terminal()
@@ -711,23 +881,19 @@ CREATE CONSTRAINT TRIGGER trg_denied_terminal
   FOR EACH ROW EXECUTE FUNCTION enforce_denied_terminal();
 ```
 
-**Strict no-reset enforcement:** a constraint trigger prevents direct
-UPDATE of `execution_status` from `executing` to any state (the only
-permitted exit paths are through `finalize_delegation_claim` or
-`operator_reconcile_execution`, which use `SECURITY DEFINER` and bypass
-the trigger via a session-level setting or a separate security context):
+**Strict no-reset enforcement.** The trigger blocks direct
+`executing → other` transitions by any role EXCEPT the function-owner
+role (which the SECURITY DEFINER functions run as). Neither the
+application nor operator session can bypass this:
 
 ```sql
 CREATE OR REPLACE FUNCTION enforce_no_direct_executing_transition()
 RETURNS trigger AS $$
 BEGIN
-  -- This trigger fires on direct UPDATEs by the application role.
-  -- SECURITY DEFINER functions run as the function owner (operator role)
-  -- and can check current_user to bypass this check.
   IF OLD.execution_status = 'executing' AND NEW.execution_status != OLD.execution_status
-     AND current_user != 'gitwire_operator' THEN
-    RAISE EXCEPTION 'executing delegation % can only be finalized via stored function',
-      NEW.id;
+     AND current_user != 'gitwire_auth_fn_owner' THEN
+    RAISE EXCEPTION 'executing delegation % can only be finalized via stored function (current_user=%)',
+      NEW.id, current_user;
   END IF;
   RETURN NEW;
 END;
@@ -736,6 +902,13 @@ $$ LANGUAGE plpgsql;
 CREATE CONSTRAINT TRIGGER trg_no_direct_executing_transition
   AFTER UPDATE ON auth_delegations
   FOR EACH ROW EXECUTE FUNCTION enforce_no_direct_executing_transition();
+```
+
+The operator role has **no direct UPDATE on `auth_delegations`**. It
+can only call `operator_reconcile_execution()`, which runs as
+`gitwire_auth_fn_owner`. The trigger bypass condition checks
+`current_user = 'gitwire_auth_fn_owner'`, which is a `NOLOGIN` role —
+no human or application session can set their role to it.
 ```
 
 ---
@@ -793,9 +966,10 @@ CREATE TABLE auth_authorization_decisions (
   principal_id                uuid        REFERENCES auth_principals(id),
   credential_id               uuid        REFERENCES auth_credentials(id),
   -- Normalized target (immutable snapshot)
-  target_resource_type        text,
+  target_resource_type        text        REFERENCES auth_resource_registry(token),
   target_resource_id          text,
-  target_selector             text,       -- 'instance', 'list', 'create', 'route-root', 'inherited'
+  target_selector             text        CHECK (target_selector IN
+                                ('instance', 'list', 'create', 'route-root', 'inherited', 'scope-slice')),
   target_container_type       text,
   target_container_id         text,
   target_installation_id      bigint,
@@ -803,24 +977,42 @@ CREATE TABLE auth_authorization_decisions (
   -- Action and route
   action                      text        NOT NULL,
   route                       text,
-  -- Evaluated authority inputs (immutable snapshot)
-  role_permissions_snapshot   jsonb       NOT NULL,  -- array of {role, scope_type, scope_id, permissions}
-  credential_scopes_snapshot  jsonb,                 -- scopes, installation_ids, repository_ids at eval time
-  matched_grants_snapshot     jsonb,                 -- array of grant IDs and effects that matched
-  matched_denies_snapshot     jsonb,                 -- array of deny grant IDs that matched
-  -- Policy versions (immutable references)
-  operation_policy_version    text        NOT NULL,  -- FK to auth_operation_policy_versions.version_hash
-  -- Denial info
-  reason_code                 text,                  -- NULL for allow
-  denial_step                 text,                  -- where evaluated
-  -- Capability/attestation inputs (for worker/attestation decisions)
-  capability_jti              text,
-  capability_delegation_id    uuid        REFERENCES auth_delegations(id),
-  attestation_id              uuid        REFERENCES auth_external_attestations(id),
+  -- Derived tri-state scope snapshot (immutable, for reproduction)
+  scope_snapshot              jsonb       NOT NULL,  -- {installation: "ALL"|"NONE"|{ids}, repository: same, fleet: bool, system: bool}
+  -- Evaluated authority inputs (immutable full-value snapshots)
+  role_permissions_snapshot   jsonb       NOT NULL,  -- array of {role_id, role_name, scope_type, scope_id, permissions: [{resource, action}]}
+  credential_scopes_snapshot  jsonb,                 -- {scopes, installation_ids, repository_ids, environment, audience}
+  matched_grants_snapshot     jsonb,                 -- array of full grant values: {id, resource_type, resource_id, scope_type, scope_id, action, effect}
+  matched_denies_snapshot     jsonb,                 -- array of full deny grant values
+  -- Policy version (immutable reference)
+  operation_policy_version    text        NOT NULL REFERENCES auth_operation_policy_versions(version_hash),
+  -- Denial info (catalog-constrained)
+  reason_code                 text        CHECK (reason_code IS NULL OR reason_code IN (
+    'no_authenticated_principal', 'no_installation_scope', 'resource_not_found',
+    'no_active_role', 'role_permission_missing', 'explicit_deny',
+    'credential_scope_denied', 'credential_resource_restricted',
+    'wrong_environment', 'expired', 'resource_grant_missing',
+    'operation_policy_denied', 'reauthorization_failed',
+    'attestation_not_found', 'attestation_revoked_on_github', 'attestation_permission_changed',
+    'capability_jti_consumed', 'capability_delegation_in_use',
+    'capability_delegation_invalid', 'capability_invalid_signature',
+    'capability_audience_mismatch', 'capability_expired',
+    'capability_payload_mismatch', 'capability_queue_mismatch',
+    'capability_delivery_mismatch', 'capability_key_not_found',
+    'unmapped_legacy_key', 'disabled'
+  )),
+  denial_step                 text,                  -- where evaluated: 'evaluate_leaf', 'evaluate_attestation_leaf', 'Algorithm step N', 'Worker verification'
+  -- Capability claim snapshot (complete, for worker decisions)
+  capability_snapshot         jsonb,                 -- {version, decision_id, delegation_id, initiating_principal_id, worker_service_principal_id, operation, queue_name, job_name, installation_id, repository_id, payload_hash, issuer, audience, key_id, issued_at, expires_at, jti, delivery_id}
+  -- Attestation recheck result (for F-07 decisions)
+  attestation_recheck_result  text,                  -- 'verified', 'revoked_on_github', 'permission_changed', 'not_found', NULL (not attestation route)
+  -- FKs to delegation/attestation (added in stage 041 via ALTER TABLE — tables do not exist at stage 040)
+  capability_delegation_id    uuid,                  -- FK added in 041
+  attestation_id              uuid,                  -- FK added in 041
   -- Break-glass
   is_break_glass              boolean     NOT NULL DEFAULT false,
   -- Reauthorization (for sensitive operations)
-  reauthorization_result      text,                  -- 'passed', 'failed', NULL (not required)
+  reauthorization_result      text        CHECK (reauthorization_result IS NULL OR reauthorization_result IN ('passed', 'failed')),
   -- Timestamp
   evaluated_at                timestamptz NOT NULL DEFAULT now()
 );
@@ -872,22 +1064,82 @@ schema makes the evaluated policy traceable and immutable per decision.
 
 ### `auth_operation_policy_versions`
 
+The primary key is `(route_pattern, version_hash)` — the hash is of the
+**canonical route+policy envelope** (`sha256(route_pattern || ':' ||
+canonical_json(policy_json))`), so two routes with identical policy JSON
+get distinct version hashes. This prevents key collisions.
+
 ```sql
 CREATE TABLE auth_operation_policy_versions (
-  version_hash  text        PRIMARY KEY,  -- sha256 of canonical policy JSON
-  route_pattern text        NOT NULL,     -- e.g., 'PUT /api/config/:owner/:repo'
-  policy_json   jsonb       NOT NULL,     -- canonical expression tree
-  created_at    timestamptz NOT NULL DEFAULT now()
+  route_pattern text        NOT NULL,
+  version_hash  text        NOT NULL,     -- sha256(route_pattern || ':' || canonical_json(policy_json))
+  policy_json   jsonb       NOT NULL,     -- canonical expression tree (all_of/any_of over leaves)
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (route_pattern, version_hash)
 );
 
-CREATE INDEX ix_opolicy_route
-  ON auth_operation_policy_versions (route_pattern, created_at DESC);
+CREATE INDEX ix_opolicy_hash
+  ON auth_operation_policy_versions (version_hash);
 ```
 
-The `policy_json` contains the compiled expression tree (all_of/any_of
-over concrete `<resource_type>:<action>` leaves). The
-`version_hash` is referenced by `auth_authorization_decisions.operation_policy_version`
-(FK added in migration).
+The `operation_policy_version` column in `auth_authorization_decisions`
+references `version_hash`. Because version_hash is unique per
+route+policy envelope, the FK is satisfied.
+
+**Immutability** (insert-only):
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_policy_version_immutable()
+RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'auth_operation_policy_versions is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_opolicy_no_update
+  BEFORE UPDATE ON auth_operation_policy_versions
+  FOR EACH ROW EXECUTE FUNCTION enforce_policy_version_immutable();
+CREATE TRIGGER trg_opolicy_no_delete
+  BEFORE DELETE ON auth_operation_policy_versions
+  FOR EACH ROW EXECUTE FUNCTION enforce_policy_version_immutable();
+```
+
+**Policy leaf validation.** Each leaf in `policy_json` must reference a
+valid `(resource, action)` pair from the action catalog. This is
+validated by a constraint trigger on INSERT:
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_policy_leaves_valid()
+RETURNS trigger AS $$
+DECLARE
+  leaf_resource text;
+  leaf_action   text;
+  leaf record;
+BEGIN
+  -- Iterate over all leaves in the policy_json expression tree.
+  -- JSONB path depends on the canonical format: each leaf has
+  -- {type: 'leaf', resource: '...', action: '...'}.
+  FOR leaf IN
+    SELECT jsonb_array_elements(NEW.policy_json #> '{leaves}')
+  LOOP
+    leaf_resource := leaf->>'resource';
+    leaf_action   := leaf->>'action';
+    IF NOT EXISTS (
+      SELECT 1 FROM auth_resource_actions
+      WHERE registry_token = leaf_resource AND action = leaf_action
+    ) THEN
+      RAISE EXCEPTION 'Policy leaf %:% is not in the action catalog',
+        leaf_resource, leaf_action;
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_policy_leaves_valid
+  AFTER INSERT ON auth_operation_policy_versions
+  FOR EACH ROW EXECUTE FUNCTION enforce_policy_leaves_valid();
+```
 
 ---
 
@@ -922,6 +1174,43 @@ CREATE INDEX ix_auth_sessions_principal
 **Epoch invalidation:** when `auth_principals.auth_epoch` increments,
 sessions with the old epoch are detected at lookup time
 (`session.auth_epoch != principal.auth_epoch`). No DB UPDATE needed.
+
+### `auth_break_glass_activations`
+
+Concrete break-glass activation records (W0-B §11). Every break-glass
+session links to an activation record with reason, activating operator,
+short expiry, and alert acknowledgement.
+
+```sql
+CREATE TABLE auth_break_glass_activations (
+  id                      uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  break_glass_principal_id uuid       NOT NULL REFERENCES auth_principals(id),
+  activated_by            uuid        NOT NULL REFERENCES auth_principals(id),
+  activation_reason       text        NOT NULL,
+  activated_at            timestamptz NOT NULL DEFAULT now(),
+  expires_at              timestamptz NOT NULL,  -- short (e.g., 30 minutes)
+  session_id              uuid        REFERENCES auth_sessions(id),
+  alert_sent              boolean     NOT NULL DEFAULT false,
+  alert_acknowledged      boolean     NOT NULL DEFAULT false,
+  alert_acknowledged_at   timestamptz,
+  alert_acknowledged_by   uuid        REFERENCES auth_principals(id),
+  revoked_at              timestamptz,
+  revoked_by              uuid        REFERENCES auth_principals(id)
+);
+
+CREATE INDEX ix_break_glass_active
+  ON auth_break_glass_activations (break_glass_principal_id)
+  WHERE revoked_at IS NULL;
+
+CREATE INDEX ix_break_glass_unacknowledged
+  ON auth_break_glass_activations (id)
+  WHERE alert_acknowledged = false;
+```
+
+Every break-glass decision records `is_break_glass = true` in
+`auth_authorization_decisions`, linking back through the session chain.
+The application MUST send an alert to all active administrators when a
+break-glass activation is created.
 
 ---
 
@@ -1004,15 +1293,15 @@ columns, required additions, and backfill derivation.
 | `repo_config` | `repo_configs` | via repo | ✅ | none |
 | `config_validation_result` | `config_validation_results` | via repo | ✅ | none |
 | `heal_pr` | `heal_prs` | via repo | ✅ | none |
-| `repair_proposal` | `repair_proposals` | ADD COLUMN | ✅ | backfill from repo |
+| `repair_proposal` | `repair_proposals` | ADD COLUMN | ✅ | `UPDATE repair_proposals rp SET installation_id = r.installation_id FROM repositories r WHERE rp.repository_id = r.github_id` |
 | `repair_proposal_event` | `repair_proposal_events` | via parent | via parent | none |
-| `patch_artifact` | `patch_artifacts` | ADD COLUMN | via parent | backfill from parent proposal's repo |
-| `execution_receipt` | `execution_receipts` | ADD COLUMN | via parent | backfill from parent proposal's repo |
-| `source_snapshot` | `source_snapshots` | ADD COLUMN | via parent | backfill from parent proposal's repo |
-| `backend_isolation_evidence` | `backend_isolation_evidence` | ADD COLUMN | via parent | backfill from parent proposal's repo |
+| `patch_artifact` | `patch_artifacts` | ADD COLUMN | via parent | `UPDATE patch_artifacts pa SET installation_id = rp.installation_id FROM repair_proposals rp WHERE pa.repair_proposal_id = rp.id` |
+| `execution_receipt` | `execution_receipts` | ADD COLUMN | via parent | `UPDATE execution_receipts er SET installation_id = rp.installation_id FROM repair_proposals rp WHERE er.repair_proposal_id = rp.id` |
+| `source_snapshot` | `source_snapshots` | ADD COLUMN | via parent | `UPDATE source_snapshots ss SET installation_id = rp.installation_id FROM repair_proposals rp WHERE ss.repair_proposal_id = rp.id` |
+| `backend_isolation_evidence` | `backend_isolation_evidence` | ADD COLUMN | via parent | `UPDATE backend_isolation_evidence be SET installation_id = rp.installation_id FROM repair_proposals rp WHERE be.repair_proposal_id = rp.id` |
 | `managed_action` | `managed_actions` | via repo | ✅ | none |
 | `action_reconciliation_log` | `action_reconciliation_log` | ✅ | n/a | none |
-| `decision_log` | `decision_log` | ADD COLUMN | n/a | backfill from route context or principal |
+| `decision_log` | `decision_log` | ADD COLUMN | n/a | `UPDATE decision_log SET installation_id = (installation_id FROM the JSON metadata->>'installation_id'::bigint)` — rows lacking metadata reported to migration_report; denied by default in new evaluator |
 | `pipeline_event` | `pipeline_events` | ✅ | n/a | none |
 | `fix_attempt` | `fix_attempts` | via repo | ✅ | none |
 | `ai_review` | `ai_reviews` | via repo | ✅ | none |
@@ -1026,13 +1315,13 @@ columns, required additions, and backfill derivation.
 | `issue_embedding` | `issue_embeddings` | via repo | ✅ | none |
 | `member` | `members` | ✅ | n/a | none |
 | `repo_collaborator` | `repo_collaborators` | via repo | ✅ | none |
-| `policy_definition` | `policy_definitions` | ADD COLUMN | n/a | backfill from known installation |
-| `policy_waiver` | `policy_waivers` | ADD COLUMN | n/a | backfill from known installation |
+| `policy_definition` | `policy_definitions` | ADD COLUMN | n/a | These tables have `installation_id` in their existing schema (added during their original migration); verify NOT NULL and report any NULL rows |
+| `policy_waiver` | `policy_waivers` | ADD COLUMN | n/a | Same as policy_definition — verify existing or add column with backfill from the policy_waiver's owning installation |
 | `policy_repo_config` | `policy_repo_configs` | via repo | ✅ | none |
 | `reconciliation_run` | `reconciliation_runs` | ✅ | n/a | none |
-| `policy_rollout_plan` | `policy_rollout_plans` | ADD COLUMN | n/a | backfill from known installation |
+| `policy_rollout_plan` | `policy_rollout_plans` | ADD COLUMN | n/a | `UPDATE policy_rollout_plans SET installation_id = pd.installation_id FROM policy_definitions pd WHERE policy_rollout_plans.policy_definition_id = pd.id` |
 | `quality_gate` | `quality_gates` | via repo | ✅ | none |
-| `feedback_rule` | `feedback_rules` | ADD COLUMN | n/a | backfill from known installation |
+| `feedback_rule` | `feedback_rules` | ADD COLUMN | n/a | `UPDATE feedback_rules SET installation_id = (SELECT id FROM installations LIMIT 1)` — only if single-installation deploy; otherwise report to migration_report |
 | `merge_queue_entry` | `merge_queue_entries` | via repo | ✅ | none |
 | `merge_queue_config` | `merge_queue_configs` | via repo | ✅ | none |
 | `rollback_event` | `rollback_events` | ✅ | n/a | none |
@@ -1229,8 +1518,10 @@ GRANT SELECT, INSERT ON auth_delegations TO gitwire_app;
 | Table | Privileges | Notes |
 |---|---|---|
 | `auth_bootstrap_allow` | INSERT, SELECT, DELETE | Marker management |
-| `auth_delegations` | SELECT, UPDATE | For operator reconciliation only |
+| `auth_delegations` | SELECT only | No direct UPDATE — reconciliation via `operator_reconcile_execution()` |
+| `auth_reconciliation_log` | SELECT | Audit inspection |
 | All `auth_*` tables | SELECT | Read-only inspection |
+| `operator_reconcile_execution()` | EXECUTE | Audited reconciliation only |
 
 ### Migration role (`gitwire_migration`)
 
@@ -1244,27 +1535,52 @@ Runs DDL only. Seeds catalog tables. Cannot create principals or grants.
 |---|---|---|---|---|
 | `auth_credentials` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
 | `auth_principal_roles` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
-| `auth_principal_roles` | `auth_roles` | `role_id` | CASCADE | Role deletion removes assignments |
+| `auth_principal_roles` | `auth_roles` | `role_id` | NO ACTION | Roles retired, not deleted — preserves audit |
+| `auth_principal_roles` | `auth_principals` | `granted_by` | NO ACTION | Audit linkage preserved |
+| `auth_principal_roles` | `auth_principals` | `revoked_by` | NO ACTION | Audit linkage preserved |
 | `auth_resource_grants` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
+| `auth_resource_grants` | `auth_principals` | `granted_by` | NO ACTION | Audit linkage preserved |
+| `auth_resource_grants` | `auth_principals` | `revoked_by` | NO ACTION | Audit linkage preserved |
+| `auth_resource_grants` | `auth_resource_registry` | `resource_type` | NO ACTION | Catalog never deleted |
 | `auth_worker_ceilings` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
+| `auth_worker_ceilings` | `auth_principals` | `granted_by` | NO ACTION | Audit linkage preserved |
+| `auth_worker_ceiling_permissions` | `auth_worker_ceilings` | `ceiling_id` | CASCADE | Ceiling deletion removes permissions (ceiling is not audit-relevant) |
+| `auth_worker_ceiling_permissions` | `auth_resource_actions` | composite | NO ACTION | Catalog never deleted |
+| `auth_role_permissions` | `auth_roles` | `role_id` | NO ACTION | Roles retired, not deleted — preserves audit |
+| `auth_role_permissions` | `auth_resource_actions` | composite | NO ACTION | Catalog never deleted |
 | `auth_delegations` | `auth_principals` | `initiating_principal_id` | NO ACTION | Principals never deleted |
 | `auth_delegations` | `auth_principals` | `worker_service_principal_id` | NO ACTION | Principals never deleted |
+| `auth_delegations` | `auth_principals` | `revoked_by` | NO ACTION | Audit linkage preserved |
 | `auth_delegations` | `auth_authorization_decisions` | `authorization_decision_id` | NO ACTION | Decisions append-only |
+| `auth_delegations` | `auth_resource_registry` | `resource_type` | NO ACTION | Catalog never deleted |
+| `auth_authorization_decisions` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
+| `auth_authorization_decisions` | `auth_credentials` | `credential_id` | NO ACTION | Credentials never deleted |
+| `auth_authorization_decisions` | `auth_resource_registry` | `target_resource_type` | NO ACTION | Catalog never deleted |
+| `auth_authorization_decisions` | `auth_delegations` | `capability_delegation_id` | NO ACTION | Added in stage 041 |
+| `auth_authorization_decisions` | `auth_external_attestations` | `attestation_id` | NO ACTION | Added in stage 041 |
+| `auth_authorization_decisions` | `auth_operation_policy_versions` | `operation_policy_version` | NO ACTION (via version_hash) | Policy immutable |
 | `auth_external_attestations` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
 | `auth_external_attestations` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
-| `auth_resource_grants` | `auth_resource_registry` | `resource_type` | NO ACTION | Catalog never deleted |
-| `auth_role_permissions` | `auth_roles` | `role_id` | CASCADE | Role deletion removes permissions |
-| `auth_role_permissions` | `auth_resource_actions` | composite | NO ACTION | Catalog never deleted |
 | `auth_sessions` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
+| `auth_break_glass_activations` | `auth_principals` | `break_glass_principal_id` | NO ACTION | Principals never deleted |
+| `auth_break_glass_activations` | `auth_principals` | `activated_by` | NO ACTION | Audit linkage preserved |
+| `auth_break_glass_activations` | `auth_sessions` | `session_id` | NO ACTION | Sessions durable |
+| `auth_reconciliation_log` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
+| `auth_reconciliation_log` | `auth_principals` | `operator_principal_id` | NO ACTION | Audit linkage preserved |
 | `auth_resource_registry` | `auth_resource_registry` | `parent_token` | NO ACTION | Self-ref, catalog stable |
 | `auth_legacy_key_map` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
+| `migration_report` | `auth_principals` | `resolved_by` | NO ACTION | Audit linkage preserved |
 | `audit_trail_entries` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
+| `audit_trail_entries` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
+| `audit_trail_entries` | `auth_authorization_decisions` | `authorization_decision_id` | NO ACTION | Decisions append-only |
 
-**Default:** `NO ACTION` everywhere. No `ON DELETE CASCADE` except
-`auth_role_permissions` and `auth_principal_roles → auth_roles` (role
-deletion is a catalog operation that should clean up). This is
-deliberate: principals, delegations, decisions, and grants are durable
-records. Soft revocation (`revoked_at`) is the lifecycle mechanism.
+**Default:** `NO ACTION` everywhere. The only `ON DELETE CASCADE` is
+`auth_worker_ceiling_permissions → auth_worker_ceilings` (ceiling
+permission rows are operational, not audit-relevant). Roles are
+**retired** (set `is_builtin = false` + soft flag), not deleted —
+deleting a role would destroy audit history for every principal who
+held it. Soft revocation (`revoked_at`) is the lifecycle mechanism for
+all durable records.
 
 ---
 
@@ -1324,23 +1640,33 @@ decisions).
 
 ### Stage 041: Delegation and attestation tables
 
-Creates `auth_delegations`, `auth_external_attestations`. Adds FK from
-`auth_delegations.authorization_decision_id` to
-`auth_authorization_decisions`. Creates stored functions and constraint
-triggers.
+Creates `auth_delegations`, `auth_external_attestations`. Adds all
+circular FKs between decisions ↔ delegations and decisions ↔
+attestations. Creates stored functions and constraint triggers.
 
 ```sql
 -- 041_auth_delegation_tables.sql
--- CREATE TABLE auth_delegations (§9)
--- ALTER TABLE auth_delegations ADD CONSTRAINT fk_delegation_decision
---   FOREIGN KEY (authorization_decision_id) REFERENCES auth_authorization_decisions(id)
--- CREATE TABLE auth_external_attestations (§10)
--- CREATE FUNCTION acquire_delegation_claim(...)
--- CREATE FUNCTION finalize_delegation_claim(...)
--- CREATE FUNCTION operator_reconcile_execution(...)
--- CREATE CONSTRAINT TRIGGER trg_denied_terminal
--- CREATE CONSTRAINT TRIGGER trg_no_direct_executing_transition
--- CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
+-- 1. CREATE TABLE auth_delegations (§9)
+-- 2. CREATE TABLE auth_external_attestations (§10)
+-- 3. Add circular FKs that could not exist in stage 040:
+ALTER TABLE auth_delegations
+  ADD CONSTRAINT fk_delegation_decision
+  FOREIGN KEY (authorization_decision_id) REFERENCES auth_authorization_decisions(id);
+
+ALTER TABLE auth_authorization_decisions
+  ADD CONSTRAINT fk_decision_delegation
+  FOREIGN KEY (capability_delegation_id) REFERENCES auth_delegations(id);
+
+ALTER TABLE auth_authorization_decisions
+  ADD CONSTRAINT fk_decision_attestation
+  FOREIGN KEY (attestation_id) REFERENCES auth_external_attestations(id);
+
+-- 4. CREATE FUNCTION acquire_delegation_claim(...)
+-- 5. CREATE FUNCTION finalize_delegation_claim(...)
+-- 6. CREATE FUNCTION operator_reconcile_execution(...)
+-- 7. CREATE CONSTRAINT TRIGGER trg_denied_terminal
+-- 8. CREATE CONSTRAINT TRIGGER trg_no_direct_executing_transition
+-- 9. CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
 ```
 
 **Rollback:** drop functions and triggers, then `DROP TABLE
@@ -1360,7 +1686,7 @@ auth_bootstrap_allow; DROP TABLE auth_bootstrap_state`.
 
 ### Stage 043: Ownership backfill
 
-Adds `installation_id` to the 8 tables identified in §15 that lack it.
+Adds `installation_id` to the 10 tables identified in §15 that lack it.
 Backfills from known parent. Creates `migration_report`.
 
 ```sql
@@ -1412,13 +1738,26 @@ installation-mapped role assignments. Unmapped keys go to
 -- Unmapped: INSERT INTO migration_report (status='unmapped_legacy_key')
 ```
 
-**Rollback:** delete only rows created by this migration batch. Use
-`migration_batch = '045'` provenance: `DELETE FROM auth_legacy_key_map
-WHERE migration_batch = '045'; DELETE FROM auth_principal_roles WHERE
-granted_by IN (SELECT id FROM auth_principals WHERE principal_type =
-'legacy-key' AND created_at >= '<migration start timestamp>'); DELETE
-FROM auth_principals WHERE principal_type = 'legacy-key' AND created_at
->= '<migration start timestamp>'`. **Safe after enforcement:** **no**.
+**Rollback:** delete only rows created by this migration batch, using
+deterministic batch provenance. Legacy-key principals are seeded with
+`uuid_generate_v5(gitwire_seed_namespace, 'legacy-key:' || key_fingerprint)`,
+so rollback targets exact IDs:
+
+```sql
+-- 1. Collect seeded principal IDs from the batch
+WITH seeded AS (
+  SELECT principal_id FROM auth_legacy_key_map WHERE migration_batch = '045'
+)
+-- 2. Delete role assignments for these principals (dependency-safe order)
+DELETE FROM auth_principal_roles WHERE principal_id IN (SELECT principal_id FROM seeded);
+-- 3. Delete legacy key map rows
+DELETE FROM auth_legacy_key_map WHERE migration_batch = '045';
+-- 4. Delete seeded principals
+DELETE FROM auth_principals WHERE id IN (SELECT principal_id FROM seeded);
+```
+
+This uses deterministic IDs from `auth_legacy_key_map` — not
+timestamps. **Safe after enforcement:** **no**.
 
 ### Stage 046: Worker identity seeding
 
@@ -1438,7 +1777,10 @@ role names for rollback identification.
 
 ### Stage 047: Authority-source state machine
 
-Creates the authority-source state table. Initializes to `legacy-only`.
+Creates the authority-source state table with a CAS transition function.
+Initializes to `legacy-only`. The application cannot directly UPDATE
+the state — transitions go through a `SECURITY DEFINER` function that
+enforces the legal transition graph.
 
 ```sql
 -- 047_authority_source_state.sql
@@ -1446,13 +1788,51 @@ CREATE TABLE auth_authority_source_state (
   id          integer PRIMARY KEY DEFAULT 1,
   state       authority_source_state NOT NULL DEFAULT 'legacy-only',
   updated_at  timestamptz NOT NULL DEFAULT now(),
+  updated_by  text,
   CONSTRAINT chk_single_row CHECK (id = 1)
 );
 INSERT INTO auth_authority_source_state (id, state) VALUES (1, 'legacy-only')
   ON CONFLICT (id) DO NOTHING;
+
+-- CAS transition function: enforces legal state ordering.
+CREATE OR REPLACE FUNCTION transition_authority_source(
+  p_expected_state authority_source_state,
+  p_new_state      authority_source_state,
+  p_updated_by     text
+) RETURNS boolean
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  affected int;
+BEGIN
+  -- Legal transitions only:
+  IF NOT (
+    (p_expected_state = 'legacy-only'       AND p_new_state = 'shadow-evaluation') OR
+    (p_expected_state = 'shadow-evaluation'  AND p_new_state IN ('dual-write', 'legacy-only')) OR
+    (p_expected_state = 'dual-write'         AND p_new_state IN ('enforce', 'shadow-evaluation')) OR
+    (p_expected_state = 'enforce'            AND p_new_state IN ('dual-write', 'legacy-retired')) OR
+    (p_expected_state = 'legacy-retired'     AND p_new_state = 'legacy-retired')  -- terminal
+  ) THEN
+    RAISE EXCEPTION 'Illegal authority-source transition: % → %',
+      p_expected_state, p_new_state;
+  END IF;
+
+  UPDATE auth_authority_source_state
+    SET state = p_new_state, updated_at = now(), updated_by = p_updated_by
+    WHERE id = 1 AND state = p_expected_state;
+
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  RETURN affected = 1;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION transition_authority_source(authority_source_state, authority_source_state, text)
+  OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION transition_authority_source(authority_source_state, authority_source_state, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION transition_authority_source(authority_source_state, authority_source_state, text) TO gitwire_app;
 ```
 
-**Rollback:** `DROP TABLE auth_authority_source_state`.
+**Rollback:** `DROP FUNCTION transition_authority_source; DROP TABLE auth_authority_source_state`.
 
 ### Dependency-aware rollback graph
 
@@ -1471,21 +1851,48 @@ of 043/045 requires forward-fix, not backward rollback.
 ## 22. Authority-source state machine
 
 The migration proceeds through an explicit state machine that controls
-which authority source is active at each phase.
+which authority source is active at each phase. The state is stored in
+`auth_authority_source_state` and transitions are via CAS
+(`transition_authority_source()`).
 
-| State | Authoritative source | New evaluator | Legacy path | Behavior |
-|---|---|---|---|---|
-| `legacy-only` | Existing shared-key path | Not running | Active (read/write) | Pre-migration baseline |
-| `shadow-evaluation` | Existing path | Running (logging only) | Active (read/write) | New evaluator logs decisions but never denies. Unmapped/ambiguous rows do NOT convert to allow. |
-| `dual-write` | Existing path | Running | Active (write both) | Both paths write audit/principal data. Legacy path still authoritative for authorization decisions. |
-| `enforce` | New evaluator | Authoritative | Read-only fallback | New evaluator denies. Legacy path retained as fallback for unmapped keys (which deny in both paths). |
-| `legacy-retired` | New evaluator | Authoritative | Removed | Legacy code paths removed. Legacy-key table archived. |
+| State | Authoritative read source | Authoritative write path | New evaluator | Legacy path | Unmapped/ambiguous keys |
+|---|---|---|---|---|---|
+| `legacy-only` | Legacy shared-key path | Legacy | Not running | Active (read/write) | Allowed by legacy path |
+| `shadow-evaluation` | Legacy path | Legacy | Running (logging only, never denies) | Active (read/write) | **Deny** — shadow never creates authority; unmapped rows are reported to `migration_report` but do NOT convert to allow |
+| `dual-write` | Legacy path | Both paths write | Running (logging only) | Active (read/write) | **Deny** in new evaluator; legacy may still allow if it has its own mapping |
+| `enforce` | New evaluator | New evaluator | Authoritative (denies enforced) | Disabled for authorization (may still write audit for residual traffic) | **Deny** — unmapped keys deny in both paths; no fallback |
+| `legacy-retired` | New evaluator | New evaluator | Authoritative | Removed | **Deny** — legacy code path removed |
+
+**Exact read/write behavior at each state:**
+
+- **`legacy-only`**: existing `API_KEY` middleware is authoritative.
+  New `auth_*` tables are empty and unused. All reads and writes go
+  through the legacy path.
+- **`shadow-evaluation`**: the new evaluator runs alongside the legacy
+  path. It evaluates every request and logs a decision to
+  `auth_authorization_decisions`, but its result is **never returned to
+  the caller**. The legacy path remains authoritative. If the new
+  evaluator produces a deny, it is logged but does not affect the
+  response. Unmapped legacy keys that the legacy path allows are
+  flagged in `migration_report` for resolution — they are NOT denied
+  in shadow mode.
+- **`dual-write`**: same as shadow-evaluation for reads, but both
+  paths now write audit/principal data. Legacy path still returns the
+  authorization decision to the caller.
+- **`enforce`**: the new evaluator is authoritative. Its decision is
+  returned to the caller. If the new evaluator allows, the request
+  proceeds. If it denies, the request is denied with the new reason
+  code. The legacy path is disabled for authorization decisions.
+  Unmapped keys that were allowed by legacy but cannot be resolved by
+  the new evaluator are **denied** — there is no read-only fallback.
+- **`legacy-retired`**: legacy code paths are removed. The new
+  evaluator is the sole authority. Legacy-key table is archived.
 
 **Transition rules:**
 - `legacy-only → shadow-evaluation`: after stages 038–047 are applied and catalog seeded.
 - `shadow-evaluation → dual-write`: after shadow logs show no unmapped critical principals/keys.
 - `dual-write → enforce`: after dual-write comparison shows zero discrepancies for a monitoring period.
-- `enforce → legacy-retired`: after all legacy keys are migrated or expired and no fallback access occurs.
+- `enforce → legacy-retired`: after all legacy keys are migrated or expired and zero legacy-path access for a monitoring period.
 
 **Rollback points:** `shadow-evaluation` and `dual-write` can revert
 to the prior state. `enforce` can revert to `dual-write` only if no
@@ -1496,14 +1903,63 @@ irreversible schema changes (stages 043/045) depend on enforcement.
 
 ## 23. Proof obligations and fixtures
 
-Each fixture is an executable, transaction-wrapped DML block using
-valid typed identifiers and all required columns. Fixtures are divided
-into three categories:
+**Honest classification.** W0-C defines schema structure and
+constraints. The fixtures below are **specifications for W0-D
+executable test cases**, not currently executable SQL files. They are
+classified as:
 
-- **(STORE)** — the schema can store this valid state.
-- **(REJECT)** — the schema rejects this invalid state.
-- **(EVAL)** — the runtime evaluator must produce this decision (the
-  schema stores the inputs; the evaluator computes the outcome).
+- **(STORE)** — the schema can represent this valid state. W0-D will
+  implement this as a transaction-wrapped INSERT that commits.
+- **(REJECT)** — the schema rejects this invalid state via a constraint
+  trigger or FK. W0-D will implement this as a transaction-wrapped
+  INSERT that raises an exception with a specific SQLSTATE/message.
+- **(EVAL)** — the runtime evaluator (implemented in Waves 1–4) must
+  produce this decision from the stored inputs. W0-D will implement
+  this as a unit test against the evaluator. The schema stores the
+  inputs; the evaluator computes the outcome.
+
+W0-C provides a **complete schema proof matrix** proving every W0-B
+constraint and decision case has a representation in the schema, plus
+rejection proofs for forbidden states.
+
+### Schema proof matrix
+
+This matrix maps every W0-B invariant to the schema mechanism that
+enforces it. "Mechanism" identifies the specific FK, trigger, CHECK,
+or function.
+
+| W0-B invariant | Schema mechanism | Type |
+|---|---|---|
+| Only declared resource/action pairs in role permissions | Composite FK to `auth_resource_actions` on `auth_role_permissions` | STORE/REJECT |
+| Only declared resource/action pairs in grants | `enforce_grant_action_valid()` trigger; allows `action='*'` wildcard | REJECT |
+| Only declared resource/action pairs in ceilings | Composite FK on `auth_worker_ceiling_permissions` | REJECT |
+| `queue_job` excluded from `auth_resource_grants` | `enforce_no_transport_in_grants()` trigger | REJECT |
+| `queue_job` legal in `auth_worker_ceiling_permissions` | Not excluded from ceiling permissions (composite FK allows it) | STORE |
+| Service principals cannot receive tenant roles | `enforce_no_tenant_roles_for_service()` trigger | REJECT |
+| Non-service principals cannot receive ceilings | `enforce_ceiling_service_only()` trigger | REJECT |
+| Non-service principals cannot be delegation workers | `enforce_delegation_worker_service()` trigger | REJECT |
+| Bootstrap user may lack `github_user_id` | `enforce_principal_type_bindings()` allows `user` without `github_user_id` | STORE |
+| `user` principals cannot have `installation_id` | `enforce_principal_type_bindings()` rejects | REJECT |
+| `installation` principals must have `installation_id` | `enforce_principal_type_bindings()` requires | REJECT |
+| Service principal cannot be retyped if ceilings/delegations exist | `enforce_no_subtype_retype_with_deps()` trigger | REJECT |
+| Denied delegations are terminal | `enforce_denied_terminal()` trigger | REJECT |
+| `executing` can only exit via stored functions | `enforce_no_direct_executing_transition()` + non-login function-owner role | REJECT |
+| Claim CAS checks status+version+worker+revocation+expiry | `acquire_delegation_claim()` function | STORE/EVAL |
+| Finalize is owner-checked and status-restricted | `finalize_delegation_claim()` function | STORE/EVAL |
+| Operator reconciliation writes audit record | `operator_reconcile_execution()` inserts `auth_reconciliation_log` | STORE |
+| Decisions are append-only | BEFORE UPDATE/DELETE triggers + INSERT/SELECT-only privileges | REJECT |
+| Policy versions are append-only | BEFORE UPDATE/DELETE triggers | REJECT |
+| Policy leaves validated against catalog | `enforce_policy_leaves_valid()` trigger | REJECT |
+| Delegation has persisted normalized boundary | `boundary_*` columns in `auth_delegations` | STORE |
+| Decision has immutable evaluated-input snapshot | JSONB snapshot columns in `auth_authorization_decisions` | STORE |
+| Break-glass has activation record | `auth_break_glass_activations` table | STORE |
+| Authority-source transitions are CAS + legal-only | `transition_authority_source()` function | STORE/REJECT |
+
+### Scope-product truth-table coverage (T1–T18)
+
+Each case specifies the role and credential inputs and the expected
+evaluator-derived scope. The schema stores these inputs; the evaluator
+computes the scope. These are **(EVAL)** specifications for W0-D.
 
 ### Fixture F-T3: Fleet + finite repository credential (STORE)
 
@@ -1555,19 +2011,30 @@ manifest:
 | F-T17 | T17 | none | any | NONE | NONE → deny |
 | F-T18 | T18 | system only | any tenant | NONE | NONE (system=true) |
 
-### Fixture F-READ-LIST: read without list denial (REJECT + EVAL)
+### Fixture F-READ-LIST: read without list denial (STORE + EVAL)
+
+**(STORE)** — the schema stores a role with `repository:read` but not
+`repository:list`. **(EVAL)** — the evaluator denies `repository:list`
+with `role_permission_missing`.
 
 ```sql
+-- W0-D fixture (specification, not currently executable file):
+-- Setup: seed the resource catalog with ('repository', 'read') and
+-- ('repository', 'list') in auth_resource_actions.
 BEGIN;
   INSERT INTO auth_principals (id, principal_type, display_name)
     VALUES ('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a01', 'user', 'Read Only');
   INSERT INTO auth_roles (id, name) VALUES ('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10', 'read-only');
   INSERT INTO auth_role_permissions (role_id, permission_resource, permission_action)
     VALUES ('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10', 'repository', 'read');
-  -- REJECT: this INSERT fails because 'list' is valid for repository, but we simply don't insert it.
-  -- EVAL: evaluate_leaf for 'repository:list' checks:
-  --   ('repository', 'list') IN (SELECT permission_resource, permission_action FROM auth_role_permissions ...)
+  -- STORE: this commits. The role has repository:read only.
+  -- EVAL: evaluate_leaf for action='repository:list' checks:
+  --   ('repository', 'list') IN (SELECT permission_resource, permission_action
+  --                               FROM auth_role_permissions WHERE role_id = ...)
   --   → false → DENY(role_permission_missing)
+  -- Note: 'repository:list' is NOT in the role's permissions.
+  -- The composite FK on auth_role_permissions would accept ('repository','list')
+  -- if it were inserted — the rejection here is by OMISSION, not by constraint.
 ROLLBACK;
 ```
 
@@ -1756,29 +2223,52 @@ ROLLBACK;
 
 ## 24. Schema-smoke verification
 
-W0-D should execute a schema-smoke test against an empty PostgreSQL 16
-database. The test:
+**W0-D must build** a schema-smoke test that:
 
-1. Applies all DDL from stages 038–042 (catalog + tables + functions).
-2. Seeds the 57-resource registry and action catalog.
-3. Runs each (STORE) fixture and verifies it commits.
-4. Runs each (REJECT) fixture and verifies it raises the expected
-   exception.
-5. Drops all objects to verify clean rollback.
+1. Creates an empty PostgreSQL 16 database with `pgcrypto` and
+   `uuid-ossp` extensions.
+2. Extracts DDL from the proposed migration files (stages 038–047) and
+   applies them in dependency order.
+3. Seeds the 57-resource registry and action catalog.
+4. Seeds built-in roles and permission sets.
+5. Runs each (STORE) fixture and verifies it commits.
+6. Runs each (REJECT) fixture and verifies it raises the expected
+   exception with the expected message.
+7. Drops all objects in reverse dependency order to verify clean
+   rollback.
 
-**Smoke command (for W0-D implementation):**
-
-```bash
-# Create a throwaway database, apply schema, run fixtures, drop.
-createdb gitwire_schema_smoke
-psql gitwire_schema_smoke -f <(cat docs/architecture/authority/schema-migration-plan.md | extract_ddl)
-psql gitwire_schema_smoke -f fixtures.sql
-dropdb gitwire_schema_smoke
-```
+**Note:** the `extract_ddl` command referenced in the prior version of
+this document does not exist. W0-D must create executable migration
+files from the DDL in this document and apply them directly — not
+extract from Markdown.
 
 ---
 
-## 25. Unresolved schema risks
+## 25. Retention and archival constraints
+
+| Record type | Table | Minimum retention | Archival strategy | Deletion |
+|---|---|---|---|---|
+| Authorization decisions | `auth_authorization_decisions` | 365 days | Monthly range partition on `evaluated_at`; detach+archive old partitions | Partition drop only (not row DELETE) |
+| External attestations | `auth_external_attestations` | 90 days | Batch archive to cold storage; delete expired records older than 90 days | DELETE only via scheduled job with `expires_at < now() - interval '90 days'` |
+| Sessions | `auth_sessions` | 30 days after expiry/revocation | DELETE sessions where `expires_at < now() - interval '30 days' AND revoked_at IS NOT NULL` | Scheduled cleanup job |
+| Capability keys | `auth_capability_keys` | Until all tokens signed with the key have expired | Set `retired_at`; DELETE only after verified zero dependent tokens | Manual after verification |
+| Legacy key mappings | `auth_legacy_key_map` | Until all legacy keys are expired and migrated | Archive to cold storage after `legacy-retired` state | Never DELETE until `legacy-retired` |
+| Reconciliation log | `auth_reconciliation_log` | 365 days | Same partition strategy as decisions | Partition drop only |
+| Break-glass activations | `auth_break_glass_activations` | 365 days | Archive with decisions | Partition drop only |
+| Policy versions | `auth_operation_policy_versions` | Indefinite (immutable) | Never archive or delete | Never |
+| Bootstrap markers | `auth_bootstrap_allow` | Until consumed (deleted by stored function) | n/a | `transition_bootstrap_state('disabled')` |
+| Migration reports | `migration_report` | Until resolved + 90 days | Archive resolved rows older than 90 days | DELETE where `resolved = true AND resolved_at < now() - interval '90 days'` |
+| Principals/roles/grants | all `auth_*` identity tables | Indefinite (durable) | Never delete; soft-revoke only | Never |
+
+**Principle:** durable identity records (principals, credentials, roles,
+grants, delegations) are never hard-deleted. Revocation
+(`revoked_at`) is the lifecycle mechanism. Append-only tables
+(decisions, reconciliation log, policy versions) use partition-based
+archival, not row-level DELETE.
+
+---
+
+## 26. Unresolved schema risks
 
 1. **Resource-type validation performance:** the composite FK to
    `auth_resource_actions` adds a JOIN per INSERT into role/grant/ceiling
