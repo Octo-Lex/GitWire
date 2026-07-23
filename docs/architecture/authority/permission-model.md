@@ -181,9 +181,10 @@ system (fleet-wide)
 
 | Category | Resources | Scope |
 |----------|-----------|-------|
-| **Installation-scoped** | repository and all its children; policy_definition, policy_waiver, quality_gate, policy_rollout_plan, queue_job, maintainer_setting; decision_log; repair_proposal_events; managed_action; rollback_event; policy_repo_config; reconciliation_run; config_validation_result; pipeline_event; test_result; gate_evaluation; backend_isolation_evidence; action_reconciliation_log | Tenant-scoped |
+| **Installation-scoped** | repository and all its children; policy_definition, policy_waiver, quality_gate, policy_rollout_plan, maintainer_setting; decision_log; repair_proposal_events; managed_action; rollback_event; policy_repo_config; reconciliation_run; config_validation_result; pipeline_event; test_result; gate_evaluation; backend_isolation_evidence; action_reconciliation_log | Tenant-scoped |
 | **Identity-scoped** | auth_principal, auth_role, auth_credential, auth_delegation, auth_resource_grant, auth_bootstrap_allow | System-scoped; not tenant-filtered |
-| **System-scoped** | audit_trail_entry, audit_export, compliance_report, system configuration; queue_job | Fleet-wide |
+| **System-scoped** | audit_trail_entry, audit_export, compliance_report, system configuration | Fleet-wide |
+| **Transport-scoped** | queue_job | Not a tenant resource — see queue authority model below |
 | **Worker-internal** | execution_receipts, source_snapshots, patch_artifacts, fix_attempts, ai_reviews, duplicate_signals, dependency_manifests, dependency_update_batches, vulnerability_advisories, flaky_tests, issue_embeddings, members, repo_collaborators, branch_rules | Installation-scoped (child of repository or installation) |
 
 ### Inheritance rules
@@ -271,9 +272,9 @@ Each permission carries a scope:
 | `service:webhook-worker` | `create` + `update` on installation, repository | ceiling | P-4 webhook worker |
 | `service:triage-worker` | `github:act` on repository; `update` on issue, managed_action, decision_log | ceiling | P-4 triage worker |
 | `service:heal-worker` | `github:act` on repository; `update` on ci_run, heal_pr, managed_action | ceiling | P-4 CI heal worker |
-| `service:evidence-worker` | `update` on repair_proposal; `enqueue` diagnosis | ceiling | P-4 evidence worker |
-| `service:diagnosis-worker` | `update` on repair_proposal_event; `enqueue` patch | ceiling | P-4 diagnosis worker |
-| `service:patch-worker` | `create` on patch_artifact; `update` on repair_proposal_event; `enqueue` verification | ceiling | P-4 patch worker |
+| `service:evidence-worker` | `update` on repair_proposal; `queue_job:enqueue` (diagnosis chain) | ceiling | P-4 evidence worker |
+| `service:diagnosis-worker` | `update` on repair_proposal_event; `queue_job:enqueue` (patch chain) | ceiling | P-4 diagnosis worker |
+| `service:patch-worker` | `create` on patch_artifact; `update` on repair_proposal_event; `queue_job:enqueue` (verification chain) | ceiling | P-4 patch worker |
 | `service:verification-worker` | `github:read` on repository; `create` on execution_receipt, source_snapshot | ceiling | P-4 verification worker |
 | `service:critic-worker` | `update` on repair_proposal_event | ceiling | P-4 critic worker |
 | `service:sync-worker` | `create` + `update` on installation, repository, issue, pull_request, ci_run, member, repo_collaborator, branch_rule; `github:read` | ceiling | P-2 sync worker |
@@ -284,11 +285,11 @@ Each permission carries a scope:
 | `service:fleet-reconciler` | `github:act` on repository (branch protection, labels, repo settings); `update` on policy_repo_config; `read` on reconciliation_run | ceiling | P-4 phase3 fleet reconciler |
 | `service:review-worker` | `github:act` on repository (reviews, check-runs); `create` on ai_review, audit_export | ceiling | P-4 phase4 worker |
 | `service:reconciler` | `read` on managed_action, heal_pr; `update` on managed_action reconciliation fields only | fleet | `setInterval` reconciliation timer — operates on installation-scoped tables, so scope is `fleet` not `system` |
-| `installation` | (webhook ingress) `enqueue` on `queue_job`; `create` on `webhook_delivery` | installation | P-3 GitHub App installation (HMAC-verified webhook) |
-| `system:scheduler` | (scheduled jobs) `enqueue` on `queue_job`; triggers sync, reconciliation, dependency scan, graduation, audit export | fleet | Cron timers that initiate fleet-wide scheduled operations |
+| `installation` | (webhook ingress) `installation:enqueue`, `repository:enqueue`; `create` on `webhook_delivery` | installation | P-3 GitHub App installation (HMAC-verified webhook) |
+| `system:scheduler` | (scheduled jobs) `installation:enqueue` (fleet-wide); triggers sync, reconciliation, dependency scan, graduation, audit export | fleet | Cron timers that initiate fleet-wide scheduled operations |
 | `system` | (migration/bootstrap) `manage` on identity resources during migration; `create` on auth_principal during bootstrap; `manage` on auth_bootstrap_state transitions | system | Migration runner, bootstrap mechanism |
 | `service:executor` | (executor-service) no DB, no GitHub, no network egress. Executes allowlisted npm commands in isolated container. Returns results to caller. | none (no resource access) | P-6 executor-service |
-| `service:bot` | `read` on `repository`, `issue`; `enqueue` on `queue_job` (fix/triage triggers) | installation (linked-user-scoped) | Telegram bot |
+| `service:bot` | `read` on `repository`, `issue`; `repository:enqueue`, `installation:enqueue` (fix/triage triggers) | installation (linked-user-scoped) | Telegram bot |
 | `legacy-key` | `read` + `create` + `update` + `enqueue` on installation-scoped resources; **no** `manage`, `approve`, `revoke`, `audit:export` | installation (explicitly mapped) only — **no automatic fleet default**; unmapped keys are rejected | Existing shared-key clients |
 
 ### Role assignment
@@ -326,10 +327,11 @@ Role assignments are durable — revocation sets `revoked_at`, never deletes.
 
 ### Evaluation algorithm (deterministic)
 
-The algorithm evaluates a request through six steps. Steps 1-4 handle
-authentication, scope derivation, gateway installation, and resource
-resolution. Step 5 evaluates the operation policy expression tree via
-`evaluate_leaf`. Step 6 issues the decision.
+The algorithm evaluates a request through five steps. Steps 1-3 handle
+authentication, scope derivation, and gateway installation. Step 4
+evaluates the operation policy expression tree via `evaluate_leaf`,
+which performs all resource/target resolution internally. Step 5 issues
+the decision.
 returns `DENY_AND_RECORD` with a deterministic reason or continues. The
 first applicable `DENY_AND_RECORD` terminates evaluation. **Every denial
 produces a decision record** with a `decision_id`, just as allows do —
@@ -366,28 +368,43 @@ so a permission appearing in multiple branches is evaluated once.
 ### evaluate_leaf(leaf, context)
 
 Each leaf carries `resource_type`, `action`, and `selector`. The selector
-defines how the target resource is resolved:
+defines how the **normalized target** is resolved. Every leaf resolves
+exactly one target with the following shape:
 
-| Selector | Meaning | target.id |
-|----------|---------|-----------|
-| `instance` | A specific resource by ID from route params | non-NULL |
-| `list` | Enumeration — no specific instance | NULL |
-| `create` | Creation — no existing instance | NULL |
-| `route-root` | The resource identified by the route itself (e.g., installation from webhook) | route-dependent |
-| `inherited` | Resource resolved via parent inheritance chain | parent's ID |
+```text
+NormalizedTarget {
+  selector:       'instance' | 'list' | 'create' | 'route-root' | 'inherited'
+  resource_type:  canonical token from §17 registry
+  instance_id:    text NULL    -- the specific resource ID (NULL for list/create)
+  container_type: text NULL    -- parent/container resource type for create/list
+  container_id:   text NULL    -- parent/container instance ID for create/list
+  installation_id: bigint NULL -- ownership path: installation
+  repository_id:   bigint NULL -- ownership path: repository (NULL if installation-scoped only)
+}
+```
+
+The `installation_id` and `repository_id` fields carry the **complete
+ownership path** derived from either the resolved instance (for
+`instance`/`route-root`/`inherited`) or the destination container (for
+`create`/`list`). Grant matching uses these fields to prove the principal
+has authority over the exact destination — not just a wildcard scope.
+
+| Selector | instance_id | container | When used |
+|----------|-------------|-----------|-----------|
+| `instance` | non-NULL (from `:id` route param) | n/a | Read/update/delete a specific resource |
+| `list` | NULL | the scoping parent (installation or repository from route) | Enumerate resources within a scope |
+| `create` | NULL | the destination parent (installation or repository from route/body) | Insert a new record |
+| `route-root` | route-dependent | n/a | The resource identified by the route itself (e.g., installation from webhook) |
+| `inherited` | parent's ID | n/a | Resource resolved via parent inheritance chain |
 
 ```
 function evaluate_leaf(leaf, context):
-  -- Resolve target based on selector
-  if leaf.selector == 'instance':
-    target = context.resolve_by_id(leaf.resource_type, route_params)
-    if target is NULL: return DENY(resource_not_found)
-  elif leaf.selector in ('list', 'create'):
-    target = NULL  -- no specific instance
-  elif leaf.selector == 'route-root':
-    target = context.resolve_route_root(leaf.resource_type)
-  elif leaf.selector == 'inherited':
-    target = context.resolve_inherited(leaf.resource_type)
+  -- Resolve the normalized target based on selector.
+  -- ALL resource resolution happens here — there is no global
+  -- resolution step in the main algorithm. The leaf evaluator is the
+  -- single authority for target resolution.
+  target = resolve_target(leaf, context)
+  if target is INVALID: return DENY(resource_not_found)
 
   -- Role permission check
   roles = context.active_roles WHERE scope matches target and leaf.resource_type
@@ -401,7 +418,7 @@ function evaluate_leaf(leaf, context):
     AND resource_type matches (exact OR parent via inheritance)
     AND effect = 'deny'
     AND (action = leaf.action OR action = '*')
-    AND grant_matches_target(resource_id, target, leaf.selector, scope)
+    AND grant_matches_target(resource_id, target, scope)
   if denies is not empty: return DENY(explicit_deny)
 
   -- Credential scope + expiry + environment
@@ -409,7 +426,11 @@ function evaluate_leaf(leaf, context):
   if credential.environment != current_environment: return DENY(wrong_environment)
   if credential.scopes not empty AND leaf.action not in credential.scopes:
     return DENY(credential_scope_denied)
-  if target is not NULL AND credential restricts to resources not including target:
+  if target.instance_id is not NULL AND credential restricts to resources not including target:
+    return DENY(credential_resource_restricted)
+  -- For create: the credential must also permit the destination container.
+  if leaf.selector == 'create' AND credential restricts to installations/repos
+     not including target.installation_id / target.repository_id:
     return DENY(credential_resource_restricted)
 
   -- Explicit allow (identical filters to deny, minus effect)
@@ -419,29 +440,106 @@ function evaluate_leaf(leaf, context):
     AND resource_type matches (exact OR parent via inheritance)
     AND effect = 'allow'
     AND (action = leaf.action OR action = '*')
-    AND grant_matches_target(resource_id, target, leaf.selector, scope)
+    AND grant_matches_target(resource_id, target, scope)
   if allows is empty: return DENY(resource_grant_missing)
 
   return ALLOW
 ```
 
-**`grant_matches_target(resource_id, target, selector, scope)` resolution:**
+**`resolve_target(leaf, context)` — the single target resolver:**
 
-| Selector | resource_id IS NOT NULL | resource_id IS NULL |
-|----------|------------------------|---------------------|
-| `instance` | `resource_id = target.id` | `scope_type matches scope` (wildcard within allowed scope) |
-| `list` | never matches (no instance) | `scope_type matches scope` (the principal can list resources within their scope) |
-| `create` | never matches (no instance) | `scope_type matches scope` (the principal can create within their scope) |
-| `route-root` | `resource_id = target.id` | `scope_type matches scope` |
-| `inherited` | `resource_id = target.id OR parent matches` | `scope_type matches scope` |
+```
+function resolve_target(leaf, context):
+  -- All resolution runs through the query gateway (tenant-scoped).
+  if leaf.selector == 'instance':
+    inst = context.resolve_by_id(leaf.resource_type, route_params)
+    if inst is NULL: return INVALID
+    return NormalizedTarget {
+      selector: 'instance',
+      resource_type: leaf.resource_type,
+      instance_id: inst.id,
+      container_type: NULL, container_id: NULL,
+      installation_id: inst.installation_id,
+      repository_id: inst.repository_id
+    }
 
-For `list` and `create`, `target` is NULL, so no `resource_id` dereference
-occurs. A wildcard grant (`resource_id IS NULL` with matching scope) is
-sufficient. This is fail-closed: if no wildcard grant exists within the
-principal's scope, the result is `resource_grant_missing`.
+  if leaf.selector == 'create':
+    -- CREATE resolves the DESTINATION CONTAINER before insertion.
+    -- The container is the parent installation or repository into
+    -- which the new record will be inserted. This is derived from the
+    -- route context (e.g., POST /api/installations/:id/repositories
+    -- → container is installation :id).
+    container = context.resolve_create_container(leaf.resource_type, route_params, body)
+    if container is NULL:
+      return INVALID  -- cannot determine destination → fail-closed
+    -- Verify the container is within the principal's tenant scope.
+    if not scope_contains(scope, container.installation_id, container.repository_id):
+      return INVALID  -- destination outside tenant boundary
+    return NormalizedTarget {
+      selector: 'create',
+      resource_type: leaf.resource_type,
+      instance_id: NULL,
+      container_type: container.type,    -- 'installation' or 'repository'
+      container_id: container.id,
+      installation_id: container.installation_id,
+      repository_id: container.repository_id
+    }
+
+  if leaf.selector == 'list':
+    -- LIST resolves the scoping parent (container), same as create
+    -- but without the create-specific destination check.
+    container = context.resolve_list_scope(leaf.resource_type, route_params)
+    if container is NULL:
+      return NormalizedTarget {
+        selector: 'list', resource_type: leaf.resource_type,
+        instance_id: NULL, container_type: NULL, container_id: NULL,
+        installation_id: NULL, repository_id: NULL
+      }
+    return NormalizedTarget {
+      selector: 'list', resource_type: leaf.resource_type,
+      instance_id: NULL,
+      container_type: container.type, container_id: container.id,
+      installation_id: container.installation_id,
+      repository_id: container.repository_id
+    }
+
+  if leaf.selector == 'route-root':
+    inst = context.resolve_route_root(leaf.resource_type)
+    if inst is NULL: return INVALID
+    return NormalizedTarget { selector: 'route-root', ... inst fields ... }
+
+  if leaf.selector == 'inherited':
+    inst = context.resolve_inherited(leaf.resource_type)
+    if inst is NULL: return INVALID
+    return NormalizedTarget { selector: 'inherited', ... inst fields ... }
 ```
 
-Step 5 in the main algorithm calls `evaluate_expression(root, context)`
+**`grant_matches_target(resource_id, target, scope)` resolution:**
+
+| Selector | resource_id IS NOT NULL (specific grant) | resource_id IS NULL (wildcard grant) |
+|----------|------------------------------------------|--------------------------------------|
+| `instance` | `resource_id = target.instance_id` | scope_type matches scope AND target within scope |
+| `list` | never matches | scope_type matches scope AND target.container within scope |
+| `create` | never matches | scope_type matches scope AND **target.container_id within scope** |
+| `route-root` | `resource_id = target.instance_id` | scope_type matches scope |
+| `inherited` | `resource_id = target.instance_id OR parent matches` | scope_type matches scope |
+
+**Critical difference from prior version:** for `create` and `list`, the
+wildcard grant (`resource_id IS NULL`) is no longer sufficient by itself.
+The grant's scope must ALSO contain the resolved `container_id`
+(`target.installation_id` / `target.repository_id`). This proves the
+principal has authority over the **exact destination** — not just any
+wildcard scope. A principal with an installation-scoped wildcard grant
+on installation 42 cannot create a resource in installation 99, even
+though both are "wildcard within installation scope."
+
+For `create`, `resolve_create_container` MUST return a valid container
+before any grant check. If the destination cannot be determined or is
+outside the tenant boundary, the leaf returns `resource_not_found`
+(fail-closed: no ambiguous insertion).
+```
+
+Step 4 in the main algorithm calls `evaluate_expression(root, context)`
 which traverses the tree and calls `evaluate_leaf` for each leaf. There
 is no separate "rerun steps 5-9 for each permission" loop.
 
@@ -451,7 +549,7 @@ STEP 1: Authenticate principal
   if not authenticated_principal:
     return DENY_AND_RECORD(reason=no_authenticated_principal)
 
-STEP 2: Derive tenant scope (tri-state dimensions)
+STEP 2: Derive tenant scope (closed product algebra)
   -- Active roles: revoked_at IS NULL, expired roles excluded.
   active_roles = SELECT * FROM auth_principal_roles
     WHERE principal_id = authenticated_principal.id
@@ -467,72 +565,165 @@ STEP 2: Derive tenant scope (tri-state dimensions)
     system:      false   -- default: no system-scoped access
   }
 
-  -- Collect installation and repository IDs from roles.
+  -- PHASE 1: Accumulate role-derived domains.
+  -- Roles only WIDEN authority (within their declared dimension). They
+  -- never narrow another role's contribution. Union semantics within
+  -- each dimension.
   role_inst_ids = Set()
   role_repo_ids = Set()
+  has_fleet_role = false
+  has_system_role = false
   for role in active_roles:
     if role.scope_type == 'fleet':
-      scope.fleet = true
-      -- Fleet role grants ALL visibility for both installation and repository dimensions
-      scope.installation = ALL
-      scope.repository = ALL
-    if role.scope_type == 'system': scope.system = true
+      has_fleet_role = true
+    if role.scope_type == 'system':
+      has_system_role = true
     if role.scope_type == 'installation':
       role_inst_ids.add(role.scope_id)
-      -- Installation role grants ALL repositories within those installations
-      if scope.repository == NONE: scope.repository = ALL
     if role.scope_type == 'repository':
       role_repo_ids.add(role.scope_id)
-      parent_inst = resolve_parent_installation(role.scope_id)
-      role_inst_ids.add(parent_inst)
+      -- A repository role implicitly includes its parent installation
+      -- in the installation domain (the repo lives there).
+      role_inst_ids.add(resolve_parent_installation(role.scope_id))
 
-  -- Narrow from NONE to SET based on accumulated role IDs.
-  -- Fleet role already set dimensions to ALL above.
-  if scope.installation == NONE and role_inst_ids is not empty:
-    scope.installation = SET(role_inst_ids)
-  if scope.repository == NONE and role_repo_ids is not empty:
-    scope.repository = SET(role_repo_ids)
-  -- If installation role set repo to ALL but no fleet, narrow repo
-  -- to SET of repos within those installations (ALL_WITHIN_INSTALLATIONS).
-  if scope.repository == ALL and not scope.fleet and role_inst_ids is not empty:
-    scope.repository = SET(repos_within(role_inst_ids))
+  -- PHASE 2: Derive the role-domain scope (before credential intersection).
+  -- The installation dimension is the UNION of fleet (ALL), explicit
+  -- installation roles, and parent installations of repository roles.
+  -- The repository dimension is the UNION of fleet (ALL) and explicit
+  -- repository roles. Installation roles do NOT widen the repository
+  -- dimension to ALL — they widen it to the repos within those
+  -- installations (ALL_WITHIN_INSTALLATIONS), represented here as a
+  -- finite SET computed at evaluation time.
+  if has_fleet_role:
+    scope.fleet = true
+    scope.installation = ALL
+    scope.repository = ALL
+  else:
+    if role_inst_ids is not empty:
+      scope.installation = SET(role_inst_ids)
+    if role_repo_ids is not empty:
+      scope.repository = SET(role_repo_ids)
+    elif role_inst_ids is not empty and role_repo_ids is empty:
+      -- Installation role with no explicit repo role and no fleet:
+      -- repositories are ALL_WITHIN those installations.
+      scope.repository = SET(repos_within(role_inst_ids))
+  scope.system = has_system_role
 
-  -- Credential narrows via INTERSECTION. Credentials CANNOT create authority.
+  -- PHASE 3: Credential intersection (narrows BOTH dimensions together).
+  -- Credentials CANNOT create authority. A finite credential restriction
+  -- narrows the relevant dimension AND its co-dimension so the gateway
+  -- never receives mismatched installation/repository domains.
   -- Tri-state intersection rules:
   --   NONE ∩ ANY  = NONE  (no authority cannot be expanded)
   --   ALL  ∩ SET  = SET   (unrestricted narrowed to finite)
-  --   SET  ∩ SET  = SET(a ∩ b)
+  --   SET  ∩ SET  = SET(a ∩ b)  — empty result stays as empty SET, not NONE
+  --
+  -- IMPORTANT: an empty intersection (SET ∩ SET = ∅) is represented as
+  -- a SET with zero elements, which the gateway treats identically to
+  -- NONE for filtering. This is distinct from NONE (no role authority at
+  -- all): it records that the principal HAD authority that the credential
+  -- narrowed to nothing, which is a different audit signal.
+
   if credential has finite installation restriction:
     cred_inst = SET(credential.installation_ids)
-    if scope.installation == NONE:
-      scope.installation = NONE  -- NONE ∩ SET = NONE
-    elif scope.installation == ALL:
-      scope.installation = cred_inst  -- ALL ∩ SET = SET
-    else:  -- SET
-      scope.installation = scope.installation ∩ cred_inst
+    scope.installation = tri_intersect(scope.installation, cred_inst)
     scope.fleet = false  -- finite credential collapses fleet
+    -- NARROW CO-DIMENSION: a finite installation restriction also
+    -- constrains the repository dimension to repos within the surviving
+    -- installations. This prevents the gateway from seeing repos whose
+    -- parent installation was just excluded.
+    if scope.repository == ALL:
+      scope.repository = SET(repos_within(as_set(scope.installation)))
+    elif scope.repository is SET:
+      scope.repository = scope.repository ∩ SET(repos_within(as_set(scope.installation)))
+
   if credential has finite repository restriction:
     cred_repo = SET(credential.repository_ids)
-    if scope.repository == NONE:
-      scope.repository = NONE
-    elif scope.repository == ALL:
-      scope.repository = cred_repo
-    else:
-      scope.repository = scope.repository ∩ cred_repo
-    -- Repository restriction also constrains parent installations
-    if scope.installation != NONE and scope.installation != ALL:
-      repo_parents = SET(parent installations of cred_repo)
-      scope.installation = scope.installation ∩ repo_parents
+    scope.repository = tri_intersect(scope.repository, cred_repo)
     scope.fleet = false
+    -- NARROW CO-DIMENSION: a finite repository restriction also
+    -- constrains the installation dimension to the parent installations
+    -- of the surviving repositories. This runs unconditionally (even
+    -- when scope.installation was ALL) so that fleet + repo-restriction
+    -- does not leave installation=ALL while repository is finite.
+    repo_parents = SET(parent installations of cred_repo)
+    if scope.installation == ALL:
+      scope.installation = repo_parents
+    elif scope.installation is SET:
+      scope.installation = scope.installation ∩ repo_parents
+    -- If the repo restriction empties the installation dimension, that
+    -- is correct: no surviving repos means no surviving installations.
+
   if credential denies fleet: scope.fleet = false
   if credential denies system: scope.system = false
 
-  -- Fail-closed: no visible scope at all.
-  -- NONE means no authority; ALL means unrestricted.
-  inst_visible = scope.installation != NONE OR scope.fleet
-  repo_visible = scope.repository != NONE OR scope.fleet
+  -- PHASE 4: Fail-closed check. A principal must have SOME non-empty
+  -- dimension to proceed. An empty SET (from intersection) counts as
+  -- no visibility, same as NONE.
+  inst_visible = (scope.installation is SET and scope.installation is not empty)
+                 or scope.installation == ALL or scope.fleet
+  repo_visible = (scope.repository is SET and scope.repository is not empty)
+                 or scope.repository == ALL or scope.fleet
   if not inst_visible AND not repo_visible AND not scope.system:
     return DENY_AND_RECORD(reason=no_installation_scope)
+
+  -- Helper: tri-state intersection
+  function tri_intersect(dim, cred_set):
+    if dim == NONE: return NONE              -- NONE ∩ SET = NONE
+    if dim == ALL:  return cred_set          -- ALL  ∩ SET = SET
+    return dim ∩ cred_set                    -- SET  ∩ SET = SET(a ∩ b)
+  function as_set(dim):
+    if dim == ALL:  return ALL_INSTALLATIONS -- materialize for co-dim narrowing
+    if dim == NONE: return empty Set()
+    return dim
+
+### Scope product algebra — normative truth table
+
+The table below is the closed specification of STEP 2. Every combination
+of role domain × credential restriction MUST produce the listed scope.
+Notation: `A` = a finite SET of installation IDs; `R` = a finite SET of
+repository IDs; `R(A)` = repos within installations A; `P(R)` = parent
+installations of repos R; `∅` = empty SET (zero elements).
+
+| # | Role domain | Credential restriction | scope.installation | scope.repository | scope.fleet |
+|---|-------------|----------------------|--------------------|------------------|-------------|
+| T1 | fleet | none | ALL | ALL | true |
+| T2 | fleet | installation A | A | R(A) | false |
+| T3 | fleet | repository R | P(R) | R | false |
+| T4 | installation I | none | {I} | R({I}) | false |
+| T5 | installation I | installation A (I ∈ A) | {I} ∩ A | R({I} ∩ A) | false |
+| T6 | installation I | installation A (I ∉ A) | ∅ | ∅ | false → deny (no_installation_scope) |
+| T7 | installation I | repository R (repos in I) | {I} ∩ P(R) | R({I}) ∩ R | false |
+| T8 | installation I | repository R (repos NOT in I) | {I} ∩ P(R) = ∅ | ∅ | false → deny |
+| T9 | repository R (parent I) | none | {I} | R | false |
+| T10 | repository R (parent I) | installation A (I ∈ A) | {I} ∩ A | R ∩ R(A) | false |
+| T11 | repository R (parent I) | installation A (I ∉ A) | ∅ | ∅ | false → deny |
+| T12 | repository R (parent I) | repository R' (R ∩ R' ≠ ∅) | {I} ∩ P(R') | R ∩ R' | false |
+| T13 | repository R (parent I) | repository R' (R ∩ R' = ∅) | {I} ∩ P(R') = ∅ | ∅ | false → deny |
+| T14 | none (no tenant roles) | any | NONE | NONE | false → deny |
+| T15 | system only | any tenant | NONE | NONE | false (system=true, proceeds for system resources) |
+
+**Key invariants enforced by this table:**
+
+1. **Co-dimension narrowing is unconditional.** T2, T3, T7, T10, T12 all
+   show the credential restriction narrowing BOTH dimensions. The gateway
+   never receives `installation=ALL` with `repository=SET` (T3) or
+   `installation=SET` with a repository domain that spans excluded
+   installations (T7, T10, T12).
+
+2. **Empty intersection = deny.** T6, T8, T11, T13 produce an empty SET
+   in both dimensions, which fails the Phase 4 visibility check. This is
+   the fail-closed behavior: a credential that narrows authority to
+   nothing denies, even if the roles alone would have granted access.
+
+3. **Fleet collapse.** Any finite credential restriction (T2, T3) sets
+   `scope.fleet = false`. Only an unrestricted credential preserves
+   fleet authority (T1).
+
+4. **System is orthogonal.** T15 shows system-only principals have no
+   tenant dimensions but proceed for system-scoped resources. System
+   authority is never widened by tenant roles or narrowed by tenant
+   credentials.
 
 STEP 3: Install data-access boundary
   -- The query gateway receives the full scope object.
@@ -548,19 +739,14 @@ STEP 3: Install data-access boundary
   -- For system/identity tables: WHERE TRUE only if scope.system IS TRUE.
   query_gateway.set_scope(scope)
 
-STEP 4: Resolve resource within boundary
-  -- the principal's tenant scope are invisible (not found, not denied).
-  -- For list/create actions (no :id param), resource_id is NULL;
-  -- the resource_type is known from the route, and the query
-  -- gateway handles scoping. No resource_not_found for list/create.
-  if resource_type is installation-scoped AND action not in ('list', 'create'):
-    if resource not found:
-      return DENY_AND_RECORD(reason=resource_not_found)
-
-STEP 5: Evaluate operation policy expression
+STEP 4: Evaluate operation policy expression
   -- The route's operation policy is compiled to a permission expression tree.
   -- evaluate_expression walks the tree, calling evaluate_leaf (defined above)
   -- for each unique leaf. Memoization prevents re-evaluation of the same leaf.
+  -- ALL resource resolution happens inside evaluate_leaf via resolve_target;
+  -- there is no separate global resolution step. The query gateway installed
+  -- in STEP 3 ensures any resource outside the principal's tenant scope is
+  -- invisible (resolve_target returns INVALID → resource_not_found).
   result = evaluate_expression(operation_policy_tree, context)
   if result is DENY:
     return DENY_AND_RECORD(reason=result.reason)
@@ -571,7 +757,7 @@ STEP 5: Evaluate operation policy expression
     if result2 is DENY:
       return DENY_AND_RECORD(reason=reauthorization_failed)
 
-STEP 6: Issue decision
+STEP 5: Issue decision
   decision_id = generate UUID
   record decision with all inputs, evaluated policy versions, and decision_id
   return ALLOW(decision_id)
@@ -668,13 +854,14 @@ Tenant isolation requires a two-phase sequence to avoid a resolution cycle:
    Intersect with credential resource restrictions.
 
 **Phase B: Install the data-access boundary**
-4. The **mandatory query gateway** is the normative enforcement boundary.
+3. The **mandatory query gateway** is the normative enforcement boundary.
    It receives the full tri-state `scope` object from step 2 and applies
    it to every SQL query against installation-scoped tables.
-5. Resource resolution (step 4) runs through this gateway — resources
-   outside the principal's tenant scope are invisible.
-6. Operation policy evaluation (step 5 of the main algorithm) then proceeds within the
-   already-scoped boundary.
+4. Operation policy evaluation (step 4 of the main algorithm) then
+   proceeds within the already-scoped boundary. All resource/target
+   resolution occurs inside `evaluate_leaf` via `resolve_target`, which
+   runs through this gateway — resources outside the principal's tenant
+   scope are invisible (returned as `resource_not_found`).
 
 **PostgreSQL RLS is NOT the chosen boundary.** The mandatory query gateway
 is the normative enforcement mechanism because:
@@ -693,10 +880,73 @@ all queries against installation-scoped tables.
 
 ### Worker scope
 
-Workers receive installation scope from the job payload, but the job's
-authorization is validated at enqueue time via the job-authorization
-capability (§14). A queue-injected job without a valid capability token
-is rejected.
+Workers do NOT receive tenant scope from the job payload. The payload's
+`installation_id` and `repository_id` are **comparison claims**, not
+authority sources (§9). The worker's gateway scope is derived **solely**
+from the validated delegation's resource boundary:
+
+1. The worker verifies the capability token (§14): signature, audience,
+   payload hash, JTI consumption, delegation validity.
+2. The worker resolves the delegation record to obtain the resource
+   boundary (`resource_type`, `resource_id`, `installation_id`).
+3. The gateway scope is constructed from the delegation's boundary —
+   never from the payload's claimed IDs directly. The payload IDs are
+   compared against the delegation's boundary as a consistency check;
+   a mismatch indicates tampering and the job is rejected.
+
+This means a worker's data access is bounded by what the initiating
+principal was authorized to delegate, not by what the payload asserts.
+A queue-injected job without a valid capability token is rejected before
+any data access occurs.
+
+### Queue authority model
+
+`queue_job` is a **transport-scoped resource**, not a tenant resource.
+It is not installation-scoped or system-scoped in the data-access sense
+— it has no `installation_id` column and is backed by Redis, not
+PostgreSQL. The query gateway does not filter it. Instead, enqueue
+authority is enforced at two distinct points with distinct semantics:
+
+**1. Initiating enqueue authority (who can trigger a job).**
+
+A principal enqueues a job by performing an `enqueue` action on the
+**target operation's resource** (the repository or installation the job
+will operate on), not on a queue resource. The permission is
+`<resource_type>:enqueue` (e.g., `repository:enqueue`,
+`installation:enqueue`). This is evaluated by `evaluate_leaf` against
+the initiating principal's roles, grants, and scope — exactly like any
+other action. The `enqueue` action in the §4 vocabulary applies to
+`repository` and `installation` because those are the resources whose
+tenant boundary the job will operate within.
+
+**2. Worker ceiling for downstream enqueue (which workers can chain jobs).**
+
+When a worker enqueues a downstream job (e.g., patch-worker enqueues
+verification), it acts under its delegation. The worker's ceiling in
+`auth_worker_ceilings` must include `queue_job:enqueue` — the transport
+permission to submit to the queue. This ceiling permission is
+system-scoped (transport infrastructure), independent of the tenant
+resource the downstream job will touch. The downstream job's tenant
+boundary comes from a **new delegation** created by the worker under
+its own delegated authority (§9 delegation chains).
+
+**Why `queue_job` is not in the tenant evaluator:**
+
+The installation principal (`scope=installation`) and the scheduler
+(`scope=fleet`) can initiate enqueues because they hold
+`<resource_type>:enqueue` on their respective tenant resources — NOT
+because they have authority over a system-scoped queue resource. The
+`queue_job` token exists in the registry only to represent the worker
+ceiling permission for downstream chaining. This cleanly separates
+"who can trigger a job" (tenant-scoped, evaluated by the normal
+algorithm) from "which workers can submit to queues" (transport-scoped
+ceiling, evaluated against `auth_worker_ceilings`).
+
+**Registry classification:** `queue_job` is listed under
+"Transport-scoped" in §3 and in the system-scoped registry table (§17)
+because the registry has no separate transport category — but its
+narrative classification is transport, and it is never passed through
+the query gateway's tenant filter.
 
 ---
 
@@ -918,7 +1168,7 @@ Fleet-wide shared keys that cannot be mapped to a specific installation:
 |------|----------------|---------|
 | `no_authenticated_principal` | Algorithm step 1 | No valid credential presented |
 | `no_installation_scope` | Algorithm step 2 | Principal has no tenant scope after role+credential intersection |
-| `resource_not_found` | Algorithm step 4 | Resource does not exist or is not visible within scope |
+| `resource_not_found` | evaluate_leaf (resolve_target) | Resource does not exist or is not visible within scope |
 | `no_active_role` | evaluate_leaf | Principal has no active role assignments matching this resource |
 | `role_permission_missing` | evaluate_leaf | The required action is not in any of the principal's role permissions |
 | `explicit_deny` | evaluate_leaf | An explicit deny grant matched this resource + action |
@@ -927,18 +1177,20 @@ Fleet-wide shared keys that cannot be mapped to a specific installation:
 | `wrong_environment` | evaluate_leaf | The credential is restricted to a different environment |
 | `expired` | evaluate_leaf | The credential, role, or grant has expired |
 | `resource_grant_missing` | evaluate_leaf | No explicit allow grant on this resource |
-| `operation_policy_denied` | Algorithm step 5 | Compound operation policy expression evaluated to deny |
-| `reauthorization_failed` | Algorithm step 5 | Sensitive operation re-check failed (principal/grant changed) |
+| `operation_policy_denied` | Algorithm step 4 | Compound operation policy expression evaluated to deny |
+| `reauthorization_failed` | Algorithm step 4 | Sensitive operation re-check failed (principal/grant changed) |
 | `attestation_not_found` | evaluate_attestation_leaf | No valid attestation exists for this principal/repo/command/delegation |
 | `attestation_revoked_on_github` | evaluate_attestation_leaf | GitHub API recheck shows user no longer has required role |
 | `attestation_permission_changed` | evaluate_attestation_leaf | GitHub role changed since attestation was created |
 | `capability_jti_consumed` | Worker verification | JTI permanently consumed; replay rejected |
+| `capability_delegation_in_use` | Worker verification | Delegation execution claim held by another attempt; concurrent execution blocked |
 | `capability_delegation_invalid` | Worker verification | Delegation revoked, expired, or denied |
 | `capability_invalid_signature` | Worker verification | Ed25519 signature verification failed |
 | `capability_audience_mismatch` | Worker verification | Token audience does not match this worker |
 | `capability_expired` | Worker verification | Token `expires_at` has passed |
 | `capability_payload_mismatch` | Worker verification | `payload_hash` does not match job payload |
 | `capability_queue_mismatch` | Worker verification | Token queue/job name does not match current queue |
+| `capability_delivery_mismatch` | Worker verification | `delivery_id` does not match the verified webhook delivery (when present) |
 | `capability_key_not_found` | Worker verification | `key_id` references an unknown signing key |
 | `unmapped_legacy_key` | Algorithm step 1 | Legacy key has no installation mapping |
 | `disabled` | Any | Principal or credential is disabled |
@@ -1122,6 +1374,12 @@ Every job enqueued into BullMQ carries a signed capability token:
 - **Installation/repository identity:** the token binds to specific
   installation and repository IDs. A token for installation A cannot be
   replayed for installation B.
+- **Delivery binding:** for webhook-originated jobs, the token carries
+  `delivery_id` (the GitHub webhook delivery ID verified at ingress).
+  At dequeue, the worker verifies this matches the recorded delivery.
+  This prevents a replayed capability from being attached to a payload
+  originating from a different webhook delivery. For direct triggers
+  (not from a webhook), `delivery_id` is NULL and this check is skipped.
 - **Issuer:** the principal that created the token (typically `gitwire-app`).
 - **Audience:** the worker service principal that is authorized to consume
   this token.
@@ -1147,25 +1405,37 @@ At dequeue time, the worker:
    - Failure: `capability_payload_mismatch`.
 6. Checks `queue_name` and `job_name` match the current queue and job.
    - Failure: `capability_queue_mismatch`.
-7. **Consumes the JTI permanently:** `SET gitwire:jti:{jti} "consumed" NX EX {retention_ttl}`
+7. **Delivery binding:** if `delivery_id` is present (webhook-originated
+   job), verifies it matches the GitHub webhook delivery ID recorded at
+   ingress. This binds the capability to the specific verified delivery,
+   preventing a replayed capability from being attached to a different
+   delivery's payload. If `delivery_id` is NULL (direct trigger), this
+   check is skipped.
+   - Failure: `capability_delivery_mismatch`.
+8. **Consumes the JTI permanently:** `SET gitwire:jti:{jti} "consumed" NX EX {retention_ttl}`
    — see JTI consumption protocol (true at-most-once).
    - If SET succeeds: JTI is permanently consumed; proceed.
    - If SET fails (key exists): reject with `capability_jti_consumed`.
-8. Resolves the delegation via `delegation_id` (checks not revoked,
-   not expired, execution_status pending). Reject with
-   `capability_delegation_invalid` if invalid.
-9. Executes the job under the delegated authority (two independent
-   evaluations, §9). The query gateway is configured from the
-   delegation's resource boundary. No finalization needed — JTI was
-   consumed before execution (step 7 of worker verification).
+9. Resolves the delegation via `delegation_id` (checks not revoked,
+   not expired). Reject with `capability_delegation_invalid` if invalid.
+10. **Acquires the delegation execution claim:** atomically transitions
+    `execution_status` from `pending` to `executing`. If another attempt
+    already holds the claim (`execution_status = 'executing'`), reject
+    with `capability_delegation_in_use`. See JTI consumption protocol
+    for the two-layer exclusion rationale.
+11. Executes the job under the delegated authority (two independent
+    evaluations, §9). The query gateway is configured from the
+    delegation's resource boundary.
+12. **Finalizes:** on completion (success or failure), transitions
+    `execution_status` to `completed` or `cancelled`, releasing the
+    execution claim so a fresh capability can proceed if needed.
 
 **Retry semantics:** BullMQ retries carry the same JTI. Since the JTI
 is permanently consumed before execution, all retries are rejected with
 `capability_jti_consumed`. The caller must re-enqueue with a fresh
-capability if the job crashes.
-
-**Retry semantics:** BullMQ retries carry the same JTI and delegation_id.
-See the JTI consumption protocol for the complete state machine.
+capability if the job crashes. See the JTI consumption protocol below
+for the execution-claim rule that prevents a fresh capability from
+overlapping a paused original attempt.
 
 ### Signing architecture
 
@@ -1191,9 +1461,15 @@ job. If the worker crashes mid-execution, the job is lost (BullMQ's
 own retry mechanism is disabled for capability-gated jobs). The caller
 must re-enqueue with a fresh capability if needed.
 
+**Two-layer exclusion.** JTI consumption alone prevents reuse of the
+same capability, but does not prevent a fresh capability (new JTI) for
+the same delegation from overlapping a paused original process. To close
+this gap, the protocol uses a **delegation-level execution claim** in
+addition to JTI consumption:
+
 **Protocol:**
 
-1. **Acquire (atomic, permanent):**
+1. **Acquire JTI (atomic, permanent):**
    ```text
    SET gitwire:jti:{jti} "consumed" NX EX {retention_ttl}
    ```
@@ -1203,35 +1479,71 @@ must re-enqueue with a fresh capability if needed.
    - If SET fails: the JTI is already consumed → reject with
      `capability_jti_consumed`.
 
-2. **Execute:** the worker processes the job. No lease, no deadline,
+2. **Acquire delegation execution claim (atomic):**
+   ```text
+   UPDATE auth_delegations
+     SET execution_status = 'executing'
+     WHERE id = :delegation_id
+       AND execution_status IN ('pending', 'completed', 'cancelled', 'denied')
+   -- Returns affected_rows = 1 on success, 0 if another execution
+   -- holds the claim (execution_status = 'executing').
+   ```
+   - This prevents a fresh capability for the same delegation from
+     beginning execution while a previous attempt is still in
+     `executing` state.
+   - If affected_rows = 0: another attempt holds the claim → reject
+     with `capability_delegation_in_use`.
+
+3. **Execute:** the worker processes the job. No lease, no deadline,
    no heartbeat.
 
-3. **No finalization needed:** the JTI was set to `"consumed"` at
-   acquisition. Whether the job succeeds or crashes, the JTI remains
-   consumed. A retried BullMQ job carrying the same JTI is rejected.
+4. **Finalize:** on completion (success or failure), set
+   `execution_status = 'completed'` (or `'cancelled'`). This releases
+   the execution claim, allowing a fresh capability to proceed if the
+   job crashed and must be re-enqueued.
 
-**Side-effect safety:** because the JTI is consumed before execution,
-no two attempts can ever execute the same job concurrently. If the
-worker crashes after some side effects but before completion, those
-side effects are partial. The caller must handle this:
+**Fresh-capability-after-crash rule.** When a job crashes mid-execution:
+- The JTI remains `"consumed"` (permanent). The crashed capability can
+  never be reused.
+- The delegation's `execution_status` remains `'executing'` until the
+  crash is detected and the status is finalized. A fresh capability for
+  the same delegation CANNOT proceed until the previous execution is
+  confirmed terminated (status transitions out of `'executing'`).
+- Crash detection: the system marks `execution_status = 'cancelled'`
+  after a configurable staleness threshold (e.g., no heartbeat/progress
+  signal for N minutes, or process supervisor reports exit). Only then
+  can a fresh capability acquire the claim.
+- This prevents a paused/stuck original process from overlapping a
+  fresh re-enqueued job. The two-layer exclusion (JTI + execution
+  claim) guarantees that at most one process executes under a given
+  delegation at any time.
+
+**Side-effect safety:** because the JTI is consumed and the execution
+claim is acquired before execution, no two attempts can ever execute
+the same job or delegation concurrently. If the worker crashes after
+some side effects but before completion, those side effects are partial.
+The caller must handle this:
 - For database mutations: transaction-based (commit atomically).
 - For GitHub mutations: each mutation carries a unique operation
   identifier (e.g., branch name with request_id suffix) so a
   re-enqueued job can detect prior partial execution.
 - For queue mutations (enqueue downstream): the downstream job's
-  capability references the original delegation, not the crashed
-  worker's state.
+  capability references a fresh delegation (not the crashed worker's
+  delegation), so the execution claim does not block legitimate
+  downstream chaining.
 
 **Why true at-most-once instead of takeover or fencing tokens:**
 - **Takeover** allows a paused old worker to resume and overlap with
   the new attempt — unsafe without fencing at every mutable sink.
 - **Fencing tokens** require every mutable sink (including GitHub API)
   to validate a monotonic counter — impractical.
-- **True at-most-once** is the simplest model that guarantees no
-  concurrent execution. The cost is that a crashed job must be
-  re-enqueued manually, but this is acceptable for the job sizes
-  involved (seconds to minutes) and the operational visibility it
-  provides (the crash is observable, not silently retried).
+- **True at-most-once** with delegation execution claims is the
+  simplest model that guarantees no concurrent execution — both of the
+  same capability (JTI) and of the same delegation (execution claim).
+  The cost is that a crashed job must be re-enqueued after confirmed
+  termination, but this is acceptable for the job sizes involved
+  (seconds to minutes) and the operational visibility it provides
+  (the crash is observable, not silently retried).
 
 ### Delegation binding
 
@@ -1269,8 +1581,10 @@ Node.js versions and implementations.
 | `capability_payload_mismatch` | `payload_hash` does not match the job payload |
 | `capability_queue_mismatch` | Token queue/job name does not match current queue |
 | `capability_jti_consumed` | JTI is already in `"consumed"` state |
+| `capability_delegation_in_use` | Delegation execution claim held by another active attempt |
 | `capability_key_not_found` | `key_id` references an unknown signing key |
 | `capability_delegation_invalid` | Referenced delegation is revoked, expired, or denied |
+| `capability_delivery_mismatch` | `delivery_id` does not match the verified webhook delivery (when present) |
 
 ### F-07 resolution: command-specific expiring delegation with GitHub recheck
 
@@ -1296,14 +1610,22 @@ dequeue time.
 
 **At dequeue (worker execution):**
 5. The worker verifies the capability (signature, audience, payload hash,
-   JTI consumption state).
-6. For **every mutating command**, the worker rechecks the GitHub API
+   delivery_id binding, JTI consumption, delegation execution claim).
+6. For **every mutating command**, the worker evaluates the attestation
+   leaf (`evaluate_attestation_leaf`), which rechecks the GitHub API
    for the user's current `authorAssociation` on the repository:
-   - If still `OWNER`/`MEMBER`/`COLLABORATOR`: proceed.
-   - If demoted or removed: reject with `reauthorization_failed`.
+   - If still `OWNER`/`MEMBER`/`COLLABORATOR` and unchanged: proceed.
+   - If demoted or removed: reject with `attestation_revoked_on_github`.
+   - If changed to a different valid role: reject with
+     `attestation_permission_changed`.
+   - If no valid attestation record exists: reject with
+     `attestation_not_found`.
    This is NOT limited to "sensitive operations" — every `/gitwire`
    mutating command rechecks, because GitHub association can change
-   between enqueue and execution.
+   between enqueue and execution. The denial codes are the
+   attestation-specific codes from §12, NOT `reauthorization_failed`
+   (which applies only to sensitive-operation rechecks of standing
+   role/grant authority).
 7. The delegation expires after its short TTL. A replayed capability
    after expiry is rejected with `capability_expired`.
 
@@ -1348,7 +1670,7 @@ expected decision with reason code.
 | P1 | `user` with `operator` role on installation 42 | repository octo-lex/gitwire (in installation 42) | `repository:update` | Role includes `update`; credential unrestricted; resource grant allows installation-scoped; operation policy permits |
 | P2 | `service:heal-worker` with capability token + valid delegation for `heal-run` on repo X | repository X | `repository:github:act` | Capability verified; delegation valid; worker ceiling includes `github:act`; initiating authority permits this repo |
 | P3 | `user` with `admin` role (fleet) | auth_principal (any) | `auth_principal:manage` | Admin role has fleet+system scope; includes `manage` action; system grant allows |
-| P4 | `installation` principal (HMAC-verified webhook), explicit allow grant on `webhook_delivery` | `webhook_delivery` (via webhook payload) | `webhook_delivery:create` | Installation principal role includes `create` on `webhook_delivery`; step 9 resource grant (allow, scope=installation) matches |
+| P4 | `installation` principal (HMAC-verified webhook), explicit allow grant on `webhook_delivery` | `webhook_delivery` (via webhook payload) | `webhook_delivery:create` | Installation principal role includes `create` on `webhook_delivery`; create target resolves to the webhook's installation; resource grant (allow, scope=installation) matches the destination container |
 | P5 | `legacy-key` mapped to installation 42 | policy_waiver in installation 42 | `policy_waiver:read` | Legacy-key role includes `read`; installation-mapped to 42; grant allows |
 
 ### Negative examples (deny)
@@ -1357,7 +1679,7 @@ expected decision with reason code.
 |---|-----------|----------|--------|---------------|
 | N1 | `user` with `operator` role on installation 42 | repository in installation 99 | `repository:read` | `resource_not_found` (outside tenant scope via query gateway) |
 | N2 | `user` with `viewer` role | repository X | `repository:update` | `role_permission_missing` (viewer has `read` only) |
-| N3 | `service:heal-worker` without capability token | repository X | `repository:github:act` | `missing_job_authorization` |
+| N3 | `service:heal-worker` without capability token | repository X | `repository:github:act` | `capability_invalid_signature` (no valid capability to verify) |
 | N4 | `legacy-key` unmapped (no installation assignment) | any installation-scoped resource | any | `unmapped_legacy_key` |
 | N5 | `user` with `operator` role, explicit deny grant on repository X | repository X | `repository:update` | `explicit_deny` (deny grant matched inside evaluate_leaf before credential scope check) |
 | N6 | `service:patch-worker` (no GitHub identity) | repository X | `repository:github:act` | `role_permission_missing` (patch-worker role lacks `github:act`) |
