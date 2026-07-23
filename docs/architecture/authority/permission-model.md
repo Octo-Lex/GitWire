@@ -181,9 +181,9 @@ system (fleet-wide)
 
 | Category | Resources | Scope |
 |----------|-----------|-------|
-| **Installation-scoped** | repository and all its children; policy, waiver, gate, rollout, queue, maintainer settings; decision_log; repair_proposal_events; managed_actions; rollback_events; policy_repo_configs; reconciliation_runs; config_validation_results; pipeline_events; test_results; gate_evaluations; backend_isolation_evidence; action_reconciliation_log | Tenant-scoped |
+| **Installation-scoped** | repository and all its children; policy_definition, policy_waiver, quality_gate, policy_rollout_plan, queue_job, maintainer_setting; decision_log; repair_proposal_events; managed_action; rollback_event; policy_repo_config; reconciliation_run; config_validation_result; pipeline_event; test_result; gate_evaluation; backend_isolation_evidence; action_reconciliation_log | Tenant-scoped |
 | **Identity-scoped** | auth_principal, auth_role, auth_credential, auth_delegation, auth_resource_grant, auth_bootstrap_allow | System-scoped; not tenant-filtered |
-| **System-scoped** | audit_trail_entry, audit_export, compliance_report, system configuration; queue/job targets | Fleet-wide |
+| **System-scoped** | audit_trail_entry, audit_export, compliance_report, system configuration; queue_job | Fleet-wide |
 | **Worker-internal** | execution_receipts, source_snapshots, patch_artifacts, fix_attempts, ai_reviews, duplicate_signals, dependency_manifests, dependency_update_batches, vulnerability_advisories, flaky_tests, issue_embeddings, members, repo_collaborators, branch_rules | Installation-scoped (child of repository or installation) |
 
 ### Inheritance rules
@@ -202,7 +202,7 @@ system (fleet-wide)
 
 Every request resolves its target resource from the route:
 - `:owner/:repo` path params → `repository` resource.
-- `:id` body/path params → resource by ID (e.g., `repair_proposal`, `waiver`).
+- `:id` body/path params → resource by ID (e.g., `repair_proposal`, `policy_waiver`).
 - List endpoints (no `:owner/:repo`) → query scoped by the principal's
   resource grants. The resource type is known from the route; the
   principal's grants determine which instances are visible.
@@ -223,11 +223,11 @@ Every request resolves its target resource from the route:
 | `github:act` | Perform a GitHub API mutation (branch protection, PR merge, label, collaborator) | repository |
 | `github:read` | Perform a GitHub API read (fetch PR, list commits) | repository |
 | `enqueue` | Submit a background job | repository, installation |
-| `approve` | Authorize a governed workflow step | rollout_plan, repair_proposal |
-| `revoke` | Revoke or invalidate a governed artifact | waiver, credential, session, delegation |
+| `approve` | Authorize a governed workflow step | policy_rollout_plan, repair_proposal |
+| `revoke` | Revoke or invalidate a governed artifact | policy_waiver, auth_credential, auth_delegation |
 | `manage` | Administrative lifecycle (create/disable principals, roles, grants) | auth_principal, auth_role, auth_credential |
-| `audit:read` | Read the canonical audit trail | audit_trail_entry, audit_export |
-| `audit:export` | Generate compliance reports and exports | compliance_report |
+| `audit:read` | Read the canonical audit trail | audit_trail_entry |
+| `audit:export` | Generate audit exports | audit_export |
 
 ### Permission naming convention
 
@@ -242,7 +242,7 @@ Examples:
 - `policy_waiver:revoke`
 - `auth_principal:manage`
 - `audit_trail_entry:audit:read`
-- `rollout_plan:approve`
+- `policy_rollout_plan:approve`
 
 **No undeclared verbs.** Every permission uses an action from the table
 above. `github:act` and `github:read` are separate actions — the previous
@@ -265,30 +265,30 @@ Each permission carries a scope:
 | Role | Key permissions | Scope | Principals |
 |------|----------------|-------|------------|
 | `admin` | all actions on all resources, including `manage` and `audit:export` | fleet + system | Human administrators |
-| `operator` | `read` + `create` + `update` + `github:act` + `enqueue` on repositories; `read` on policy/waiver/gate | installation | Human operators |
-| `reviewer` | `read` + `approve` on rollouts, repairs, gates | installation | Human reviewers |
+| `operator` | `read` + `create` + `update` + `github:act` + `enqueue` on `repository`; `read` on `policy_definition`, `policy_waiver`, `quality_gate` | installation | Human operators |
+| `reviewer` | `read` + `approve` on `policy_rollout_plan`, `repair_proposal`, `quality_gate` | installation | Human reviewers |
 | `viewer` | `read` only | installation | Human viewers |
 | `service:webhook-worker` | `create` + `update` on installation, repository | ceiling | P-4 webhook worker |
 | `service:triage-worker` | `github:act` on repository; `update` on issue, managed_action, decision_log | ceiling | P-4 triage worker |
 | `service:heal-worker` | `github:act` on repository; `update` on ci_run, heal_pr, managed_action | ceiling | P-4 CI heal worker |
 | `service:evidence-worker` | `update` on repair_proposal; `enqueue` diagnosis | ceiling | P-4 evidence worker |
 | `service:diagnosis-worker` | `update` on repair_proposal_event; `enqueue` patch | ceiling | P-4 diagnosis worker |
-| `service:patch-worker` | `update` on patch_artifact, repair_proposal_event; `enqueue` verification | ceiling | P-4 patch worker |
+| `service:patch-worker` | `create` on patch_artifact; `update` on repair_proposal_event; `enqueue` verification | ceiling | P-4 patch worker |
 | `service:verification-worker` | `github:read` on repository; `create` on execution_receipt, source_snapshot | ceiling | P-4 verification worker |
 | `service:critic-worker` | `update` on repair_proposal_event | ceiling | P-4 critic worker |
 | `service:sync-worker` | `create` + `update` on installation, repository, issue, pull_request, ci_run, member, repo_collaborator, branch_rule; `github:read` | ceiling | P-2 sync worker |
-| `service:maintainer-worker` | `github:act` on repository; `update` on maintainer_action, maintainer_setting | ceiling | P-4 maintainer worker |
+| `service:maintainer-worker` | `github:act` on repository; `create` on maintainer_action; `update` on maintainer_setting | ceiling | P-4 maintainer worker |
 | `service:issue-fix-worker` | `github:act` on repository; `update` on fix_attempt, managed_action | ceiling | P-4 issue fix worker |
-| `service:merge-queue-worker` | `github:act` on repository (merge); `update` on merge_queue_entry, rollback_event | ceiling | P-4 phase2 worker |
+| `service:merge-queue-worker` | `github:act` on repository (merge); `update` on merge_queue_entry; `create` on rollback_event | ceiling | P-4 phase2 worker |
 | `service:policy-worker` | `github:act` on repository; `update` on policy_repo_config, dependency_manifest, dependency_update_batch, flaky_test, vulnerability_advisory | ceiling | P-4 phase3 dependency/scan worker |
-| `service:fleet-reconciler` | `github:act` on repository (branch protection, labels, repo settings); `update` on policy_repo_config, reconciliation_run | ceiling | P-4 phase3 fleet reconciler |
-| `service:review-worker` | `github:act` on repository (reviews, check-runs); `update` on ai_review, audit_export | ceiling | P-4 phase4 worker |
-| `service:reconciler` | `read` on managed_actions, heal_prs; `update` on managed_actions reconciliation fields only | fleet | `setInterval` reconciliation timer — operates on installation-scoped tables, so scope is `fleet` not `system` |
-| `installation` | (webhook ingress) `enqueue` to all worker queues; `create` on `webhook_delivery` | installation | P-3 GitHub App installation (HMAC-verified webhook) |
-| `system:scheduler` | (scheduled jobs) `enqueue` on all worker queues; triggers sync, reconciliation, dependency scan, graduation, audit export | fleet | Cron timers that initiate fleet-wide scheduled operations |
+| `service:fleet-reconciler` | `github:act` on repository (branch protection, labels, repo settings); `update` on policy_repo_config; `read` on reconciliation_run | ceiling | P-4 phase3 fleet reconciler |
+| `service:review-worker` | `github:act` on repository (reviews, check-runs); `create` on ai_review, audit_export | ceiling | P-4 phase4 worker |
+| `service:reconciler` | `read` on managed_action, heal_pr; `update` on managed_action reconciliation fields only | fleet | `setInterval` reconciliation timer — operates on installation-scoped tables, so scope is `fleet` not `system` |
+| `installation` | (webhook ingress) `enqueue` on `queue_job`; `create` on `webhook_delivery` | installation | P-3 GitHub App installation (HMAC-verified webhook) |
+| `system:scheduler` | (scheduled jobs) `enqueue` on `queue_job`; triggers sync, reconciliation, dependency scan, graduation, audit export | fleet | Cron timers that initiate fleet-wide scheduled operations |
 | `system` | (migration/bootstrap) `manage` on identity resources during migration; `create` on auth_principal during bootstrap; `manage` on auth_bootstrap_state transitions | system | Migration runner, bootstrap mechanism |
 | `service:executor` | (executor-service) no DB, no GitHub, no network egress. Executes allowlisted npm commands in isolated container. Returns results to caller. | none (no resource access) | P-6 executor-service |
-| `service:bot` | `read` on repositories, issues, activity; `enqueue` fix/triage triggers | installation (linked-user-scoped) | Telegram bot |
+| `service:bot` | `read` on `repository`, `issue`; `enqueue` on `queue_job` (fix/triage triggers) | installation (linked-user-scoped) | Telegram bot |
 | `legacy-key` | `read` + `create` + `update` + `enqueue` on installation-scoped resources; **no** `manage`, `approve`, `revoke`, `audit:export` | installation (explicitly mapped) only — **no automatic fleet default**; unmapped keys are rejected | Existing shared-key clients |
 
 ### Role assignment
@@ -471,19 +471,31 @@ STEP 2: Derive tenant scope (tri-state dimensions)
   role_inst_ids = Set()
   role_repo_ids = Set()
   for role in active_roles:
-    if role.scope_type == 'fleet': scope.fleet = true
+    if role.scope_type == 'fleet':
+      scope.fleet = true
+      -- Fleet role grants ALL visibility for both installation and repository dimensions
+      scope.installation = ALL
+      scope.repository = ALL
     if role.scope_type == 'system': scope.system = true
-    if role.scope_type == 'installation': role_inst_ids.add(role.scope_id)
+    if role.scope_type == 'installation':
+      role_inst_ids.add(role.scope_id)
+      -- Installation role grants ALL repositories within those installations
+      if scope.repository == NONE: scope.repository = ALL
     if role.scope_type == 'repository':
       role_repo_ids.add(role.scope_id)
       parent_inst = resolve_parent_installation(role.scope_id)
       role_inst_ids.add(parent_inst)
 
-  -- If any installation-scoped roles exist, narrow from NONE to SET.
-  if role_inst_ids is not empty: scope.installation = SET(role_inst_ids)
-  if role_repo_ids is not empty: scope.repository = SET(role_repo_ids)
-  -- fleet role grants ALL visibility for installation-scoped tables
-  -- (but only if no finite credential restriction collapses it below)
+  -- Narrow from NONE to SET based on accumulated role IDs.
+  -- Fleet role already set dimensions to ALL above.
+  if scope.installation == NONE and role_inst_ids is not empty:
+    scope.installation = SET(role_inst_ids)
+  if scope.repository == NONE and role_repo_ids is not empty:
+    scope.repository = SET(role_repo_ids)
+  -- If installation role set repo to ALL but no fleet, narrow repo
+  -- to SET of repos within those installations (ALL_WITHIN_INSTALLATIONS).
+  if scope.repository == ALL and not scope.fleet and role_inst_ids is not empty:
+    scope.repository = SET(repos_within(role_inst_ids))
 
   -- Credential narrows via INTERSECTION. Credentials CANNOT create authority.
   -- Tri-state intersection rules:
@@ -624,9 +636,10 @@ execution to the specific authorization decision that permitted it.
   `DENY` with reason `no_matching_allow`.
 - **Explicit deny precedence:** an explicit deny grant overrides any allow
   from role, credential, or resource grant. Denial reason: `explicit_deny`.
-- **Evaluation order for denies:** explicit deny is checked at step 7,
-  after role permissions (step 6) and before credential scope (step 8).
-  If deny matches, the result is immediately deny regardless of other factors.
+- **Evaluation order for denies:** explicit deny is checked inside
+  `evaluate_leaf`, after the role permission check and before the
+  credential scope check. If deny matches, the result is immediately
+  deny regardless of other factors.
 - **Deny specificity:** a deny on a specific resource overrides an allow on
   the parent resource. An allow on a specific resource does NOT override a
   deny on the parent.
@@ -660,7 +673,7 @@ Tenant isolation requires a two-phase sequence to avoid a resolution cycle:
    it to every SQL query against installation-scoped tables.
 5. Resource resolution (step 4) runs through this gateway — resources
    outside the principal's tenant scope are invisible.
-6. Operation policy evaluation (steps 5-11) then proceeds within the
+6. Operation policy evaluation (step 5 of the main algorithm) then proceeds within the
    already-scoped boundary.
 
 **PostgreSQL RLS is NOT the chosen boundary.** The mandatory query gateway
@@ -807,18 +820,19 @@ worker, operation, resource_type, and resource_id?
 - Check the authorization_decision that created it was valid at creation time
 ```
 
-**Evaluation B: Worker service principal's role ceiling**
+**Evaluation B: Worker action ceiling**
 ```
-Does the worker's durable service role include the required action
-for this resource type?
-- Check auth_principal_roles for the worker principal
-- Check role.permissions includes the action
-- Check not revoked, not expired
+Does the worker's ceiling in auth_worker_ceilings include the
+required action for this resource type?
+- Check auth_worker_ceilings for the worker principal
+- Check permissions includes the action
+- Check not revoked
 ```
 
-Both must independently allow. If either denies, the result is deny.
-The worker cannot exceed its ceiling (Evaluation B) or the initiator's
-delegated scope (Evaluation A).
+Both must independently allow. The worker cannot exceed its ceiling
+(Evaluation B) or the initiator's delegated scope (Evaluation A).
+Payload installation and repository IDs are claims compared against
+the signed capability and delegation — never authority sources.
 
 ### Revocation-after-enqueue
 
@@ -900,21 +914,33 @@ Fleet-wide shared keys that cannot be mapped to a specific installation:
 
 ### Denial reason codes
 
-| Code | Step | Meaning |
-|------|------|---------|
-| `no_authenticated_principal` | 1 | No valid credential presented |
-| `resource_not_found` | 2 | Resource does not exist or is not visible |
-| `no_active_role` | 3 | Principal has no active role assignments matching this resource |
-| `role_permission_missing` | 4 | The required action is not in any of the principal's role permissions |
-| `explicit_deny` | 5 | An explicit deny grant matched this resource + action |
-| `credential_scope_denied` | 6 | The credential's scope does not include this action |
-| `credential_resource_restricted` | 6 | The credential is restricted to different resources |
-| `wrong_environment` | 6 | The credential is restricted to a different environment |
-| `expired` | 6 | The credential, role, or grant has expired |
-| `resource_grant_missing` | 7 | No explicit allow grant on this resource (required for 'own' scope) |
-| `reauthorization_failed` | 8 | Sensitive operation re-check failed (principal/grant changed) |
-| `missing_job_authorization` | Worker | Job lacks a valid authorization capability (F-06) |
-| `unmapped_legacy_key` | Legacy | Legacy key has no installation or fleet mapping |
+| Code | Where evaluated | Meaning |
+|------|----------------|---------|
+| `no_authenticated_principal` | Algorithm step 1 | No valid credential presented |
+| `no_installation_scope` | Algorithm step 2 | Principal has no tenant scope after role+credential intersection |
+| `resource_not_found` | Algorithm step 4 | Resource does not exist or is not visible within scope |
+| `no_active_role` | evaluate_leaf | Principal has no active role assignments matching this resource |
+| `role_permission_missing` | evaluate_leaf | The required action is not in any of the principal's role permissions |
+| `explicit_deny` | evaluate_leaf | An explicit deny grant matched this resource + action |
+| `credential_scope_denied` | evaluate_leaf | The credential's scope does not include this action |
+| `credential_resource_restricted` | evaluate_leaf | The credential is restricted to different resources |
+| `wrong_environment` | evaluate_leaf | The credential is restricted to a different environment |
+| `expired` | evaluate_leaf | The credential, role, or grant has expired |
+| `resource_grant_missing` | evaluate_leaf | No explicit allow grant on this resource |
+| `operation_policy_denied` | Algorithm step 5 | Compound operation policy expression evaluated to deny |
+| `reauthorization_failed` | Algorithm step 5 | Sensitive operation re-check failed (principal/grant changed) |
+| `attestation_not_found` | evaluate_attestation_leaf | No valid attestation exists for this principal/repo/command/delegation |
+| `attestation_revoked_on_github` | evaluate_attestation_leaf | GitHub API recheck shows user no longer has required role |
+| `attestation_permission_changed` | evaluate_attestation_leaf | GitHub role changed since attestation was created |
+| `capability_jti_consumed` | Worker verification | JTI permanently consumed; replay rejected |
+| `capability_delegation_invalid` | Worker verification | Delegation revoked, expired, or denied |
+| `capability_invalid_signature` | Worker verification | Ed25519 signature verification failed |
+| `capability_audience_mismatch` | Worker verification | Token audience does not match this worker |
+| `capability_expired` | Worker verification | Token `expires_at` has passed |
+| `capability_payload_mismatch` | Worker verification | `payload_hash` does not match job payload |
+| `capability_queue_mismatch` | Worker verification | Token queue/job name does not match current queue |
+| `capability_key_not_found` | Worker verification | `key_id` references an unknown signing key |
+| `unmapped_legacy_key` | Algorithm step 1 | Legacy key has no installation mapping |
 | `disabled` | Any | Principal or credential is disabled |
 
 ### External error responses
@@ -1080,7 +1106,8 @@ Every job enqueued into BullMQ carries a signed capability token:
   "key_id": "<which signing key was used>",
   "issued_at": "2026-07-21T12:00:00Z",
   "expires_at": "2026-07-21T13:00:00Z",
-  "jti": "<unique token ID for one-time consumption>"
+  "jti": "<unique token ID for one-time consumption>",
+  "delivery_id": "<GitHub webhook delivery ID, if originating from a webhook — NULL for direct triggers>"
 }
 ```
 
@@ -1102,10 +1129,11 @@ Every job enqueued into BullMQ carries a signed capability token:
 - **JTI (JWT ID):** a unique token identifier for one-time consumption.
   The worker records the JTI in Redis with a TTL matching `expires_at`.
   A replayed JTI is rejected.
-- **One-time consumption:** after the worker processes the job, the JTI is
+- **One-time consumption:** the JTI is permanently consumed before
+  execution begins. After the worker processes the job, the JTI remains
   marked consumed. Any replay attempt is denied.
 
-### Worker verification (reservation protocol)
+### Worker verification (true at-most-once)
 
 At dequeue time, the worker:
 1. Extracts the capability token from `job.data.__capability`.
@@ -1129,10 +1157,10 @@ At dequeue time, the worker:
 9. Executes the job under the delegated authority (two independent
    evaluations, §9). The query gateway is configured from the
    delegation's resource boundary. No finalization needed — JTI was
-   consumed at step 7.
+   consumed before execution (step 7 of worker verification).
 
 **Retry semantics:** BullMQ retries carry the same JTI. Since the JTI
-is permanently consumed at step 7, all retries are rejected with
+is permanently consumed before execution, all retries are rejected with
 `capability_jti_consumed`. The caller must re-enqueue with a fresh
 capability if the job crashes.
 
@@ -1241,9 +1269,7 @@ Node.js versions and implementations.
 | `capability_payload_mismatch` | `payload_hash` does not match the job payload |
 | `capability_queue_mismatch` | Token queue/job name does not match current queue |
 | `capability_jti_consumed` | JTI is already in `"consumed"` state |
-| `capability_jti_expired` | JTI key has expired (TTL elapsed) |
 | `capability_key_not_found` | `key_id` references an unknown signing key |
-| `capability_jti_in_use` | JTI is actively leased by another attempt (deadline not expired) |
 | `capability_delegation_invalid` | Referenced delegation is revoked, expired, or denied |
 
 ### F-07 resolution: command-specific expiring delegation with GitHub recheck
@@ -1270,7 +1296,7 @@ dequeue time.
 
 **At dequeue (worker execution):**
 5. The worker verifies the capability (signature, audience, payload hash,
-   JTI reservation).
+   JTI consumption state).
 6. For **every mutating command**, the worker rechecks the GitHub API
    for the user's current `authorAssociation` on the repository:
    - If still `OWNER`/`MEMBER`/`COLLABORATOR`: proceed.
@@ -1320,7 +1346,7 @@ expected decision with reason code.
 | # | Principal | Resource | Action | Why allowed |
 |---|-----------|----------|--------|-------------|
 | P1 | `user` with `operator` role on installation 42 | repository octo-lex/gitwire (in installation 42) | `repository:update` | Role includes `update`; credential unrestricted; resource grant allows installation-scoped; operation policy permits |
-| P2 | `service:heal-worker` with capability token for `heal-run` on repo X, explicit allow grant on repository X | repository X | `repository:github:act` | Capability token verified; delegation valid; service role includes `github:act`; step 9 resource grant matches |
+| P2 | `service:heal-worker` with capability token + valid delegation for `heal-run` on repo X | repository X | `repository:github:act` | Capability verified; delegation valid; worker ceiling includes `github:act`; initiating authority permits this repo |
 | P3 | `user` with `admin` role (fleet) | auth_principal (any) | `auth_principal:manage` | Admin role has fleet+system scope; includes `manage` action; system grant allows |
 | P4 | `installation` principal (HMAC-verified webhook), explicit allow grant on `webhook_delivery` | `webhook_delivery` (via webhook payload) | `webhook_delivery:create` | Installation principal role includes `create` on `webhook_delivery`; step 9 resource grant (allow, scope=installation) matches |
 | P5 | `legacy-key` mapped to installation 42 | policy_waiver in installation 42 | `policy_waiver:read` | Legacy-key role includes `read`; installation-mapped to 42; grant allows |
@@ -1333,10 +1359,10 @@ expected decision with reason code.
 | N2 | `user` with `viewer` role | repository X | `repository:update` | `role_permission_missing` (viewer has `read` only) |
 | N3 | `service:heal-worker` without capability token | repository X | `repository:github:act` | `missing_job_authorization` |
 | N4 | `legacy-key` unmapped (no installation assignment) | any installation-scoped resource | any | `unmapped_legacy_key` |
-| N5 | `user` with `operator` role, explicit deny grant on repository X | repository X | `repository:update` | `explicit_deny` (step 7: deny grant matched before credential scope at step 8) |
+| N5 | `user` with `operator` role, explicit deny grant on repository X | repository X | `repository:update` | `explicit_deny` (deny grant matched inside evaluate_leaf before credential scope check) |
 | N6 | `service:patch-worker` (no GitHub identity) | repository X | `repository:github:act` | `role_permission_missing` (patch-worker role lacks `github:act`) |
-| N7 | `user` with expired credential | repository X | `repository:read` | `expired` (credential expired at step 8) |
-| N8 | Worker job with consumed JTI (replay attempt) | any | any | `missing_job_authorization` (JTI already consumed) |
+| N7 | `user` with expired credential | repository X | `repository:read` | `expired` (credential expired, checked inside evaluate_leaf) |
+| N8 | Worker job with consumed JTI (replay attempt) | any | any | `capability_jti_consumed` (JTI permanently consumed before execution) |
 | N9 | `legacy-key` with fleet role + `manage` action | auth_principal | `auth_principal:manage` | `role_permission_missing` (legacy-key role excludes `manage`) |
 | N10 | `user` with `viewer` role, compound any_of policy requiring approve permission | `policy_rollout_plan` | `policy_rollout_plan:approve` | `operation_policy_denied` (compound any_of: no alternative allowed; reason is operation_policy_denied per §6 deterministic failure rule) |
 
@@ -1356,12 +1382,12 @@ derived from this table.
 
 | Token | Parent | Identifier type | Backing table(s) | Actions |
 |-------|--------|----------------|-------------------|---------|
-| `installation` | — | bigint | `installations` | read, update |
-| `repository` | `installation` | bigint (github_id) | `repositories` | read, update, github:act, github:read, enqueue |
-| `pull_request` | `repository` | bigint | `pull_requests` | read |
-| `issue` | `repository` | bigint | `issues` | read, update |
-| `ci_run` | `repository` | bigint | `ci_runs` | read, update |
-| `branch_rule` | `repository` | bigint | `branch_rules` | read |
+| `installation` | — | bigint | `installations` | read, create, update |
+| `repository` | `installation` | bigint (github_id) | `repositories` | read, create, update, github:act, github:read, enqueue |
+| `pull_request` | `repository` | bigint | `pull_requests` | read, create, update |
+| `issue` | `repository` | bigint | `issues` | read, create, update |
+| `ci_run` | `repository` | bigint | `ci_runs` | read, create, update |
+| `branch_rule` | `repository` | bigint | `branch_rules` | read, create, update |
 | `repo_config` | `repository` | bigint | `repo_config`, `config_history` | read, update, delete |
 | `config_validation_result` | `repository` | bigint | `config_validation_results` | read |
 | `heal_pr` | `repository` | bigint | `heal_prs` | read, update |
@@ -1385,8 +1411,8 @@ derived from this table.
 | `test_result` | `repository` | bigint | `test_results` | read, create |
 | `gate_evaluation` | `repository` | bigint | `gate_evaluations` | read |
 | `issue_embedding` | `repository` | bigint | `issue_embeddings` | read |
-| `member` | `installation` | bigint | `members` | read |
-| `repo_collaborator` | `repository` | bigint | `repo_collaborators` | read |
+| `member` | `installation` | bigint | `members` | read, create, update |
+| `repo_collaborator` | `repository` | bigint | `repo_collaborators` | read, create, update |
 | `policy_definition` | `installation` | bigint | `policy_definitions` | read, create, update, delete |
 | `policy_waiver` | `installation` | bigint | `policy_waivers` | read, create, revoke |
 | `policy_repo_config` | `repository` | bigint | `policy_repo_configs` | read, update |
