@@ -450,29 +450,64 @@ on `auth_roles`. Retirement is an audited operation performed via a
 `SECURITY DEFINER` function owned by `gitwire_auth_fn_owner`:
 
 ```sql
+-- Function-owner grants for retirement:
+GRANT SELECT, UPDATE ON auth_roles TO gitwire_auth_fn_owner;
+
 CREATE OR REPLACE FUNCTION retire_role(
-  p_role_id      uuid,
-  p_retired_by   uuid
+  p_role_id            uuid,
+  p_authorization_decision_id uuid   -- links to the admin decision authorizing this retirement
 ) RETURNS void
 SECURITY DEFINER
 SET search_path = gitwire_auth, pg_temp
 AS $$
+DECLARE
+  affected int;
+  v_db_session text := session_user;
 BEGIN
   UPDATE auth_roles
-    SET status = 'retired', retired_at = now(), retired_by = p_retired_by, updated_at = now()
+    SET status = 'retired',
+        retired_at = now(),
+        retired_by = (SELECT principal_id FROM auth_authorization_decisions WHERE id = p_authorization_decision_id),
+        updated_at = now()
     WHERE id = p_role_id AND status = 'active';
-  -- If affected_rows = 0, role was already retired or doesn't exist — no-op.
+
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  IF affected = 1 THEN
+    -- Immutable audit record linking the retirement to the authorization decision
+    -- and the authenticated DB session identity.
+    INSERT INTO auth_role_retirement_log (
+      role_id, authorization_decision_id, db_session_user, retired_at
+    ) VALUES (
+      p_role_id, p_authorization_decision_id, v_db_session, now()
+    );
+  END IF;
 END;
 $$ LANGUAGE plpgsql;
 ALTER FUNCTION retire_role(uuid, uuid) OWNER TO gitwire_auth_fn_owner;
 REVOKE ALL ON FUNCTION retire_role(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION retire_role(uuid, uuid) TO gitwire_app;
+GRANT INSERT ON auth_role_retirement_log TO gitwire_auth_fn_owner;
 ```
 
-The application can retire roles (via an admin dashboard action) but
-cannot directly UPDATE the table. Retired roles are excluded from
-evaluation because the evaluator joins `auth_roles` and filters
-`status = 'active'` (see active predicate above). Builtin roles can be
+**Retirement audit table:**
+
+```sql
+CREATE TABLE auth_role_retirement_log (
+  id                          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  role_id                     uuid        NOT NULL REFERENCES auth_roles(id),
+  authorization_decision_id   uuid        NOT NULL REFERENCES auth_authorization_decisions(id),
+  db_session_user             text        NOT NULL,  -- session_user at execution
+  retired_at                  timestamptz NOT NULL DEFAULT now()
+);
+-- Append-only (BEFORE UPDATE/DELETE triggers)
+```
+
+The application can retire roles (via an admin dashboard action that
+produces an authorization decision) but cannot directly UPDATE the
+table. The `retired_by` field is derived from the authorization
+decision's principal — not caller-supplied. The DB session identity is
+captured immutably. Retired roles are excluded from evaluation because
+the evaluator joins `auth_roles` and filters `status = 'active'`.
 retired but not deleted.
 
 ### `auth_principal_roles`
@@ -688,7 +723,7 @@ CREATE TABLE auth_delegations (
   operation                   text              NOT NULL,
   resource_type               text              NOT NULL REFERENCES auth_resource_registry(token),
   resource_id                 text,
-  authorization_decision_id   uuid              NOT NULL,
+  authorization_decision_id   uuid,  -- nullable: set to NULL by archival when decision is deleted (FK ON DELETE SET NULL)
   plan_hash                   text,
   -- Persisted normalized tenant boundary (for worker gateway scope derivation)
   boundary_installation_id    bigint,
@@ -763,10 +798,8 @@ unqualified `CREATE TABLE` statements resolve to `gitwire_auth.*`
 under the stage's `SET search_path`.
 
 ```sql
--- (Schema creation and REVOKE CREATE happen at the start of stage 038.)
--- Non-login role for SECURITY DEFINER function ownership
-CREATE ROLE gitwire_auth_fn_owner NOLOGIN;
-GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner;
+-- (Schema creation, REVOKE CREATE, and gitwire_auth_fn_owner role
+--  creation happen at the start of stage 038 — see §21 stage 038.)
 
 -- All authority tables live in gitwire_auth schema (schema-qualified).
 -- Example: gitwire_auth.auth_delegations, gitwire_auth.auth_principals, etc.
@@ -939,7 +972,9 @@ CREATE OR REPLACE FUNCTION enforce_reconciliation_append_only()
 RETURNS trigger AS $$
 BEGIN
   IF current_user = 'gitwire_auth_fn_owner' THEN
-    RETURN NEW;
+    -- BEFORE UPDATE → return NEW (allow the change)
+    -- BEFORE DELETE → return OLD (allow the deletion; NEW is NULL in DELETE)
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   END IF;
   RAISE EXCEPTION 'auth_reconciliation_log is append-only (current_user=%)',
     current_user;
@@ -1140,8 +1175,9 @@ RETURNS trigger AS $$
 BEGIN
   -- Exempt the function-owner role so the archival function can DELETE
   -- old rows (SECURITY DEFINER runs as gitwire_auth_fn_owner).
+  -- BEFORE UPDATE → return NEW; BEFORE DELETE → return OLD (NEW is NULL in DELETE).
   IF current_user = 'gitwire_auth_fn_owner' THEN
-    RETURN NEW;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   END IF;
   RAISE EXCEPTION 'auth_authorization_decisions is append-only (current_user=%)',
     current_user;
@@ -1583,7 +1619,7 @@ columns, required additions, and backfill derivation.
 | `backend_isolation_evidence` | `backend_isolation_evidence` | ADD COLUMN | via parent | `UPDATE backend_isolation_evidence be SET installation_id = rp.installation_id FROM repair_proposals rp WHERE be.repair_proposal_id = rp.id` |
 | `managed_action` | `managed_actions` | via repo | ✅ | none |
 | `action_reconciliation_log` | `action_reconciliation_log` | ✅ | n/a | none |
-| `decision_log` | `decision_log` | ADD COLUMN | ✅ (repo_id) | `ALTER TABLE decision_log ADD COLUMN installation_id bigint;` then `UPDATE decision_log dl SET installation_id = r.installation_id FROM repositories r WHERE dl.repo_id = r.github_id;` — rows with no matching repo (NULL after UPDATE) reported to migration_report; remain NULL; denied by default in new evaluator |
+| `decision_log` | `decision_log` | ADD COLUMN | ✅ (repo_id) | See detailed gate sequence below |
 | `pipeline_event` | `pipeline_events` | ✅ | n/a | none |
 | `fix_attempt` | `fix_attempts` | via repo | ✅ | none |
 | `ai_review` | `ai_reviews` | via repo | ✅ | none |
@@ -1657,6 +1693,55 @@ CREATE INDEX ix_migration_report_unresolved
   WHERE resolved = false;
 ```
 
+### Ownership column gate sequence (applies to every ADD COLUMN in stage 043)
+
+For every table receiving `installation_id` in stage 043, the following
+sequence ensures fail-closed behavior and deterministic enforcement:
+
+```sql
+-- Example: decision_log (same pattern for all 8 target tables)
+
+-- 1. Add nullable column
+ALTER TABLE decision_log ADD COLUMN installation_id bigint;
+
+-- 2. Exact backfill JOIN (disk-verified source: repo_id → repositories.github_id)
+UPDATE decision_log dl
+  SET installation_id = r.installation_id
+  FROM repositories r
+  WHERE dl.repo_id = r.github_id;
+
+-- 3. Report unmapped rows (ambiguous/system/cross-tenant → fail-closed)
+INSERT INTO migration_report (migration_batch, source_table, source_id, status, detail)
+  SELECT '043', 'decision_log', dl.id::text, 'unmapped_installation',
+    'No matching repository for installation_id derivation'
+  FROM decision_log dl
+  WHERE dl.installation_id IS NULL;
+
+-- 4. Add FK (initially NOT VALID so existing NULLs don't block)
+ALTER TABLE decision_log
+  ADD CONSTRAINT fk_decision_log_installation
+  FOREIGN KEY (installation_id) REFERENCES public.installations(github_id)
+  NOT VALID;
+
+-- 5. Validate FK after backfill (fails if any non-NULL value is invalid)
+ALTER TABLE decision_log
+  VALIDATE CONSTRAINT fk_decision_log_installation;
+
+-- 6. Create index for query gateway performance
+CREATE INDEX ix_decision_log_installation
+  ON decision_log (installation_id)
+  WHERE installation_id IS NOT NULL;
+
+-- 7. Optional NOT NULL cutover: only after zero unresolved rows
+--    SELECT count(*) FROM decision_log WHERE installation_id IS NULL;
+--    If count = 0: ALTER TABLE decision_log ALTER COLUMN installation_id SET NOT NULL;
+--    If count > 0: rows remain NULL and fail-closed; resolve manually first.
+```
+
+Unresolved rows (NULL `installation_id`) are denied by default in the
+new evaluator — the query gateway treats NULL as invisible. No
+implicit installation assignment is ever performed.
+
 ---
 
 ## 16. Audit-event linkage
@@ -1666,16 +1751,19 @@ CREATE INDEX ix_migration_report_unresolved
 ALTER TABLE audit_trail_entries
   ADD COLUMN principal_id uuid REFERENCES auth_principals(id),
   ADD COLUMN delegation_id uuid REFERENCES auth_delegations(id),
-  ADD COLUMN authorization_decision_id uuid REFERENCES auth_authorization_decisions(id);
+  ADD COLUMN authorization_decision_id uuid REFERENCES auth_authorization_decisions(id) ON DELETE SET NULL;
 
 -- decision_log gains:
 ALTER TABLE decision_log
   ADD COLUMN principal_id uuid REFERENCES auth_principals(id),
-  ADD COLUMN authorization_decision_id uuid REFERENCES auth_authorization_decisions(id);
+  ADD COLUMN authorization_decision_id uuid REFERENCES auth_authorization_decisions(id) ON DELETE SET NULL;
 ```
 
-These are nullable during the migration period (dual-write). After full
-enforcement, they become NOT NULL. Actor fields derived from
+These columns remain nullable permanently — the `authorization_decision_id`
+FKs use `ON DELETE SET NULL` so 365-day archival can delete old decisions
+without violating FK constraints. The `principal_id` and `delegation_id`
+columns are nullable for the same reason (principals and delegations are
+durable, but nullability prevents archival conflicts). Actor fields derived from
 `req.auth.principalId`, not client-supplied headers (F-03 resolution).
 
 ---
@@ -1833,12 +1921,14 @@ Runs DDL only. Seeds catalog tables. Cannot create principals or grants.
 | `auth_delegations` | `auth_principals` | `initiating_principal_id` | NO ACTION | Principals never deleted |
 | `auth_delegations` | `auth_principals` | `worker_service_principal_id` | NO ACTION | Principals never deleted |
 | `auth_delegations` | `auth_principals` | `revoked_by` | NO ACTION | Audit linkage preserved |
-| `auth_delegations` | `auth_authorization_decisions` | `authorization_decision_id` | NO ACTION | Decisions append-only |
+| `auth_delegations` | `auth_authorization_decisions` | `authorization_decision_id` | SET NULL | Archival can delete old decisions; delegation retains NULL |
 | `auth_delegations` | `auth_resource_registry` | `resource_type` | NO ACTION | Catalog never deleted |
 | `auth_authorization_decisions` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
 | `auth_authorization_decisions` | `auth_credentials` | `credential_id` | NO ACTION | Credentials never deleted |
 | `auth_authorization_decisions` | `auth_resource_registry` | `target_resource_type` | NO ACTION | Catalog never deleted |
-| `auth_authorization_decisions` | `auth_delegations` | `capability_delegation_id` | NO ACTION | Added in stage 041 |
+| `auth_authorization_decisions` | `auth_delegations` | `capability_delegation_id` | SET NULL | Archival of delegation sets NULL | 
+| `auth_authorization_decisions` | `auth_external_attestations` | `attestation_id` | SET NULL | Attestation cleanup sets NULL; decision retains JSONB snapshot |
+| `auth_authorization_decisions` | `auth_break_glass_activations` | `break_glass_activation_id` | SET NULL | Break-glass archival sets NULL; decision retains is_break_glass flag |
 | `auth_authorization_decisions` | `auth_external_attestations` | `attestation_id` | SET NULL | Attestation cleanup sets attestation_id=NULL; decision retains JSONB snapshot |
 | `auth_authorization_decisions` | `auth_operation_policy_versions` | `operation_policy_version` | NO ACTION (via version_hash) | Policy immutable |
 | `auth_external_attestations` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
@@ -1854,7 +1944,7 @@ Runs DDL only. Seeds catalog tables. Cannot create principals or grants.
 | `migration_report` | `auth_principals` | `resolved_by` | NO ACTION | Audit linkage preserved |
 | `audit_trail_entries` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
 | `audit_trail_entries` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
-| `audit_trail_entries` | `auth_authorization_decisions` | `authorization_decision_id` | NO ACTION | Decisions append-only |
+| `audit_trail_entries` | `auth_authorization_decisions` | `authorization_decision_id` | SET NULL | Archival sets NULL; audit entry retains other fields |
 
 **Default:** `NO ACTION` everywhere. The only `ON DELETE CASCADE` is
 `auth_worker_ceiling_permissions → auth_worker_ceilings` (ceiling
@@ -1903,6 +1993,16 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- 5. CREATE TABLE auth_resource_registry (§2) → gitwire_auth.auth_resource_registry
 -- 6. CREATE TABLE auth_resource_actions (§2) → gitwire_auth.auth_resource_actions
 -- 7. INSERT 57 resource tokens + action sets
+
+-- 8. Create function-owner NOLOGIN role (needed in stage 039+)
+CREATE ROLE gitwire_auth_fn_owner NOLOGIN;
+GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner;
+-- Application and operator roles (assumed to exist in production;
+-- for empty-database smoke test, create them here):
+-- CREATE ROLE gitwire_app;
+-- CREATE ROLE gitwire_operator;
+-- CREATE ROLE gitwire_migration;
+GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_app, gitwire_operator;
 ```
 
 All subsequent `CREATE TABLE auth_*` statements in stages 039–047
@@ -1928,6 +2028,13 @@ Seeds built-in roles and permission sets.
 
 ```sql
 -- 039_auth_identity_tables.sql
+SET search_path = gitwire_auth, public;
+-- CREATE TABLE auth_principals (§4) + constraint triggers
+-- CREATE TABLE auth_credentials (§5)
+-- CREATE TABLE auth_roles (§6) + retirement CHECKs
+-- CREATE TABLE auth_role_permissions (§6)
+-- CREATE TABLE auth_principal_roles (§6) + constraint triggers
+-- Seeds built-in roles and permission sets
 ```
 
 **Rollback:** drop triggers, then `DROP TABLE` in reverse FK order:
@@ -1945,6 +2052,7 @@ deferred via `ALTER TABLE`.
 
 ```sql
 -- 040_auth_authorization_tables.sql
+SET search_path = gitwire_auth, public;
 -- 1. auth_operation_policy_versions (no FKs to other 040 tables)
 -- 2. auth_resource_grants (+ transport-exclusion + action-valid triggers)
 -- 3. auth_worker_ceilings (+ service-only trigger)
@@ -1990,6 +2098,7 @@ attestations. Creates stored functions and constraint triggers.
 
 ```sql
 -- 041_auth_delegation_tables.sql
+SET search_path = gitwire_auth, public;
 -- 1. CREATE TABLE auth_delegations (§9)
 -- 2. CREATE TABLE auth_external_attestations (§10)
 -- 3. Add circular FKs that could not exist in stage 040:
@@ -2038,6 +2147,7 @@ Creates `auth_bootstrap_allow`, `auth_bootstrap_state`,
 
 ```sql
 -- 042_auth_bootstrap.sql
+SET search_path = gitwire_auth, public;
 ```
 
 **Rollback:** `DROP FUNCTION transition_bootstrap_state; DROP TABLE
@@ -2052,6 +2162,7 @@ Backfills from known parent. Creates `migration_report`.
 
 ```sql
 -- 043_ownership_backfill.sql
+SET search_path = gitwire_auth, public;
 -- CREATE TABLE migration_report
 -- 8 tables requiring ADD COLUMN (policy_definitions and feedback_rules
 -- already have installation_id per disk-verified migrations 008/009):
@@ -2077,6 +2188,7 @@ Adds `principal_id`, `delegation_id`, `authorization_decision_id` to
 
 ```sql
 -- 044_audit_linkage.sql
+SET search_path = gitwire_auth, public;
 ```
 
 **Rollback:** `DROP COLUMN` for each. **Safe after enforcement:** yes
@@ -2091,6 +2203,7 @@ installation-mapped role assignments. Unmapped keys go to
 
 ```sql
 -- 045_legacy_key_backfill.sql
+SET search_path = gitwire_auth, public;
 -- CREATE TABLE auth_legacy_key_map
 -- CREATE TABLE auth_capability_keys
 -- For each existing key fingerprint:
@@ -2138,6 +2251,7 @@ role names for rollback identification.
 
 ```sql
 -- 046_worker_identity_seed.sql
+SET search_path = gitwire_auth, public;
 -- Each worker principal gets a deterministic UUID (uuid_generate_v5(namespace, role_name))
 -- so rollback can target exact rows.
 ```
@@ -2155,6 +2269,7 @@ enforces the legal transition graph.
 
 ```sql
 -- 047_authority_source_state.sql
+SET search_path = gitwire_auth, public;
 CREATE TABLE auth_authority_source_state (
   id          integer PRIMARY KEY DEFAULT 1,
   state       authority_source_state NOT NULL DEFAULT 'legacy-only',
@@ -2753,12 +2868,38 @@ $$ LANGUAGE plpgsql;
 ALTER FUNCTION archive_old_decisions(integer) OWNER TO gitwire_auth_fn_owner;
 REVOKE ALL ON FUNCTION archive_old_decisions(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION archive_old_decisions(integer) TO gitwire_operator;
+
+-- DELETE grant: the function owner needs DELETE to remove old rows
+-- (the append-only trigger exempts gitwire_auth_fn_owner).
+GRANT DELETE ON auth_authorization_decisions TO gitwire_auth_fn_owner;
+
+-- Reconciliation log archival (concrete, same pattern):
+CREATE OR REPLACE FUNCTION archive_old_reconciliation(p_retention_days integer DEFAULT 365)
+RETURNS integer
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+DECLARE
+  deleted_count integer;
+BEGIN
+  DELETE FROM auth_reconciliation_log
+    WHERE reconciled_at < now() - (p_retention_days || ' days')::interval;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION archive_old_reconciliation(integer) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION archive_old_reconciliation(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION archive_old_reconciliation(integer) TO gitwire_operator;
+GRANT DELETE ON auth_reconciliation_log TO gitwire_auth_fn_owner;
 ```
 
-A scheduled job (cron, systemd timer) calls this function daily. The
-operator role executes it — the application cannot trigger archival.
-Similar functions exist for `auth_reconciliation_log` and
-`auth_break_glass_activations`. Non-append-only tables (sessions,
+A scheduled job (cron, systemd timer) calls these functions daily. The
+operator role executes them — the application cannot trigger archival.
+Non-append-only tables (sessions, attestations, break-glass activations)
+use direct scheduled DELETE jobs. Break-glass activation archival
+orders before decision archival (decisions reference activations via
+`ON DELETE SET NULL`, so activations can be deleted independently).
 attestations) use direct scheduled DELETE jobs.
 
 **Retention table (non-partitioned, row-level archival):**
@@ -2781,8 +2922,9 @@ attestations) use direct scheduled DELETE jobs.
 **Principle:** durable identity records (principals, credentials, roles,
 grants, delegations) are never hard-deleted. Revocation
 (`revoked_at`) is the lifecycle mechanism. Append-only tables
-(decisions, reconciliation log, policy versions) use partition-based
-archival, not row-level DELETE.
+(decisions, reconciliation log) use the `SECURITY DEFINER` archival
+functions described above (exempting `gitwire_auth_fn_owner` from the
+append-only triggers). Policy versions are never deleted.
 
 ---
 
@@ -2793,9 +2935,12 @@ archival, not row-level DELETE.
    tables. At GitWire's scale this is negligible. Revisit if INSERT
    volume becomes significant.
 
-2. **Decision table volume:** partitioning by time is needed before
-   enforcement. Strategy: monthly range partitions on `evaluated_at`.
-   Define in W0-D.
+2. **Decision table volume:** non-partitioned tables with row-level
+   archival via `SECURITY DEFINER` functions are sufficient for
+   GitWire's current scale. If volume grows significantly, a later
+   implementation wave may convert high-volume tables to partitioned
+   with composite PKs — but this is out of scope for Wave 0 and not a
+   prerequisite for enforcement.
 
 3. **Constraint trigger overhead:** every INSERT/UPDATE on guarded
    tables runs a trigger function. For high-volume tables (sessions,
