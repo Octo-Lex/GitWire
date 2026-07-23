@@ -69,25 +69,30 @@ Specifically:
 ### Extension prerequisites
 
 Two extensions are required before any W0-C migration runs. They are
-installed as migration `037a` (a pre-requisite step before `038`) or
-declared in the migration runner's bootstrap:
+installed at the top of stage 038 (the first W0-C migration), not as
+a separate `037a` file — the existing migration runner does not
+support fractional numbering:
 
 ```sql
--- Required extensions (must run before stage 038)
-CREATE EXTENSION IF NOT EXISTS pgcrypto;   -- provides gen_random_uuid()
+-- Top of 038_auth_catalog_and_enums.sql:
+CREATE EXTENSION IF NOT EXISTS pgcrypto;    -- provides gen_random_uuid()
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; -- provides uuid_generate_v5()
 ```
 
-`pgcrypto` provides `gen_random_uuid()` (used as DEFAULT for all
-primary keys). `uuid-ossp` provides `uuid_generate_v5(namespace, name)`
-(used for deterministic seed UUIDs in rollback-provenance, §21 stage 046).
+`pgcrypto` provides `gen_random_uuid()` (DEFAULT for all primary keys).
+`uuid-ossp` provides `uuid_generate_v5(namespace, name)` for
+deterministic seed UUIDs.
 
-A fixed namespace UUID is declared for deterministic seed generation:
+**Deterministic seed namespace.** The fixed namespace UUID is
+hard-coded as a literal in every seed expression — not stored in a
+`SELECT ... AS` constant (which is not a reusable database object):
 
 ```sql
--- Fixed namespace for all deterministic seed UUIDs in GitWire migrations.
--- This UUID is arbitrary but stable — never change it after first use.
-SELECT '6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid AS gitwire_seed_namespace;
+-- Every deterministic seed uses this literal UUID as the namespace.
+-- Do NOT change after first use.
+-- '6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'
+-- Example:
+--   uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'service:heal-worker')
 ```
 
 ### Migration file naming
@@ -405,6 +410,9 @@ CREATE TABLE auth_roles (
   name        text        NOT NULL UNIQUE,
   description text,
   is_builtin  boolean     NOT NULL DEFAULT false,
+  status      text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'retired')),
+  retired_at  timestamptz,
+  retired_by  uuid        REFERENCES auth_principals(id),
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -418,7 +426,7 @@ INSERT time.
 
 ```sql
 CREATE TABLE auth_role_permissions (
-  role_id             uuid        NOT NULL REFERENCES auth_roles(id) ON DELETE CASCADE,
+  role_id             uuid        NOT NULL REFERENCES auth_roles(id) ON DELETE NO ACTION,
   permission_resource text        NOT NULL,
   permission_action   text        NOT NULL,
   -- The permission token is permission_resource:permission_action
@@ -716,8 +724,9 @@ impersonated by any human-accessible session.
 -- Non-login role for SECURITY DEFINER function ownership
 CREATE ROLE gitwire_auth_fn_owner NOLOGIN;
 GRANT UPDATE ON auth_delegations TO gitwire_auth_fn_owner;
-GRANT INSERT ON auth_reconciliation_log TO gitwire_auth_fn_owner;
 GRANT SELECT ON auth_delegations TO gitwire_auth_fn_owner;
+-- NOTE: GRANT INSERT ON auth_reconciliation_log is deferred until after
+-- the table is created later in this stage (§9 reconciliation_log DDL).
 ```
 
 **Claim acquisition** — atomically checks status, version, revocation,
@@ -859,7 +868,25 @@ CREATE TABLE auth_reconciliation_log (
   new_status            delegation_status NOT NULL,
   reconciled_at         timestamptz NOT NULL DEFAULT now()
 );
--- Append-only (application gets SELECT + INSERT; no UPDATE/DELETE)
+-- Append-only: ONLY the function owner (gitwire_auth_fn_owner) can INSERT.
+-- The application gets SELECT only (for audit inspection).
+-- This prevents the application from forging reconciliation events.
+GRANT INSERT ON auth_reconciliation_log TO gitwire_auth_fn_owner;
+
+-- Append-only triggers (defense-in-depth):
+CREATE OR REPLACE FUNCTION enforce_reconciliation_append_only()
+RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'auth_reconciliation_log is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_reconciliation_no_update
+  BEFORE UPDATE ON auth_reconciliation_log
+  FOR EACH ROW EXECUTE FUNCTION enforce_reconciliation_append_only();
+CREATE TRIGGER trg_reconciliation_no_delete
+  BEFORE DELETE ON auth_reconciliation_log
+  FOR EACH ROW EXECUTE FUNCTION enforce_reconciliation_append_only();
 ```
 
 **Denied-terminal enforcement:**
@@ -974,7 +1001,7 @@ CREATE TABLE auth_authorization_decisions (
   target_container_id         text,
   target_installation_id      bigint,
   target_repository_id        bigint,
-  -- Action and route
+  -- Action and route — action is a concrete evaluated action (not wildcard '*')
   action                      text        NOT NULL,
   route                       text,
   -- Derived tri-state scope snapshot (immutable, for reproduction)
@@ -985,7 +1012,9 @@ CREATE TABLE auth_authorization_decisions (
   matched_grants_snapshot     jsonb,                 -- array of full grant values: {id, resource_type, resource_id, scope_type, scope_id, action, effect}
   matched_denies_snapshot     jsonb,                 -- array of full deny grant values
   -- Policy version (immutable reference)
-  operation_policy_version    text        NOT NULL REFERENCES auth_operation_policy_versions(version_hash),
+  -- Nullable for pre-policy failures (unauthenticated, invalid capability)
+  -- where no operation policy was evaluated.
+  operation_policy_version    text        REFERENCES auth_operation_policy_versions(version_hash),
   -- Denial info (catalog-constrained)
   reason_code                 text        CHECK (reason_code IS NULL OR reason_code IN (
     'no_authenticated_principal', 'no_installation_scope', 'resource_not_found',
@@ -1011,13 +1040,27 @@ CREATE TABLE auth_authorization_decisions (
   attestation_id              uuid,                  -- FK added in 041
   -- Break-glass
   is_break_glass              boolean     NOT NULL DEFAULT false,
+  break_glass_activation_id   uuid        REFERENCES auth_break_glass_activations(id),
   -- Reauthorization (for sensitive operations)
   reauthorization_result      text        CHECK (reauthorization_result IS NULL OR reauthorization_result IN ('passed', 'failed')),
   -- Timestamp
-  evaluated_at                timestamptz NOT NULL DEFAULT now()
+  evaluated_at                timestamptz NOT NULL DEFAULT now(),
+
+  -- Outcome consistency: allow requires NULL reason; deny requires non-NULL reason
+  CONSTRAINT chk_decision_outcome_consistency
+    CHECK ((decision = 'allow' AND reason_code IS NULL)
+           OR (decision = 'deny' AND reason_code IS NOT NULL))
 );
 
 CREATE INDEX ix_auth_decisions_principal
+  ON auth_authorization_decisions (principal_id, evaluated_at DESC);
+
+CREATE INDEX ix_auth_decisions_resource
+  ON auth_authorization_decisions (target_resource_type, target_resource_id, evaluated_at DESC);
+
+CREATE INDEX ix_auth_decisions_deny
+  ON auth_authorization_decisions (decision, reason_code)
+  WHERE decision = 'deny';
   ON auth_authorization_decisions (principal_id, evaluated_at DESC);
 
 CREATE INDEX ix_auth_decisions_resource
@@ -1075,12 +1118,16 @@ CREATE TABLE auth_operation_policy_versions (
   version_hash  text        NOT NULL,     -- sha256(route_pattern || ':' || canonical_json(policy_json))
   policy_json   jsonb       NOT NULL,     -- canonical expression tree (all_of/any_of over leaves)
   created_at    timestamptz NOT NULL DEFAULT now(),
+  -- version_hash is independently UNIQUE so it can serve as an FK target
+  -- from auth_authorization_decisions.operation_policy_version
+  CONSTRAINT ux_opolicy_version_hash UNIQUE (version_hash),
   PRIMARY KEY (route_pattern, version_hash)
 );
-
-CREATE INDEX ix_opolicy_hash
-  ON auth_operation_policy_versions (version_hash);
 ```
+
+The `version_hash` column has its own `UNIQUE` constraint (in addition
+to the composite PK), so the FK from
+`auth_authorization_decisions.operation_policy_version` is valid.
 
 The `operation_policy_version` column in `auth_authorization_decisions`
 references `version_hash`. Because version_hash is unique per
@@ -1106,24 +1153,46 @@ CREATE TRIGGER trg_opolicy_no_delete
 
 **Policy leaf validation.** Each leaf in `policy_json` must reference a
 valid `(resource, action)` pair from the action catalog. This is
-validated by a constraint trigger on INSERT:
+validated by a recursive constraint trigger on INSERT. The canonical
+policy format is a nested expression tree:
+
+```json
+{
+  "type": "all_of" | "any_of",
+  "children": [ <node>, ... ]
+}
+```
+
+or a leaf:
+
+```json
+{
+  "type": "leaf",
+  "resource": "<registry_token>",
+  "action": "<action>"
+}
+```
 
 ```sql
-CREATE OR REPLACE FUNCTION enforce_policy_leaves_valid()
-RETURNS trigger AS $$
+-- Recursive validator: walks the all_of/any_of tree and validates
+-- every leaf against the action catalog.
+CREATE OR REPLACE FUNCTION validate_policy_node(node jsonb) RETURNS void AS $$
 DECLARE
+  child jsonb;
+  node_type text := node->>'type';
   leaf_resource text;
-  leaf_action   text;
-  leaf record;
+  leaf_action text;
 BEGIN
-  -- Iterate over all leaves in the policy_json expression tree.
-  -- JSONB path depends on the canonical format: each leaf has
-  -- {type: 'leaf', resource: '...', action: '...'}.
-  FOR leaf IN
-    SELECT jsonb_array_elements(NEW.policy_json #> '{leaves}')
-  LOOP
-    leaf_resource := leaf->>'resource';
-    leaf_action   := leaf->>'action';
+  IF node_type IS NULL THEN
+    RAISE EXCEPTION 'Policy node missing type';
+  END IF;
+
+  IF node_type = 'leaf' THEN
+    leaf_resource := node->>'resource';
+    leaf_action := node->>'action';
+    IF leaf_resource IS NULL OR leaf_action IS NULL THEN
+      RAISE EXCEPTION 'Policy leaf missing resource or action';
+    END IF;
     IF NOT EXISTS (
       SELECT 1 FROM auth_resource_actions
       WHERE registry_token = leaf_resource AND action = leaf_action
@@ -1131,7 +1200,25 @@ BEGIN
       RAISE EXCEPTION 'Policy leaf %:% is not in the action catalog',
         leaf_resource, leaf_action;
     END IF;
-  END LOOP;
+
+  ELSIF node_type IN ('all_of', 'any_of') THEN
+    IF jsonb_array_length(node->'children') = 0 THEN
+      RAISE EXCEPTION 'Policy % node has empty children', node_type;
+    END IF;
+    FOR child IN SELECT jsonb_array_elements(node->'children') LOOP
+      PERFORM validate_policy_node(child);
+    END LOOP;
+
+  ELSE
+    RAISE EXCEPTION 'Unknown policy node type: %', node_type;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION enforce_policy_leaves_valid()
+RETURNS trigger AS $$
+BEGIN
+  PERFORM validate_policy_node(NEW.policy_json);
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -1139,6 +1226,33 @@ $$ LANGUAGE plpgsql;
 CREATE CONSTRAINT TRIGGER trg_policy_leaves_valid
   AFTER INSERT ON auth_operation_policy_versions
   FOR EACH ROW EXECUTE FUNCTION enforce_policy_leaves_valid();
+```
+
+**Hash verification trigger.** Verifies that `version_hash` equals
+`sha256(route_pattern || ':' || canonical_json(policy_json))`. Prevents
+a caller from claiming an arbitrary hash:
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_policy_hash_matches()
+RETURNS trigger AS $$
+DECLARE
+  computed_hash text;
+BEGIN
+  computed_hash := 'sha256:' || encode(
+    digest(NEW.route_pattern || ':' || NEW.policy_json::text, 'sha256'),
+    'hex'
+  );
+  IF NEW.version_hash != computed_hash THEN
+    RAISE EXCEPTION 'Policy version_hash mismatch: stored %, computed %',
+      NEW.version_hash, computed_hash;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_policy_hash_matches
+  AFTER INSERT ON auth_operation_policy_versions
+  FOR EACH ROW EXECUTE FUNCTION enforce_policy_hash_matches();
 ```
 
 ---
@@ -1188,7 +1302,7 @@ CREATE TABLE auth_break_glass_activations (
   activated_by            uuid        NOT NULL REFERENCES auth_principals(id),
   activation_reason       text        NOT NULL,
   activated_at            timestamptz NOT NULL DEFAULT now(),
-  expires_at              timestamptz NOT NULL,  -- short (e.g., 30 minutes)
+  expires_at              timestamptz NOT NULL,
   session_id              uuid        REFERENCES auth_sessions(id),
   alert_sent              boolean     NOT NULL DEFAULT false,
   alert_acknowledged      boolean     NOT NULL DEFAULT false,
@@ -1207,9 +1321,65 @@ CREATE INDEX ix_break_glass_unacknowledged
   WHERE alert_acknowledged = false;
 ```
 
-Every break-glass decision records `is_break_glass = true` in
-`auth_authorization_decisions`, linking back through the session chain.
-The application MUST send an alert to all active administrators when a
+**Break-glass activation constraints** (enforced by constraint trigger —
+the referenced principal must be `is_break_glass = true`, the
+activating principal must be a human `user`, the session must belong to
+the break-glass principal, and expiry must not exceed the principal's
+break-glass expiry):
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_break_glass_constraints()
+RETURNS trigger AS $$
+DECLARE
+  v_principal_bg      boolean;
+  v_principal_bg_exp  timestamptz;
+  v_activator_type    principal_type;
+  v_session_principal uuid;
+BEGIN
+  -- 1. Referenced principal must be break-glass
+  SELECT is_break_glass, break_glass_expires_at
+    INTO v_principal_bg, v_principal_bg_exp
+    FROM auth_principals WHERE id = NEW.break_glass_principal_id;
+  IF NOT v_principal_bg THEN
+    RAISE EXCEPTION 'break_glass_activation references non-break-glass principal %',
+      NEW.break_glass_principal_id;
+  END IF;
+
+  -- 2. Activating principal must be a human user
+  SELECT principal_type INTO v_activator_type
+    FROM auth_principals WHERE id = NEW.activated_by;
+  IF v_activator_type != 'user' THEN
+    RAISE EXCEPTION 'break_glass activation can only be performed by a human user';
+  END IF;
+
+  -- 3. Session (if provided) must belong to the break-glass principal
+  IF NEW.session_id IS NOT NULL THEN
+    SELECT principal_id INTO v_session_principal
+      FROM auth_sessions WHERE id = NEW.session_id;
+    IF v_session_principal != NEW.break_glass_principal_id THEN
+      RAISE EXCEPTION 'break_glass activation session must belong to the break-glass principal';
+    END IF;
+  END IF;
+
+  -- 4. Activation expiry must not exceed principal break-glass expiry
+  IF NEW.expires_at > v_principal_bg_exp THEN
+    RAISE EXCEPTION 'break_glass activation expiry exceeds principal break_glass expiry';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_break_glass_constraints
+  AFTER INSERT OR UPDATE ON auth_break_glass_activations
+  FOR EACH ROW EXECUTE FUNCTION enforce_break_glass_constraints();
+```
+
+Every break-glass decision records `is_break_glass = true` and
+`break_glass_activation_id` in `auth_authorization_decisions`, providing
+direct linkage to the activation record — not just "through the session
+chain." The application MUST send an alert to all active administrators
+when a
 break-glass activation is created.
 
 ---
@@ -1265,10 +1435,20 @@ BEGIN
     WHERE id = 1;
 END;
 $$ LANGUAGE plpgsql;
-
+ALTER FUNCTION transition_bootstrap_state(text) OWNER TO gitwire_auth_fn_owner;
 -- Revoke from PUBLIC; grant only to application role
 REVOKE ALL ON FUNCTION transition_bootstrap_state(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION transition_bootstrap_state(text) TO gitwire_app;
+```
+
+The bootstrap function is owned by `gitwire_auth_fn_owner` (the
+non-login role), consistent with all other SECURITY DEFINER functions.
+It needs DELETE on `auth_bootstrap_allow` and UPDATE on
+`auth_bootstrap_state` — these are granted to the function owner:
+
+```sql
+GRANT DELETE ON auth_bootstrap_allow TO gitwire_auth_fn_owner;
+GRANT UPDATE ON auth_bootstrap_state TO gitwire_auth_fn_owner;
 ```
 
 ---
@@ -1315,13 +1495,13 @@ columns, required additions, and backfill derivation.
 | `issue_embedding` | `issue_embeddings` | via repo | ✅ | none |
 | `member` | `members` | ✅ | n/a | none |
 | `repo_collaborator` | `repo_collaborators` | via repo | ✅ | none |
-| `policy_definition` | `policy_definitions` | ADD COLUMN | n/a | These tables have `installation_id` in their existing schema (added during their original migration); verify NOT NULL and report any NULL rows |
-| `policy_waiver` | `policy_waivers` | ADD COLUMN | n/a | Same as policy_definition — verify existing or add column with backfill from the policy_waiver's owning installation |
+| `policy_definition` | `policy_definitions` | ✅ (exists) | n/a | Disk-verified: `008_phase1_enforcement.sql` already declares `installation_id BIGINT NOT NULL REFERENCES installations(github_id)`. No migration needed. |
+| `policy_waiver` | `policy_waivers` | ADD COLUMN (derive from repo_id) | ✅ (repo_id) | `ALTER TABLE policy_waivers ADD COLUMN installation_id bigint; UPDATE policy_waivers pw SET installation_id = r.installation_id FROM repositories r WHERE pw.repo_id = r.github_id;` — rows with NULL repo_id → report to migration_report |
 | `policy_repo_config` | `policy_repo_configs` | via repo | ✅ | none |
 | `reconciliation_run` | `reconciliation_runs` | ✅ | n/a | none |
-| `policy_rollout_plan` | `policy_rollout_plans` | ADD COLUMN | n/a | `UPDATE policy_rollout_plans SET installation_id = pd.installation_id FROM policy_definitions pd WHERE policy_rollout_plans.policy_definition_id = pd.id` |
+| `policy_rollout_plan` | `policy_rollout_plans` | ADD COLUMN (derive from repo_id) | ✅ (repo_id) | `ALTER TABLE policy_rollout_plans ADD COLUMN installation_id bigint; UPDATE policy_rollout_plans prp SET installation_id = r.installation_id FROM repositories r WHERE prp.repo_id = r.github_id;` |
 | `quality_gate` | `quality_gates` | via repo | ✅ | none |
-| `feedback_rule` | `feedback_rules` | ADD COLUMN | n/a | `UPDATE feedback_rules SET installation_id = (SELECT id FROM installations LIMIT 1)` — only if single-installation deploy; otherwise report to migration_report |
+| `feedback_rule` | `feedback_rules` | ✅ (exists) | n/a | Disk-verified: `009_phase2_automation.sql` already declares `installation_id BIGINT NOT NULL REFERENCES installations(github_id)`. No migration needed. |
 | `merge_queue_entry` | `merge_queue_entries` | via repo | ✅ | none |
 | `merge_queue_config` | `merge_queue_configs` | via repo | ✅ | none |
 | `rollback_event` | `rollback_events` | ✅ | n/a | none |
@@ -1669,8 +1849,23 @@ ALTER TABLE auth_authorization_decisions
 -- 9. CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
 ```
 
-**Rollback:** drop functions and triggers, then `DROP TABLE
-auth_external_attestations; DROP TABLE auth_delegations`.
+**Rollback:** reverse dependency order:
+1. Drop constraint triggers and functions (`trg_denied_terminal`,
+   `trg_no_direct_executing_transition`, `trg_delegation_worker_service`,
+   `acquire_delegation_claim`, `finalize_delegation_claim`,
+   `operator_reconcile_execution`).
+2. Drop the reverse FKs added to `auth_authorization_decisions`:
+   ```sql
+   ALTER TABLE auth_authorization_decisions DROP CONSTRAINT IF EXISTS fk_decision_delegation;
+   ALTER TABLE auth_authorization_decisions DROP CONSTRAINT IF EXISTS fk_decision_attestation;
+   ```
+3. Drop the FK from `auth_delegations` to decisions:
+   ```sql
+   ALTER TABLE auth_delegations DROP CONSTRAINT IF EXISTS fk_delegation_decision;
+   ```
+4. `DROP TABLE auth_reconciliation_log;` (if created in this stage).
+5. `DROP TABLE auth_external_attestations;`
+6. `DROP TABLE auth_delegations;`
 
 ### Stage 042: Bootstrap
 
@@ -1744,16 +1939,25 @@ deterministic batch provenance. Legacy-key principals are seeded with
 so rollback targets exact IDs:
 
 ```sql
--- 1. Collect seeded principal IDs from the batch
-WITH seeded AS (
-  SELECT principal_id FROM auth_legacy_key_map WHERE migration_batch = '045'
-)
--- 2. Delete role assignments for these principals (dependency-safe order)
-DELETE FROM auth_principal_roles WHERE principal_id IN (SELECT principal_id FROM seeded);
--- 3. Delete legacy key map rows
-DELETE FROM auth_legacy_key_map WHERE migration_batch = '045';
--- 4. Delete seeded principals
-DELETE FROM auth_principals WHERE id IN (SELECT principal_id FROM seeded);
+-- Use a transaction-local temporary table so all statements can reference it.
+BEGIN;
+  -- 1. Collect seeded principal IDs into a temp table
+  CREATE TEMP TABLE tmp_rollback_045 AS
+    SELECT principal_id FROM auth_legacy_key_map WHERE migration_batch = '045';
+
+  -- 2. Delete role assignments for these principals (dependency-safe order)
+  DELETE FROM auth_principal_roles
+    WHERE principal_id IN (SELECT principal_id FROM tmp_rollback_045);
+
+  -- 3. Delete legacy key map rows
+  DELETE FROM auth_legacy_key_map WHERE migration_batch = '045';
+
+  -- 4. Delete seeded principals
+  DELETE FROM auth_principals
+    WHERE id IN (SELECT principal_id FROM tmp_rollback_045);
+
+  DROP TABLE tmp_rollback_045;
+COMMIT;
 ```
 
 This uses deterministic IDs from `auth_legacy_key_map` — not
@@ -1795,16 +1999,19 @@ INSERT INTO auth_authority_source_state (id, state) VALUES (1, 'legacy-only')
   ON CONFLICT (id) DO NOTHING;
 
 -- CAS transition function: enforces legal state ordering.
+-- Production-cutover authority (promoting to enforce/legacy-retired)
+-- is operator-controlled, NOT application-controlled. The application
+-- cannot execute this function.
 CREATE OR REPLACE FUNCTION transition_authority_source(
   p_expected_state authority_source_state,
-  p_new_state      authority_source_state,
-  p_updated_by     text
+  p_new_state      authority_source_state
 ) RETURNS boolean
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
   affected int;
+  v_session_user text := session_user;
 BEGIN
   -- Legal transitions only:
   IF NOT (
@@ -1819,18 +2026,50 @@ BEGIN
   END IF;
 
   UPDATE auth_authority_source_state
-    SET state = p_new_state, updated_at = now(), updated_by = p_updated_by
+    SET state = p_new_state, updated_at = now(), updated_by = v_session_user
     WHERE id = 1 AND state = p_expected_state;
 
   GET DIAGNOSTICS affected = ROW_COUNT;
+
+  -- Immutable transition audit record
+  IF affected = 1 THEN
+    INSERT INTO auth_authority_source_log (
+      from_state, to_state, transitioned_by, transitioned_at
+    ) VALUES (
+      p_expected_state, p_new_state, v_session_user, now()
+    );
+  END IF;
+
   RETURN affected = 1;
 END;
 $$ LANGUAGE plpgsql;
-ALTER FUNCTION transition_authority_source(authority_source_state, authority_source_state, text)
+ALTER FUNCTION transition_authority_source(authority_source_state, authority_source_state)
   OWNER TO gitwire_auth_fn_owner;
-REVOKE ALL ON FUNCTION transition_authority_source(authority_source_state, authority_source_state, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION transition_authority_source(authority_source_state, authority_source_state, text) TO gitwire_app;
+REVOKE ALL ON FUNCTION transition_authority_source(authority_source_state, authority_source_state) FROM PUBLIC;
+-- Operator-only: the application CANNOT promote to enforce/legacy-retired.
+GRANT EXECUTE ON FUNCTION transition_authority_source(authority_source_state, authority_source_state) TO gitwire_operator;
 ```
+
+**Authority-source transition audit table:**
+
+```sql
+CREATE TABLE auth_authority_source_log (
+  id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  from_state      authority_source_state NOT NULL,
+  to_state        authority_source_state NOT NULL,
+  transitioned_by text        NOT NULL,  -- session_user (DB-authenticated, not caller-supplied)
+  transitioned_at timestamptz NOT NULL DEFAULT now()
+);
+-- Append-only (BEFORE UPDATE/DELETE triggers + INSERT-only privilege for function owner)
+```
+
+**Identity binding.** The `transitioned_by` column records `session_user`
+(the authenticated database session identity), not a caller-supplied
+parameter. This prevents forged audit attribution. The same principle
+applies to `operator_reconcile_execution`: the `p_operator_principal_id`
+and `p_supervisor_session` parameters record the human operator's
+intent, but the DB session identity (`session_user`) is captured
+separately in the reconciliation log for forensic verification.
 
 **Rollback:** `DROP FUNCTION transition_authority_source; DROP TABLE auth_authority_source_state`.
 
@@ -1858,7 +2097,7 @@ which authority source is active at each phase. The state is stored in
 | State | Authoritative read source | Authoritative write path | New evaluator | Legacy path | Unmapped/ambiguous keys |
 |---|---|---|---|---|---|
 | `legacy-only` | Legacy shared-key path | Legacy | Not running | Active (read/write) | Allowed by legacy path |
-| `shadow-evaluation` | Legacy path | Legacy | Running (logging only, never denies) | Active (read/write) | **Deny** — shadow never creates authority; unmapped rows are reported to `migration_report` but do NOT convert to allow |
+| `shadow-evaluation` | Legacy path | Legacy | Running (logging only, never affects response) | Active (read/write) | Two outcomes: (1) If the **legacy path** allows the request (including unmapped keys), the request proceeds — the legacy path is authoritative. (2) The **new evaluator** independently evaluates and logs its decision to `auth_authorization_decisions`, but its result is never returned to the caller. If the new evaluator would deny, it is logged but does not affect the response. Unmapped/ambiguous rows are reported to `migration_report` for resolution but do NOT cause a deny in the response. |
 | `dual-write` | Legacy path | Both paths write | Running (logging only) | Active (read/write) | **Deny** in new evaluator; legacy may still allow if it has its own mapping |
 | `enforce` | New evaluator | New evaluator | Authoritative (denies enforced) | Disabled for authorization (may still write audit for residual traffic) | **Deny** — unmapped keys deny in both paths; no fallback |
 | `legacy-retired` | New evaluator | New evaluator | Authoritative | Removed | **Deny** — legacy code path removed |
@@ -2221,42 +2460,66 @@ ROLLBACK;
 
 ---
 
-## 24. Schema-smoke verification
+## 24. Schema-smoke validation plan
 
-**W0-D must build** a schema-smoke test that:
+**Wave 0 boundary.** Issue #77 limits Wave 0 to documentation, schema
+design, and validation planning. This section defines the test
+manifest, expected outcomes, and later-wave gates for the schema-smoke
+procedure. **W0-D does not create executable migration files.** Those
+belong to the authorized implementation wave after Wave 0 acceptance.
 
-1. Creates an empty PostgreSQL 16 database with `pgcrypto` and
-   `uuid-ossp` extensions.
-2. Extracts DDL from the proposed migration files (stages 038–047) and
-   applies them in dependency order.
-3. Seeds the 57-resource registry and action catalog.
-4. Seeds built-in roles and permission sets.
-5. Runs each (STORE) fixture and verifies it commits.
-6. Runs each (REJECT) fixture and verifies it raises the expected
-   exception with the expected message.
-7. Drops all objects in reverse dependency order to verify clean
-   rollback.
+**What W0-D produces (validation artifacts only):**
 
-**Note:** the `extract_ddl` command referenced in the prior version of
-this document does not exist. W0-D must create executable migration
-files from the DDL in this document and apply them directly — not
-extract from Markdown.
+1. **Test manifest** — a checklist mapping every fixture in §23 to its
+   expected SQLSTATE, error message, or commit confirmation.
+2. **Expected SQLSTATE catalog** — for each (REJECT) fixture, the exact
+   PostgreSQL error code (e.g., `23514` for CHECK violation, `23503`
+   for FK violation, `P0001` for RAISE EXCEPTION in trigger).
+3. **Store/reject fixture specifications** — complete DML blocks with
+   all required parent rows, valid UUIDs, and expected outcomes. These
+   are specifications for the implementation wave to implement as test
+   files, not executable SQL today.
+4. **Later-wave gate definition** — the gate criteria that must be met
+   before `shadow-evaluation` can begin: all (STORE) fixtures commit,
+   all (REJECT) fixtures raise expected exceptions, rollback produces a
+   clean database, and all constraint triggers fire correctly.
+
+**What the implementation wave (post-W0-E) produces:**
+
+- Executable migration files (`038_*.sql` through `047_*.sql`) derived
+  from the DDL in this document.
+- A schema-smoke test script that applies those migrations, runs the
+  fixtures, and verifies outcomes against the W0-D manifest.
+- The test runs against a throwaway PostgreSQL 16 database with
+  `pgcrypto` and `uuid-ossp` extensions installed.
 
 ---
 
 ## 25. Retention and archival constraints
 
-| Record type | Table | Minimum retention | Archival strategy | Deletion |
-|---|---|---|---|---|
-| Authorization decisions | `auth_authorization_decisions` | 365 days | Monthly range partition on `evaluated_at`; detach+archive old partitions | Partition drop only (not row DELETE) |
-| External attestations | `auth_external_attestations` | 90 days | Batch archive to cold storage; delete expired records older than 90 days | DELETE only via scheduled job with `expires_at < now() - interval '90 days'` |
-| Sessions | `auth_sessions` | 30 days after expiry/revocation | DELETE sessions where `expires_at < now() - interval '30 days' AND revoked_at IS NOT NULL` | Scheduled cleanup job |
-| Capability keys | `auth_capability_keys` | Until all tokens signed with the key have expired | Set `retired_at`; DELETE only after verified zero dependent tokens | Manual after verification |
-| Legacy key mappings | `auth_legacy_key_map` | Until all legacy keys are expired and migrated | Archive to cold storage after `legacy-retired` state | Never DELETE until `legacy-retired` |
-| Reconciliation log | `auth_reconciliation_log` | 365 days | Same partition strategy as decisions | Partition drop only |
-| Break-glass activations | `auth_break_glass_activations` | 365 days | Archive with decisions | Partition drop only |
-| Policy versions | `auth_operation_policy_versions` | Indefinite (immutable) | Never archive or delete | Never |
-| Bootstrap markers | `auth_bootstrap_allow` | Until consumed (deleted by stored function) | n/a | `transition_bootstrap_state('disabled')` |
+**Partitioned tables.** The following high-volume tables must be created
+as range-partitioned tables from the outset (using `PARTITION BY RANGE
+(evaluated_at)`). A pre-enforcement partition-conversion stage converts
+the initial single-partition table to a partitioned table before
+volume increases:
+
+| Record type | Table | Partitioning | Minimum retention | Archival | Deletion |
+|---|---|---|---|---|---|
+| Authorization decisions | `auth_authorization_decisions` | `PARTITION BY RANGE (evaluated_at)`, monthly | 365 days | Detach+archive old partitions | Partition drop only |
+| Reconciliation log | `auth_reconciliation_log` | `PARTITION BY RANGE (reconciled_at)`, monthly | 365 days | Detach+archive | Partition drop only |
+| Break-glass activations | `auth_break_glass_activations` | `PARTITION BY RANGE (activated_at)`, monthly | 365 days | Detach+archive | Partition drop only |
+| Authority-source log | `auth_authority_source_log` | No partitioning (low volume) | Indefinite | Never | Never |
+
+**Non-partitioned tables** (low volume or lifecycle-managed):
+
+| Record type | Table | Minimum retention | Deletion mechanism |
+|---|---|---|---|
+| External attestations | `auth_external_attestations` | 90 days | Scheduled job: `DELETE WHERE expires_at < now() - interval '90 days'` |
+| Sessions | `auth_sessions` | 30 days after expiry or revocation | Scheduled job: `DELETE WHERE expires_at < now() - interval '30 days'` (covers both revoked and never-revoked expired sessions) |
+| Capability keys | `auth_capability_keys` | Until all tokens signed with the key have expired | Set `retired_at`; manual DELETE after verified zero dependents |
+| Legacy key mappings | `auth_legacy_key_map` | Until all keys expired and migrated | Archive after `legacy-retired`; never DELETE until then |
+| Policy versions | `auth_operation_policy_versions` | Indefinite (immutable) | Never |
+| Bootstrap markers | `auth_bootstrap_allow` | Until consumed | `transition_bootstrap_state('disabled')` deletes them |
 | Migration reports | `migration_report` | Until resolved + 90 days | Archive resolved rows older than 90 days | DELETE where `resolved = true AND resolved_at < now() - interval '90 days'` |
 | Principals/roles/grants | all `auth_*` identity tables | Indefinite (durable) | Never delete; soft-revoke only | Never |
 
