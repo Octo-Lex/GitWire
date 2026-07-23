@@ -11,7 +11,7 @@
 |---|---|
 | [`current-state-inventory.md`](./current-state-inventory.md) | Disk-verified map of every authority surface today (W0-A). Every claim cites `file:line`. 51 database tables, 174 HTTP endpoints, 14 workers, 15 ranked findings. |
 | [`permission-model.md`](./permission-model.md) | Proposed canonical principal / resource / action / permission model (W0-B). Includes evaluation algebra, job-authorization capabilities, and decision-example matrix. |
-| `schema-migration-plan.md` *(W0-C, not yet written)* | No-execution schema design for the proposed model. |
+| [`schema-migration-plan.md`](./schema-migration-plan.md) | No-execution schema design: DDL, constraints, indexes, privileges, concurrency invariants, additive migration ordering, backfill rules, rollback boundaries, and schema-level proof obligations (W0-C). |
 | `wave-validation-plan.md` *(W0-D, not yet written)* | Defect-sensitive validation plan for Waves 1–4. |
 
 The inventory is the substrate for everything else. Do not propose a model
@@ -94,11 +94,12 @@ Per the assignment:
 - `.ouroboros/`, `.zcode/`, `rewrite-rules.txt`, detached `trial_repo_*`
   worktrees, and stale `gitwire/heal-*` branches are not touched.
 
-## Next checkpoints
+## Checkpoint status
 
-- **W0-A** (this commit): inventory. No design.
-- **W0-B**: proposed permission and resource model, with positive and negative
-  examples that reference the inventory findings by ID.
-- **W0-C**: schema and migration plan that can represent every W0-B example.
-- **W0-D**: ADRs and the wave-validation plan.
-- **W0-E**: cumulative re-verification before opening the Wave 0 PR.
+| Checkpoint | Status | Head |
+|---|---|---|
+| **W0-A** | ✅ Accepted | `f7e2ce6` — current-state inventory |
+| **W0-B** | ✅ Accepted | `51e3f70` — permission and resource model |
+| **W0-C** | 🔲 Awaiting review | schema and migration plan |
+| **W0-D** | ⛔ Blocked | ADRs and validation plan (blocked on W0-C) |
+| **W0-E** | ⛔ Blocked | cumulative re-verification before PR |
