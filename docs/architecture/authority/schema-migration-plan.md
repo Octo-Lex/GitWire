@@ -445,6 +445,36 @@ CREATE TABLE auth_role_permissions (
 );
 ```
 
+**Role retirement function.** The application has no UPDATE privilege
+on `auth_roles`. Retirement is an audited operation performed via a
+`SECURITY DEFINER` function owned by `gitwire_auth_fn_owner`:
+
+```sql
+CREATE OR REPLACE FUNCTION retire_role(
+  p_role_id      uuid,
+  p_retired_by   uuid
+) RETURNS void
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+BEGIN
+  UPDATE auth_roles
+    SET status = 'retired', retired_at = now(), retired_by = p_retired_by, updated_at = now()
+    WHERE id = p_role_id AND status = 'active';
+  -- If affected_rows = 0, role was already retired or doesn't exist — no-op.
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION retire_role(uuid, uuid) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION retire_role(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION retire_role(uuid, uuid) TO gitwire_app;
+```
+
+The application can retire roles (via an admin dashboard action) but
+cannot directly UPDATE the table. Retired roles are excluded from
+evaluation because the evaluator joins `auth_roles` and filters
+`status = 'active'` (see active predicate above). Builtin roles can be
+retired but not deleted.
+
 ### `auth_principal_roles`
 
 ```sql
@@ -727,14 +757,13 @@ functions are owned by `gitwire_auth_fn_owner` — a dedicated **non-login**
 role. The functions use `SET search_path = gitwire_auth, pg_temp` where
 `gitwire_auth` is a dedicated schema that contains only the authority
 tables and functions. `REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC`
-prevents `pg_temp` shadow-object attacks:
+prevents `pg_temp` shadow-object attacks. The schema is created at the
+start of stage 038 (before any authority table). All subsequent
+unqualified `CREATE TABLE` statements resolve to `gitwire_auth.*`
+under the stage's `SET search_path`.
 
 ```sql
--- Dedicated locked schema for authority objects
-CREATE SCHEMA gitwire_auth;
-REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;
-GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_app, gitwire_operator;
-
+-- (Schema creation and REVOKE CREATE happen at the start of stage 038.)
 -- Non-login role for SECURITY DEFINER function ownership
 CREATE ROLE gitwire_auth_fn_owner NOLOGIN;
 GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner;
@@ -767,7 +796,7 @@ CREATE OR REPLACE FUNCTION acquire_delegation_claim(
   p_expected_version    bigint
 ) RETURNS boolean
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = gitwire_auth, pg_temp
 AS $$
 DECLARE
   affected int;
@@ -802,7 +831,7 @@ CREATE OR REPLACE FUNCTION finalize_delegation_claim(
   p_final_status   delegation_status
 ) RETURNS boolean
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = gitwire_auth, pg_temp
 AS $$
 DECLARE
   affected int;
@@ -838,7 +867,7 @@ CREATE OR REPLACE FUNCTION operator_reconcile_execution(
   p_supervisor_session    text
 ) RETURNS boolean
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = gitwire_auth, pg_temp
 AS $$
 DECLARE
   affected     int;
@@ -909,7 +938,11 @@ GRANT INSERT ON auth_reconciliation_log TO gitwire_auth_fn_owner;
 CREATE OR REPLACE FUNCTION enforce_reconciliation_append_only()
 RETURNS trigger AS $$
 BEGIN
-  RAISE EXCEPTION 'auth_reconciliation_log is append-only';
+  IF current_user = 'gitwire_auth_fn_owner' THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'auth_reconciliation_log is append-only (current_user=%)',
+    current_user;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1105,7 +1138,13 @@ only — no UPDATE or DELETE. A trigger provides defense-in-depth:
 CREATE OR REPLACE FUNCTION enforce_decisions_append_only()
 RETURNS trigger AS $$
 BEGIN
-  RAISE EXCEPTION 'auth_authorization_decisions is append-only';
+  -- Exempt the function-owner role so the archival function can DELETE
+  -- old rows (SECURITY DEFINER runs as gitwire_auth_fn_owner).
+  IF current_user = 'gitwire_auth_fn_owner' THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'auth_authorization_decisions is append-only (current_user=%)',
+    current_user;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1366,7 +1405,7 @@ CREATE TABLE auth_break_glass_activations (
   activation_reason       text        NOT NULL,
   activated_at            timestamptz NOT NULL DEFAULT now(),
   expires_at              timestamptz NOT NULL,
-  session_id              uuid        REFERENCES auth_sessions(id),
+  session_id              uuid        REFERENCES auth_sessions(id) ON DELETE SET NULL,
   alert_sent              boolean     NOT NULL DEFAULT false,
   alert_acknowledged      boolean     NOT NULL DEFAULT false,
   alert_acknowledged_at   timestamptz,
@@ -1480,7 +1519,7 @@ INSERT INTO auth_bootstrap_state (id, state) VALUES (1, 'enabled')
 CREATE OR REPLACE FUNCTION transition_bootstrap_state(p_new_state text)
 RETURNS void
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = gitwire_auth, pg_temp
 AS $$
 BEGIN
   IF p_new_state = 'enabled' THEN
@@ -1544,7 +1583,7 @@ columns, required additions, and backfill derivation.
 | `backend_isolation_evidence` | `backend_isolation_evidence` | ADD COLUMN | via parent | `UPDATE backend_isolation_evidence be SET installation_id = rp.installation_id FROM repair_proposals rp WHERE be.repair_proposal_id = rp.id` |
 | `managed_action` | `managed_actions` | via repo | ✅ | none |
 | `action_reconciliation_log` | `action_reconciliation_log` | ✅ | n/a | none |
-| `decision_log` | `decision_log` | ADD COLUMN | n/a | `UPDATE decision_log SET installation_id = (installation_id FROM the JSON metadata->>'installation_id'::bigint)` — rows lacking metadata reported to migration_report; denied by default in new evaluator |
+| `decision_log` | `decision_log` | ADD COLUMN | ✅ (repo_id) | `ALTER TABLE decision_log ADD COLUMN installation_id bigint;` then `UPDATE decision_log dl SET installation_id = r.installation_id FROM repositories r WHERE dl.repo_id = r.github_id;` — rows with no matching repo (NULL after UPDATE) reported to migration_report; remain NULL; denied by default in new evaluator |
 | `pipeline_event` | `pipeline_events` | ✅ | n/a | none |
 | `fix_attempt` | `fix_attempts` | via repo | ✅ | none |
 | `ai_review` | `ai_reviews` | via repo | ✅ | none |
@@ -1726,7 +1765,7 @@ No `GRANT ... ON ALL TABLES`. Each grant is explicit.
 | `auth_resource_actions` | ✅ | ❌ | ❌ | ❌ | Read-only catalog |
 | `auth_principals` | ✅ | ✅ | ✅ (limited) | ❌ | UPDATE only for status, auth_epoch, display_name, updated_at |
 | `auth_credentials` | ✅ | ✅ | ✅ (limited) | ❌ | UPDATE only for revoked_at, revoked_by, revocation_reason, updated_at |
-| `auth_roles` | ✅ | ✅ | ❌ | ❌ | Built-in roles seeded at migration |
+| `auth_roles` | ✅ | ✅ | ❌ (via function) | ❌ | Retirement via `retire_role()` function only; no direct UPDATE |
 | `auth_role_permissions` | ✅ | ✅ | ❌ | ❌ | Permission management |
 | `auth_principal_roles` | ✅ | ✅ | ✅ (limited) | ❌ | UPDATE only for revoked_at, revoked_by, revocation_reason |
 | `auth_resource_grants` | ✅ | ✅ | ✅ (limited) | ❌ | UPDATE only for revoked_at, revoked_by, revocation_reason |
@@ -1836,19 +1875,48 @@ objects they reference.
 
 ### Stage 038: Catalog and enums
 
+**First:** creates the locked `gitwire_auth` schema and sets the
+session `search_path` so all unqualified `CREATE TABLE` statements in
+stages 038–047 resolve to `gitwire_auth.*`. All authority tables and
+functions live in this schema.
+
 Creates enums, `auth_resource_registry`, `auth_resource_actions`. Seeds
 all 57 tokens and their action sets.
 
 ```sql
 -- 038_auth_catalog_and_enums.sql
--- CREATE TYPE statements (§3)
--- CREATE TABLE auth_resource_registry (§2)
--- CREATE TABLE auth_resource_actions (§2)
--- INSERT 57 resource tokens + action sets
+
+-- 1. Create the locked schema FIRST, before any authority table.
+CREATE SCHEMA IF NOT EXISTS gitwire_auth;
+REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;
+GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_app, gitwire_operator;
+
+-- 2. Set search_path so all subsequent unqualified CREATE TABLE
+--    statements in stages 038–047 create objects in gitwire_auth.
+SET search_path = gitwire_auth, public;
+
+-- 3. Extensions (required before gen_random_uuid / uuid_generate_v5)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 4. CREATE TYPE statements (§3)
+-- 5. CREATE TABLE auth_resource_registry (§2) → gitwire_auth.auth_resource_registry
+-- 6. CREATE TABLE auth_resource_actions (§2) → gitwire_auth.auth_resource_actions
+-- 7. INSERT 57 resource tokens + action sets
 ```
 
-**Rollback:** `DROP TABLE auth_resource_actions; DROP TABLE
-auth_resource_registry;` then `DROP TYPE` each enum. **Dependency
+All subsequent `CREATE TABLE auth_*` statements in stages 039–047
+execute under `SET search_path = gitwire_auth, public` and therefore
+create tables in the `gitwire_auth` schema. All `SECURITY DEFINER`
+functions use `SET search_path = gitwire_auth, pg_temp` (already
+updated in the function definitions above).
+
+**Note:** existing application tables (`repositories`, `decision_log`,
+etc.) remain in the `public` schema. Cross-schema FKs from `gitwire_auth`
+to `public` are fully qualified: e.g., `REFERENCES public.repositories(github_id)`.
+
+**Rollback:** `DROP TABLE gitwire_auth.auth_resource_actions; DROP TABLE
+gitwire_auth.auth_resource_registry;` then `DROP TYPE` each enum.
 check:** must be rolled back AFTER all stages that reference the
 catalog and enums (039–047).
 
@@ -1902,9 +1970,16 @@ ALTER TABLE auth_authorization_decisions
 - Decisions → attestations: stage 041
 - Decisions → break-glass activations: stage 040b (within this stage, after the activation table is created)
 
-**Rollback:** drop triggers, then `DROP TABLE` in reverse FK order:
-break-glass activations, sessions, decisions, ceiling-permissions,
-ceilings, grants, policy-versions. **Dependency check:** must be rolled
+**Rollback:** drop triggers, then drop FKs and tables in reverse
+dependency order:
+1. Drop deferred FKs: `ALTER TABLE auth_authorization_decisions DROP CONSTRAINT fk_decision_break_glass;`
+2. Drop break-glass activation triggers, then `DROP TABLE auth_break_glass_activations`
+3. `DROP TABLE auth_sessions`
+4. Drop decision triggers, then `DROP TABLE auth_authorization_decisions`
+5. `DROP TABLE auth_worker_ceiling_permissions`
+6. Drop ceiling triggers, then `DROP TABLE auth_worker_ceilings`
+7. Drop grant triggers, then `DROP TABLE auth_resource_grants`
+8. Drop policy triggers, then `DROP TABLE auth_operation_policy_versions` **Dependency check:** must be rolled
 back AFTER 041 (delegations FK to decisions).
 
 ### Stage 041: Delegation and attestation tables
@@ -1920,7 +1995,7 @@ attestations. Creates stored functions and constraint triggers.
 -- 3. Add circular FKs that could not exist in stage 040:
 ALTER TABLE auth_delegations
   ADD CONSTRAINT fk_delegation_decision
-  FOREIGN KEY (authorization_decision_id) REFERENCES auth_authorization_decisions(id);
+  FOREIGN KEY (authorization_decision_id) REFERENCES auth_authorization_decisions(id) ON DELETE SET NULL;
 
 ALTER TABLE auth_authorization_decisions
   ADD CONSTRAINT fk_decision_delegation
@@ -1928,7 +2003,7 @@ ALTER TABLE auth_authorization_decisions
 
 ALTER TABLE auth_authorization_decisions
   ADD CONSTRAINT fk_decision_attestation
-  FOREIGN KEY (attestation_id) REFERENCES auth_external_attestations(id);
+  FOREIGN KEY (attestation_id) REFERENCES auth_external_attestations(id) ON DELETE SET NULL;
 
 -- 4. CREATE FUNCTION acquire_delegation_claim(...)
 -- 5. CREATE FUNCTION finalize_delegation_claim(...)
@@ -2099,7 +2174,7 @@ CREATE OR REPLACE FUNCTION transition_authority_source(
   p_new_state      authority_source_state
 ) RETURNS boolean
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = gitwire_auth, pg_temp
 AS $$
 DECLARE
   affected int;
@@ -2647,17 +2722,52 @@ The following dependency rules apply:
 | `auth_break_glass_activations` (365 days) | `auth_sessions` (30 days) | `session_id` FK is nullable. When session is deleted, set `session_id = NULL` (via `ON DELETE SET NULL` on the FK); the activation record retains all other metadata. |
 
 **All FKs to short-lived tables use `ON DELETE SET NULL`** (not
-`NO ACTION`), so cleanup jobs can delete expired records without FK
-violations. The immutable JSONB snapshots in long-lived records
-preserve the audit trail.
+`ON DELETE SET NULL`), so cleanup operations can delete expired
+records without FK violations. The immutable JSONB snapshots in
+long-lived records preserve the audit trail. The delegation→decision FK
+also uses `ON DELETE SET NULL` so decision archival does not block on
+durable delegation references.
+
+**Archival mechanism.** Append-only tables (`auth_authorization_decisions`,
+`auth_reconciliation_log`, `auth_authority_source_log`) have `BEFORE
+DELETE` triggers that reject deletion by the application or operator.
+These triggers exempt `gitwire_auth_fn_owner` (checked via
+`current_user`). An archival function owned by this role performs the
+age-based cleanup:
+
+```sql
+CREATE OR REPLACE FUNCTION archive_old_decisions(p_retention_days integer DEFAULT 365)
+RETURNS integer
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+DECLARE
+  deleted_count integer;
+BEGIN
+  DELETE FROM auth_authorization_decisions
+    WHERE evaluated_at < now() - (p_retention_days || ' days')::interval;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION archive_old_decisions(integer) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION archive_old_decisions(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION archive_old_decisions(integer) TO gitwire_operator;
+```
+
+A scheduled job (cron, systemd timer) calls this function daily. The
+operator role executes it — the application cannot trigger archival.
+Similar functions exist for `auth_reconciliation_log` and
+`auth_break_glass_activations`. Non-append-only tables (sessions,
+attestations) use direct scheduled DELETE jobs.
 
 **Retention table (non-partitioned, row-level archival):**
 
 | Record type | Table | Min retention | Deletion mechanism |
 |---|---|---|---|
-| Authorization decisions | `auth_authorization_decisions` | 365 days | Scheduled job: `DELETE WHERE evaluated_at < now() - interval '365 days'` |
-| Reconciliation log | `auth_reconciliation_log` | 365 days | Scheduled job: `DELETE WHERE reconciled_at < now() - interval '365 days'` |
-| Break-glass activations | `auth_break_glass_activations` | 365 days | Scheduled job: `DELETE WHERE activated_at < now() - interval '365 days'` |
+| Authorization decisions | `auth_authorization_decisions` | 365 days | `archive_old_decisions(365)` — SECURITY DEFINER, operator-executable, bypasses append-only trigger |
+| Reconciliation log | `auth_reconciliation_log` | 365 days | `archive_old_reconciliation(365)` — same pattern |
+| Break-glass activations | `auth_break_glass_activations` | 365 days | Scheduled DELETE (not append-only) |
 | Authority-source log | `auth_authority_source_log` | Indefinite | Never deleted (low volume) |
 | External attestations | `auth_external_attestations` | 90 days | Scheduled job: `DELETE WHERE expires_at < now() - interval '90 days'` |
 | Sessions | `auth_sessions` | 30 days after expiry/revocation | Scheduled job: `DELETE WHERE expires_at < now() - interval '30 days'` |
