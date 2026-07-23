@@ -238,6 +238,7 @@ Every request resolves its target resource from the route:
 
 Examples:
 - `repository:read`
+- `repository:list`
 - `repository:update`
 - `repository:github:act`
 - `policy_waiver:revoke`
@@ -247,7 +248,10 @@ Examples:
 
 **No undeclared verbs.** Every permission uses an action from the table
 above. `github:act` and `github:read` are separate actions — the previous
-`github:mutate (read-only)` was self-contradictory and is removed.
+`github:mutate (read-only)` was self-contradictory and is removed. `read`
+and `list` are **independent actions**: `read` views a specific resource
+by ID; `list` enumerates a collection. A role granting `read` does NOT
+implicitly grant `list`, and vice versa. Both must be explicitly granted.
 
 ### Scope modifiers
 
@@ -265,10 +269,10 @@ Each permission carries a scope:
 
 | Role | Key permissions | Scope | Principals |
 |------|----------------|-------|------------|
-| `admin` | all actions on all resources, including `manage` and `audit:export` | fleet + system | Human administrators |
-| `operator` | `read` + `create` + `update` + `github:act` + `enqueue` on `repository`; `read` on `policy_definition`, `policy_waiver`, `quality_gate` | installation | Human operators |
-| `reviewer` | `read` + `approve` on `policy_rollout_plan`, `repair_proposal`, `quality_gate` | installation | Human reviewers |
-| `viewer` | `read` only | installation | Human viewers |
+| `admin` | all actions on all resources, including `list`, `manage`, and `audit:export` | fleet + system | Human administrators |
+| `operator` | `read` + `list` + `create` + `update` + `github:act` + `enqueue` on `repository`; `read` + `list` on `policy_definition`, `policy_waiver`, `quality_gate` | installation | Human operators |
+| `reviewer` | `read` + `list` + `approve` on `policy_rollout_plan`, `repair_proposal`, `quality_gate` | installation | Human reviewers |
+| `viewer` | `read` + `list` only | installation | Human viewers |
 | `service:webhook-worker` | `create` + `update` on installation, repository | ceiling | P-4 webhook worker |
 | `service:triage-worker` | `github:act` on repository; `update` on issue, managed_action, decision_log | ceiling | P-4 triage worker |
 | `service:heal-worker` | `github:act` on repository; `update` on ci_run, heal_pr, managed_action | ceiling | P-4 CI heal worker |
@@ -290,7 +294,7 @@ Each permission carries a scope:
 | `system` | (migration/bootstrap) `manage` on identity resources during migration; `create` on auth_principal during bootstrap; `manage` on auth_bootstrap_state transitions | system | Migration runner, bootstrap mechanism |
 | `service:executor` | (executor-service) no DB, no GitHub, no network egress. Executes allowlisted npm commands in isolated container. Returns results to caller. | none (no resource access) | P-6 executor-service |
 | `service:bot` | `read` on `repository`, `issue`; `repository:enqueue`, `installation:enqueue` (fix/triage triggers) | installation (linked-user-scoped) | Telegram bot |
-| `legacy-key` | `read` + `create` + `update` + `enqueue` on installation-scoped resources; **no** `manage`, `approve`, `revoke`, `audit:export` | installation (explicitly mapped) only — **no automatic fleet default**; unmapped keys are rejected | Existing shared-key clients |
+| `legacy-key` | `read` + `list` + `create` + `update` + `enqueue` on installation-scoped resources; **no** `manage`, `approve`, `revoke`, `audit:export` | installation (explicitly mapped) only — **no automatic fleet default**; unmapped keys are rejected | Existing shared-key clients |
 
 ### Role assignment
 
@@ -1838,14 +1842,14 @@ expected decision with reason code.
 | P3 | `user` with `admin` role (fleet) | auth_principal (any) | `auth_principal:manage` | Admin role has fleet+system scope; includes `manage` action; system grant allows |
 | P4 | `installation` principal (HMAC-verified webhook), explicit allow grant on `webhook_delivery` | `webhook_delivery` (via webhook payload) | `webhook_delivery:create` | Installation principal role includes `create` on `webhook_delivery`; create target resolves to the webhook's installation; resource grant (allow, scope=installation) matches the destination container |
 | P5 | `legacy-key` mapped to installation 42 | policy_waiver in installation 42 | `policy_waiver:read` | Legacy-key role includes `read`; installation-mapped to 42; grant allows |
-| P6 | `user` with `viewer` role on installation 42 | global list: `GET /api/repositories` (containerless) | `repository:list` | List target is scope-slice; wildcard grant scope_type=installation matches; scope_slice.installation={42} is non-empty; gateway filters enumeration to installation 42 |
+| P6 | `user` with `viewer` role on installation 42 (grants `repository:list`) | global list: `GET /api/repositories` (containerless) | `repository:list` | Role includes `list`; list target is scope-slice; wildcard grant scope_type=installation matches; scope_slice.installation={42} is non-empty; gateway filters enumeration to installation 42 |
 
 ### Negative examples (deny)
 
 | # | Principal | Resource | Action | Denial reason |
 |---|-----------|----------|--------|---------------|
 | N1 | `user` with `operator` role on installation 42 | repository in installation 99 | `repository:read` | `resource_not_found` (outside tenant scope via query gateway) |
-| N2 | `user` with `viewer` role | repository X | `repository:update` | `role_permission_missing` (viewer has `read` only) |
+| N2 | `user` with `viewer` role | repository X | `repository:update` | `role_permission_missing` (viewer has `read`+`list` only, not `update`) |
 | N3 | `service:heal-worker` without capability token | repository X | `repository:github:act` | `capability_invalid_signature` (no valid capability to verify) |
 | N4 | `legacy-key` unmapped (no installation assignment) | any installation-scoped resource | any | `unmapped_legacy_key` |
 | N5 | `user` with `operator` role, explicit deny grant on repository X | repository X | `repository:update` | `explicit_deny` (deny grant matched inside evaluate_leaf before credential scope check) |
@@ -1855,6 +1859,7 @@ expected decision with reason code.
 | N9 | `legacy-key` with fleet role + `manage` action | auth_principal | `auth_principal:manage` | `role_permission_missing` (legacy-key role excludes `manage`) |
 | N10 | `user` with `viewer` role, compound any_of policy requiring approve permission | `policy_rollout_plan` | `policy_rollout_plan:approve` | `operation_policy_denied` (compound any_of: no alternative allowed; reason is operation_policy_denied per §6 deterministic failure rule) |
 | N11 | `user` with no tenant roles (system-only) | global list: `GET /api/repositories` (containerless) | `repository:list` | `resource_grant_missing` (scope-slice check fails: scope_slice.installation=NONE, scope_slice.repository=NONE, no fleet; no non-empty dimension to authorize enumeration) |
+| N12 | `user` with custom role granting `repository:read` but NOT `repository:list` | repository X | `repository:list` | `role_permission_missing` (role lacks `list`; `read` does not imply `list` — they are independent actions) |
 
 ---
 
@@ -1872,67 +1877,67 @@ derived from this table.
 
 | Token | Parent | Identifier type | Backing table(s) | Actions |
 |-------|--------|----------------|-------------------|---------|
-| `installation` | — | bigint | `installations` | read, create, update |
-| `repository` | `installation` | bigint (github_id) | `repositories` | read, create, update, github:act, github:read, enqueue |
-| `pull_request` | `repository` | bigint | `pull_requests` | read, create, update |
-| `issue` | `repository` | bigint | `issues` | read, create, update |
-| `ci_run` | `repository` | bigint | `ci_runs` | read, create, update |
-| `branch_rule` | `repository` | bigint | `branch_rules` | read, create, update |
-| `repo_config` | `repository` | bigint | `repo_config`, `config_history` | read, update, delete |
-| `config_validation_result` | `repository` | bigint | `config_validation_results` | read |
-| `heal_pr` | `repository` | bigint | `heal_prs` | read, update |
-| `repair_proposal` | `repository` | bigint | `repair_proposals` | read |
-| `repair_proposal_event` | `repair_proposal` | bigint | `repair_proposal_events` | read, create, update |
-| `patch_artifact` | `repair_proposal` | text (hash) | `patch_artifacts` | read, create |
-| `execution_receipt` | `repair_proposal` | text (hash) | `execution_receipts` | read, create |
-| `source_snapshot` | `repair_proposal` | text (hash) | `source_snapshots` | read, create |
-| `backend_isolation_evidence` | `repair_proposal` | bigint | `backend_isolation_evidence` | read, create |
-| `managed_action` | `repository` | bigint | `managed_actions` | read, create, update |
-| `action_reconciliation_log` | `installation` | bigint | `action_reconciliation_log` | read |
-| `decision_log` | `installation` | bigint | `decision_log` | read, create |
-| `pipeline_event` | `installation` | bigint | `pipeline_events` | read |
-| `fix_attempt` | `repository` | bigint | `fix_attempts` | read, create, update |
-| `ai_review` | `repository` | bigint | `ai_reviews` | read, create |
-| `duplicate_signal` | `repository` | bigint | `duplicate_signals` | read |
-| `dependency_manifest` | `repository` | bigint | `dependency_manifests` | read |
-| `dependency_update_batch` | `repository` | bigint | `dependency_update_batches` | read, create |
-| `vulnerability_advisory` | `repository` | bigint | `vulnerability_advisories` | read, update |
-| `flaky_test` | `repository` | bigint | `flaky_tests` | read, update |
-| `test_result` | `repository` | bigint | `test_results` | read, create |
-| `gate_evaluation` | `repository` | bigint | `gate_evaluations` | read |
-| `issue_embedding` | `repository` | bigint | `issue_embeddings` | read |
-| `member` | `installation` | bigint | `members` | read, create, update |
-| `repo_collaborator` | `repository` | bigint | `repo_collaborators` | read, create, update |
-| `policy_definition` | `installation` | bigint | `policy_definitions` | read, create, update, delete |
-| `policy_waiver` | `installation` | bigint | `policy_waivers` | read, create, revoke |
-| `policy_repo_config` | `repository` | bigint | `policy_repo_configs` | read, update |
-| `reconciliation_run` | `installation` | bigint | `reconciliation_runs` | read |
-| `policy_rollout_plan` | `installation` | bigint | `policy_rollout_plans` | read, create, update, approve |
-| `quality_gate` | `repository` | bigint | `quality_gates` | read, create, delete |
-| `feedback_rule` | `installation` | bigint | `feedback_rules` | read, create, update, delete |
-| `merge_queue_entry` | `repository` | bigint | `merge_queue_entries` | read, create, update |
-| `merge_queue_config` | `repository` | bigint | `merge_queue_config` | read, update |
-| `rollback_event` | `installation` | bigint | `rollback_events` | read, create |
-| `maintainer_setting` | `repository` | bigint | `maintainer_settings` | read, update |
-| `maintainer_action` | `repository` | bigint | `maintainer_actions` | read, create |
-| `webhook_delivery` | `installation` | text (delivery_id) | `webhook_deliveries` | read, create |
-| `external_attestation` | `installation` | UUID | `auth_external_attestations` | read, create |
+| `installation` | — | bigint | `installations` | read, list, create, update |
+| `repository` | `installation` | bigint (github_id) | `repositories` | read, list, create, update, github:act, github:read, enqueue |
+| `pull_request` | `repository` | bigint | `pull_requests` | read, list, create, update |
+| `issue` | `repository` | bigint | `issues` | read, list, create, update |
+| `ci_run` | `repository` | bigint | `ci_runs` | read, list, create, update |
+| `branch_rule` | `repository` | bigint | `branch_rules` | read, list, create, update |
+| `repo_config` | `repository` | bigint | `repo_config`, `config_history` | read, list, update, delete |
+| `config_validation_result` | `repository` | bigint | `config_validation_results` | read, list |
+| `heal_pr` | `repository` | bigint | `heal_prs` | read, list, update |
+| `repair_proposal` | `repository` | bigint | `repair_proposals` | read, list |
+| `repair_proposal_event` | `repair_proposal` | bigint | `repair_proposal_events` | read, list, create, update |
+| `patch_artifact` | `repair_proposal` | text (hash) | `patch_artifacts` | read, list, create |
+| `execution_receipt` | `repair_proposal` | text (hash) | `execution_receipts` | read, list, create |
+| `source_snapshot` | `repair_proposal` | text (hash) | `source_snapshots` | read, list, create |
+| `backend_isolation_evidence` | `repair_proposal` | bigint | `backend_isolation_evidence` | read, list, create |
+| `managed_action` | `repository` | bigint | `managed_actions` | read, list, create, update |
+| `action_reconciliation_log` | `installation` | bigint | `action_reconciliation_log` | read, list |
+| `decision_log` | `installation` | bigint | `decision_log` | read, list, create |
+| `pipeline_event` | `installation` | bigint | `pipeline_events` | read, list |
+| `fix_attempt` | `repository` | bigint | `fix_attempts` | read, list, create, update |
+| `ai_review` | `repository` | bigint | `ai_reviews` | read, list, create |
+| `duplicate_signal` | `repository` | bigint | `duplicate_signals` | read, list |
+| `dependency_manifest` | `repository` | bigint | `dependency_manifests` | read, list |
+| `dependency_update_batch` | `repository` | bigint | `dependency_update_batches` | read, list, create |
+| `vulnerability_advisory` | `repository` | bigint | `vulnerability_advisories` | read, list, update |
+| `flaky_test` | `repository` | bigint | `flaky_tests` | read, list, update |
+| `test_result` | `repository` | bigint | `test_results` | read, list, create |
+| `gate_evaluation` | `repository` | bigint | `gate_evaluations` | read, list |
+| `issue_embedding` | `repository` | bigint | `issue_embeddings` | read, list |
+| `member` | `installation` | bigint | `members` | read, list, create, update |
+| `repo_collaborator` | `repository` | bigint | `repo_collaborators` | read, list, create, update |
+| `policy_definition` | `installation` | bigint | `policy_definitions` | read, list, create, update, delete |
+| `policy_waiver` | `installation` | bigint | `policy_waivers` | read, list, create, revoke |
+| `policy_repo_config` | `repository` | bigint | `policy_repo_configs` | read, list, update |
+| `reconciliation_run` | `installation` | bigint | `reconciliation_runs` | read, list |
+| `policy_rollout_plan` | `installation` | bigint | `policy_rollout_plans` | read, list, create, update, approve |
+| `quality_gate` | `repository` | bigint | `quality_gates` | read, list, create, delete |
+| `feedback_rule` | `installation` | bigint | `feedback_rules` | read, list, create, update, delete |
+| `merge_queue_entry` | `repository` | bigint | `merge_queue_entries` | read, list, create, update |
+| `merge_queue_config` | `repository` | bigint | `merge_queue_config` | read, list, update |
+| `rollback_event` | `installation` | bigint | `rollback_events` | read, list, create |
+| `maintainer_setting` | `repository` | bigint | `maintainer_settings` | read, list, update |
+| `maintainer_action` | `repository` | bigint | `maintainer_actions` | read, list, create |
+| `webhook_delivery` | `installation` | text (delivery_id) | `webhook_deliveries` | read, list, create |
+| `external_attestation` | `installation` | UUID | `auth_external_attestations` | read, list, create |
 
 ### System-scoped resources
 
 | Token | Parent | Identifier type | Backing table(s) | Actions |
 |-------|--------|----------------|-------------------|---------|
-| `auth_principal` | — | UUID | `auth_principals` | read, manage |
-| `auth_role` | — | UUID | `auth_roles` | read, manage |
-| `auth_credential` | `auth_principal` | UUID | `auth_credentials` | read, manage, revoke |
-| `auth_delegation` | — | UUID | `auth_delegations` | read, create, revoke |
-| `auth_resource_grant` | — | UUID | `auth_resource_grants` | read, manage, revoke |
-| `auth_worker_ceiling` | `auth_principal` | UUID | `auth_worker_ceilings` | read, manage |
+| `auth_principal` | — | UUID | `auth_principals` | read, list, manage |
+| `auth_role` | — | UUID | `auth_roles` | read, list, manage |
+| `auth_credential` | `auth_principal` | UUID | `auth_credentials` | read, list, manage, revoke |
+| `auth_delegation` | — | UUID | `auth_delegations` | read, list, create, revoke |
+| `auth_resource_grant` | — | UUID | `auth_resource_grants` | read, list, manage, revoke |
+| `auth_worker_ceiling` | `auth_principal` | UUID | `auth_worker_ceilings` | read, list, manage |
 | `auth_bootstrap_allow` | — | UUID | `auth_bootstrap_allow` | (operator DB only) |
 | `auth_bootstrap_state` | — | text | `auth_bootstrap_state` | (stored function only) |
-| `audit_trail_entry` | — | text (hash) | `audit_trail_entries` | read, create, audit:read |
-| `audit_export` | — | bigint | `audit_exports` | read, create, audit:export |
-| `compliance_report` | — | bigint | `compliance_reports` | read, create |
+| `audit_trail_entry` | — | text (hash) | `audit_trail_entries` | read, list, create, audit:read |
+| `audit_export` | — | bigint | `audit_exports` | read, list, create, audit:export |
+| `compliance_report` | — | bigint | `compliance_reports` | read, list, create |
 
 ### Transport-scoped resources
 
