@@ -450,12 +450,54 @@ on `auth_roles`. Retirement is an audited operation performed via a
 `SECURITY DEFINER` function owned by `gitwire_auth_fn_owner`:
 
 ```sql
--- Function-owner grants for retirement:
-GRANT SELECT, UPDATE ON auth_roles TO gitwire_auth_fn_owner;
+-- Function-owner grants for retirement (applied in stage 040 after
+-- auth_roles and auth_authorization_decisions both exist):
+-- GRANT SELECT, UPDATE ON auth_roles TO gitwire_auth_fn_owner;
+-- GRANT INSERT ON auth_role_retirement_log TO gitwire_auth_fn_owner;
 
+-- The retire_role() function and auth_role_retirement_log table are
+-- defined in stage 040 (§11), after auth_authorization_decisions exists,
+-- because the retirement log has an FK to that table. See §11 for the
+-- complete function DDL including authority validation.
+```
+
+**Retirement audit table** (created in stage 040):
+
+```sql
+CREATE TABLE auth_role_retirement_log (
+  id                          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  role_id                     uuid        NOT NULL REFERENCES auth_roles(id),
+  authorization_decision_id   uuid        NOT NULL REFERENCES auth_authorization_decisions(id) ON DELETE SET NULL,
+  db_session_user             text        NOT NULL,  -- session_user at execution
+  retired_at                  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Append-only enforcement:
+CREATE OR REPLACE FUNCTION enforce_retirement_log_append_only()
+RETURNS trigger AS $$
+BEGIN
+  IF current_user = 'gitwire_auth_fn_owner' THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  RAISE EXCEPTION 'auth_role_retirement_log is append-only (current_user=%)',
+    current_user;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_retirement_log_no_update
+  BEFORE UPDATE ON auth_role_retirement_log
+  FOR EACH ROW EXECUTE FUNCTION enforce_retirement_log_append_only();
+CREATE TRIGGER trg_retirement_log_no_delete
+  BEFORE DELETE ON auth_role_retirement_log
+  FOR EACH ROW EXECUTE FUNCTION enforce_retirement_log_append_only();
+```
+
+**`retire_role()` function** (created in stage 040, after decisions exist):
+
+```sql
 CREATE OR REPLACE FUNCTION retire_role(
-  p_role_id            uuid,
-  p_authorization_decision_id uuid   -- links to the admin decision authorizing this retirement
+  p_role_id                    uuid,
+  p_authorization_decision_id  uuid
 ) RETURNS void
 SECURITY DEFINER
 SET search_path = gitwire_auth, pg_temp
@@ -463,18 +505,38 @@ AS $$
 DECLARE
   affected int;
   v_db_session text := session_user;
+  v_decision_principal uuid;
+  v_decision_action text;
+  v_decision_target text;
 BEGIN
+  -- Authority validation: the referenced decision must be an allow
+  -- for auth_role:manage targeting the exact role being retired.
+  SELECT principal_id, action, target_resource_id
+    INTO v_decision_principal, v_decision_action, v_decision_target
+    FROM auth_authorization_decisions
+    WHERE id = p_authorization_decision_id
+      AND decision = 'allow'
+      AND action = 'manage'
+      AND target_resource_type = 'auth_role';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'retire_role: authorization_decision_id % is not a valid auth_role:manage allow decision',
+      p_authorization_decision_id;
+  END IF;
+
+  IF v_decision_target IS NULL OR v_decision_target != p_role_id::text THEN
+    RAISE EXCEPTION 'retire_role: decision does not target role %', p_role_id;
+  END IF;
+
   UPDATE auth_roles
     SET status = 'retired',
         retired_at = now(),
-        retired_by = (SELECT principal_id FROM auth_authorization_decisions WHERE id = p_authorization_decision_id),
+        retired_by = v_decision_principal,
         updated_at = now()
     WHERE id = p_role_id AND status = 'active';
 
   GET DIAGNOSTICS affected = ROW_COUNT;
   IF affected = 1 THEN
-    -- Immutable audit record linking the retirement to the authorization decision
-    -- and the authenticated DB session identity.
     INSERT INTO auth_role_retirement_log (
       role_id, authorization_decision_id, db_session_user, retired_at
     ) VALUES (
@@ -486,29 +548,15 @@ $$ LANGUAGE plpgsql;
 ALTER FUNCTION retire_role(uuid, uuid) OWNER TO gitwire_auth_fn_owner;
 REVOKE ALL ON FUNCTION retire_role(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION retire_role(uuid, uuid) TO gitwire_app;
-GRANT INSERT ON auth_role_retirement_log TO gitwire_auth_fn_owner;
 ```
 
-**Retirement audit table:**
-
-```sql
-CREATE TABLE auth_role_retirement_log (
-  id                          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  role_id                     uuid        NOT NULL REFERENCES auth_roles(id),
-  authorization_decision_id   uuid        NOT NULL REFERENCES auth_authorization_decisions(id),
-  db_session_user             text        NOT NULL,  -- session_user at execution
-  retired_at                  timestamptz NOT NULL DEFAULT now()
-);
--- Append-only (BEFORE UPDATE/DELETE triggers)
-```
-
-The application can retire roles (via an admin dashboard action that
-produces an authorization decision) but cannot directly UPDATE the
-table. The `retired_by` field is derived from the authorization
-decision's principal — not caller-supplied. The DB session identity is
-captured immutably. Retired roles are excluded from evaluation because
-the evaluator joins `auth_roles` and filters `status = 'active'`.
-retired but not deleted.
+The application can retire roles only by providing a valid
+`auth_role:manage` authorization decision targeting the exact role.
+The function validates the decision is an `allow` with the correct
+action, resource type, and target. The `retired_by` field is derived
+from the decision's principal — not caller-supplied. Retired roles are
+excluded from evaluation because the evaluator joins `auth_roles` and
+filters `status = 'active'`.
 
 ### `auth_principal_roles`
 
@@ -723,7 +771,9 @@ CREATE TABLE auth_delegations (
   operation                   text              NOT NULL,
   resource_type               text              NOT NULL REFERENCES auth_resource_registry(token),
   resource_id                 text,
-  authorization_decision_id   uuid,  -- nullable: set to NULL by archival when decision is deleted (FK ON DELETE SET NULL)
+  -- authorization_decision_id is nullable (FK ON DELETE SET NULL allows archival),
+  -- but a BEFORE INSERT trigger enforces it is NOT NULL at creation time.
+  authorization_decision_id   uuid,
   plan_hash                   text,
   -- Persisted normalized tenant boundary (for worker gateway scope derivation)
   boundary_installation_id    bigint,
@@ -780,6 +830,28 @@ $$ LANGUAGE plpgsql;
 CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
   AFTER INSERT OR UPDATE ON auth_delegations
   FOR EACH ROW EXECUTE FUNCTION enforce_delegation_worker_service();
+```
+
+**Creation-time decision linkage enforcement.** The
+`authorization_decision_id` column is nullable (archival may set it
+NULL via `ON DELETE SET NULL`), but every newly created delegation MUST
+reference a valid authorization decision. A `BEFORE INSERT` trigger
+enforces this:
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_delegation_decision_at_creation()
+RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'INSERT' AND NEW.authorization_decision_id IS NULL THEN
+    RAISE EXCEPTION 'delegation authorization_decision_id is required at creation time';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_delegation_decision_notnull_insert
+  BEFORE INSERT ON auth_delegations
+  FOR EACH ROW EXECUTE FUNCTION enforce_delegation_decision_at_creation();
 ```
 
 ### Stored functions for execution-claim CAS
@@ -1150,9 +1222,11 @@ CREATE TABLE auth_authorization_decisions (
   CONSTRAINT chk_decision_outcome_consistency
     CHECK ((decision = 'allow' AND reason_code IS NULL)
            OR (decision = 'deny' AND reason_code IS NOT NULL)),
-  -- Break-glass flag consistency: flag and activation_id must agree
+  -- Break-glass consistency: if activation_id is present, is_break_glass must be true.
+  -- (Archival may set activation_id to NULL via ON DELETE SET NULL, leaving is_break_glass
+  --  true as a historical marker — the reverse implication is not enforced.)
   CONSTRAINT chk_break_glass_consistency
-    CHECK (is_break_glass = (break_glass_activation_id IS NOT NULL))
+    CHECK (break_glass_activation_id IS NULL OR is_break_glass = true)
 );
 
 CREATE INDEX ix_auth_decisions_principal
@@ -1890,8 +1964,12 @@ GRANT SELECT, INSERT ON auth_delegations TO gitwire_app;
 | `auth_bootstrap_allow` | INSERT, SELECT, DELETE | Marker management |
 | `auth_delegations` | SELECT only | No direct UPDATE — reconciliation via `operator_reconcile_execution()` |
 | `auth_reconciliation_log` | SELECT | Audit inspection |
+| `auth_role_retirement_log` | SELECT | Audit inspection |
 | All `auth_*` tables | SELECT | Read-only inspection |
 | `operator_reconcile_execution()` | EXECUTE | Audited reconciliation only |
+| `archive_old_decisions()` | EXECUTE | Daily archival with 365-day floor |
+| `archive_old_reconciliation()` | EXECUTE | Daily archival with 365-day floor |
+| `transition_authority_source()` | EXECUTE | Production cutover control |
 
 ### Migration role (`gitwire_migration`)
 
@@ -1929,8 +2007,9 @@ Runs DDL only. Seeds catalog tables. Cannot create principals or grants.
 | `auth_authorization_decisions` | `auth_delegations` | `capability_delegation_id` | SET NULL | Archival of delegation sets NULL | 
 | `auth_authorization_decisions` | `auth_external_attestations` | `attestation_id` | SET NULL | Attestation cleanup sets NULL; decision retains JSONB snapshot |
 | `auth_authorization_decisions` | `auth_break_glass_activations` | `break_glass_activation_id` | SET NULL | Break-glass archival sets NULL; decision retains is_break_glass flag |
-| `auth_authorization_decisions` | `auth_external_attestations` | `attestation_id` | SET NULL | Attestation cleanup sets attestation_id=NULL; decision retains JSONB snapshot |
 | `auth_authorization_decisions` | `auth_operation_policy_versions` | `operation_policy_version` | NO ACTION (via version_hash) | Policy immutable |
+| `auth_role_retirement_log` | `auth_roles` | `role_id` | NO ACTION | Roles never deleted |
+| `auth_role_retirement_log` | `auth_authorization_decisions` | `authorization_decision_id` | SET NULL | Decision archival sets NULL; retirement record retains other fields |
 | `auth_external_attestations` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
 | `auth_external_attestations` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
 | `auth_sessions` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
@@ -2065,7 +2144,7 @@ SET search_path = gitwire_auth, public;
 -- Stage 040b: deferred FKs from decisions to break-glass activations
 ALTER TABLE auth_authorization_decisions
   ADD CONSTRAINT fk_decision_break_glass
-  FOREIGN KEY (break_glass_activation_id) REFERENCES auth_break_glass_activations(id);
+  FOREIGN KEY (break_glass_activation_id) REFERENCES auth_break_glass_activations(id) ON DELETE SET NULL;
 ```
 
 **Tables created:** `auth_operation_policy_versions`,
@@ -2108,7 +2187,7 @@ ALTER TABLE auth_delegations
 
 ALTER TABLE auth_authorization_decisions
   ADD CONSTRAINT fk_decision_delegation
-  FOREIGN KEY (capability_delegation_id) REFERENCES auth_delegations(id);
+  FOREIGN KEY (capability_delegation_id) REFERENCES auth_delegations(id) ON DELETE SET NULL;
 
 ALTER TABLE auth_authorization_decisions
   ADD CONSTRAINT fk_decision_attestation
@@ -2386,6 +2465,11 @@ separately in the reconciliation log for forensic verification.
 Roll back in this order (latest first):
   047 → 046 → 045 → 044 → 043 → 042 → 041 → 040 → 039 → 038
 ```
+
+**Stage 047 also creates:** `archive_old_decisions()` and
+`archive_old_reconciliation()` functions (all tables exist by this
+stage). Rollback of 047 drops these functions first, then the
+authority-source functions and tables.
 
 Stages 043 and 045 are **irreversible after enforcement is active**
 (they modify data that existing code depends on). After the
@@ -2859,6 +2943,12 @@ AS $$
 DECLARE
   deleted_count integer;
 BEGIN
+  -- Retention floor: reject attempts to delete records younger than 365 days
+  IF p_retention_days < 365 THEN
+    RAISE EXCEPTION 'archive_old_decisions: retention_days must be >= 365, got %',
+      p_retention_days;
+  END IF;
+
   DELETE FROM auth_authorization_decisions
     WHERE evaluated_at < now() - (p_retention_days || ' days')::interval;
   GET DIAGNOSTICS deleted_count = ROW_COUNT;
@@ -2882,6 +2972,11 @@ AS $$
 DECLARE
   deleted_count integer;
 BEGIN
+  IF p_retention_days < 365 THEN
+    RAISE EXCEPTION 'archive_old_reconciliation: retention_days must be >= 365, got %',
+      p_retention_days;
+  END IF;
+
   DELETE FROM auth_reconciliation_log
     WHERE reconciled_at < now() - (p_retention_days || ' days')::interval;
   GET DIAGNOSTICS deleted_count = ROW_COUNT;
