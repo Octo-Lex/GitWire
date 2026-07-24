@@ -563,7 +563,25 @@ CREATE TABLE gitwire_auth.auth_principals (
   installation_id bigint,
   auth_epoch      bigint      NOT NULL DEFAULT 0,
   created_at      timestamptz NOT NULL DEFAULT now(),
-  updated_at      timestamptz NOT NULL DEFAULT now()
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+
+  -- Subtype constraints (W0-B §2):
+  -- service: no external identity
+  CONSTRAINT chk_service_no_external
+    CHECK (principal_type != 'service'
+           OR (github_user_id IS NULL AND installation_id IS NULL)),
+  -- installation: must have installation_id, no github_user_id
+  CONSTRAINT chk_installation_binding
+    CHECK (principal_type != 'installation'
+           OR (installation_id IS NOT NULL AND github_user_id IS NULL)),
+  -- system: no external identity
+  CONSTRAINT chk_system_no_external
+    CHECK (principal_type != 'system'
+           OR (github_user_id IS NULL AND installation_id IS NULL)),
+  -- legacy-key: no external identity
+  CONSTRAINT chk_legacy_no_external
+    CHECK (principal_type != 'legacy-key'
+           OR (github_user_id IS NULL AND installation_id IS NULL))
 );
 
 CREATE UNIQUE INDEX ux_auth_principals_github_user_id
@@ -671,7 +689,7 @@ CREATE TABLE gitwire_auth.mutation_commands (
   auth_policy_version    text        NOT NULL,
   assurance_profile      text        NOT NULL DEFAULT 'level1',
   -- Admission (immutable after INSERT)
-  admitted               boolean     NOT NULL DEFAULT true,
+  admitted               boolean     NOT NULL DEFAULT false,
   admitting_service      uuid        NOT NULL REFERENCES gitwire_auth.auth_principals(id),
   -- Concurrency
   idempotency_key        text        NOT NULL,
@@ -764,11 +782,58 @@ INSERT INTO gitwire_auth.auth_enforcement_state (id, state) VALUES (1, 'observed
   ON CONFLICT (id) DO NOTHING;
 ```
 
-Legal enforcement-state transitions (operator-controlled):
-`observed → enforce → executor_only → legacy_removed`.
-Reverse transitions (`legacy_removed → executor_only`, etc.) are
-permitted for rollback. The operator records `updated_by` (session
-identity) and `evidence` (reason/ticket reference) on each transition.
+Legal enforcement-state transitions are enforced by a SECURITY DEFINER
+function. The operator calls this function; it derives `updated_by`
+from `session_user` (not caller-supplied), requires non-empty evidence,
+and enforces the legal forward/rollback transition graph:
+
+```sql
+CREATE OR REPLACE FUNCTION gitwire_auth.transition_enforcement_state(
+  p_expected_state text,
+  p_new_state       text,
+  p_evidence        text
+) RETURNS boolean
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+DECLARE
+  affected int;
+BEGIN
+  IF p_evidence IS NULL OR p_evidence = '' THEN
+    RAISE EXCEPTION 'transition_enforcement_state: evidence is required';
+  END IF;
+
+  -- Legal forward and rollback transitions
+  IF NOT (
+    (p_expected_state = 'observed'      AND p_new_state = 'enforce') OR
+    (p_expected_state = 'enforce'       AND p_new_state IN ('executor_only', 'observed')) OR
+    (p_expected_state = 'executor_only'  AND p_new_state IN ('legacy_removed', 'enforce')) OR
+    (p_expected_state = 'legacy_removed' AND p_new_state = 'executor_only')
+  ) THEN
+    RAISE EXCEPTION 'Illegal enforcement-state transition: % → %',
+      p_expected_state, p_new_state;
+  END IF;
+
+  UPDATE auth_enforcement_state
+    SET state = p_new_state,
+        updated_at = now(),
+        updated_by = session_user,
+        evidence = p_evidence
+    WHERE id = 1 AND state = p_expected_state;
+
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  RETURN affected = 1;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION gitwire_auth.transition_enforcement_state(text, text, text)
+  OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION gitwire_auth.transition_enforcement_state(text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION gitwire_auth.transition_enforcement_state(text, text, text) TO gitwire_operator;
+```
+
+The operator's direct UPDATE on `auth_enforcement_state` is removed;
+only the function can transition. The function records `session_user`
+(not a caller-supplied parameter) as `updated_by`.
 
 ### Lifecycle legal-transition trigger
 
@@ -844,13 +909,25 @@ CREATE TRIGGER trg_command_immutability
 CREATE OR REPLACE FUNCTION gitwire_auth.enforce_event_source_partition()
 RETURNS trigger AS $$
 BEGIN
-  -- Admission events can only be inserted by gitwire_app
-  -- Execution events can only be inserted by gitwire_executor
-  IF NEW.event_source = 'admission' AND current_user != 'gitwire_app' THEN
-    RAISE EXCEPTION 'admission events can only be inserted by gitwire_app';
-  END IF;
-  IF NEW.event_source = 'executor' AND current_user != 'gitwire_executor' THEN
-    RAISE EXCEPTION 'executor events can only be inserted by gitwire_executor';
+  -- Bind event_type to event_source + caller role:
+  -- Admission events (admitted, submitted, cancelled): source='admission', caller=gitwire_app
+  -- Execution events (started, succeeded, failed, reconciled): source='executor', caller=gitwire_executor
+  IF NEW.event_type IN ('admitted', 'submitted', 'cancelled') THEN
+    IF NEW.event_source != 'admission' THEN
+      RAISE EXCEPTION '% events must have source admission, got %', NEW.event_type, NEW.event_source;
+    END IF;
+    IF current_user != 'gitwire_app' THEN
+      RAISE EXCEPTION '% events can only be inserted by gitwire_app', NEW.event_type;
+    END IF;
+  ELSIF NEW.event_type IN ('started', 'succeeded', 'failed', 'reconciled') THEN
+    IF NEW.event_source != 'executor' THEN
+      RAISE EXCEPTION '% events must have source executor, got %', NEW.event_type, NEW.event_source;
+    END IF;
+    IF current_user != 'gitwire_executor' THEN
+      RAISE EXCEPTION '% events can only be inserted by gitwire_executor', NEW.event_type;
+    END IF;
+  ELSE
+    RAISE EXCEPTION 'Unknown event type: %', NEW.event_type;
   END IF;
   RETURN NEW;
 END;
@@ -861,10 +938,57 @@ CREATE TRIGGER trg_event_source_partition
   FOR EACH ROW EXECUTE FUNCTION gitwire_auth.enforce_event_source_partition();
 ```
 
-### CAS lifecycle function
+### Command admission function
+
+Only this function can set `admitted = true`. It is called by the
+trusted admission path after authorization evaluation. Workers that
+directly INSERT commands get `admitted = false` (the column default),
+which the executor rejects:
 
 ```sql
-CREATE OR REPLACE FUNCTION gitwire_auth.transition_command_lifecycle(
+CREATE OR REPLACE FUNCTION gitwire_auth.admit_command(
+  p_command_id uuid,
+  p_admitting_service uuid
+) RETURNS boolean
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+DECLARE
+  affected int;
+BEGIN
+  UPDATE mutation_commands
+    SET admitted = true,
+        admitting_service = p_admitting_service
+    WHERE id = p_command_id
+      AND admitted = false;
+
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  RETURN affected = 1;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION gitwire_auth.admit_command(uuid, uuid) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION gitwire_auth.admit_command(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION gitwire_auth.admit_command(uuid, uuid) TO gitwire_app;
+```
+
+The `admitted` field is included in the immutability trigger — it
+cannot be changed after being set to `true`. This means only the
+admission function (running as `gitwire_auth_fn_owner`) can set it,
+and once set, it cannot be unset.
+
+### Partitioned CAS lifecycle functions
+
+Lifecycle transitions are partitioned by caller. Admission transitions
+(pending→submitted, pending→cancelled, submitted→cancelled) are
+performed by the application via `transition_admission`. Execution
+transitions (submitted→executing, executing→completed,
+executing→failed) are performed by the executor via
+`transition_execution`. Each function verifies the caller's DB role
+via `current_user`:
+
+```sql
+-- Admission transitions: only gitwire_app may call
+CREATE OR REPLACE FUNCTION gitwire_auth.transition_admission(
   p_command_id     uuid,
   p_expected_state text,
   p_new_state      text,
@@ -876,6 +1000,20 @@ AS $$
 DECLARE
   affected int;
 BEGIN
+  -- Caller must be gitwire_app (the session user that called this function)
+  IF session_user != 'gitwire_app' THEN
+    RAISE EXCEPTION 'transition_admission: only gitwire_app may call this function';
+  END IF;
+
+  -- Legal admission transitions only
+  IF NOT (
+    (p_expected_state = 'pending' AND p_new_state IN ('submitted', 'cancelled')) OR
+    (p_expected_state = 'submitted' AND p_new_state = 'cancelled')
+  ) THEN
+    RAISE EXCEPTION 'transition_admission: illegal transition % → %',
+      p_expected_state, p_new_state;
+  END IF;
+
   UPDATE mutation_commands
     SET lifecycle_state = p_new_state,
         lifecycle_version = p_expected_ver + 1,
@@ -888,6 +1026,52 @@ BEGIN
   RETURN affected = 1;
 END;
 $$ LANGUAGE plpgsql;
+ALTER FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigint)
+  OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigint) TO gitwire_app;
+
+-- Execution transitions: only gitwire_executor may call
+CREATE OR REPLACE FUNCTION gitwire_auth.transition_execution(
+  p_command_id     uuid,
+  p_expected_state text,
+  p_new_state      text,
+  p_expected_ver   bigint
+) RETURNS boolean
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+DECLARE
+  affected int;
+BEGIN
+  IF session_user != 'gitwire_executor' THEN
+    RAISE EXCEPTION 'transition_execution: only gitwire_executor may call this function';
+  END IF;
+
+  IF NOT (
+    (p_expected_state = 'submitted' AND p_new_state = 'executing') OR
+    (p_expected_state = 'executing' AND p_new_state IN ('completed', 'failed'))
+  ) THEN
+    RAISE EXCEPTION 'transition_execution: illegal transition % → %',
+      p_expected_state, p_new_state;
+  END IF;
+
+  UPDATE mutation_commands
+    SET lifecycle_state = p_new_state,
+        lifecycle_version = p_expected_ver + 1,
+        transitioned_at = now()
+    WHERE id = p_command_id
+      AND lifecycle_state = p_expected_state
+      AND lifecycle_version = p_expected_ver;
+
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  RETURN affected = 1;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION gitwire_auth.transition_execution(uuid, text, text, bigint)
+  OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION gitwire_auth.transition_execution(uuid, text, text, bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION gitwire_auth.transition_execution(uuid, text, text, bigint) TO gitwire_executor;
 ```
 
 ### Append-only triggers for events and receipts
@@ -939,7 +1123,11 @@ CREATE TRIGGER trg_receipts_no_delete
 Each file opens with `SET search_path = gitwire_auth, public;`.
 
 **Object creation order:**
-1. `CREATE SCHEMA gitwire_auth; REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;`
+1. `CREATE EXTENSION IF NOT EXISTS pgcrypto;`
+2. `CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`
+3. `CREATE SCHEMA gitwire_auth; REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;`
+4. Create roles (idempotent): `gitwire_auth_fn_owner` NOLOGIN, `gitwire_app`, `gitwire_executor`, `gitwire_operator`
+5. `GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner, gitwire_app, gitwire_executor, gitwire_operator;`
 2. `CREATE TABLE auth_principals` + unique indexes
 3. `CREATE TABLE auth_credentials` + index
 4. `CREATE TABLE auth_roles`
@@ -955,10 +1143,14 @@ Each file opens with `SET search_path = gitwire_auth, public;`.
 14. `CREATE FUNCTION enforce_event_source_partition` + trigger
 15. `CREATE FUNCTION enforce_events_append_only` + triggers
 16. `CREATE FUNCTION enforce_receipts_append_only` + triggers
-17. `CREATE FUNCTION transition_command_lifecycle` + ALTER OWNER + REVOKE + GRANT
+17. `CREATE FUNCTION admit_command` + ALTER OWNER + REVOKE FROM PUBLIC + GRANT
+18. `CREATE FUNCTION transition_admission` + ALTER OWNER + REVOKE FROM PUBLIC + GRANT
+19. `CREATE FUNCTION transition_execution` + ALTER OWNER + REVOKE FROM PUBLIC + GRANT
 
 **Rollback (reverse order):**
-1. `DROP FUNCTION transition_command_lifecycle(uuid, text, text, bigint);`
+1. `DROP FUNCTION admit_command(uuid, uuid);`
+2. `DROP FUNCTION transition_admission(uuid, text, text, bigint);`
+3. `DROP FUNCTION transition_execution(uuid, text, text, bigint);`
 2. `DROP TRIGGER trg_receipts_no_delete; DROP TRIGGER trg_receipts_no_update;`
 3. `DROP FUNCTION enforce_receipts_append_only;`
 4. `DROP TRIGGER trg_events_no_delete; DROP TRIGGER trg_events_no_update;`
@@ -1026,8 +1218,10 @@ GRANT SELECT, INSERT ON mutation_events TO gitwire_executor;
 GRANT SELECT, INSERT ON execution_receipts TO gitwire_executor;
 
 -- Function owner transition grant
-GRANT EXECUTE ON FUNCTION transition_command_lifecycle(uuid, text, text, bigint) TO gitwire_app;
-GRANT EXECUTE ON FUNCTION transition_command_lifecycle(uuid, text, text, bigint) TO gitwire_executor;
+-- Function execution grants (PUBLIC revoked on each function at creation)
+GRANT EXECUTE ON FUNCTION admit_command(uuid, uuid) TO gitwire_app;
+GRANT EXECUTE ON FUNCTION transition_admission(uuid, text, text, bigint) TO gitwire_app;
+GRANT EXECUTE ON FUNCTION transition_execution(uuid, text, text, bigint) TO gitwire_executor;
 
 -- Operator: inspect everything, transition enforcement state
 GRANT SELECT ON auth_principals TO gitwire_operator;
@@ -1040,7 +1234,8 @@ GRANT SELECT ON mutation_events TO gitwire_operator;
 GRANT SELECT ON execution_receipts TO gitwire_operator;
 GRANT SELECT ON auth_sessions TO gitwire_operator;
 GRANT SELECT ON auth_enforcement_state TO gitwire_operator;
-GRANT UPDATE (state, updated_at, updated_by, evidence) ON auth_enforcement_state TO gitwire_operator;
+-- Operator transitions enforcement state via function only (not direct UPDATE)
+GRANT EXECUTE ON FUNCTION transition_enforcement_state(text, text, text) TO gitwire_operator;
 ```
 
 **Rollback:** REVOKE all grants from each role. Do NOT drop
@@ -1050,30 +1245,49 @@ migration.
 
 ### Stage 040: Bootstrap seed
 
-Creates the initial admin principal and credential using a
-deterministic UUID for rollback identification:
+Creates the initial admin role, principal, credential, and role
+assignment using deterministic UUIDs for rollback identification.
+Requires `uuid-ossp` (installed in stage 038):
 
 ```sql
 SET search_path = gitwire_auth, public;
 
--- Bootstrap admin principal (deterministic UUID for rollback)
+-- 1. Seed built-in roles and permissions
+INSERT INTO auth_roles (id, name, description, is_builtin)
+VALUES (uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'role-admin'),
+        'admin', 'Full administrative access', true)
+ON CONFLICT (name) DO NOTHING;
+
+-- Seed minimal admin permissions (Level 1 uses application-layer
+-- evaluation; these permissions are the authoritative source)
+INSERT INTO auth_role_permissions (role_id, permission)
+SELECT id, perm FROM auth_roles
+CROSS JOIN (VALUES ('repository:read'), ('repository:list'), ('repository:update'),
+                   ('repository:create'), ('repository:github:act'),
+                   ('installation:read'), ('installation:list'))
+AS t(perm)
+WHERE name = 'admin'
+ON CONFLICT DO NOTHING;
+
+-- 2. Bootstrap admin principal
 INSERT INTO auth_principals (id, principal_type, display_name)
 VALUES (uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin'),
         'user', 'Bootstrap Admin')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (id) DO NOTHING;
 
--- Bootstrap admin credential
+-- 3. Bootstrap admin credential
 INSERT INTO auth_credentials (id, principal_id, lookup_id, secret_hash,
   pepper_version, audience, display_prefix)
 VALUES (uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin-credential'),
         uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin'),
         'bootstrap-admin', '<hash-from-environment>', 1, 'gitwire-app', 'gw_pat_')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (id) DO NOTHING;
 
--- Bootstrap admin role assignment (fleet scope)
+-- 4. Bootstrap admin role assignment (fleet scope)
 INSERT INTO auth_principal_roles (principal_id, role_id, scope_type, granted_by)
 SELECT p.id, r.id, 'fleet', p.id
-FROM auth_principals p, auth_roles r
+FROM auth_principals p
+CROSS JOIN auth_roles r
 WHERE p.id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin')
   AND r.name = 'admin'
 ON CONFLICT DO NOTHING;
@@ -1123,7 +1337,7 @@ WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'boots
 | `SELECT, INSERT` | `mutation_events` (admission events only — enforced by trigger) |
 | `SELECT` | `execution_receipts` (no INSERT — executor only) |
 | `SELECT` | `auth_enforcement_state` (no UPDATE — operator only) |
-| `EXECUTE` | `transition_command_lifecycle()` |
+| `EXECUTE` | `admit_command()`, `transition_admission()` |
 
 ### Executor role (`gitwire_executor`)
 
@@ -1132,14 +1346,14 @@ WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'boots
 | `SELECT` | `mutation_commands` |
 | `SELECT, INSERT` | `mutation_events` (execution events only — enforced by trigger) |
 | `SELECT, INSERT` | `execution_receipts` |
-| `EXECUTE` | `transition_command_lifecycle()` |
+| `EXECUTE` | `transition_execution()` |
 
 ### Operator role (`gitwire_operator`)
 
 | Privilege | Scope |
 |---|---|
 | `SELECT` | All `gitwire_auth` tables (listed individually in §12 stage 039) |
-| `UPDATE (state, updated_at, updated_by, evidence)` | `auth_enforcement_state` only |
+| `EXECUTE` | `transition_enforcement_state()` only (no direct table UPDATE) |
 
 ### Function-owner role (`gitwire_auth_fn_owner`)
 
