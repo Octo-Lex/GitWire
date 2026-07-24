@@ -380,7 +380,7 @@ MutationEvent {
 Event INSERT authority is partitioned by source to prevent forgery:
 
 - **Admission events** (`admitted`, `submitted`, `cancelled`): the
-  command-admission path (running as `gitwire_app`) may INSERT these.
+  command-admission path (running as `gitwire_admission`) may INSERT these.
   A CHECK constraint or trigger enforces `event_source = 'admission'`
   for these event types.
 - **Execution events** (`started`, `succeeded`, `failed`, `reconciled`):
@@ -388,9 +388,10 @@ Event INSERT authority is partitioned by source to prevent forgery:
   A CHECK constraint enforces `event_source = 'executor'` for these
   event types.
 
-The application (`gitwire_app`) has INSERT on events but only for
-admission-type events. The executor (`gitwire_executor`) has INSERT
-only for execution-type events. A BEFORE INSERT trigger on
+The application (`gitwire_app`) has SELECT on events only. The
+admission role (`gitwire_admission`) has INSERT for admission-type
+events. The executor (`gitwire_executor`) has INSERT only for
+execution-type events. A BEFORE INSERT trigger on
 `mutation_events` enforces this partition by checking
 `current_user` against the `event_source`.
 
@@ -566,6 +567,9 @@ CREATE TABLE gitwire_auth.auth_principals (
   updated_at      timestamptz NOT NULL DEFAULT now(),
 
   -- Subtype constraints (W0-B §2):
+  -- user: must NOT have installation_id
+  CONSTRAINT chk_user_no_installation
+    CHECK (principal_type != 'user' OR installation_id IS NULL),
   -- service: no external identity
   CONSTRAINT chk_service_no_external
     CHECK (principal_type != 'service'
@@ -690,7 +694,7 @@ CREATE TABLE gitwire_auth.mutation_commands (
   assurance_profile      text        NOT NULL DEFAULT 'level1',
   -- Admission (immutable after INSERT)
   admitted               boolean     NOT NULL DEFAULT false,
-  admitting_service      uuid        NOT NULL REFERENCES gitwire_auth.auth_principals(id),
+  admitting_service      uuid        REFERENCES gitwire_auth.auth_principals(id),
   -- Concurrency
   idempotency_key        text        NOT NULL,
   lifecycle_version      bigint      NOT NULL DEFAULT 0,
@@ -888,12 +892,27 @@ BEGIN
      OR NEW.auth_result_snapshot != OLD.auth_result_snapshot
      OR NEW.auth_policy_version != OLD.auth_policy_version
      OR NEW.idempotency_key != OLD.idempotency_key
-     OR NEW.admitted IS DISTINCT FROM OLD.admitted
-     OR NEW.admitting_service != OLD.admitting_service
      OR NEW.extension IS DISTINCT FROM OLD.extension
      OR NEW.created_at != OLD.created_at THEN
     RAISE EXCEPTION 'mutation_command provenance fields are immutable';
   END IF;
+
+  -- Admission fields: allow one-time transition false→true
+  -- (set by admit_command SECURITY DEFINER function).
+  -- Once admitted=true, neither field may change.
+  IF OLD.admitted = true THEN
+    IF NEW.admitted != OLD.admitted
+       OR NEW.admitting_service IS DISTINCT FROM OLD.admitting_service THEN
+      RAISE EXCEPTION 'admitted commands cannot have admission fields changed';
+    END IF;
+  ELSIF NEW.admitted = false AND OLD.admitted = false THEN
+    -- Both false: admitting_service may change (e.g., NULL→NULL is fine)
+    IF NEW.admitting_service IS DISTINCT FROM OLD.admitting_service THEN
+      RAISE EXCEPTION 'admitting_service cannot be set except via admit_command';
+    END IF;
+  END IF;
+  -- false→true with admitting_service set: allowed (the admission transition)
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -910,14 +929,14 @@ CREATE OR REPLACE FUNCTION gitwire_auth.enforce_event_source_partition()
 RETURNS trigger AS $$
 BEGIN
   -- Bind event_type to event_source + caller role:
-  -- Admission events (admitted, submitted, cancelled): source='admission', caller=gitwire_app
+  -- Admission events (admitted, submitted, cancelled): source='admission', caller=gitwire_admission
   -- Execution events (started, succeeded, failed, reconciled): source='executor', caller=gitwire_executor
   IF NEW.event_type IN ('admitted', 'submitted', 'cancelled') THEN
     IF NEW.event_source != 'admission' THEN
       RAISE EXCEPTION '% events must have source admission, got %', NEW.event_type, NEW.event_source;
     END IF;
-    IF current_user != 'gitwire_app' THEN
-      RAISE EXCEPTION '% events can only be inserted by gitwire_app', NEW.event_type;
+    IF current_user != 'gitwire_admission' THEN
+      RAISE EXCEPTION '% events can only be inserted by gitwire_admission', NEW.event_type;
     END IF;
   ELSIF NEW.event_type IN ('started', 'succeeded', 'failed', 'reconciled') THEN
     IF NEW.event_source != 'executor' THEN
@@ -968,7 +987,7 @@ END;
 $$ LANGUAGE plpgsql;
 ALTER FUNCTION gitwire_auth.admit_command(uuid, uuid) OWNER TO gitwire_auth_fn_owner;
 REVOKE ALL ON FUNCTION gitwire_auth.admit_command(uuid, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION gitwire_auth.admit_command(uuid, uuid) TO gitwire_app;
+GRANT EXECUTE ON FUNCTION gitwire_auth.admit_command(uuid, uuid) TO gitwire_admission;
 ```
 
 The `admitted` field is included in the immutability trigger — it
@@ -987,7 +1006,7 @@ executing→failed) are performed by the executor via
 via `current_user`:
 
 ```sql
--- Admission transitions: only gitwire_app may call
+-- Admission transitions: only gitwire_admission may call
 CREATE OR REPLACE FUNCTION gitwire_auth.transition_admission(
   p_command_id     uuid,
   p_expected_state text,
@@ -1000,9 +1019,9 @@ AS $$
 DECLARE
   affected int;
 BEGIN
-  -- Caller must be gitwire_app (the session user that called this function)
-  IF session_user != 'gitwire_app' THEN
-    RAISE EXCEPTION 'transition_admission: only gitwire_app may call this function';
+  -- Caller must be gitwire_admission (the session user that called this function)
+  IF session_user != 'gitwire_admission' THEN
+    RAISE EXCEPTION 'transition_admission: only gitwire_admission may call this function';
   END IF;
 
   -- Legal admission transitions only
@@ -1029,7 +1048,7 @@ $$ LANGUAGE plpgsql;
 ALTER FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigint)
   OWNER TO gitwire_auth_fn_owner;
 REVOKE ALL ON FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigint) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigint) TO gitwire_app;
+GRANT EXECUTE ON FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigint) TO gitwire_admission;
 
 -- Execution transitions: only gitwire_executor may call
 CREATE OR REPLACE FUNCTION gitwire_auth.transition_execution(
@@ -1127,7 +1146,7 @@ Each file opens with `SET search_path = gitwire_auth, public;`.
 2. `CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`
 3. `CREATE SCHEMA gitwire_auth; REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;`
 4. Create roles (idempotent): `gitwire_auth_fn_owner` NOLOGIN, `gitwire_app`, `gitwire_executor`, `gitwire_operator`
-5. `GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner, gitwire_app, gitwire_executor, gitwire_operator;`
+5. `GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner, gitwire_app, gitwire_admission, gitwire_executor, gitwire_operator;`
 2. `CREATE TABLE auth_principals` + unique indexes
 3. `CREATE TABLE auth_credentials` + index
 4. `CREATE TABLE auth_roles`
@@ -1181,6 +1200,7 @@ SET search_path = gitwire_auth, public;
 -- Create roles (idempotent for production vs. smoke test)
 DO $$ BEGIN CREATE ROLE gitwire_auth_fn_owner NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE gitwire_app; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE gitwire_admission; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE gitwire_executor; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE gitwire_operator; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -1188,11 +1208,12 @@ DO $$ BEGIN CREATE ROLE gitwire_operator; EXCEPTION WHEN duplicate_object THEN N
 GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_app, gitwire_executor, gitwire_operator;
 
 -- Function owner: lifecycle transitions only
-GRANT UPDATE (lifecycle_state, lifecycle_version, transitioned_at)
+GRANT UPDATE (lifecycle_state, lifecycle_version, transitioned_at,
+              admitted, admitting_service)
   ON mutation_commands TO gitwire_auth_fn_owner;
 GRANT SELECT ON mutation_commands TO gitwire_auth_fn_owner;
 
--- Application: principals, credentials, sessions, roles, commands, admission events
+-- Application (ordinary workers/routes): NO command INSERT, NO role mutation
 GRANT SELECT, INSERT ON auth_principals TO gitwire_app;
 GRANT UPDATE (status, auth_epoch, updated_at) ON auth_principals TO gitwire_app;
 GRANT SELECT, INSERT ON auth_credentials TO gitwire_app;
@@ -1200,27 +1221,33 @@ GRANT UPDATE (revoked_at, revoked_by, updated_at) ON auth_credentials TO gitwire
 GRANT SELECT, INSERT ON auth_sessions TO gitwire_app;
 GRANT UPDATE (revoked_at) ON auth_sessions TO gitwire_app;
 GRANT DELETE ON auth_sessions TO gitwire_app;
+-- Application can SELECT roles but NOT INSERT/UPDATE role permissions or assignments
 GRANT SELECT ON auth_roles TO gitwire_app;
-GRANT SELECT, INSERT ON auth_role_permissions TO gitwire_app;
-GRANT SELECT, INSERT ON auth_principal_roles TO gitwire_app;
-GRANT UPDATE (revoked_at) ON auth_principal_roles TO gitwire_app;
-GRANT SELECT, INSERT ON mutation_commands TO gitwire_app;
--- Application CANNOT UPDATE lifecycle fields (only CAS function can)
--- Application CAN INSERT admission events but NOT execution events (enforced by trigger)
-GRANT SELECT, INSERT ON mutation_events TO gitwire_app;
--- Application CANNOT INSERT receipts (executor only)
+GRANT SELECT ON auth_role_permissions TO gitwire_app;
+GRANT SELECT ON auth_principal_roles TO gitwire_app;
+-- Application can SELECT commands but NOT INSERT (admission role only)
+GRANT SELECT ON mutation_commands TO gitwire_app;
+-- Application can SELECT events/receipts but NOT INSERT (admission/executor only)
+GRANT SELECT ON mutation_events TO gitwire_app;
 GRANT SELECT ON execution_receipts TO gitwire_app;
 GRANT SELECT ON auth_enforcement_state TO gitwire_app;
 
--- Executor: commands (read + lifecycle via function), execution events, receipts
+-- Admission (trusted command-admission boundary): creates+admits commands,
+-- manages role assignments, emits admission events
+GRANT SELECT, INSERT ON mutation_commands TO gitwire_admission;
+GRANT SELECT, INSERT ON auth_role_permissions TO gitwire_admission;
+GRANT SELECT, INSERT ON auth_principal_roles TO gitwire_admission;
+GRANT UPDATE (revoked_at) ON auth_principal_roles TO gitwire_admission;
+GRANT SELECT, INSERT ON mutation_events TO gitwire_admission;
+
+-- Executor: commands (read), execution events, receipts
 GRANT SELECT ON mutation_commands TO gitwire_executor;
 GRANT SELECT, INSERT ON mutation_events TO gitwire_executor;
 GRANT SELECT, INSERT ON execution_receipts TO gitwire_executor;
 
--- Function owner transition grant
 -- Function execution grants (PUBLIC revoked on each function at creation)
-GRANT EXECUTE ON FUNCTION admit_command(uuid, uuid) TO gitwire_app;
-GRANT EXECUTE ON FUNCTION transition_admission(uuid, text, text, bigint) TO gitwire_app;
+GRANT EXECUTE ON FUNCTION admit_command(uuid, uuid) TO gitwire_admission;
+GRANT EXECUTE ON FUNCTION transition_admission(uuid, text, text, bigint) TO gitwire_admission;
 GRANT EXECUTE ON FUNCTION transition_execution(uuid, text, text, bigint) TO gitwire_executor;
 
 -- Operator: inspect everything, transition enforcement state
@@ -1297,10 +1324,14 @@ ON CONFLICT DO NOTHING;
 ```sql
 DELETE FROM auth_principal_roles
 WHERE principal_id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin');
+DELETE FROM auth_role_permissions
+WHERE role_id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'role-admin');
 DELETE FROM auth_credentials
 WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin-credential');
 DELETE FROM auth_principals
 WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin');
+DELETE FROM auth_roles
+WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'role-admin');
 ```
 
 ### Cutover sequence
@@ -1325,18 +1356,30 @@ WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'boots
 
 ### Application role (`gitwire_app`)
 
+Ordinary workers and routes. Cannot create commands, mutate role
+assignments, or admit commands.
+
 | Privilege | Scope |
 |---|---|
 | `SELECT, INSERT` + limited `UPDATE` | `auth_principals` (status, auth_epoch, updated_at) |
 | `SELECT, INSERT` + limited `UPDATE` | `auth_credentials` (revocation fields) |
 | `SELECT, INSERT` + limited `UPDATE` + `DELETE` | `auth_sessions` (revoked_at; DELETE for cleanup) |
-| `SELECT` | `auth_roles` |
-| `SELECT, INSERT` | `auth_role_permissions` |
-| `SELECT, INSERT` + limited `UPDATE` | `auth_principal_roles` (revoked_at) |
-| `SELECT, INSERT` | `mutation_commands` (INSERT only — no UPDATE; lifecycle via function) |
-| `SELECT, INSERT` | `mutation_events` (admission events only — enforced by trigger) |
-| `SELECT` | `execution_receipts` (no INSERT — executor only) |
+| `SELECT` | `auth_roles`, `auth_role_permissions`, `auth_principal_roles` |
+| `SELECT` | `mutation_commands` (no INSERT — admission role only) |
+| `SELECT` | `mutation_events`, `execution_receipts` (no INSERT) |
 | `SELECT` | `auth_enforcement_state` (no UPDATE — operator only) |
+
+### Admission role (`gitwire_admission`)
+
+Trusted command-admission boundary. Creates and admits commands,
+manages role assignments, emits admission events.
+
+| Privilege | Scope |
+|---|---|
+| `SELECT, INSERT` | `mutation_commands` (creates commands with `admitted=false`) |
+| `SELECT, INSERT` | `auth_role_permissions`, `auth_principal_roles` |
+| `UPDATE (revoked_at)` | `auth_principal_roles` |
+| `SELECT, INSERT` | `mutation_events` (admission event types only — enforced by trigger) |
 | `EXECUTE` | `admit_command()`, `transition_admission()` |
 
 ### Executor role (`gitwire_executor`)
@@ -1344,7 +1387,7 @@ WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'boots
 | Privilege | Scope |
 |---|---|
 | `SELECT` | `mutation_commands` |
-| `SELECT, INSERT` | `mutation_events` (execution events only — enforced by trigger) |
+| `SELECT, INSERT` | `mutation_events` (execution event types only — enforced by trigger) |
 | `SELECT, INSERT` | `execution_receipts` |
 | `EXECUTE` | `transition_execution()` |
 
@@ -1360,8 +1403,9 @@ WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'boots
 | Privilege | Scope |
 |---|---|
 | `NOLOGIN` | Cannot be logged into |
-| `UPDATE (lifecycle_state, lifecycle_version, transitioned_at)` | `mutation_commands` |
-| `SELECT` | `mutation_commands` |
+| `UPDATE (lifecycle_state, lifecycle_version, transitioned_at, admitted, admitting_service)` | `mutation_commands` |
+| `UPDATE (state, updated_at, updated_by, evidence)` | `auth_enforcement_state` |
+| `SELECT` | `mutation_commands`, `auth_enforcement_state` |
 
 ---
 
