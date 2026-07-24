@@ -453,6 +453,7 @@ on `auth_roles`. Retirement is an audited operation performed via a
 -- Function-owner grants for retirement (applied in stage 040 after
 -- auth_roles and auth_authorization_decisions both exist):
 -- GRANT SELECT, UPDATE ON auth_roles TO gitwire_auth_fn_owner;
+-- GRANT SELECT ON auth_authorization_decisions TO gitwire_auth_fn_owner;
 -- GRANT INSERT ON auth_role_retirement_log TO gitwire_auth_fn_owner;
 
 -- The retire_role() function and auth_role_retirement_log table are
@@ -467,7 +468,7 @@ on `auth_roles`. Retirement is an audited operation performed via a
 CREATE TABLE auth_role_retirement_log (
   id                          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   role_id                     uuid        NOT NULL REFERENCES auth_roles(id),
-  authorization_decision_id   uuid        NOT NULL REFERENCES auth_authorization_decisions(id) ON DELETE SET NULL,
+  authorization_decision_id   uuid        REFERENCES auth_authorization_decisions(id) ON DELETE SET NULL,
   db_session_user             text        NOT NULL,  -- session_user at execution
   retired_at                  timestamptz NOT NULL DEFAULT now()
 );
@@ -841,10 +842,43 @@ enforces this:
 ```sql
 CREATE OR REPLACE FUNCTION enforce_delegation_decision_at_creation()
 RETURNS trigger AS $$
+DECLARE
+  v_decision           text;
+  v_decision_principal uuid;
 BEGIN
   IF TG_OP = 'INSERT' AND NEW.authorization_decision_id IS NULL THEN
     RAISE EXCEPTION 'delegation authorization_decision_id is required at creation time';
   END IF;
+
+  -- Enforce initial execution_status = 'pending' at INSERT
+  IF TG_OP = 'INSERT' AND NEW.execution_status != 'pending' THEN
+    RAISE EXCEPTION 'delegation execution_status must be pending at creation, got %',
+      NEW.execution_status;
+  END IF;
+
+  -- Validate the decision is an applicable allow matching this delegation
+  IF TG_OP = 'INSERT' THEN
+    SELECT decision, principal_id
+      INTO v_decision, v_decision_principal
+      FROM auth_authorization_decisions
+      WHERE id = NEW.authorization_decision_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'delegation authorization_decision_id % does not exist',
+        NEW.authorization_decision_id;
+    END IF;
+
+    IF v_decision != 'allow' THEN
+      RAISE EXCEPTION 'delegation authorization_decision_id % is not an allow decision',
+        NEW.authorization_decision_id;
+    END IF;
+
+    -- The decision's principal must be the initiating principal
+    IF v_decision_principal != NEW.initiating_principal_id THEN
+      RAISE EXCEPTION 'delegation decision principal does not match initiating_principal_id';
+    END IF;
+  END IF;
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -1267,6 +1301,22 @@ CREATE TRIGGER trg_decisions_no_delete
   FOR EACH ROW EXECUTE FUNCTION enforce_decisions_append_only();
 ```
 
+**FK-driven `ON DELETE SET NULL` and append-only triggers.** PostgreSQL
+FK referential actions (`ON DELETE SET NULL`, `ON DELETE CASCADE`) are
+internal system operations that do **not** fire user-defined `BEFORE
+UPDATE`/`BEFORE DELETE` triggers. Therefore, when attestation or
+break-glass cleanup deletes a row, the resulting `SET NULL` on
+`auth_authorization_decisions.break_glass_activation_id` or
+`attestation_id` proceeds without triggering the append-only guard.
+This is the correct and safe behavior: the FK action is a system-level
+integrity operation, not a caller-initiated UPDATE.
+
+For direct age-based archival of attestations and break-glass
+activations (non-append-only tables), the operator runs scheduled
+DELETE jobs directly. These DELETEs cascade `SET NULL` to the
+append-only decisions table via the FK, which is permitted by
+PostgreSQL's internal FK action mechanism.
+
 **Decision action validation.** The `action` column must contain a
 concrete action from the global action vocabulary (not `'*'`), and when
 `target_resource_type` is non-NULL, the `(target_resource_type, action)`
@@ -1301,6 +1351,30 @@ $$ LANGUAGE plpgsql;
 CREATE CONSTRAINT TRIGGER trg_decision_action_valid
   AFTER INSERT OR UPDATE ON auth_authorization_decisions
   FOR EACH ROW EXECUTE FUNCTION enforce_decision_action_valid();
+```
+
+**Break-glass decision creation-time enforcement.** At INSERT, a
+break-glass decision (`is_break_glass = true`) MUST have a live
+`break_glass_activation_id`. Only FK-driven archival (`ON DELETE SET
+NULL`) may later clear the activation while keeping `is_break_glass =
+true` as a historical marker. This trigger prevents arbitrary INSERTs
+with `is_break_glass = true` but no activation:
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_break_glass_decision_at_creation()
+RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'INSERT' AND NEW.is_break_glass = true
+     AND NEW.break_glass_activation_id IS NULL THEN
+    RAISE EXCEPTION 'break-glass decision requires a live break_glass_activation_id at creation';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_break_glass_decision_insert
+  BEFORE INSERT ON auth_authorization_decisions
+  FOR EACH ROW EXECUTE FUNCTION enforce_break_glass_decision_at_creation();
 ```
 
 **Reproducibility:** the `role_permissions_snapshot`,
@@ -1575,7 +1649,17 @@ BEGIN
 
   -- 4. Activation expiry must not exceed principal break-glass expiry
   IF NEW.expires_at > v_principal_bg_exp THEN
-    RAISE EXCEPTION 'break_glass activation expiry exceeds principal break_glass expiry';
+    RAISE EXCEPTION 'break_glass activation expiry exceeds principal break-glass expiry';
+  END IF;
+
+  -- 5. Activation expiry must be after activation time
+  IF NEW.expires_at <= NEW.activated_at THEN
+    RAISE EXCEPTION 'break_glass activation expires_at must be after activated_at';
+  END IF;
+
+  -- 6. Hard maximum activation duration (30 minutes)
+  IF NEW.expires_at > NEW.activated_at + interval '30 minutes' THEN
+    RAISE EXCEPTION 'break_glass activation exceeds maximum 30-minute duration';
   END IF;
 
   RETURN NEW;
@@ -1751,15 +1835,21 @@ INSERT INTO migration_report (migration_batch, source_table, source_id, status, 
 ```sql
 CREATE TABLE migration_report (
   id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  migration_batch text        NOT NULL,  -- e.g., '043', '045'
+  migration_batch text        NOT NULL,
   source_table    text        NOT NULL,
-  source_id       text        NOT NULL,  -- stable identity of the unmapped row
-  status          text        NOT NULL,  -- 'unmapped_installation', 'unmapped_legacy_key', etc.
+  source_id       text        NOT NULL,
+  status          text        NOT NULL,
   detail          text,
   resolved        boolean     NOT NULL DEFAULT false,
   resolved_at     timestamptz,
   resolved_by     uuid        REFERENCES auth_principals(id),
-  created_at      timestamptz NOT NULL DEFAULT now()
+  created_at      timestamptz NOT NULL DEFAULT now(),
+
+  -- Idempotency: same finding from same batch for same row+status is reported once
+  CONSTRAINT ux_migration_report_finding UNIQUE (migration_batch, source_table, source_id, status),
+  -- Resolution consistency: resolved requires timestamp and resolver
+  CONSTRAINT chk_migration_report_resolved
+    CHECK ((resolved = false) OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL))
 );
 
 CREATE INDEX ix_migration_report_unresolved
@@ -1954,7 +2044,7 @@ column-level GRANTs instead of table-level. Example for
 -- Lifecycle mutations go through SECURITY DEFINER functions.
 GRANT SELECT, INSERT ON auth_delegations TO gitwire_app;
 -- No UPDATE or DELETE granted.
--- The stored functions (owned by operator role) have full access.
+-- The stored functions (owned by gitwire_auth_fn_owner NOLOGIN) have full access.
 ```
 
 ### Operator role (`gitwire_operator`)
@@ -2024,11 +2114,17 @@ Runs DDL only. Seeds catalog tables. Cannot create principals or grants.
 | `audit_trail_entries` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
 | `audit_trail_entries` | `auth_delegations` | `delegation_id` | NO ACTION | Delegations durable |
 | `audit_trail_entries` | `auth_authorization_decisions` | `authorization_decision_id` | SET NULL | Archival sets NULL; audit entry retains other fields |
+| `auth_resource_actions` | `auth_resource_registry` | `registry_token` | NO ACTION | Catalog never deleted |
+| `auth_credentials` | `auth_principals` | `revoked_by` | NO ACTION | Audit linkage preserved |
+| `auth_break_glass_activations` | `auth_principals` | `alert_acknowledged_by` | NO ACTION | Audit linkage preserved |
+| `auth_break_glass_activations` | `auth_principals` | `revoked_by` | NO ACTION | Audit linkage preserved |
+| `decision_log` | `auth_principals` | `principal_id` | NO ACTION | Principals never deleted |
+| `decision_log` | `auth_authorization_decisions` | `authorization_decision_id` | SET NULL | Archival sets NULL |
 
 **Default:** `NO ACTION` everywhere. The only `ON DELETE CASCADE` is
 `auth_worker_ceiling_permissions → auth_worker_ceilings` (ceiling
 permission rows are operational, not audit-relevant). Roles are
-**retired** (set `is_builtin = false` + soft flag), not deleted —
+**retired** (via `retire_role()`: sets `status = 'retired'`, `retired_at`, `retired_by`), not deleted —
 deleting a role would destroy audit history for every principal who
 held it. Soft revocation (`revoked_at`) is the lifecycle mechanism for
 all durable records.
@@ -2073,14 +2169,20 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- 6. CREATE TABLE auth_resource_actions (§2) → gitwire_auth.auth_resource_actions
 -- 7. INSERT 57 resource tokens + action sets
 
--- 8. Create function-owner NOLOGIN role (needed in stage 039+)
-CREATE ROLE gitwire_auth_fn_owner NOLOGIN;
+-- 8. Create all roles (production assumes these exist; smoke test creates them)
+DO $$ BEGIN
+  CREATE ROLE gitwire_auth_fn_owner NOLOGIN;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE ROLE gitwire_app;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE ROLE gitwire_operator;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  CREATE ROLE gitwire_migration;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner;
--- Application and operator roles (assumed to exist in production;
--- for empty-database smoke test, create them here):
--- CREATE ROLE gitwire_app;
--- CREATE ROLE gitwire_operator;
--- CREATE ROLE gitwire_migration;
 GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_app, gitwire_operator;
 ```
 
@@ -2095,9 +2197,15 @@ etc.) remain in the `public` schema. Cross-schema FKs from `gitwire_auth`
 to `public` are fully qualified: e.g., `REFERENCES public.repositories(github_id)`.
 
 **Rollback:** `DROP TABLE gitwire_auth.auth_resource_actions; DROP TABLE
-gitwire_auth.auth_resource_registry;` then `DROP TYPE` each enum.
-check:** must be rolled back AFTER all stages that reference the
-catalog and enums (039–047).
+gitwire_auth.auth_resource_registry;` then `DROP TYPE` for each enum
+(principal_type, principal_status, scope_type, grant_effect,
+delegation_status, bootstrap_state_enum, credential_environment,
+credential_audience, authority_source_state). Drop roles:
+`DROP ROLE gitwire_auth_fn_owner; DROP ROLE gitwire_migration;`
+(gitwire_app/gitwire_operator may be shared — do not drop in rollback).
+Drop schema: `DROP SCHEMA IF EXISTS gitwire_auth;`.
+**Dependency check:** must be rolled back AFTER all stages that
+reference the catalog and enums (039–047).
 
 ### Stage 039: Identity tables
 
@@ -2193,12 +2301,16 @@ ALTER TABLE auth_authorization_decisions
   ADD CONSTRAINT fk_decision_attestation
   FOREIGN KEY (attestation_id) REFERENCES auth_external_attestations(id) ON DELETE SET NULL;
 
--- 4. CREATE FUNCTION acquire_delegation_claim(...)
--- 5. CREATE FUNCTION finalize_delegation_claim(...)
--- 6. CREATE FUNCTION operator_reconcile_execution(...)
--- 7. CREATE CONSTRAINT TRIGGER trg_denied_terminal
--- 8. CREATE CONSTRAINT TRIGGER trg_no_direct_executing_transition
--- 9. CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
+-- 4. CREATE TABLE auth_reconciliation_log (§9) + append-only triggers
+-- 5. CREATE FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint)
+-- 6. CREATE FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status)
+-- 7. CREATE FUNCTION operator_reconcile_execution(uuid, uuid, text, text)
+-- 8. CREATE CONSTRAINT TRIGGER trg_denied_terminal
+-- 9. CREATE CONSTRAINT TRIGGER trg_no_direct_executing_transition
+-- 10. CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
+-- 11. CREATE TRIGGER trg_delegation_decision_notnull_insert
+-- 12. GRANT DELETE ON auth_authorization_decisions, auth_reconciliation_log TO gitwire_auth_fn_owner
+-- 13. GRANT INSERT ON auth_reconciliation_log TO gitwire_auth_fn_owner
 ```
 
 **Rollback:** reverse dependency order:
@@ -2229,7 +2341,7 @@ Creates `auth_bootstrap_allow`, `auth_bootstrap_state`,
 SET search_path = gitwire_auth, public;
 ```
 
-**Rollback:** `DROP FUNCTION transition_bootstrap_state; DROP TABLE
+**Rollback:** `DROP FUNCTION transition_bootstrap_state(text); DROP TABLE
 auth_bootstrap_allow; DROP TABLE auth_bootstrap_state`.
 
 ### Stage 043: Ownership backfill
@@ -2363,6 +2475,40 @@ INSERT INTO auth_authority_source_state (id, state) VALUES (1, 'legacy-only')
 -- Production-cutover authority (promoting to enforce/legacy-retired)
 -- is operator-controlled, NOT application-controlled. The application
 -- cannot execute this function.
+
+-- Authority-source transition audit table (MUST be created BEFORE the
+-- function that inserts into it):
+CREATE TABLE auth_authority_source_log (
+  id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  from_state      authority_source_state NOT NULL,
+  to_state        authority_source_state NOT NULL,
+  transitioned_by text        NOT NULL,  -- session_user (DB-authenticated)
+  transitioned_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Append-only enforcement:
+CREATE OR REPLACE FUNCTION enforce_authority_source_log_append_only()
+RETURNS trigger AS $$
+BEGIN
+  IF current_user = 'gitwire_auth_fn_owner' THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  RAISE EXCEPTION 'auth_authority_source_log is append-only (current_user=%)',
+    current_user;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_authority_source_log_no_update
+  BEFORE UPDATE ON auth_authority_source_log
+  FOR EACH ROW EXECUTE FUNCTION enforce_authority_source_log_append_only();
+CREATE TRIGGER trg_authority_source_log_no_delete
+  BEFORE DELETE ON auth_authority_source_log
+  FOR EACH ROW EXECUTE FUNCTION enforce_authority_source_log_append_only();
+
+-- Privileges: only function owner can INSERT; application/operator get SELECT.
+GRANT INSERT ON auth_authority_source_log TO gitwire_auth_fn_owner;
+GRANT SELECT, UPDATE ON auth_authority_source_state TO gitwire_auth_fn_owner;
+
 CREATE OR REPLACE FUNCTION transition_authority_source(
   p_expected_state authority_source_state,
   p_new_state      authority_source_state
@@ -2380,7 +2526,7 @@ BEGIN
     (p_expected_state = 'shadow-evaluation'  AND p_new_state IN ('dual-write', 'legacy-only')) OR
     (p_expected_state = 'dual-write'         AND p_new_state IN ('enforce', 'shadow-evaluation')) OR
     (p_expected_state = 'enforce'            AND p_new_state IN ('dual-write', 'legacy-retired')) OR
-    (p_expected_state = 'legacy-retired'     AND p_new_state = 'legacy-retired')  -- terminal
+    -- legacy-retired is terminal: no transitions out, no self-transition
   ) THEN
     RAISE EXCEPTION 'Illegal authority-source transition: % → %',
       p_expected_state, p_new_state;
@@ -2411,38 +2557,6 @@ REVOKE ALL ON FUNCTION transition_authority_source(authority_source_state, autho
 GRANT EXECUTE ON FUNCTION transition_authority_source(authority_source_state, authority_source_state) TO gitwire_operator;
 ```
 
-**Authority-source transition audit table:**
-
-```sql
-CREATE TABLE auth_authority_source_log (
-  id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  from_state      authority_source_state NOT NULL,
-  to_state        authority_source_state NOT NULL,
-  transitioned_by text        NOT NULL,  -- session_user (DB-authenticated, not caller-supplied)
-  transitioned_at timestamptz NOT NULL DEFAULT now()
-);
-
--- Append-only enforcement:
-CREATE OR REPLACE FUNCTION enforce_authority_source_log_append_only()
-RETURNS trigger AS $$
-BEGIN
-  RAISE EXCEPTION 'auth_authority_source_log is append-only';
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_authority_source_log_no_update
-  BEFORE UPDATE ON auth_authority_source_log
-  FOR EACH ROW EXECUTE FUNCTION enforce_authority_source_log_append_only();
-CREATE TRIGGER trg_authority_source_log_no_delete
-  BEFORE DELETE ON auth_authority_source_log
-  FOR EACH ROW EXECUTE FUNCTION enforce_authority_source_log_append_only();
-
--- Privileges: only function owner can INSERT; application/operator get SELECT.
-GRANT INSERT ON auth_authority_source_log TO gitwire_auth_fn_owner;
-GRANT SELECT ON auth_authority_source_state TO gitwire_auth_fn_owner;
-GRANT UPDATE ON auth_authority_source_state TO gitwire_auth_fn_owner;
-```
-
 **Identity binding.** The `transitioned_by` column records `session_user`
 (the authenticated database session identity), not a caller-supplied
 parameter. This prevents forged audit attribution. The same principle
@@ -2452,7 +2566,7 @@ intent, but the DB session identity (`session_user`) is captured
 separately in the reconciliation log for forensic verification.
 
 **Rollback:**
-1. `DROP FUNCTION transition_authority_source;`
+1. `DROP FUNCTION transition_authority_source(authority_source_state, authority_source_state);`
 2. `DROP TRIGGER trg_authority_source_log_no_update ON auth_authority_source_log;`
 3. `DROP TRIGGER trg_authority_source_log_no_delete ON auth_authority_source_log;`
 4. `DROP FUNCTION enforce_authority_source_log_append_only;`
@@ -2747,15 +2861,18 @@ ROLLBACK;
 BEGIN;
   INSERT INTO auth_principals (id, principal_type, display_name)
     VALUES ('f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a01', 'service', 'Heal Worker');
-  INSERT INTO auth_worker_ceilings (id, principal_id, role_name, permissions,
-    granted_by)
+  INSERT INTO auth_worker_ceilings (id, principal_id, role_name, granted_by)
     VALUES ('f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10',
             'f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a01',
             'service:heal-worker',
-            ARRAY['repository:github:act', 'ci_run:update', 'heal_pr:update',
-                  'managed_action:update'],
             'f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a01');
-  -- EVAL: ceiling includes 'repository:github:act'. Delegation authorizes repo X.
+  -- Normalized junction table (not text[] array):
+  INSERT INTO auth_worker_ceiling_permissions (ceiling_id, permission_resource, permission_action)
+    VALUES ('f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10', 'repository', 'github:act'),
+           ('f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10', 'ci_run', 'update'),
+           ('f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10', 'heal_pr', 'update'),
+           ('f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a10', 'managed_action', 'update');
+  -- EVAL: ceiling includes ('repository', 'github:act'). Delegation authorizes repo X.
   --   Both evaluations ALLOW.
 ROLLBACK;
 ```
@@ -2921,10 +3038,10 @@ The following dependency rules apply:
 | `auth_break_glass_activations` (365 days) | `auth_sessions` (30 days) | `session_id` FK is nullable. When session is deleted, set `session_id = NULL` (via `ON DELETE SET NULL` on the FK); the activation record retains all other metadata. |
 
 **All FKs to short-lived tables use `ON DELETE SET NULL`** (not
-`ON DELETE SET NULL`), so cleanup operations can delete expired
-records without FK violations. The immutable JSONB snapshots in
-long-lived records preserve the audit trail. The delegation→decision FK
-also uses `ON DELETE SET NULL` so decision archival does not block on
+`NO ACTION`), so cleanup operations can delete expired records without
+FK violations. The immutable JSONB snapshots in long-lived records
+preserve the audit trail. The delegation→decision FK also uses
+`ON DELETE SET NULL` so decision archival does not block on
 durable delegation references.
 
 **Archival mechanism.** Append-only tables (`auth_authorization_decisions`,
@@ -2944,7 +3061,7 @@ DECLARE
   deleted_count integer;
 BEGIN
   -- Retention floor: reject attempts to delete records younger than 365 days
-  IF p_retention_days < 365 THEN
+  IF p_retention_days IS NULL OR p_retention_days < 365 THEN
     RAISE EXCEPTION 'archive_old_decisions: retention_days must be >= 365, got %',
       p_retention_days;
   END IF;
@@ -2972,7 +3089,7 @@ AS $$
 DECLARE
   deleted_count integer;
 BEGIN
-  IF p_retention_days < 365 THEN
+  IF p_retention_days IS NULL OR p_retention_days < 365 THEN
     RAISE EXCEPTION 'archive_old_reconciliation: retention_days must be >= 365, got %',
       p_retention_days;
   END IF;
