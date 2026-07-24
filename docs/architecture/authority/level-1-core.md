@@ -10,6 +10,17 @@
 > authority core. It implements issue #80 and supersedes the frozen
 > W0-C draft on `lane-b/wave-0-authority-cartography` (research source
 > only — not merged or copied).
+>
+> **Implementation status.** The SQL DDL, role grants, migration order,
+> rollback sequences, trigger definitions, and seed examples in this
+> document are **implementation targets**, not executable proof. They
+> describe the intended Level 1 contract for implementers. Executable
+> correctness — including apply, rerun, negative-test, rollback, and
+> reapply verification against a disposable PostgreSQL instance — is
+> owned by issue #81 and the authorized implementation wave. The
+> architectural invariants, enforcement allocation, trust boundaries,
+> and extension seams defined here are the stable design; the SQL is
+> guidance for achieving that design.
 
 ## Table of contents
 
