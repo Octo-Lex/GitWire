@@ -37,7 +37,7 @@
 21. [Migration plan — additive sequence](#21-migration-plan--additive-sequence)
 22. [Authority-source state machine](#22-authority-source-state-machine)
 23. [Proof obligations and fixtures](#23-proof-obligations-and-fixtures)
-24. [Schema-smoke verification](#24-schema-smoke-verification)
+24. [Schema-smoke validation plan](#24-schema-smoke-validation-plan)
 25. [Retention and archival constraints](#25-retention-and-archival-constraints)
 26. [Unresolved schema risks](#26-unresolved-schema-risks)
 
@@ -320,24 +320,32 @@ non-service type when ceilings or delegations reference it (and vice
 versa for non-service principals receiving ceilings/delegations):
 
 ```sql
-CREATE OR REPLACE FUNCTION enforce_no_subtype_retype_with_deps()
-RETURNS trigger AS $$
-BEGIN
-  IF OLD.principal_type = 'service' AND NEW.principal_type != 'service' THEN
-    IF EXISTS (SELECT 1 FROM auth_worker_ceilings WHERE principal_id = NEW.id) THEN
-      RAISE EXCEPTION 'cannot retype service principal % — worker ceilings exist', NEW.id;
-    END IF;
-    IF EXISTS (SELECT 1 FROM auth_delegations WHERE worker_service_principal_id = NEW.id) THEN
-      RAISE EXCEPTION 'cannot retype service principal % — delegations exist', NEW.id;
-    END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE CONSTRAINT TRIGGER trg_no_subtype_retype
-  AFTER UPDATE ON auth_principals
-  FOR EACH ROW EXECUTE FUNCTION enforce_no_subtype_retype_with_deps();
+-- NOTE: This function and trigger are created in stage 041 (not stage 039)
+-- because they reference auth_worker_ceilings (stage 040) and
+-- auth_delegations (stage 041). Creating them in 039 would be a forward
+-- reference. The trigger fires on auth_principals UPDATE, which is safe
+-- because principal retyping is rare and only meaningful after the full
+-- schema is deployed.
+--
+-- Stage 041 creates:
+-- CREATE OR REPLACE FUNCTION enforce_no_subtype_retype_with_deps()
+-- RETURNS trigger AS $$
+-- BEGIN
+--   IF OLD.principal_type = 'service' AND NEW.principal_type != 'service' THEN
+--     IF EXISTS (SELECT 1 FROM auth_worker_ceilings WHERE principal_id = NEW.id) THEN
+--       RAISE EXCEPTION 'cannot retype service principal % — worker ceilings exist', NEW.id;
+--     END IF;
+--     IF EXISTS (SELECT 1 FROM auth_delegations WHERE worker_service_principal_id = NEW.id) THEN
+--       RAISE EXCEPTION 'cannot retype service principal % — delegations exist', NEW.id;
+--     END IF;
+--   END IF;
+--   RETURN NEW;
+-- END;
+-- $$ LANGUAGE plpgsql;
+--
+-- CREATE CONSTRAINT TRIGGER trg_no_subtype_retype
+--   AFTER UPDATE ON auth_principals
+--   FOR EACH ROW EXECUTE FUNCTION enforce_no_subtype_retype_with_deps();
 ```
 
 **Active predicate:** `status = 'active'`.
@@ -965,9 +973,10 @@ GRANT EXECUTE ON FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint) TO 
 
 ```sql
 CREATE OR REPLACE FUNCTION finalize_delegation_claim(
-  p_delegation_id  uuid,
-  p_attempt_id     uuid,
-  p_final_status   delegation_status
+  p_delegation_id          uuid,
+  p_attempt_id             uuid,
+  p_final_status           delegation_status,
+  p_worker_principal_id    uuid
 ) RETURNS boolean
 SECURITY DEFINER
 SET search_path = gitwire_auth, pg_temp
@@ -982,17 +991,18 @@ BEGIN
 
   UPDATE auth_delegations
     SET execution_status = p_final_status
-    WHERE id                    = p_delegation_id
-      AND execution_attempt_id = p_attempt_id
+    WHERE id                        = p_delegation_id
+      AND execution_attempt_id      = p_attempt_id
+      AND worker_service_principal_id = p_worker_principal_id
       AND execution_status     = 'executing';
 
   GET DIAGNOSTICS affected = ROW_COUNT;
   RETURN affected = 1;
 END;
 $$ LANGUAGE plpgsql;
-ALTER FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status) OWNER TO gitwire_auth_fn_owner;
-REVOKE ALL ON FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status) TO gitwire_app;
+ALTER FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status, uuid) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status, uuid) TO gitwire_app;
 ```
 
 **Operator reconciliation** — requires confirmed termination evidence,
@@ -1113,6 +1123,51 @@ CREATE CONSTRAINT TRIGGER trg_denied_terminal
   AFTER UPDATE ON auth_delegations
   FOR EACH ROW EXECUTE FUNCTION enforce_denied_terminal();
 ```
+
+**Delegation denial function.** The `denied` status is set when an
+admin explicitly rejects a delegation (e.g., the authorization decision
+was overturned after creation). This function provides the defined
+entry path:
+
+```sql
+CREATE OR REPLACE FUNCTION deny_delegation(
+  p_delegation_id     uuid,
+  p_authorization_decision_id uuid
+) RETURNS boolean
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+DECLARE
+  affected int;
+BEGIN
+  -- Validate the denial decision
+  IF NOT EXISTS (
+    SELECT 1 FROM auth_authorization_decisions
+    WHERE id = p_authorization_decision_id
+      AND decision = 'allow'
+      AND action = 'manage'
+      AND target_resource_type = 'auth_delegation'
+  ) THEN
+    RAISE EXCEPTION 'deny_delegation: invalid authorization decision';
+  END IF;
+
+  UPDATE auth_delegations
+    SET execution_status = 'denied'
+    WHERE id = p_delegation_id
+      AND execution_status = 'pending';
+
+  GET DIAGNOSTICS affected = ROW_COUNT;
+  RETURN affected = 1;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION deny_delegation(uuid, uuid) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION deny_delegation(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION deny_delegation(uuid, uuid) TO gitwire_app;
+```
+
+Only `pending` delegations can be denied. `executing` delegations
+cannot be denied (they must be finalized or reconciled first). Once
+`denied`, the terminal trigger prevents any further transition.
 
 **Strict no-reset enforcement.** The trigger blocks direct
 `executing → other` transitions by any role EXCEPT the function-owner
@@ -1302,20 +1357,84 @@ CREATE TRIGGER trg_decisions_no_delete
 ```
 
 **FK-driven `ON DELETE SET NULL` and append-only triggers.** PostgreSQL
-FK referential actions (`ON DELETE SET NULL`, `ON DELETE CASCADE`) are
-internal system operations that do **not** fire user-defined `BEFORE
-UPDATE`/`BEFORE DELETE` triggers. Therefore, when attestation or
-break-glass cleanup deletes a row, the resulting `SET NULL` on
-`auth_authorization_decisions.break_glass_activation_id` or
-`attestation_id` proceeds without triggering the append-only guard.
-This is the correct and safe behavior: the FK action is a system-level
-integrity operation, not a caller-initiated UPDATE.
+FK referential actions execute as ordinary `UPDATE` or `DELETE`
+operations on the referencing table, and user-defined triggers **do
+fire**. Therefore, when attestation or break-glass cleanup deletes a
+row, the resulting `SET NULL` UPDATE on
+`auth_authorization_decisions` fires `trg_decisions_no_update`.
 
-For direct age-based archival of attestations and break-glass
-activations (non-append-only tables), the operator runs scheduled
-DELETE jobs directly. These DELETEs cascade `SET NULL` to the
-append-only decisions table via the FK, which is permitted by
-PostgreSQL's internal FK action mechanism.
+To handle this correctly, all cleanup of tables with `ON DELETE SET
+NULL` FKs to append-only tables must go through `SECURITY DEFINER`
+functions owned by `gitwire_auth_fn_owner`. The FK-driven UPDATE runs
+under the session user that initiated the DELETE — when that session
+is inside a `SECURITY DEFINER` function owned by
+`gitwire_auth_fn_owner`, the trigger's `current_user` check passes:
+
+```sql
+-- Archival for attestations (causes ON DELETE SET NULL on decisions)
+CREATE OR REPLACE FUNCTION archive_old_attestations(p_retention_days integer DEFAULT 90)
+RETURNS integer
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+DECLARE
+  deleted_count integer;
+BEGIN
+  IF p_retention_days IS NULL OR p_retention_days < 90 THEN
+    RAISE EXCEPTION 'archive_old_attestations: retention_days must be >= 90, got %',
+      p_retention_days;
+  END IF;
+
+  DELETE FROM auth_external_attestations
+    WHERE expires_at < now() - (p_retention_days || ' days')::interval;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION archive_old_attestations(integer) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION archive_old_attestations(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION archive_old_attestations(integer) TO gitwire_operator;
+GRANT DELETE ON auth_external_attestations TO gitwire_auth_fn_owner;
+
+-- Archival for break-glass activations (causes ON DELETE SET NULL on decisions)
+CREATE OR REPLACE FUNCTION archive_old_break_glass(p_retention_days integer DEFAULT 365)
+RETURNS integer
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_temp
+AS $$
+DECLARE
+  deleted_count integer;
+BEGIN
+  IF p_retention_days IS NULL OR p_retention_days < 365 THEN
+    RAISE EXCEPTION 'archive_old_break_glass: retention_days must be >= 365, got %',
+      p_retention_days;
+  END IF;
+
+  DELETE FROM auth_break_glass_activations
+    WHERE activated_at < now() - (p_retention_days || ' days')::interval;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+  RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION archive_old_break_glass(integer) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION archive_old_break_glass(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION archive_old_break_glass(integer) TO gitwire_operator;
+GRANT DELETE ON auth_break_glass_activations TO gitwire_auth_fn_owner;
+```
+
+When these functions DELETE from attestation/break-glass tables, the
+FK `ON DELETE SET NULL` fires `trg_decisions_no_update` on
+`auth_authorization_decisions`. Because the function runs as
+`gitwire_auth_fn_owner` (`SECURITY DEFINER`), `current_user` is
+`gitwire_auth_fn_owner`, and the trigger's owner exemption allows the
+UPDATE. Direct operator or application DELETE on these tables would
+fail the trigger because `current_user` would not match.
+
+Session cleanup (`auth_sessions`) does not have this problem because
+no `ON DELETE SET NULL` FK targets an append-only table — the
+break-glass activation's `session_id` FK targets sessions (not
+append-only), so session DELETE does not UPDATE any append-only table.
+Session cleanup can therefore use a direct scheduled DELETE job.
 
 **Decision action validation.** The `action` column must contain a
 concrete action from the global action vocabulary (not `'*'`), and when
@@ -2027,6 +2146,7 @@ No `GRANT ... ON ALL TABLES`. Each grant is explicit.
 | `auth_authorization_decisions` | ✅ | ✅ | ❌ | ❌ | Append-only (triggers enforce) |
 | `auth_operation_policy_versions` | ✅ | ✅ | ❌ | ❌ | Versioned, insert-only |
 | `auth_sessions` | ✅ | ✅ | ✅ (limited) | ❌ | UPDATE only for revoked_at |
+| `auth_break_glass_activations` | ✅ | ✅ | ✅ (limited) | ❌ | UPDATE only for alert_sent, alert_acknowledged, alert_acknowledged_at, alert_acknowledged_by, revoked_at, revoked_by |
 | `auth_bootstrap_state` | ✅ | ❌ | ❌ | ❌ | Via stored function only |
 | `auth_bootstrap_allow` | ❌ | ❌ | ❌ | ❌ | Operator-only |
 | `auth_legacy_key_map` | ✅ | ✅ | ✅ (limited) | ❌ | UPDATE only for usage_count, last_used_at, updated_at |
@@ -2059,6 +2179,8 @@ GRANT SELECT, INSERT ON auth_delegations TO gitwire_app;
 | `operator_reconcile_execution()` | EXECUTE | Audited reconciliation only |
 | `archive_old_decisions()` | EXECUTE | Daily archival with 365-day floor |
 | `archive_old_reconciliation()` | EXECUTE | Daily archival with 365-day floor |
+| `archive_old_attestations()` | EXECUTE | Attestation cleanup with 90-day floor |
+| `archive_old_break_glass()` | EXECUTE | Break-glass cleanup with 365-day floor |
 | `transition_authority_source()` | EXECUTE | Production cutover control |
 
 ### Migration role (`gitwire_migration`)
@@ -2224,10 +2346,19 @@ SET search_path = gitwire_auth, public;
 -- Seeds built-in roles and permission sets
 ```
 
-**Rollback:** drop triggers, then `DROP TABLE` in reverse FK order:
-`auth_principal_roles`, `auth_role_permissions`, `auth_roles`,
-`auth_credentials`, `auth_principals`. **Dependency check:** must be
-rolled back AFTER stages 040–047 that reference these tables.
+**Rollback:**
+1. Drop constraint triggers: `DROP TRIGGER trg_principal_bindings ON auth_principals;`
+   `DROP TRIGGER trg_no_service_tenant_roles ON auth_principal_roles;`
+2. Drop trigger functions: `DROP FUNCTION enforce_principal_type_bindings;`
+   `DROP FUNCTION enforce_no_tenant_roles_for_service;`
+3. `DROP TABLE auth_principal_roles;`
+4. `DROP TABLE auth_role_permissions;`
+5. `DROP TABLE auth_roles;`
+6. `DROP TABLE auth_credentials;`
+7. `DROP TABLE auth_principals;`
+**Dependency check:** must be rolled back AFTER stages 040–047 that
+reference these tables. (The `trg_no_subtype_retype` trigger is created
+in stage 041, so it is dropped in stage 041's rollback, not here.)
 
 ### Stage 040: Authorization tables
 
@@ -2303,8 +2434,9 @@ ALTER TABLE auth_authorization_decisions
 
 -- 4. CREATE TABLE auth_reconciliation_log (§9) + append-only triggers
 -- 5. CREATE FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint)
--- 6. CREATE FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status)
+-- 6. CREATE FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status, uuid)
 -- 7. CREATE FUNCTION operator_reconcile_execution(uuid, uuid, text, text)
+-- 7a. CREATE FUNCTION deny_delegation(uuid, uuid)
 -- 8. CREATE CONSTRAINT TRIGGER trg_denied_terminal
 -- 9. CREATE CONSTRAINT TRIGGER trg_no_direct_executing_transition
 -- 10. CREATE CONSTRAINT TRIGGER trg_delegation_worker_service
@@ -2580,10 +2712,14 @@ Roll back in this order (latest first):
   047 → 046 → 045 → 044 → 043 → 042 → 041 → 040 → 039 → 038
 ```
 
-**Stage 047 also creates:** `archive_old_decisions()` and
-`archive_old_reconciliation()` functions (all tables exist by this
-stage). Rollback of 047 drops these functions first, then the
-authority-source functions and tables.
+**Stage 047 also creates:** `archive_old_decisions()`,
+`archive_old_reconciliation()`, `archive_old_attestations()`, and
+`archive_old_break_glass()` functions (all tables exist by this
+stage). Rollback of 047 drops these functions first (with exact
+signatures: `archive_old_decisions(integer)`,
+`archive_old_reconciliation(integer)`, `archive_old_attestations(integer)`,
+`archive_old_break_glass(integer)`), then the authority-source log
+triggers/functions, then the authority-source function, then tables.
 
 Stages 043 and 045 are **irreversible after enforcement is active**
 (they modify data that existing code depends on). After the
@@ -3108,11 +3244,11 @@ GRANT DELETE ON auth_reconciliation_log TO gitwire_auth_fn_owner;
 
 A scheduled job (cron, systemd timer) calls these functions daily. The
 operator role executes them — the application cannot trigger archival.
-Non-append-only tables (sessions, attestations, break-glass activations)
-use direct scheduled DELETE jobs. Break-glass activation archival
-orders before decision archival (decisions reference activations via
-`ON DELETE SET NULL`, so activations can be deleted independently).
-attestations) use direct scheduled DELETE jobs.
+Session cleanup uses a direct scheduled DELETE job (sessions are not
+append-only and their deletion does not trigger FK updates on
+append-only tables). Break-glass and attestation archival use
+`SECURITY DEFINER` functions (see above) because their deletion
+causes FK-driven `SET NULL` on the append-only decisions table.
 
 **Retention table (non-partitioned, row-level archival):**
 
@@ -3120,16 +3256,16 @@ attestations) use direct scheduled DELETE jobs.
 |---|---|---|---|
 | Authorization decisions | `auth_authorization_decisions` | 365 days | `archive_old_decisions(365)` — SECURITY DEFINER, operator-executable, bypasses append-only trigger |
 | Reconciliation log | `auth_reconciliation_log` | 365 days | `archive_old_reconciliation(365)` — same pattern |
-| Break-glass activations | `auth_break_glass_activations` | 365 days | Scheduled DELETE (not append-only) |
+| Break-glass activations | `auth_break_glass_activations` | 365 days | `archive_old_break_glass(365)` — SECURITY DEFINER (FK SET NULL on append-only decisions fires under fn_owner) |
 | Authority-source log | `auth_authority_source_log` | Indefinite | Never deleted (low volume) |
-| External attestations | `auth_external_attestations` | 90 days | Scheduled job: `DELETE WHERE expires_at < now() - interval '90 days'` |
+| External attestations | `auth_external_attestations` | 90 days | `archive_old_attestations(90)` — SECURITY DEFINER (FK SET NULL on append-only decisions fires under fn_owner) |
 | Sessions | `auth_sessions` | 30 days after expiry/revocation | Scheduled job: `DELETE WHERE expires_at < now() - interval '30 days'` |
 | Capability keys | `auth_capability_keys` | Until zero dependents | Set `retired_at`; manual DELETE after verified zero dependents |
 | Legacy key mappings | `auth_legacy_key_map` | Until `legacy-retired` | Archive after state change; never DELETE until then |
 | Policy versions | `auth_operation_policy_versions` | Indefinite (immutable) | Never |
 | Bootstrap markers | `auth_bootstrap_allow` | Until consumed | `transition_bootstrap_state('disabled')` deletes them |
-| Migration reports | `migration_report` | Until resolved + 90 days | Archive resolved rows older than 90 days | DELETE where `resolved = true AND resolved_at < now() - interval '90 days'` |
-| Principals/roles/grants | all `auth_*` identity tables | Indefinite (durable) | Never delete; soft-revoke only | Never |
+| Migration reports | `migration_report` | Until resolved + 90 days | Scheduled job: `DELETE WHERE resolved = true AND resolved_at < now() - interval '90 days'` |
+| Principals/roles/grants | all `auth_*` identity tables | Indefinite (durable) | Never delete; soft-revoke only |
 
 **Principle:** durable identity records (principals, credentials, roles,
 grants, delegations) are never hard-deleted. Revocation
