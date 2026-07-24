@@ -319,33 +319,30 @@ CREATE CONSTRAINT TRIGGER trg_principal_bindings
 non-service type when ceilings or delegations reference it (and vice
 versa for non-service principals receiving ceilings/delegations):
 
+This function and trigger are created in **stage 041** (not stage 039)
+because they reference `auth_worker_ceilings` (stage 040) and
+`auth_delegations` (stage 041). The normative SQL (created in stage
+041 after both referenced tables exist):
+
 ```sql
--- NOTE: This function and trigger are created in stage 041 (not stage 039)
--- because they reference auth_worker_ceilings (stage 040) and
--- auth_delegations (stage 041). Creating them in 039 would be a forward
--- reference. The trigger fires on auth_principals UPDATE, which is safe
--- because principal retyping is rare and only meaningful after the full
--- schema is deployed.
---
--- Stage 041 creates:
--- CREATE OR REPLACE FUNCTION enforce_no_subtype_retype_with_deps()
--- RETURNS trigger AS $$
--- BEGIN
---   IF OLD.principal_type = 'service' AND NEW.principal_type != 'service' THEN
---     IF EXISTS (SELECT 1 FROM auth_worker_ceilings WHERE principal_id = NEW.id) THEN
---       RAISE EXCEPTION 'cannot retype service principal % — worker ceilings exist', NEW.id;
---     END IF;
---     IF EXISTS (SELECT 1 FROM auth_delegations WHERE worker_service_principal_id = NEW.id) THEN
---       RAISE EXCEPTION 'cannot retype service principal % — delegations exist', NEW.id;
---     END IF;
---   END IF;
---   RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
---
--- CREATE CONSTRAINT TRIGGER trg_no_subtype_retype
---   AFTER UPDATE ON auth_principals
---   FOR EACH ROW EXECUTE FUNCTION enforce_no_subtype_retype_with_deps();
+CREATE OR REPLACE FUNCTION enforce_no_subtype_retype_with_deps()
+RETURNS trigger AS $$
+BEGIN
+  IF OLD.principal_type = 'service' AND NEW.principal_type != 'service' THEN
+    IF EXISTS (SELECT 1 FROM auth_worker_ceilings WHERE principal_id = NEW.id) THEN
+      RAISE EXCEPTION 'cannot retype service principal % — worker ceilings exist', NEW.id;
+    END IF;
+    IF EXISTS (SELECT 1 FROM auth_delegations WHERE worker_service_principal_id = NEW.id) THEN
+      RAISE EXCEPTION 'cannot retype service principal % — delegations exist', NEW.id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_no_subtype_retype
+  AFTER UPDATE ON auth_principals
+  FOR EACH ROW EXECUTE FUNCTION enforce_no_subtype_retype_with_deps();
 ```
 
 **Active predicate:** `status = 'active'`.
@@ -895,37 +892,63 @@ BEGIN
     END IF;
 
     -- Decision resource type must match delegation resource type
-    IF v_decision_resource IS NOT NULL AND v_decision_resource != NEW.resource_type THEN
+    -- Decision resource type must match delegation resource type (non-NULL required)
+    IF v_decision_resource IS NULL THEN
+      RAISE EXCEPTION 'delegation decision must have a target_resource_type';
+    END IF;
+    IF v_decision_resource != NEW.resource_type THEN
       RAISE EXCEPTION 'delegation decision resource_type % does not match delegation %',
         v_decision_resource, NEW.resource_type;
     END IF;
 
-    -- Decision target (when specific) must match delegation resource_id
-    IF v_decision_target IS NOT NULL AND v_decision_target != NEW.resource_id THEN
+    -- Decision target must match delegation resource_id (non-NULL required)
+    IF v_decision_target IS NULL THEN
+      RAISE EXCEPTION 'delegation decision must have a target_resource_id';
+    END IF;
+    IF v_decision_target != NEW.resource_id THEN
       RAISE EXCEPTION 'delegation decision target % does not match delegation resource_id %',
         v_decision_target, NEW.resource_id;
     END IF;
 
-    -- Decision installation boundary must encompass delegation boundary
-    IF v_decision_installation IS NOT NULL
-       AND NEW.boundary_installation_id IS NOT NULL
-       AND v_decision_installation != NEW.boundary_installation_id THEN
-      RAISE EXCEPTION 'delegation decision installation % does not match boundary %',
-        v_decision_installation, NEW.boundary_installation_id;
+    -- Decision installation boundary must match delegation boundary (when both present)
+    IF NEW.boundary_installation_id IS NOT NULL THEN
+      IF v_decision_installation IS NULL THEN
+        RAISE EXCEPTION 'delegation has boundary_installation_id but decision has no installation scope';
+      END IF;
+      IF v_decision_installation != NEW.boundary_installation_id THEN
+        RAISE EXCEPTION 'delegation decision installation % does not match boundary %',
+          v_decision_installation, NEW.boundary_installation_id;
+      END IF;
     END IF;
 
-    -- Decision repository boundary must encompass delegation boundary
-    IF v_decision_repository IS NOT NULL
-       AND NEW.boundary_repository_id IS NOT NULL
-       AND v_decision_repository != NEW.boundary_repository_id THEN
-      RAISE EXCEPTION 'delegation decision repository % does not match boundary %',
-        v_decision_repository, NEW.boundary_repository_id;
+    -- Decision repository boundary must match delegation boundary (when both present)
+    IF NEW.boundary_repository_id IS NOT NULL THEN
+      IF v_decision_repository IS NULL THEN
+        RAISE EXCEPTION 'delegation has boundary_repository_id but decision has no repository scope';
+      END IF;
+      IF v_decision_repository != NEW.boundary_repository_id THEN
+        RAISE EXCEPTION 'delegation decision repository % does not match boundary %',
+          v_decision_repository, NEW.boundary_repository_id;
+      END IF;
     END IF;
 
-    -- Worker target: decision action must relate to delegation operation
+    -- Decision action must be non-NULL and be an enqueue/create action
     -- (the decision authorized the operation that creates this delegation)
     IF v_decision_action IS NULL THEN
       RAISE EXCEPTION 'delegation decision has no action';
+    END IF;
+    IF v_decision_action NOT IN ('enqueue', 'create') THEN
+      RAISE EXCEPTION 'delegation decision action % must be enqueue or create (delegation-creating action)',
+        v_decision_action;
+    END IF;
+
+    -- Worker must be a service principal (already enforced by trigger, but
+    -- the decision must also implicitly authorize delegation to this worker)
+    IF NOT EXISTS (
+      SELECT 1 FROM auth_principals
+      WHERE id = NEW.worker_service_principal_id AND principal_type = 'service'
+    ) THEN
+      RAISE EXCEPTION 'delegation worker_service_principal_id must be a service principal';
     END IF;
   END IF;
 
@@ -975,24 +998,28 @@ GRANT SELECT, UPDATE ON gitwire_auth.auth_delegations TO gitwire_auth_fn_owner;
 ```
 
 **Claim acquisition** — atomically checks status, version, revocation,
-expiry, and worker identity:
+expiry, and worker identity. The attempt_id is **generated inside the
+function** (not accepted from the caller) via `gen_random_uuid()`. The
+function RETURNS the attempt_id so the caller can use it for
+finalization. This prevents the application from supplying a
+predictable or reused attempt_id:
 
 ```sql
 CREATE OR REPLACE FUNCTION acquire_delegation_claim(
   p_delegation_id       uuid,
   p_worker_principal_id uuid,
-  p_attempt_id          uuid,
   p_expected_version    bigint
-) RETURNS boolean
+) RETURNS uuid  -- returns the generated attempt_id, or NULL on failure
 SECURITY DEFINER
 SET search_path = gitwire_auth, pg_temp
 AS $$
 DECLARE
   affected int;
+  v_attempt_id uuid := gen_random_uuid();
 BEGIN
   UPDATE auth_delegations
     SET execution_status     = 'executing',
-        execution_attempt_id = p_attempt_id,
+        execution_attempt_id = v_attempt_id,
         execution_version    = p_expected_version + 1,
         execution_started_at = now()
     WHERE id                       = p_delegation_id
@@ -1003,21 +1030,24 @@ BEGIN
       AND expires_at > now();
 
   GET DIAGNOSTICS affected = ROW_COUNT;
-  RETURN affected = 1;
+  IF affected = 1 THEN
+    RETURN v_attempt_id;
+  ELSE
+    RETURN NULL;
+  END IF;
 END;
 $$ LANGUAGE plpgsql;
-ALTER FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint) OWNER TO gitwire_auth_fn_owner;
-REVOKE ALL ON FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint) TO gitwire_app;
+ALTER FUNCTION acquire_delegation_claim(uuid, uuid, bigint) OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION acquire_delegation_claim(uuid, uuid, bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION acquire_delegation_claim(uuid, uuid, bigint) TO gitwire_app;
 ```
 
-**Claim finalization** — owner-checked via the attempt_id that only the
-acquiring worker knows. The `p_worker_principal_id` parameter is
-supplementary; the real authentication is the `p_attempt_id`, which is
-a cryptographically random UUID generated by the worker's
-`acquire_delegation_claim` call and never transmitted to any other
-party. An attacker who knows the worker's principal ID but not the
-fresh `attempt_id` cannot finalize.
+**Claim finalization** — the caller passes the `attempt_id` that was
+**returned by** `acquire_delegation_claim()`. Since the attempt_id was
+generated inside the SECURITY DEFINER acquire function (not supplied by
+the caller), only the worker process that called acquire and received
+the return value knows it. The CAS on `(id, attempt_id, worker_id,
+status='executing')` ensures only that worker can finalize.
 
 ```sql
 CREATE OR REPLACE FUNCTION finalize_delegation_claim(
@@ -1216,12 +1246,19 @@ BEGIN
     RAISE EXCEPTION 'deny_delegation: decision does not target delegation %', p_delegation_id;
   END IF;
 
-  -- Atomically transition pending → denied and persist denial evidence
+  -- Atomically transition pending → denied and persist denial evidence.
+  -- revocation_reason stores structured JSON with the decision ID and
+  -- the authenticated DB session identity (session_user).
   UPDATE auth_delegations
     SET execution_status = 'denied',
         revoked_at = now(),
         revoked_by = v_decision_principal,
-        revocation_reason = 'Denied via admin authorization decision ' || p_authorization_decision_id::text
+        revocation_reason = json_build_object(
+          'type', 'denial',
+          'authorization_decision_id', p_authorization_decision_id,
+          'db_session_user', v_db_session,
+          'denied_at', now()
+        )::text
     WHERE id = p_delegation_id
       AND execution_status = 'pending';
 
@@ -2259,10 +2296,13 @@ Runs DDL only. Seeds catalog tables. Cannot create principals or grants.
 ### Concrete column-level GRANT statements
 
 The following SQL implements the column-level UPDATE restrictions
-described in the privilege matrix above. These statements are applied
-in the stage that creates each table.
+described in the privilege matrix above. **Each block is applied only
+in the stage that creates the referenced tables** — blocks are
+annotated with their stage. No block references tables from a later
+stage.
 
 ```sql
+-- ===== STAGE 039 (identity tables) =====
 -- auth_principals: app can UPDATE only status, auth_epoch, display_name, updated_at
 GRANT SELECT, INSERT ON auth_principals TO gitwire_app;
 GRANT UPDATE (status, auth_epoch, display_name, updated_at) ON auth_principals TO gitwire_app;
@@ -2275,6 +2315,12 @@ GRANT UPDATE (revoked_at, revoked_by, revocation_reason, updated_at) ON auth_cre
 GRANT SELECT, INSERT ON auth_principal_roles TO gitwire_app;
 GRANT UPDATE (revoked_at, revoked_by, revocation_reason) ON auth_principal_roles TO gitwire_app;
 
+-- auth_roles: SELECT only (retirement via function)
+GRANT SELECT ON auth_roles TO gitwire_app;
+-- auth_role_permissions: INSERT + SELECT
+GRANT SELECT, INSERT ON auth_role_permissions TO gitwire_app;
+
+-- ===== STAGE 040 (authorization tables) =====
 -- auth_resource_grants: app can UPDATE only revocation fields
 GRANT SELECT, INSERT ON auth_resource_grants TO gitwire_app;
 GRANT UPDATE (revoked_at, revoked_by, revocation_reason) ON auth_resource_grants TO gitwire_app;
@@ -2282,6 +2328,18 @@ GRANT UPDATE (revoked_at, revoked_by, revocation_reason) ON auth_resource_grants
 -- auth_worker_ceilings: app can UPDATE only revoked_at, updated_at
 GRANT SELECT, INSERT ON auth_worker_ceilings TO gitwire_app;
 GRANT UPDATE (revoked_at, updated_at) ON auth_worker_ceilings TO gitwire_app;
+
+-- auth_worker_ceiling_permissions: INSERT + SELECT
+GRANT SELECT, INSERT ON auth_worker_ceiling_permissions TO gitwire_app;
+
+-- auth_authorization_decisions: INSERT + SELECT only (append-only)
+GRANT SELECT, INSERT ON auth_authorization_decisions TO gitwire_app;
+
+-- auth_operation_policy_versions: INSERT + SELECT (append-only)
+GRANT SELECT, INSERT ON auth_operation_policy_versions TO gitwire_app;
+
+-- auth_role_retirement_log: SELECT only; INSERT by gitwire_auth_fn_owner
+GRANT SELECT ON auth_role_retirement_log TO gitwire_app;
 
 -- auth_sessions: app can UPDATE only revoked_at
 GRANT SELECT, INSERT ON auth_sessions TO gitwire_app;
@@ -2293,27 +2351,36 @@ GRANT UPDATE (alert_sent, alert_acknowledged, alert_acknowledged_at,
               alert_acknowledged_by, revoked_at, revoked_by)
   ON auth_break_glass_activations TO gitwire_app;
 
--- auth_legacy_key_map: app can UPDATE usage + updated_at
-GRANT SELECT, INSERT ON auth_legacy_key_map TO gitwire_app;
-GRANT UPDATE (usage_count, last_used_at, updated_at) ON auth_legacy_key_map TO gitwire_app;
+-- Catalog tables (created in 038): SELECT only
+GRANT SELECT ON auth_resource_registry TO gitwire_app;
+GRANT SELECT ON auth_resource_actions TO gitwire_app;
 
--- auth_capability_keys: app can UPDATE only retired_at
-GRANT SELECT, INSERT ON auth_capability_keys TO gitwire_app;
-GRANT UPDATE (retired_at) ON auth_capability_keys TO gitwire_app;
+-- ===== STAGE 041 (delegation + attestation tables) =====
+-- auth_delegations: SELECT + INSERT only (lifecycle via functions)
+GRANT SELECT, INSERT ON auth_delegations TO gitwire_app;
+-- auth_external_attestations: INSERT + SELECT (created at ingress)
+GRANT SELECT, INSERT ON auth_external_attestations TO gitwire_app;
+-- auth_reconciliation_log: SELECT only; INSERT by gitwire_auth_fn_owner
+GRANT SELECT ON auth_reconciliation_log TO gitwire_app;
 
--- migration_report: app can UPDATE only resolution fields
+-- ===== STAGE 042 (bootstrap) =====
+GRANT SELECT ON auth_bootstrap_state TO gitwire_app;
+
+-- ===== STAGE 043 (ownership backfill) =====
 GRANT SELECT, INSERT ON migration_report TO gitwire_app;
 GRANT UPDATE (resolved, resolved_at, resolved_by) ON migration_report TO gitwire_app;
 
--- Append-only tables: INSERT + SELECT only, no UPDATE/DELETE
-GRANT SELECT, INSERT ON auth_authorization_decisions TO gitwire_app;
-GRANT SELECT, INSERT ON auth_external_attestations TO gitwire_app;
-GRANT SELECT, INSERT ON auth_reconciliation_log TO gitwire_app;  -- SELECT only; INSERT by fn_owner
-GRANT SELECT, INSERT ON auth_role_retirement_log TO gitwire_app;  -- SELECT only; INSERT by fn_owner
-GRANT SELECT, INSERT ON auth_operation_policy_versions TO gitwire_app;
-GRANT SELECT, INSERT ON auth_authority_source_log TO gitwire_app;  -- SELECT only
+-- ===== STAGE 045 (legacy-key) =====
+GRANT SELECT, INSERT ON auth_legacy_key_map TO gitwire_app;
+GRANT UPDATE (usage_count, last_used_at, updated_at) ON auth_legacy_key_map TO gitwire_app;
+GRANT SELECT, INSERT ON auth_capability_keys TO gitwire_app;
+GRANT UPDATE (retired_at) ON auth_capability_keys TO gitwire_app;
 
--- Tables with no UPDATE (INSERT + SELECT only):
+-- ===== STAGE 047 (authority-source) =====
+GRANT SELECT ON auth_authority_source_state TO gitwire_app;
+-- auth_authority_source_log: SELECT only; INSERT by gitwire_auth_fn_owner
+GRANT SELECT ON auth_authority_source_log TO gitwire_app;
+```
 GRANT SELECT, INSERT ON auth_delegations TO gitwire_app;  -- lifecycle via functions only
 GRANT SELECT ON auth_roles TO gitwire_app;
 GRANT SELECT, INSERT ON auth_role_permissions TO gitwire_app;
@@ -2583,7 +2650,7 @@ ALTER TABLE auth_authorization_decisions
   FOREIGN KEY (attestation_id) REFERENCES auth_external_attestations(id) ON DELETE SET NULL;
 
 -- 4. CREATE TABLE auth_reconciliation_log (§9) + append-only triggers
--- 5. CREATE FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint)
+-- 5. CREATE FUNCTION acquire_delegation_claim(uuid, uuid, bigint)
 -- 6. CREATE FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status, uuid)
 -- 7. CREATE FUNCTION operator_reconcile_execution(uuid, uuid, text, text)
 -- 7a. CREATE FUNCTION deny_delegation(uuid, uuid)
@@ -2604,7 +2671,7 @@ ALTER TABLE auth_authorization_decisions
    `DROP TRIGGER trg_delegation_decision_notnull_insert ON auth_delegations;`
    `DROP TRIGGER trg_no_subtype_retype ON auth_principals;`
 2. Drop functions (exact signatures):
-   `DROP FUNCTION acquire_delegation_claim(uuid, uuid, uuid, bigint);`
+   `DROP FUNCTION acquire_delegation_claim(uuid, uuid, bigint);`
    `DROP FUNCTION finalize_delegation_claim(uuid, uuid, delegation_status, uuid);`
    `DROP FUNCTION operator_reconcile_execution(uuid, uuid, text, text);`
    `DROP FUNCTION deny_delegation(uuid, uuid);`
@@ -2624,7 +2691,6 @@ ALTER TABLE auth_authorization_decisions
    ```sql
    ALTER TABLE auth_delegations DROP CONSTRAINT IF EXISTS fk_delegation_decision;
    ```
-4. `DROP TABLE auth_reconciliation_log;` (if created in this stage).
 5. `DROP TABLE auth_external_attestations;`
 6. `DROP TABLE auth_delegations;`
 
