@@ -1442,6 +1442,13 @@ every execution.
 
 ## 14. Job-authorization capability (F-06 closure)
 
+> **Level 1 supersession.** ADR-0006 supersedes this section only as the
+> Level 1 closure for F-06. Level 1 closes F-06 through trusted command
+> admission, immutable payload/provenance binding, unique idempotency
+> keys, CAS lifecycle transitions, and central-executor verification. The signed
+> capability-token and JTI protocol below is retained as optional Level 2
+> design guidance.
+
 ### Capability token
 
 Every job enqueued into BullMQ carries a signed capability token:
@@ -1812,7 +1819,7 @@ How the proposed model addresses each W0-A finding:
 | **F-03** | HIGH | Audit-attribution forgery. Model attaches authenticated `principal_id` to every request. Actor fields derived from `req.auth.principalId`, not from client-supplied headers. |
 | **F-04** | LOW | Non-constant-time executor-service compare. Model specifies constant-time comparison for all credential checks (§10). Low priority — private-network boundary. |
 | **F-05** | HIGH | Webhook replay. Model requires delivery-dedupe BEFORE side effects. The capability token (§14) binds the job to the specific verified delivery via `payload_hash` and one-time `jti`. |
-| **F-06** | HIGH | Trust-the-payload worker model. Capability token (§14) signed at enqueue time, verified at dequeue with payload hash binding, audience check, one-time consumption. Job without valid token is rejected. |
+| **F-06** | HIGH | Trust-the-payload worker model. Closed at Level 1 by trusted command admission, immutable command binding, idempotency, CAS lifecycle control, and sole-executor verification. Capability/JTI remains optional Level 2 hardening; see ADR-0006. |
 | **F-07** | HIGH | GitHub comment-command authority discard (not Telegram). The `/gitwire` comment commands arrive via webhook. Role is verified at webhook ingress and carried in the capability token — not discarded at queue time. Delegation binds to the verified GitHub user identity. |
 | **F-08** | MEDIUM | Auto-generated key logged. Production fail-closed for `API_KEY` (fixed in PR #40). Model requires explicit credential provisioning — no auto-generation in production. |
 | **F-09** | HIGH | List endpoints global by default. Query-building interceptor (§8) enforces installation scoping at the data-access layer. Fail-closed: missing scope = empty result, not data leak. |
