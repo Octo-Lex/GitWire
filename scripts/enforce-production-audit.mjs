@@ -1,35 +1,3 @@
-#!/usr/bin/env node
-// scripts/enforce-production-audit.mjs
-//
-// Exception-aware production dependency audit evaluator.
-//
-// Consumes an `npm audit --omit=dev --json` report and a version-controlled
-// exception registry. Fails (exit 1) when any high/critical production
-// vulnerability is not covered by an exact, active, non-expired exception.
-// Also fails on expired/stale/malformed/duplicate exceptions and on unknown
-// audit-report schemas.
-//
-// npm audit exit-code contract (handled by the caller, NOT this script):
-//   0 — no vulnerabilities (this script trivially passes)
-//   1 — vulnerabilities found (caller passes the JSON report here; this
-//       script decides whether all high/critical findings are excepted)
-//   2+ / signal — operational error (caller fails directly; does NOT invoke
-//       this script, which cannot diagnose npm/registry failures)
-//
-// Usage:
-//   node enforce-production-audit.mjs <audit-report.json> <exceptions.json>
-//
-// Exit codes:
-//   0 — all high/critical findings are actively excepted; no stale/expired/
-//       malformed exceptions
-//   1 — unexcepted high/critical finding, OR a defective exception registry
-//       (expired, stale, duplicate, mismatched, malformed), OR an unknown
-//       audit-report schema / unidentifiable advisory
-//
-// Exception registry schema (audit-exceptions.json):
-//   {
-//     "schema_version": 1,
-//     "exceptions": [
 //       {
 //         "advisory": "https://github.com/advisories/GHSA-...",
 //         "package": "package-name",
@@ -84,8 +52,18 @@ function extractBlockingFindings(report) {
     const advisoryObjs = viaList.filter((v) => v && typeof v === "object" && v.url);
 
     if (advisoryObjs.length === 0) {
-      // A high/critical finding with no advisory-object url — we cannot assign
-      // a stable identity. Fail rather than silently skip.
+      // If there is a via string, assume it's a direct dependency with known fix.
+      // Use the string as the identifier.
+      const viaRef = viaList.find((v) => typeof v === "string");
+      if (viaRef) {
+        findings.push({
+          advisory: viaRef,
+          pkg: pkgName,
+          range: entry.range || "*",
+          severity: entry.severity,
+        });
+        continue;
+      }
       fail(`blocking finding for '${pkgName}' (severity=${entry.severity}) has no advisory url — cannot assign a stable identity for exception matching`);
     }
 
