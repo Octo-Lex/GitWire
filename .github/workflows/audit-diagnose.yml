@@ -9,27 +9,39 @@ permissions:
 
 jobs:
   diagnose:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [force, fresh]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+      - name: Regenerate candidate lockfile
+        run: |
+          if [ "${{ matrix.mode }}" = fresh ]; then
+            rm package-lock.json
+            npm install --package-lock-only --ignore-scripts
+          else
+            npm install --package-lock-only --ignore-scripts --force
+          fi
       - run: npm ci --ignore-scripts
-      - name: Capture residual audit diagnosis
+      - name: Evaluate candidate
         run: |
           set +e
-          npm audit --omit=dev --json > /tmp/audit.json
-          node scripts/enforce-production-audit.mjs /tmp/audit.json audit-exceptions.json > /tmp/evaluator.log 2>&1
+          npm audit --omit=dev --json > /tmp/audit-${{ matrix.mode }}.json
+          node scripts/enforce-production-audit.mjs /tmp/audit-${{ matrix.mode }}.json audit-exceptions.json > /tmp/evaluator-${{ matrix.mode }}.log 2>&1
           set -e
-          cat /tmp/evaluator.log
+          cat /tmp/evaluator-${{ matrix.mode }}.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: residual-audit-diagnosis
+          name: audit-diagnosis-${{ matrix.mode }}
           path: |
-            /tmp/audit.json
-            /tmp/evaluator.log
+            package-lock.json
+            /tmp/audit-${{ matrix.mode }}.json
+            /tmp/evaluator-${{ matrix.mode }}.log
           if-no-files-found: error
           retention-days: 1
