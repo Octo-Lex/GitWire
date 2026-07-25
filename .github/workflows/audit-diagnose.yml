@@ -1,8 +1,8 @@
 name: Audit diagnose
 
 on:
-  push:
-    branches: [ci/audit-diagnose]
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
@@ -25,13 +25,14 @@ jobs:
           node scripts/enforce-production-audit.mjs /tmp/production-audit.json audit-exceptions.json > /tmp/evaluator.log 2>&1
           EVALUATOR_EXIT=$?
           set -e
+          export AUDIT_EXIT EVALUATOR_EXIT
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const report = JSON.parse(fs.readFileSync('/tmp/production-audit.json', 'utf8'));
           const blocking = Object.fromEntries(Object.entries(report.vulnerabilities || {}).filter(([,v]) => ['high','critical'].includes(v.severity)));
           fs.writeFileSync('/tmp/diagnosis.json', JSON.stringify({
-            audit_exit: Number(process.env.AUDIT_EXIT || -1),
-            evaluator_exit: Number(process.env.EVALUATOR_EXIT || -1),
+            audit_exit: Number(process.env.AUDIT_EXIT),
+            evaluator_exit: Number(process.env.EVALUATOR_EXIT),
             metadata: report.metadata,
             blocking
           }, null, 2));
@@ -39,9 +40,6 @@ jobs:
           printf 'AUDIT_EXIT=%s\nEVALUATOR_EXIT=%s\n' "$AUDIT_EXIT" "$EVALUATOR_EXIT" > /tmp/exit-codes.txt
           cat /tmp/evaluator.log
           cat /tmp/diagnosis.json
-        env:
-          AUDIT_EXIT: '0'
-          EVALUATOR_EXIT: '0'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
