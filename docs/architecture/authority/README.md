@@ -12,7 +12,8 @@
 | [`current-state-inventory.md`](./current-state-inventory.md) | Disk-verified map of every authority surface today (W0-A). Every claim cites `file:line`. 51 database tables, 174 HTTP endpoints, 14 workers, 15 ranked findings. |
 | [`permission-model.md`](./permission-model.md) | Proposed canonical principal / resource / action / permission model (W0-B). Includes evaluation algebra, job-authorization capabilities, and decision-example matrix. |
 | [`level-1-core.md`](./level-1-core.md) | Level 1 authority core: the permanent upstream security profile (W0-C-R). Defines threat model, server-owned identities, repository-scoped authorization, immutable mutation commands, central GitHub executor, minimal additive schema, and Level 2/3 extension seams. |
-| `wave-validation-plan.md` *(W0-D, not yet written)* | Defect-sensitive validation plan for Waves 1–4. |
+| [`wave-validation-plan.md`](./wave-validation-plan.md) | Defect-sensitive validation plan for Waves 1–4 (W0-D). Documentation-only fixtures and rejection contracts; executable proof is owned by issue #81. |
+| [`../adr/README.md`](../adr/README.md) | Architecture Decision Records for the Level 1 authority architecture (W0-D): ADR-0001..0008 plus a minimal ADR convention. |
 
 The inventory is the substrate for everything else. Do not propose a model
 that contradicts an inventory finding without an explicit decision recorded
@@ -100,6 +101,6 @@ Per the assignment:
 |---|---|---|
 | **W0-A** | ✅ Accepted | `f7e2ce6` — current-state inventory |
 | **W0-B** | ✅ Accepted | `51e3f70` — permission and resource model |
-| **W0-C-R** | 🔲 Awaiting review | Level 1 authority core (issue #80) |
-| **W0-D** | ⛔ Blocked | ADRs and validation plan (blocked on W0-C-R) |
-| **W0-E** | ⛔ Blocked | cumulative re-verification before PR |
+| **W0-C-R** | ✅ Accepted | PR #82 — `b99d6c8` |
+| **W0-D** | ✅ Delivered | ADR set and wave validation plan in this package |
+| **W0-E** | 🔲 Current gate | Cumulative re-verification and explicit merge authorization |
