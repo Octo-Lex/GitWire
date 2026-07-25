@@ -556,9 +556,12 @@ tables are additive — no existing tables are modified destructively.
 ### Schema and extensions
 
 ```sql
+-- Shared extension: permitted to use CREATE EXTENSION IF NOT EXISTS.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE SCHEMA IF NOT EXISTS gitwire_auth;
+-- Dedicated schema: plain CREATE (fail-closed). A pre-existing gitwire_auth
+-- schema aborts the migration rather than being silently adopted.
+CREATE SCHEMA gitwire_auth;
 REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;
 ```
 
@@ -1160,11 +1163,11 @@ CREATE TRIGGER trg_receipts_no_delete
 
 ### Fail-closed policy
 
-Level 1 schema objects use plain `CREATE` (no `IF NOT EXISTS` for tables,
-indexes, triggers, functions, or roles) so an unexpected collision aborts the
-migration rather than silently adopting a foreign object. Only the shared
-extension and the schema itself use `IF NOT EXISTS` (permitted shared
-bootstrap). Roles are created with a `DO` block that raises
+Level 1 schema objects use plain `CREATE` (no `IF NOT EXISTS` for the schema,
+tables, indexes, triggers, functions, or roles) so an unexpected collision
+aborts the migration rather than silently adopting a foreign object. Only the
+shared `pgcrypto` **extension** uses `CREATE EXTENSION IF NOT EXISTS` (permitted
+shared bootstrap). Roles are created with a `DO` block that raises
 `duplicate_object` explicitly rather than swallowing it — there is **no**
 `EXCEPTION WHEN duplicate_object THEN NULL` for authority roles. No
 `DROP ... CASCADE` is used anywhere; rollback names exact objects and removes
@@ -1180,7 +1183,7 @@ pgcrypto's `hmac` is invoked fully-qualified as `public.hmac` where needed.)
 **Object creation order:**
 1. `CREATE EXTENSION IF NOT EXISTS pgcrypto;` (shared; provides `digest`/`hmac`
    for recovery-marker hash validation in 039)
-2. `CREATE SCHEMA IF NOT EXISTS gitwire_auth; REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;`
+2. `CREATE SCHEMA gitwire_auth; REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;` (plain CREATE — fail-closed on a pre-existing schema)
 3. `CREATE TABLE auth_principals` + unique indexes
 4. `CREATE TABLE auth_credentials` + index
 5. `CREATE TABLE auth_roles`

@@ -149,32 +149,59 @@ export async function runCollisions({ record, log }) {
     }
 
     // ── Pre-existing FUNCTION collision (own isolated DB) ───────────────────
-    // 038/039 use plain CREATE FUNCTION (no OR REPLACE), so a pre-existing
-    // same-signature function must fail closed — it must NOT be silently
-    // replaced. Test against a 038 trigger function.
+    // 039 uses plain CREATE FUNCTION (no OR REPLACE), so a pre-existing
+    // same-signature SECURITY DEFINER function must fail closed — it must NOT
+    // be silently replaced. The reviewer's exact prescription:
+    //   1. apply 038 successfully;
+    //   2. create a colliding 039 function (e.g. a transition/bootstrap fn);
+    //   3. run 039;
+    //   4. require the existing-function error;
+    //   5. verify the 039 roles/objects were rolled back.
+    // (A prior version pre-created the function BEFORE applying 038, so 038
+    // failed at CREATE SCHEMA and never reached the function — a false positive.)
     log("  [pre-existing-function collision]");
     const fnDb = `proof_fncoll_${Date.now()}`;
     await adminPool.query(`CREATE DATABASE ${fnDb}`);
     const fnUrl = adminUrl.replace(/\/[^/?]+$/, `/${fnDb}`);
     const fnPool = new pg.Pool({ connectionString: fnUrl });
     try {
-      // Apply the schema portion up to (but not including) the trigger function
-      // we want to collide, by creating the schema + the function shell first.
-      await fnPool.query(`CREATE SCHEMA gitwire_auth`);
-      await fnPool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
-      await fnPool.query(`CREATE TABLE gitwire_auth.auth_principals (id uuid primary key default gen_random_uuid())`);
-      // Pre-create a function with the SAME signature as a 038 trigger function.
+      // 1. Apply 038 in full (creates schema, tables, trigger functions).
+      const sql038 = await readFile(join(MIGRATIONS_DIR, "038_level1_schema.sql"), "utf8");
+      await fnPool.query(sql038);
+      const schemaOk = (await fnPool.query("SELECT to_regclass('gitwire_auth.mutation_commands') IS NOT NULL AS e")).rows[0].e;
+      check("function-collision: 038 applied cleanly before collision", schemaOk === true, `mutation_commands exists=${schemaOk}`);
+
+      // 2. Pre-create a function with the SAME signature as a 039 SECURITY
+      //    DEFINER function (transition_execution). This is the colliding object.
       await fnPool.query(`
-        CREATE FUNCTION gitwire_auth.enforce_events_append_only()
-        RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$;
+        CREATE FUNCTION gitwire_auth.transition_execution(
+          p_command_id     uuid,
+          p_expected_state text,
+          p_new_state      text,
+          p_expected_ver   bigint
+        ) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN RETURN false; END $$;
       `);
-      const sql038f = await readFile(join(MIGRATIONS_DIR, "038_level1_schema.sql"), "utf8");
-      const fnCollision = await expectThrow(() => fnPool.query(sql038f));
+
+      // 3. Run 039 — it must fail at CREATE FUNCTION transition_execution.
+      const sql039 = await readFile(join(MIGRATIONS_DIR, "039_level1_roles.sql"), "utf8");
+      const fnCollision = await expectThrow(() => fnPool.query(sql039));
       check(
-        "038 fails closed on pre-existing same-signature function (no OR REPLACE)",
+        "039 fails closed on pre-existing same-signature function (no OR REPLACE)",
         fnCollision.threw && /already exists/.test(fnCollision.msg),
         fnCollision.msg
       );
+
+      // 5. Verify the 039 roles were NOT created (the file transaction rolled
+      //    back at the function collision). Roles are cluster-wide, so they
+      //    would persist if 039 had partially committed.
+      const rolesAfter = (
+        await fnPool.query(
+          `SELECT rolname FROM pg_roles WHERE rolname IN
+            ('gitwire_auth_fn_owner','gitwire_app','gitwire_admission',
+             'gitwire_executor','gitwire_operator')`
+        )
+      ).rows.map((r) => r.rolname);
+      check("function-collision rolled back all 039 roles", rolesAfter.length === 0, JSON.stringify(rolesAfter));
     } finally {
       await fnPool.end();
       await adminPool.query(`DROP DATABASE ${fnDb} WITH (FORCE)`);

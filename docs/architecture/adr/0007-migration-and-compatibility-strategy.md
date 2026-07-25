@@ -31,8 +31,11 @@ Boundary (Wave 1 / issue #81): roles, grants, and all SECURITY DEFINER
 functions live in **039**; SECURITY INVOKER trigger functions live in **038**;
 040 seeds canonical roles/permissions and the initial bootstrap state only and
 creates **no** administrator. Level 1 objects use plain `CREATE` (fail-closed
-on collision); only the shared extension and schema use `IF NOT EXISTS`. No
-`DROP ... CASCADE` is used; rollback names exact objects in dependency order.
+on collision); only the shared `pgcrypto` **extension** uses
+`CREATE EXTENSION IF NOT EXISTS` (the schema, tables, triggers, and functions
+all use plain `CREATE` so a pre-existing object aborts the migration rather
+than being silently adopted). No `DROP ... CASCADE` is used; rollback names
+exact objects in dependency order.
 Object creation proceeds in the numbered steps recorded in
 `level-1-core.md §12`; rollback is the reverse. All changes are additive — no
 existing tables are modified destructively (level-1-core.md:553-554).
@@ -98,10 +101,14 @@ Fresh state is `enabled`; migration **040 does not create an administrator**
 — the administrator is created atomically by `complete_bootstrap()` (039) at
 first run. Re-enable after lockout requires an operator (with production DB
 credentials) to INSERT a row into
-`auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version,
-created_by_db_session)`; only the **derived** hash is stored. The marker is
-validated against its derived consumer-secret hash by
-`enable_bootstrap_from_marker()` and consumed exactly once by
+`auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version)`; the
+operator's INSERT grant is column-level on only those two columns, and
+`created_by_db_session` is database-derived (`DEFAULT current_user`, not
+insertable by the operator), so attribution cannot be forged. Only the
+**derived** hash is stored; the raw consumer secret never enters PostgreSQL.
+Recovery is permitted only when **no active administrator exists** (the
+all-admins-locked-out condition). The marker is matched by derived-hash
+equality in `enable_bootstrap_from_marker()` and consumed exactly once by
 `complete_bootstrap()`. There is no API route for re-enable. See ADR-0008.
 
 ## Rationale

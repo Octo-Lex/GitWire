@@ -8,11 +8,11 @@
 --   * Canonical built-in roles/permissions and initial bootstrap state live in 040.
 --
 -- Fail-closed policy: Level 1 schema objects use plain CREATE (no IF NOT EXISTS
--- for tables/indexes/triggers/functions) so an unexpected collision aborts the
--- migration rather than silently adopting a foreign object. Only the shared
--- extension and the schema itself use IF NOT EXISTS, as permitted for shared
--- bootstrap (Wave 1 "Binding architecture": shared extensions may use
--- CREATE EXTENSION IF NOT EXISTS).
+-- for the schema, tables, indexes, triggers, or functions) so an unexpected
+-- collision aborts the migration rather than silently adopting a foreign object.
+-- Only the shared pgcrypto EXTENSION uses CREATE EXTENSION IF NOT EXISTS, as
+-- permitted for shared bootstrap (Wave 1 "Binding architecture": shared
+-- extensions may use CREATE EXTENSION IF NOT EXISTS).
 --
 -- Atomicity: scripts/migrate.js wraps each file in BEGIN/COMMIT, so a
 -- fail-closed abort rolls back the whole file cleanly.
