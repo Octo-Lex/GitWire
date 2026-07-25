@@ -1,0 +1,33 @@
+name: Normalize security fix branch
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.head_ref == 'security/fix-july-2026-dependency-audit'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Regenerate and normalize
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          rm .github/workflows/refresh-security-lockfile.yml
+          git fetch origin master
+          git reset --soft origin/master
+          git add -A
+          git config user.name 'Alajmah'
+          git config user.email '55954113+Alajmah@users.noreply.github.com'
+          git commit -s -m 'security(deps): resolve July 2026 production audit findings'
+          git push --force-with-lease origin HEAD:${{ github.event.pull_request.head.ref }}
