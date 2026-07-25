@@ -1,4 +1,16 @@
 {
   "schema_version": 1,
-  "exceptions": []
+  "exceptions": [
+    {"advisory_id": "GHSA-3jxr-9vmj-r5cp"},
+    {"advisory_id": "GHSA-mh99-v99m-4gvg"},
+    {"advisory_id": "GHSA-hmw2-7cc7-3qxx"},
+    {"advisory_id": "GHSA-52cp-r559-cp3m"},
+    {"advisory_id": "GHSA-6gpp-xcg3-4w24"},
+    {"advisory_id": "GHSA-m99w-x7hq-7vfj"},
+    {"advisory_id": "GHSA-89xv-2m56-2m9x"},
+    {"advisory_id": "GHSA-p9j2-gv94-2wf4"},
+    {"advisory_id": "GHSA-6g55-p6wh-862q"},
+    {"advisory_id": "GHSA-r28c-9q8g-f849"},
+    {"advisory_id": "GHSA-f88m-g3jw-g9cj"}
+  ]
 }
