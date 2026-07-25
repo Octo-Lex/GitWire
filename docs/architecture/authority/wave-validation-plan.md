@@ -116,13 +116,20 @@ Reference: ADR-0007, ADR-0005.
 | `transition_enforcement_state` illegal transition (e.g. `observed` → `legacy_removed`) | reject | legal-transition graph (ADR-0005) |
 | Bootstrap re-enable via API route | no such route exists | ADR-0007 / ADR-0008 |
 | Pre-existing `gitwire_auth.auth_principals` table before 038 | 038 aborts (fail-closed on collision) | no silent schema adoption |
+| Pre-existing bare `gitwire_auth` schema (empty) before 038 | 038 aborts at `CREATE SCHEMA` (no `IF NOT EXISTS`) | no silent schema adoption |
+| Pre-existing same-signature function before 038/039 | migration aborts (no `CREATE OR REPLACE`) | no silent function replacement |
 | Pre-existing `gitwire_app` role before 039 | 039 aborts with explicit collision; no `duplicate_object` swallowed | no silent role adoption |
-| Direct re-execution of 040 | idempotent (`ON CONFLICT DO NOTHING` on natural keys) | seed idempotency |
-| Canonical drift (same role name, different attributes) | existing row preserved (NOT overwritten) | canonical seed-drift rejection |
+| Direct re-execution of 040 (no drift) | idempotent (`ON CONFLICT DO NOTHING` + drift-verification passes) | seed idempotency |
+| Canonical drift (canonical row mutated, then 040 re-run) | 040 **raises** `canonical seed drift detected` | canonical seed-drift rejection (fail-closed, not silent preservation) |
 | First bootstrap (state `enabled`, count 0) | succeeds; admin principal + credential + fleet assignment created atomically; state → `disabled` | zero-administrator bootstrap |
 | Repeated bootstrap without marker | rejected (`bootstrap is not enabled` / no recovery marker) | repeated-bootstrap rejection |
-| `enable_bootstrap_from_marker` with wrong secret | rejected (no matching unconsumed marker) | recovery-marker hash validation |
-| `complete_bootstrap` after recovery | consumes exactly one marker; consumed marker cannot re-enable | single consumption |
+| `enable_bootstrap_from_marker` while an active administrator exists | rejected (`recovery is blocked while an active administrator exists`) | lockout-only recovery |
+| `enable_bootstrap_from_marker` with wrong derived hash | rejected (no matching unconsumed marker) | recovery-marker derived-hash validation |
+| `complete_bootstrap` after recovery (lockout) | consumes exactly one marker; consumed marker cannot re-enable | single consumption |
+| Operator INSERT of `created_by_db_session` | rejected (column not insertable; derived from `current_user`) | no forged attribution |
+| Admission INSERT of `admitted=true` / non-`pending` `lifecycle_state` / nonzero `lifecycle_version` / `admitting_service` | rejected (column-level INSERT grant excludes server-controlled fields) | admission cannot forge initial command state |
+| Executor `transition_execution` on an unadmitted command | returns false / no row affected | unadmitted commands cannot reach execution |
+| Raw bootstrap/admin secret passed to a PG function | rejected by signature (functions accept derived hashes only) | only derived hashes enter PostgreSQL |
 | Raw bootstrap/admin secret in any repo file/log | absent | only derived hashes enter PostgreSQL |
 
 Executable apply/rerun/rollback/seed proof is owned by issue #81. The

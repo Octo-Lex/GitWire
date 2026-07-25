@@ -351,6 +351,123 @@ export async function runFixtures({ pool, record, connUrl, rolePasswords, log })
     );
     check("terminal transition completed->pending rejected", term.threw && /illegal transition/i.test(term.msg), term.msg);
     await execClient.end();
+
+    // ── Executor cannot transition an UNADMITTED command ───────────────────
+    // A command that bypassed the trusted admission path (admitted=false) must
+    // never reach execution, even if its lifecycle_state were 'submitted'.
+    const unadm = await adm.query(
+      `INSERT INTO gitwire_auth.mutation_commands
+         (initiating_principal, requesting_service, authentication_method,
+          target_installation_id, target_repository_id, target_organization,
+          target_repository, target_resource_type, operation, payload_hash,
+          payload_canonical, auth_result_snapshot, auth_policy_version,
+          idempotency_key)
+       VALUES ($1,$2,'api_key',101,299,'org','repo','issue','issue.close',
+               'hash','{}'::jsonb,'{}'::jsonb,'v1','fx-unadmitted-key')
+       RETURNING id, lifecycle_version`,
+      [userId, serviceId]
+    );
+    const unadmId = unadm.rows[0].id;
+    // Force it to 'submitted' via the legit admission transition path, but do
+    // NOT call admit_command (admitted stays false).
+    await adm.query("SELECT gitwire_auth.transition_admission($1,'pending','submitted',0)", [unadmId]);
+    const execClient2 = await asRole("gitwire_executor");
+    const unadmTransition = await execClient2.query(
+      "SELECT gitwire_auth.transition_execution($1,'submitted','executing',1) AS ok",
+      [unadmId]
+    );
+    check("executor cannot transition an unadmitted command (returns false)", unadmTransition.rows[0].ok === false, JSON.stringify(unadmTransition.rows[0]));
+    await execClient2.end();
+    await adm.end();
+  }
+
+  // ── Admission INSERT column-level restriction (server-controlled fields) ──
+  log("  [admission INSERT column-level restriction]");
+  {
+    const { serviceId, userId } = await seedBaselinePrincipals();
+    const adm = await asRole("gitwire_admission");
+
+    // Baseline: a legal minimal INSERT succeeds and defaults to admitted=false,
+    // lifecycle_state='pending', lifecycle_version=0.
+    const ok = await adm.query(
+      `INSERT INTO gitwire_auth.mutation_commands
+         (initiating_principal, requesting_service, authentication_method,
+          target_installation_id, target_repository_id, target_organization,
+          target_repository, target_resource_type, operation, payload_hash,
+          payload_canonical, auth_result_snapshot, auth_policy_version,
+          idempotency_key)
+       VALUES ($1,$2,'api_key',501,501,'org','repo','issue','issue.close',
+               'hash','{}'::jsonb,'{}'::jsonb,'v1','fx-ins-ok')
+       RETURNING id, admitted, lifecycle_state, lifecycle_version`,
+      [userId, serviceId]
+    );
+    check("legal admission INSERT defaults admitted=false", ok.rows[0].admitted === false, JSON.stringify(ok.rows[0]));
+    check("legal admission INSERT defaults lifecycle_state='pending'", ok.rows[0].lifecycle_state === "pending", JSON.stringify(ok.rows[0]));
+    check("legal admission INSERT defaults lifecycle_version=0", Number(ok.rows[0].lifecycle_version) === 0, JSON.stringify(ok.rows[0]));
+
+    // admission cannot set admitted=true on INSERT (column not insertable).
+    const insAdmitted = await expectThrow(() =>
+      adm.query(
+        `INSERT INTO gitwire_auth.mutation_commands
+           (initiating_principal, requesting_service, authentication_method,
+            target_installation_id, target_repository_id, target_organization,
+            target_repository, target_resource_type, operation, payload_hash,
+            payload_canonical, auth_result_snapshot, auth_policy_version,
+            idempotency_key, admitted)
+         VALUES ($1,$2,'api_key',501,502,'org','repo','issue','issue.close',
+                 'hash','{}'::jsonb,'{}'::jsonb,'v1','fx-ins-admitted',true)`,
+        [userId, serviceId]
+      )
+    );
+    check("admission cannot INSERT admitted=true (column denied)", insAdmitted.threw && /permission denied/.test(insAdmitted.msg), insAdmitted.msg);
+
+    // admission cannot set a non-pending lifecycle_state on INSERT.
+    const insState = await expectThrow(() =>
+      adm.query(
+        `INSERT INTO gitwire_auth.mutation_commands
+           (initiating_principal, requesting_service, authentication_method,
+            target_installation_id, target_repository_id, target_organization,
+            target_repository, target_resource_type, operation, payload_hash,
+            payload_canonical, auth_result_snapshot, auth_policy_version,
+            idempotency_key, lifecycle_state)
+         VALUES ($1,$2,'api_key',501,503,'org','repo','issue','issue.close',
+                 'hash','{}'::jsonb,'{}'::jsonb,'v1','fx-ins-state','completed')`,
+        [userId, serviceId]
+      )
+    );
+    check("admission cannot INSERT non-pending lifecycle_state (column denied)", insState.threw && /permission denied/.test(insState.msg), insState.msg);
+
+    // admission cannot set a nonzero lifecycle_version on INSERT.
+    const insVer = await expectThrow(() =>
+      adm.query(
+        `INSERT INTO gitwire_auth.mutation_commands
+           (initiating_principal, requesting_service, authentication_method,
+            target_installation_id, target_repository_id, target_organization,
+            target_repository, target_resource_type, operation, payload_hash,
+            payload_canonical, auth_result_snapshot, auth_policy_version,
+            idempotency_key, lifecycle_version)
+         VALUES ($1,$2,'api_key',501,504,'org','repo','issue','issue.close',
+                 'hash','{}'::jsonb,'{}'::jsonb,'v1','fx-ins-ver',99)`,
+        [userId, serviceId]
+      )
+    );
+    check("admission cannot INSERT nonzero lifecycle_version (column denied)", insVer.threw && /permission denied/.test(insVer.msg), insVer.msg);
+
+    // admission cannot set admitting_service on INSERT (column denied).
+    const insAdmSvc = await expectThrow(() =>
+      adm.query(
+        `INSERT INTO gitwire_auth.mutation_commands
+           (initiating_principal, requesting_service, authentication_method,
+            target_installation_id, target_repository_id, target_organization,
+            target_repository, target_resource_type, operation, payload_hash,
+            payload_canonical, auth_result_snapshot, auth_policy_version,
+            idempotency_key, admitting_service)
+         VALUES ($1,$2,'api_key',501,505,'org','repo','issue','issue.close',
+                 'hash','{}'::jsonb,'{}'::jsonb,'v1','fx-ins-admsvc',$2)`,
+        [userId, serviceId]
+      )
+    );
+    check("admission cannot INSERT admitting_service (column denied)", insAdmSvc.threw && /permission denied/.test(insAdmSvc.msg), insAdmSvc.msg);
     await adm.end();
   }
 
@@ -620,20 +737,22 @@ export async function runFixtures({ pool, record, connUrl, rolePasswords, log })
     await op.end();
   }
 
-  // ── Bootstrap: first, repeat rejection, recovery marker, single consume ──
-  log("  [bootstrap: first / repeat / recovery / single consume]");
+  // ── Bootstrap: first, repeat rejection, recovery (derived-hash), single
+  //    consume, active-admin absence, forged-attribution ───────────────────
+  log("  [bootstrap: first / repeat / recovery / lockout / attribution]");
   {
-    // First bootstrap: state is 'enabled', bootstrap_count 0 -> no marker required.
+    // First bootstrap: state is 'enabled', bootstrap_count 0 -> no marker
+    // required, no active admin exists. complete_bootstrap takes only DERIVED
+    // hashes (p_admin_secret_hash, p_consumer_secret_hash); no raw secret.
     const appClient = await asRole("gitwire_app");
     const first = await appClient.query(
       `SELECT gitwire_auth.complete_bootstrap(
          'fx-admin','fx-admin-lookup','derived-admin-hash',1,'gitwire-app','gw_pat_',
-         'unused',1) AS id`
+         'unused-recovery-hash',1) AS id`
     );
     check("first bootstrap succeeds (creates admin principal)", !!first.rows[0].id, "");
     const st1 = await pool.query("SELECT state, bootstrap_count FROM gitwire_auth.auth_bootstrap_state WHERE id=1");
     check("bootstrap state disabled after first bootstrap", st1.rows[0].state === "disabled", JSON.stringify(st1.rows[0]));
-    // bigint serializes as string in pg's JSON; coerce for comparison.
     check("bootstrap_count incremented to 1", Number(st1.rows[0].bootstrap_count) === 1, JSON.stringify(st1.rows[0]));
 
     // Admin principal + credential + assignment created atomically.
@@ -648,70 +767,114 @@ export async function runFixtures({ pool, record, connUrl, rolePasswords, log })
     );
     check("fleet admin assignment created", assigns.rows[0].n === 1, JSON.stringify(assigns.rows[0]));
 
-    // Repeated bootstrap WITHOUT marker -> rejected (state disabled, count>0, no marker).
+    // active_admin_exists() now returns true (the bootstrap admin is active).
+    const aae = (await pool.query("SELECT gitwire_auth.active_admin_exists() AS b")).rows[0].b;
+    check("active_admin_exists() true after first bootstrap", aae === true, JSON.stringify(aae));
+
+    // Repeated bootstrap WITHOUT marker -> rejected (state disabled).
     const repeat = await expectThrow(() =>
       appClient.query(
         `SELECT gitwire_auth.complete_bootstrap(
            'fx-admin-2','fx-admin-lookup-2','derived-admin-hash-2',1,'gitwire-app','gw_pat_',
-           'unused',1)`
+           'unused-recovery-hash',1)`
       )
     );
-    check("repeated bootstrap without marker rejected", repeat.threw && /not enabled|recovery marker/.test(repeat.msg), repeat.msg);
+    check("repeated bootstrap without marker rejected", repeat.threw && /not enabled/.test(repeat.msg), repeat.msg);
     await appClient.end();
 
-    // Recovery path: operator inserts a marker with a DERIVED hash; the raw
-    // secret is validated against it.
-    const rawSecret = "fx-recovery-secret";
+    // ── Active-admin-negative: recovery is BLOCKED while an active admin exists.
+    // Operator inserts a valid derived-hash marker, but active_admin_exists() is
+    // still true, so enable_bootstrap_from_marker must reject with the lockout
+    // message (not "no matching marker").
+    const derivedHash = "derived-recovery-hash-fixture"; // derived outside PG
     const pepperV = 1;
-    const derivedHash = (
-      await pool.query(
-        `SELECT encode(public.hmac($1::bytea, ('pepper-v'||$2)::bytea, 'sha256'), 'hex') AS h`,
-        [rawSecret, pepperV]
-      )
-    ).rows[0].h;
     const op = await asRole("gitwire_operator");
     await op.query(
       `INSERT INTO gitwire_auth.auth_bootstrap_recovery_markers
-         (consumer_secret_hash, pepper_version, created_by_db_session)
-       VALUES ($1,$2,'gitwire_operator')`,
+         (consumer_secret_hash, pepper_version)
+       VALUES ($1,$2)`,
       [derivedHash, pepperV]
     );
+    // Verify created_by_db_session was DERIVED (current_user = gitwire_operator),
+    // NOT operator-supplied.
+    const mkCreator = (
+      await pool.query("SELECT created_by_db_session FROM gitwire_auth.auth_bootstrap_recovery_markers WHERE consumer_secret_hash=$1", [derivedHash])
+    ).rows[0].created_by_db_session;
+    check("recovery marker created_by_db_session derived from session (gitwire_operator)", mkCreator === "gitwire_operator", JSON.stringify(mkCreator));
 
-    // enable_bootstrap_from_marker with WRONG secret -> rejected.
-    const wrongSecret = await expectThrow(() =>
-      op.query("SELECT gitwire_auth.enable_bootstrap_from_marker('wrong-secret',$1)", [pepperV])
+    const blockedByActiveAdmin = await expectThrow(() =>
+      op.query("SELECT gitwire_auth.enable_bootstrap_from_marker($1,$2)", [derivedHash, pepperV])
     );
-    check("enable_bootstrap_from_marker rejects wrong secret", wrongSecret.threw && /no matching unconsumed recovery marker/.test(wrongSecret.msg), wrongSecret.msg);
+    check(
+      "recovery enable BLOCKED while active administrator exists",
+      blockedByActiveAdmin.threw && /blocked while an active administrator exists/.test(blockedByActiveAdmin.msg),
+      blockedByActiveAdmin.msg
+    );
 
-    // enable with CORRECT secret -> state flips to enabled (marker not yet consumed).
-    const enable = await op.query("SELECT gitwire_auth.enable_bootstrap_from_marker($1,$2) AS ok", [rawSecret, pepperV]);
-    check("enable_bootstrap_from_marker accepts correct secret", enable.rows[0].ok === true);
-    // marker still unconsumed at this point
-    const unconsumed1 = await pool.query("SELECT count(*)::int AS n FROM gitwire_auth.auth_bootstrap_recovery_markers WHERE consumed_at IS NULL");
-    check("marker not consumed by enable step", unconsumed1.rows[0].n === 1, JSON.stringify(unconsumed1.rows[0]));
+    // Forged-attribution attempt: operator cannot INSERT created_by_db_session
+    // explicitly (column not in its INSERT grant).
+    const forgedAttr = await expectThrow(() =>
+      op.query(
+        `INSERT INTO gitwire_auth.auth_bootstrap_recovery_markers
+           (consumer_secret_hash, pepper_version, created_by_db_session)
+         VALUES ('forged-hash-attempt',1,'fake-operator')`
+      )
+    );
+    check("operator cannot forge created_by_db_session (column not insertable)", forgedAttr.threw && /permission denied/.test(forgedAttr.msg), forgedAttr.msg);
+
+    // Wrong derived hash -> rejected (no matching marker). This is now reachable
+    // only conceptually; to test it without the active-admin block, we first
+    // simulate lockout below. Keep a direct wrong-hash check after lockout.
     await op.end();
 
-    // Now complete_bootstrap with correct recovery secret consumes exactly one marker.
+    // ── Simulate lockout: disable the active admin. Now recovery is permitted.
+    await pool.query("UPDATE gitwire_auth.auth_principals SET status='disabled' WHERE display_name='fx-admin'");
+    const aae2 = (await pool.query("SELECT gitwire_auth.active_admin_exists() AS b")).rows[0].b;
+    check("active_admin_exists() false after admin disabled (lockout)", aae2 === false, JSON.stringify(aae2));
+
+    const op2 = await asRole("gitwire_operator");
+    // Wrong derived hash after lockout -> rejected (no matching marker).
+    const wrongHash = await expectThrow(() =>
+      op2.query("SELECT gitwire_auth.enable_bootstrap_from_marker('wrong-derived-hash',$1)", [pepperV])
+    );
+    check("enable rejects wrong derived hash after lockout", wrongHash.threw && /no matching unconsumed recovery marker/.test(wrongHash.msg), wrongHash.msg);
+
+    // Correct derived hash after lockout -> state flips to enabled (marker unconsumed).
+    const enable = await op2.query("SELECT gitwire_auth.enable_bootstrap_from_marker($1,$2) AS ok", [derivedHash, pepperV]);
+    check("enable_bootstrap_from_marker accepts correct derived hash after lockout", enable.rows[0].ok === true);
+    const unconsumed1 = await pool.query("SELECT count(*)::int AS n FROM gitwire_auth.auth_bootstrap_recovery_markers WHERE consumed_at IS NULL");
+    check("marker not consumed by enable step", unconsumed1.rows[0].n === 1, JSON.stringify(unconsumed1.rows[0]));
+    await op2.end();
+
+    // complete_bootstrap with correct derived hash consumes exactly one marker.
+    // (Admin remains disabled, so active_admin_exists() is false -> recovery OK.)
     const appClient2 = await asRole("gitwire_app");
     const second = await appClient2.query(
       `SELECT gitwire_auth.complete_bootstrap(
          'fx-admin-3','fx-admin-lookup-3','derived-admin-hash-3',1,'gitwire-app','gw_pat_',
          $1,$2) AS id`,
-      [rawSecret, pepperV]
+      [derivedHash, pepperV]
     );
-    check("recovery bootstrap succeeds with correct secret", !!second.rows[0].id, "");
+    check("recovery bootstrap succeeds with correct derived hash", !!second.rows[0].id, "");
     const unconsumed2 = await pool.query("SELECT count(*)::int AS n FROM gitwire_auth.auth_bootstrap_recovery_markers WHERE consumed_at IS NULL");
     check("marker consumed exactly once by complete_bootstrap", unconsumed2.rows[0].n === 0, JSON.stringify(unconsumed2.rows[0]));
     const consumed = await pool.query("SELECT count(*)::int AS n FROM gitwire_auth.auth_bootstrap_recovery_markers WHERE consumed_at IS NOT NULL");
     check("exactly one marker row marked consumed", consumed.rows[0].n === 1, JSON.stringify(consumed.rows[0]));
 
-    // Re-using the same consumed marker is rejected (enable finds none).
-    const op2 = await asRole("gitwire_operator");
+    // Re-using the same consumed marker is rejected. After a successful recovery
+    // bootstrap, BOTH rejection predicates are true: the marker is consumed
+    // AND a new active administrator exists. Either message is a valid
+    // single-consumer rejection; the active-admin check fires first.
+    const op3 = await asRole("gitwire_operator");
     const reconsume = await expectThrow(() =>
-      op2.query("SELECT gitwire_auth.enable_bootstrap_from_marker($1,$2)", [rawSecret, pepperV])
+      op3.query("SELECT gitwire_auth.enable_bootstrap_from_marker($1,$2)", [derivedHash, pepperV])
     );
-    check("consumed marker cannot re-enable (single consumption)", reconsume.threw && /no matching unconsumed recovery marker/.test(reconsume.msg), reconsume.msg);
-    await op2.end();
+    check(
+      "consumed marker cannot re-enable (single consumption)",
+      reconsume.threw && (/no matching unconsumed recovery marker/.test(reconsume.msg) || /blocked while an active administrator exists/.test(reconsume.msg)),
+      reconsume.msg
+    );
+    await op3.end();
     await appClient2.end();
   }
 

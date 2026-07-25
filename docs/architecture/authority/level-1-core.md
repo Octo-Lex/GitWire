@@ -1393,7 +1393,7 @@ manages role assignments, emits admission events.
 
 | Privilege | Scope |
 |---|---|
-| `SELECT, INSERT` | `mutation_commands` (creates commands with `admitted=false`) |
+| `SELECT` + column-level `INSERT` (provenance fields only) | `mutation_commands` — the INSERT **excludes** server-controlled fields (`admitted`, `admitting_service`, `lifecycle_state`, `lifecycle_version`, `transitioned_at`, `id`), so a direct INSERT receives the canonical defaults `admitted=false`, `lifecycle_state='pending'`, `lifecycle_version=0`. The immutability/lifecycle triggers are `BEFORE UPDATE` only, so this column-level grant is the enforcement boundary against forged initial values. |
 | `SELECT, INSERT` | `auth_role_permissions`, `auth_principal_roles` |
 | `UPDATE (revoked_at)` | `auth_principal_roles` |
 | `SELECT, INSERT` | `mutation_events` (admission event types only — enforced by trigger) |
@@ -1406,7 +1406,7 @@ manages role assignments, emits admission events.
 | `SELECT` | `mutation_commands` |
 | `SELECT, INSERT` | `mutation_events` (execution event types only — enforced by trigger) |
 | `SELECT, INSERT` | `execution_receipts` |
-| `EXECUTE` | `transition_execution()` |
+| `EXECUTE` | `transition_execution()` — additionally requires the command be `admitted=true`; an unadmitted command cannot reach execution |
 
 ### Operator role (`gitwire_operator`)
 

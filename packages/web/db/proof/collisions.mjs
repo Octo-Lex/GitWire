@@ -76,6 +76,10 @@ export async function runCollisions({ record, log }) {
   try {
     await waitForReady(connUrl, 60_000);
     const pool = new pg.Pool({ connectionString: connUrl });
+    // Admin connection to the maintenance DB for CREATE/DROP DATABASE (these
+    // cannot run in a transaction or against the DB being created/dropped).
+    const adminUrl = connUrl.replace(/\/[^/?]*$/, "/postgres");
+    const adminPool = new pg.Pool({ connectionString: adminUrl });
 
     try {
       // ── Pre-existing ROLE collision: create gitwire_app first, then 039 must fail ─
@@ -100,9 +104,8 @@ export async function runCollisions({ record, log }) {
       // Clean up the intentionally-colliding role so the schema test is independent.
       await pool.query(`DROP ROLE gitwire_app`);
 
-      // ── Pre-existing SCHEMA-object collision: 038 uses CREATE SCHEMA IF NOT
-      // EXISTS (permitted shared bootstrap) but plain CREATE TABLE, so a
-      // pre-existing gitwire_auth.auth_principals must fail closed. ──────────
+      // ── Pre-existing SCHEMA-object collision: 038 uses plain CREATE TABLE, so
+      // a pre-existing gitwire_auth.auth_principals must fail closed. ──────────
       log("  [schema-object collision]");
       await pool.query(`CREATE SCHEMA gitwire_auth`);
       await pool.query(`CREATE TABLE gitwire_auth.auth_principals (id uuid primary key)`);
@@ -122,6 +125,61 @@ export async function runCollisions({ record, log }) {
     } finally {
       await pool.end();
     }
+
+    // ── Bare pre-existing SCHEMA collision (own isolated DB) ────────────────
+    // 038 uses plain CREATE SCHEMA (no IF NOT EXISTS), so a pre-existing empty
+    // gitwire_auth schema must fail closed — it must NOT be silently adopted.
+    log("  [bare-schema collision]");
+    const bareDb = `proof_barecoll_${Date.now()}`;
+    await adminPool.query(`CREATE DATABASE ${bareDb}`);
+    const bareUrl = adminUrl.replace(/\/[^/?]+$/, `/${bareDb}`);
+    const barePool = new pg.Pool({ connectionString: bareUrl });
+    try {
+      await barePool.query(`CREATE SCHEMA gitwire_auth`);
+      const sql038b = await readFile(join(MIGRATIONS_DIR, "038_level1_schema.sql"), "utf8");
+      const bareCollision = await expectThrow(() => barePool.query(sql038b));
+      check(
+        "038 fails closed on pre-existing (bare) gitwire_auth schema",
+        bareCollision.threw && /already exists/.test(bareCollision.msg),
+        bareCollision.msg
+      );
+    } finally {
+      await barePool.end();
+      await adminPool.query(`DROP DATABASE ${bareDb} WITH (FORCE)`);
+    }
+
+    // ── Pre-existing FUNCTION collision (own isolated DB) ───────────────────
+    // 038/039 use plain CREATE FUNCTION (no OR REPLACE), so a pre-existing
+    // same-signature function must fail closed — it must NOT be silently
+    // replaced. Test against a 038 trigger function.
+    log("  [pre-existing-function collision]");
+    const fnDb = `proof_fncoll_${Date.now()}`;
+    await adminPool.query(`CREATE DATABASE ${fnDb}`);
+    const fnUrl = adminUrl.replace(/\/[^/?]+$/, `/${fnDb}`);
+    const fnPool = new pg.Pool({ connectionString: fnUrl });
+    try {
+      // Apply the schema portion up to (but not including) the trigger function
+      // we want to collide, by creating the schema + the function shell first.
+      await fnPool.query(`CREATE SCHEMA gitwire_auth`);
+      await fnPool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+      await fnPool.query(`CREATE TABLE gitwire_auth.auth_principals (id uuid primary key default gen_random_uuid())`);
+      // Pre-create a function with the SAME signature as a 038 trigger function.
+      await fnPool.query(`
+        CREATE FUNCTION gitwire_auth.enforce_events_append_only()
+        RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$;
+      `);
+      const sql038f = await readFile(join(MIGRATIONS_DIR, "038_level1_schema.sql"), "utf8");
+      const fnCollision = await expectThrow(() => fnPool.query(sql038f));
+      check(
+        "038 fails closed on pre-existing same-signature function (no OR REPLACE)",
+        fnCollision.threw && /already exists/.test(fnCollision.msg),
+        fnCollision.msg
+      );
+    } finally {
+      await fnPool.end();
+      await adminPool.query(`DROP DATABASE ${fnDb} WITH (FORCE)`);
+    }
+    await adminPool.end();
   } finally {
     try {
       execFileSync("docker", ["rm", "-f", containerId], { stdio: "ignore" });

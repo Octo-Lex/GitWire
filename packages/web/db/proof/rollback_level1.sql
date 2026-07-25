@@ -30,6 +30,7 @@ DROP FUNCTION IF EXISTS gitwire_auth.transition_execution(uuid, text, text, bigi
 DROP FUNCTION IF EXISTS gitwire_auth.transition_enforcement_state(text, text, text);
 DROP FUNCTION IF EXISTS gitwire_auth.enable_bootstrap_from_marker(text, integer);
 DROP FUNCTION IF EXISTS gitwire_auth.complete_bootstrap(text, text, text, integer, text, text, text, integer);
+DROP FUNCTION IF EXISTS gitwire_auth.active_admin_exists();
 
 -- ── 3. Drop 038 triggers (before their trigger functions) ──────────────────
 DROP TRIGGER IF EXISTS trg_receipts_no_delete ON gitwire_auth.execution_receipts;

@@ -76,6 +76,15 @@ function waitForReady(connUrl, timeoutMs) {
   });
 }
 
+async function expectThrow(fn) {
+  try {
+    await fn();
+    return { threw: false, msg: "" };
+  } catch (e) {
+    return { threw: true, msg: (e && e.message) || String(e) };
+  }
+}
+
 async function main() {
   if (process.env.DATABASE_URL) {
     console.error("REFUSED: this harness constructs its own disposable DATABASE_URL.");
@@ -154,14 +163,29 @@ async function main() {
         `roles ${before.roles}->${after.roles}, perms ${before.perms}->${after.perms}`
       );
 
-      // Canonical drift rejection: ON CONFLICT DO NOTHING must NOT overwrite.
-      const descBefore = (await pool.query("SELECT description FROM gitwire_auth.auth_roles WHERE name='admin'")).rows[0].description;
+      // Canonical drift rejection (true drift): MUTATE a canonical seed row,
+      // then run 040 SQL directly, and require it to RAISE. This proves 040's
+      // drift-verification DO block detects attribute drift (not just that
+      // ON CONFLICT DO NOTHING preserves a row).
       await pool.query(
-        `INSERT INTO gitwire_auth.auth_roles (name, description, is_builtin, status)
-         VALUES ('admin','DRIFT-ATTEMPT',true,'active') ON CONFLICT (name) DO NOTHING`
+        `UPDATE gitwire_auth.auth_roles SET description='DRIFTED-DESCRIPTION'
+         WHERE name='admin'`
       );
-      const descAfter = (await pool.query("SELECT description FROM gitwire_auth.auth_roles WHERE name='admin'")).rows[0].description;
-      check("canonical drift NOT applied (description preserved)", descBefore === descAfter, `${descBefore} != ${descAfter}`);
+      const driftReject = await expectThrow(() => pool.query(sql040));
+      check(
+        "040 raises on mutated canonical seed row (drift detection)",
+        driftReject.threw && /canonical seed drift detected/.test(driftReject.msg),
+        driftReject.msg
+      );
+      // Restore the canonical description so subsequent checks are valid.
+      await pool.query(
+        `UPDATE gitwire_auth.auth_roles
+         SET description='Full administrative access (fleet scope). Assigned to the bootstrap administrator.'
+         WHERE name='admin'`
+      );
+      // And confirm a clean 040 re-run now succeeds (drift resolved).
+      const cleanRerun = await expectThrow(() => pool.query(sql040));
+      check("040 succeeds after drift restored", !cleanRerun.threw, cleanRerun.msg);
 
       // Canonical set matches spec exactly.
       const roles = (await pool.query("SELECT name FROM gitwire_auth.auth_roles WHERE is_builtin ORDER BY name")).rows.map((r) => r.name);

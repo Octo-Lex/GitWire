@@ -134,7 +134,27 @@ GRANT SELECT ON gitwire_auth.auth_bootstrap_state TO gitwire_app;
 
 -- gitwire_admission: trusted command-admission boundary. Creates+admits
 -- commands, manages role assignments, emits admission events.
-GRANT SELECT, INSERT ON gitwire_auth.mutation_commands TO gitwire_admission;
+--
+-- Command INSERT is COLUMN-LEVEL: admission may supply only the
+-- caller-attributable provenance fields. The server-controlled admission and
+-- lifecycle fields are excluded so a malicious/erroneous INSERT cannot forge
+-- them (the BEFORE UPDATE immutability/lifecycle triggers do not constrain
+-- initial INSERT, so column privileges are the enforcement boundary here):
+--   id                -> excluded (DEFAULT gen_random_uuid)
+--   admitted          -> excluded (column DEFAULT false; only admit_command sets true)
+--   admitting_service -> excluded (NULL until admit_command)
+--   lifecycle_version -> excluded (DEFAULT 0)
+--   lifecycle_state   -> excluded (DEFAULT 'pending')
+--   transitioned_at   -> excluded (NULL until a transition function runs)
+GRANT SELECT ON gitwire_auth.mutation_commands TO gitwire_admission;
+GRANT INSERT (
+  initiating_principal, requesting_service, authentication_method,
+  target_installation_id, target_repository_id, target_organization,
+  target_repository, target_resource_type, target_resource_id,
+  operation, payload_hash, payload_canonical,
+  auth_result_snapshot, auth_policy_version, assurance_profile,
+  idempotency_key, extension, created_at
+) ON gitwire_auth.mutation_commands TO gitwire_admission;
 GRANT SELECT, INSERT ON gitwire_auth.auth_role_permissions TO gitwire_admission;
 GRANT SELECT, INSERT ON gitwire_auth.auth_principal_roles TO gitwire_admission;
 GRANT UPDATE (revoked_at) ON gitwire_auth.auth_principal_roles TO gitwire_admission;
@@ -159,8 +179,12 @@ GRANT SELECT ON gitwire_auth.auth_enforcement_state TO gitwire_operator;
 GRANT SELECT ON gitwire_auth.auth_bootstrap_state TO gitwire_operator;
 GRANT SELECT ON gitwire_auth.auth_bootstrap_recovery_markers TO gitwire_operator;
 -- Operator may INSERT recovery markers (operator DB role); it CANNOT
--- authenticate to the application API and cannot complete bootstrap.
-GRANT INSERT (consumer_secret_hash, pepper_version, created_by_db_session)
+-- authenticate to the application API and cannot complete bootstrap. The
+-- INSERT is column-level on ONLY (consumer_secret_hash, pepper_version) —
+-- created_by_db_session is NOT insertable by the operator; the column DEFAULT
+-- current_user derives attribution from the database session, so an operator
+-- cannot forge created_by_db_session.
+GRANT INSERT (consumer_secret_hash, pepper_version)
   ON gitwire_auth.auth_bootstrap_recovery_markers TO gitwire_operator;
 
 -- ── 4. SECURITY DEFINER functions ──────────────────────────────────────────
@@ -171,7 +195,7 @@ GRANT INSERT (consumer_secret_hash, pepper_version, created_by_db_session)
 
 -- admit_command: the ONLY way admitted becomes true. Called by the trusted
 -- admission path after authorization evaluation.
-CREATE OR REPLACE FUNCTION gitwire_auth.admit_command(
+CREATE FUNCTION gitwire_auth.admit_command(
   p_command_id        uuid,
   p_admitting_service uuid
 ) RETURNS boolean
@@ -200,7 +224,7 @@ REVOKE ALL ON FUNCTION gitwire_auth.admit_command(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION gitwire_auth.admit_command(uuid, uuid) TO gitwire_admission;
 
 -- transition_admission: pending→submitted, pending→cancelled, submitted→cancelled.
-CREATE OR REPLACE FUNCTION gitwire_auth.transition_admission(
+CREATE FUNCTION gitwire_auth.transition_admission(
   p_command_id     uuid,
   p_expected_state text,
   p_new_state      text,
@@ -241,7 +265,7 @@ REVOKE ALL ON FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigin
 GRANT EXECUTE ON FUNCTION gitwire_auth.transition_admission(uuid, text, text, bigint) TO gitwire_admission;
 
 -- transition_execution: submitted→executing, executing→completed/failed.
-CREATE OR REPLACE FUNCTION gitwire_auth.transition_execution(
+CREATE FUNCTION gitwire_auth.transition_execution(
   p_command_id     uuid,
   p_expected_state text,
   p_new_state      text,
@@ -265,11 +289,16 @@ BEGIN
       p_expected_state, p_new_state;
   END IF;
 
+  -- The executor may only act on an ADMITTED command. An unadmitted command
+  -- (admitted=false, e.g. a worker INSERT that bypassed the trusted admission
+  -- path) must never reach execution. This closes the confused-deputy gap
+  -- where a forged command could otherwise move submitted→executing.
   UPDATE mutation_commands
     SET lifecycle_state = p_new_state,
         lifecycle_version = p_expected_ver + 1,
         transitioned_at = now()
     WHERE id = p_command_id
+      AND admitted = true
       AND lifecycle_state = p_expected_state
       AND lifecycle_version = p_expected_ver;
 
@@ -283,7 +312,7 @@ GRANT EXECUTE ON FUNCTION gitwire_auth.transition_execution(uuid, text, text, bi
 
 -- transition_enforcement_state: operator-driven cutover. updated_by is taken
 -- from session_user, NOT a parameter, so a caller cannot forge attribution.
-CREATE OR REPLACE FUNCTION gitwire_auth.transition_enforcement_state(
+CREATE FUNCTION gitwire_auth.transition_enforcement_state(
   p_expected_state text,
   p_new_state       text,
   p_evidence        text
@@ -331,45 +360,79 @@ GRANT EXECUTE ON FUNCTION gitwire_auth.transition_enforcement_state(text, text, 
 -- Owned by gitwire_auth_fn_owner (NOT gitwire_operator), per Wave 1 binding
 -- architecture. Fresh state is 'enabled'; successful bootstrap atomically
 -- creates the admin principal + credential + fleet assignment and disables
--- bootstrap. Re-enable requires an operator-inserted recovery marker whose
--- derived consumer-secret hash is validated here; the marker is consumed
--- exactly once. Only derived hashes enter PostgreSQL.
+-- bootstrap. Re-enable requires an operator-inserted recovery marker; the
+-- marker is validated by DERIVED-hash equality and consumed exactly once.
+--
+-- SECURITY CONTRACT (frozen, issue #81):
+--   * Raw bootstrap/admin secrets NEVER enter PostgreSQL. The operator and
+--     the bootstrap endpoint compute the derived consumer_secret_hash
+--     OUTSIDE the database (HMAC-SHA256, salted by pepper_version) and pass
+--     only the derived hash to these functions. The functions perform plain
+--     equality comparison against the stored derived hash — no hmac() call,
+--     no raw secret parameter.
+--   * Recovery (re-bootstrap) is permitted ONLY when NO active
+--     administrator exists (all are disabled/revoked). This is the "all
+--     administrators locked out" recovery condition.
+--   * created_by_db_session is database-derived (DEFAULT current_user); the
+--     operator cannot set it, so attribution cannot be forged.
 
--- enable_bootstrap_from_marker: operator has inserted a recovery marker;
--- the caller supplies the raw consumer secret, which this function hashes
--- (salted by pepper_version) and compares to the stored hash. On match it
--- flips state to 'enabled' WITHOUT consuming the marker (consumption happens
--- at complete_bootstrap so re-enable + bootstrap are atomic per marker).
-CREATE OR REPLACE FUNCTION gitwire_auth.enable_bootstrap_from_marker(
-  p_consumer_secret text,
-  p_pepper_version  integer
+-- active_admin_exists: helper — true iff any principal holds a non-revoked
+-- fleet-scoped admin assignment. Used to gate recovery on the "all admins
+-- locked out" condition.
+CREATE FUNCTION gitwire_auth.active_admin_exists()
+RETURNS boolean
+SECURITY DEFINER
+SET search_path = gitwire_auth, pg_catalog
+AS $$
+DECLARE
+  v_n int;
+BEGIN
+  SELECT count(*) INTO v_n
+    FROM auth_principal_roles apr
+    JOIN auth_roles ar ON ar.id = apr.role_id
+    JOIN auth_principals p ON p.id = apr.principal_id
+    WHERE ar.name = 'admin'
+      AND apr.scope_type = 'fleet'
+      AND apr.revoked_at IS NULL
+      AND p.status = 'active';
+  RETURN v_n > 0;
+END;
+$$ LANGUAGE plpgsql;
+ALTER FUNCTION gitwire_auth.active_admin_exists() OWNER TO gitwire_auth_fn_owner;
+REVOKE ALL ON FUNCTION gitwire_auth.active_admin_exists() FROM PUBLIC;
+-- Internal helper used only by the bootstrap functions (same owner). No
+-- EXECUTE grant to any login role.
+
+-- enable_bootstrap_from_marker: operator has inserted a recovery marker
+-- (with its DERIVED consumer_secret_hash). The caller supplies the SAME
+-- derived hash; the function matches it by equality and flips state to
+-- 'enabled' WITHOUT consuming the marker (consumption happens at
+-- complete_bootstrap so re-enable + bootstrap are atomic per marker).
+-- Recovery is permitted ONLY when no active administrator exists.
+CREATE FUNCTION gitwire_auth.enable_bootstrap_from_marker(
+  p_consumer_secret_hash text,
+  p_pepper_version       integer
 ) RETURNS boolean
 SECURITY DEFINER
 SET search_path = gitwire_auth, pg_catalog
 AS $$
 DECLARE
-  v_hash text;
   v_count int;
 BEGIN
   IF session_user != 'gitwire_operator' THEN
     RAISE EXCEPTION 'enable_bootstrap_from_marker: only gitwire_operator may call this function';
   END IF;
 
-  -- Validate the supplied secret against the stored DERIVED hash. The raw
-  -- secret is never stored; only this transient comparison sees it.
-  -- NOTE: hmac() is installed by pgcrypto into the `public` schema (via CREATE
-  -- EXTENSION in 038); encode() is a built-in in pg_catalog. The SECURITY
-  -- DEFINER search_path is fixed to (gitwire_auth, pg_catalog) for safety, so
-  -- we fully-qualify the pgcrypto hmac() call (public.hmac) rather than adding
-  -- `public` to the search_path (which would allow a hostile public object to
-  -- shadow the real implementation). encode() resolves via pg_catalog.
-  SELECT encode(public.hmac(p_consumer_secret::bytea,
-                     ('pepper-v' || p_pepper_version)::bytea, 'sha256'), 'hex')
-    INTO v_hash;
+  -- Recovery condition: permitted only when ALL administrators are locked out.
+  IF gitwire_auth.active_admin_exists() THEN
+    RAISE EXCEPTION 'enable_bootstrap_from_marker: recovery is blocked while an active administrator exists';
+  END IF;
 
+  -- Match the caller-supplied DERIVED hash against a stored unconsumed marker.
+  -- No raw secret is accepted here; the operator must supply the derived hash.
   SELECT count(*) INTO v_count
     FROM auth_bootstrap_recovery_markers
-    WHERE consumer_secret_hash = v_hash
+    WHERE consumer_secret_hash = p_consumer_secret_hash
       AND pepper_version = p_pepper_version
       AND consumed_at IS NULL;
 
@@ -394,22 +457,23 @@ GRANT EXECUTE ON FUNCTION gitwire_auth.enable_bootstrap_from_marker(text, intege
 -- this after collecting the new administrator's details. It atomically:
 --   1. requires state = 'enabled';
 --   2. requires the FIRST bootstrap (bootstrap_count = 0) OR a valid
---      unconsumed recovery marker (matches p_consumer_secret hash);
+--      unconsumed recovery marker (matched by DERIVED hash) AND no active
+--      administrator (the lockout condition);
 --   3. creates the admin principal, credential, and fleet role assignment;
 --   4. consumes exactly one marker (if this was a recovery bootstrap);
 --   5. flips state to 'disabled', increments bootstrap_count.
--- p_admin_display_name / p_credential_lookup_id / p_secret_hash are supplied
--- by the bootstrap endpoint from its HMAC-verified collection; only the
--- derived p_secret_hash is stored. The raw consumer secret is validated
--- against the marker here, never persisted.
-CREATE OR REPLACE FUNCTION gitwire_auth.complete_bootstrap(
-  p_admin_display_name     text,
-  p_credential_lookup_id   text,
-  p_admin_secret_hash      text,
-  p_admin_pepper_version   integer,
-  p_admin_audience         text,
-  p_admin_display_prefix   text,
-  p_consumer_secret        text,
+-- p_admin_secret_hash is the DERIVED hash of the new admin's secret (computed
+-- by the bootstrap endpoint outside PostgreSQL). p_consumer_secret_hash is
+-- the DERIVED recovery-secret hash (recovery path only). No raw secret is
+-- accepted by this function.
+CREATE FUNCTION gitwire_auth.complete_bootstrap(
+  p_admin_display_name      text,
+  p_credential_lookup_id    text,
+  p_admin_secret_hash       text,
+  p_admin_pepper_version    integer,
+  p_admin_audience          text,
+  p_admin_display_prefix    text,
+  p_consumer_secret_hash    text,
   p_recovery_pepper_version integer
 ) RETURNS uuid
 SECURITY DEFINER
@@ -420,7 +484,6 @@ DECLARE
   v_count          bigint;
   v_principal_id   uuid;
   v_role_id        uuid;
-  v_marker_hash    text;
   v_marker_id      uuid;
 BEGIN
   IF session_user != 'gitwire_app' THEN
@@ -435,17 +498,17 @@ BEGIN
   SELECT bootstrap_count INTO v_count FROM auth_bootstrap_state WHERE id = 1;
 
   IF v_count = 0 THEN
-    -- First bootstrap: no recovery marker required.
+    -- First bootstrap: no recovery marker required (fresh deploy, no admins).
     v_marker_id := NULL;
   ELSE
-    -- Re-bootstrap: require a matching unconsumed recovery marker.
-    -- Fully-qualified public.hmac; encode resolves via pg_catalog.
-    SELECT encode(public.hmac(p_consumer_secret::bytea,
-                       ('pepper-v' || p_recovery_pepper_version)::bytea, 'sha256'), 'hex')
-      INTO v_marker_hash;
+    -- Re-bootstrap (recovery): require (a) no active administrator (lockout)
+    -- AND (b) a matching unconsumed recovery marker, matched by DERIVED hash.
+    IF gitwire_auth.active_admin_exists() THEN
+      RAISE EXCEPTION 'complete_bootstrap: recovery is blocked while an active administrator exists';
+    END IF;
     SELECT id INTO v_marker_id
       FROM auth_bootstrap_recovery_markers
-      WHERE consumer_secret_hash = v_marker_hash
+      WHERE consumer_secret_hash = p_consumer_secret_hash
         AND pepper_version = p_recovery_pepper_version
         AND consumed_at IS NULL
       FOR UPDATE;

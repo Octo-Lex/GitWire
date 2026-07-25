@@ -21,9 +21,11 @@
 -- used by the recovery-marker hash validation SECURITY DEFINER function in 039.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Dedicated schema. IF NOT EXISTS is permitted here (shared bootstrap); CREATE
--- is revoked from PUBLIC below so only the migration owner can add objects.
-CREATE SCHEMA IF NOT EXISTS gitwire_auth;
+-- Dedicated schema. Fail-closed: plain CREATE (no IF NOT EXISTS) so a
+-- pre-existing gitwire_auth schema aborts the migration rather than being
+-- silently adopted. (pgcrypto above is the permitted shared-extension
+-- exception.) CREATE is revoked from PUBLIC below.
+CREATE SCHEMA gitwire_auth;
 REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;
 
 -- All Level 1 DDL is fully qualified to gitwire_auth so the effective
@@ -271,13 +273,18 @@ INSERT INTO gitwire_auth.auth_bootstrap_state (id, state) VALUES (1, 'enabled')
 -- Operator-inserted recovery markers for re-enabling bootstrap after lockout.
 -- Only the DERIVED consumer_secret_hash is stored; the raw consumer secret
 -- never enters SQL, the repository, logs, or proof evidence. A marker is
--- consumed exactly once by complete_bootstrap (039), which validates the
--- caller-supplied secret against this hash before re-enabling.
+-- consumed exactly once by complete_bootstrap (039).
+--
+-- created_by_db_session is DERIVED from the database session (DEFAULT
+-- current_user), NOT operator-supplied, so an operator cannot forge
+-- attribution. The operator role is granted INSERT only on
+-- (consumer_secret_hash, pepper_version) — it cannot set
+-- created_by_db_session explicitly.
 CREATE TABLE gitwire_auth.auth_bootstrap_recovery_markers (
   id                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   consumer_secret_hash text        NOT NULL UNIQUE,
   pepper_version       integer     NOT NULL,
-  created_by_db_session text       NOT NULL,
+  created_by_db_session text       NOT NULL DEFAULT current_user,
   created_at           timestamptz NOT NULL DEFAULT now(),
   consumed_at          timestamptz,
   consumed_by_bootstrap bigint
@@ -290,7 +297,7 @@ CREATE TABLE gitwire_auth.auth_bootstrap_recovery_markers (
 -- functions live in 039.
 
 -- Legal lifecycle transition + version-increment enforcement.
-CREATE OR REPLACE FUNCTION gitwire_auth.enforce_legal_lifecycle_transition()
+CREATE FUNCTION gitwire_auth.enforce_legal_lifecycle_transition()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
@@ -320,7 +327,7 @@ CREATE TRIGGER trg_legal_lifecycle_transition
 -- Provenance immutability. Admission fields allow exactly one false→true flip
 -- (set by admit_command in 039); once true, neither admitted nor
 -- admitting_service may change.
-CREATE OR REPLACE FUNCTION gitwire_auth.enforce_command_immutability()
+CREATE FUNCTION gitwire_auth.enforce_command_immutability()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
@@ -370,7 +377,7 @@ CREATE TRIGGER trg_command_immutability
 -- and current_user='gitwire_admission'; execution events require source=
 -- 'executor' and current_user='gitwire_executor'. This prevents a compromised
 -- worker from forging events even if it obtained INSERT privilege.
-CREATE OR REPLACE FUNCTION gitwire_auth.enforce_event_source_partition()
+CREATE FUNCTION gitwire_auth.enforce_event_source_partition()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
@@ -402,7 +409,7 @@ CREATE TRIGGER trg_event_source_partition
 
 -- Append-only enforcement for events and receipts. No owner exemption,
 -- no cleanup path — Level 1 retains these indefinitely.
-CREATE OR REPLACE FUNCTION gitwire_auth.enforce_events_append_only()
+CREATE FUNCTION gitwire_auth.enforce_events_append_only()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
@@ -418,7 +425,7 @@ CREATE TRIGGER trg_events_no_delete
   BEFORE DELETE ON gitwire_auth.mutation_events
   FOR EACH ROW EXECUTE FUNCTION gitwire_auth.enforce_events_append_only();
 
-CREATE OR REPLACE FUNCTION gitwire_auth.enforce_receipts_append_only()
+CREATE FUNCTION gitwire_auth.enforce_receipts_append_only()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$

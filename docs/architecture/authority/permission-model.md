@@ -112,18 +112,21 @@ separate `auth_bootstrap_recovery_markers` table. The earlier
    in one transaction, then disables bootstrap.
 3. If all admins are disabled (lockout), an operator with production DB
    credentials inserts a row into
-   `auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version,
-   created_by_db_session)`. **Only the derived `consumer_secret_hash` is
-   stored; the raw consumer secret never enters SQL, repository files, logs,
-   or proof evidence.**
-4. `enable_bootstrap_from_marker(p_consumer_secret, p_pepper_version)`
-   hashes the supplied secret (salted by `pepper_version`) and compares it
-   to the stored derived hash; on match it flips state to `enabled`. The
+   `auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version)`.
+   **Only the derived `consumer_secret_hash` is stored; the raw consumer
+   secret never enters SQL, repository files, logs, or proof evidence.**
+   `created_by_db_session` is database-derived (`DEFAULT current_user`) and is
+   not insertable by the operator, so attribution cannot be forged.
+4. `enable_bootstrap_from_marker(p_consumer_secret_hash, p_pepper_version)`
+   accepts the **derived** hash (not the raw secret) and matches it by equality
+   against the stored derived hash; on match it flips state to `enabled`. It
+   requires that **no active administrator exists** (the lockout condition). The
    marker is **not** consumed at this step.
 5. On successful bootstrap, `complete_bootstrap()` requires the marker (for
-   any bootstrap after the first), validates the supplied recovery secret
-   against the stored derived hash, consumes exactly one marker (sets
-   `consumed_at`), and transitions to `disabled` — all in one transaction.
+   any bootstrap after the first) AND no active administrator, matches the
+   caller-supplied derived recovery hash against the stored hash, consumes
+   exactly one marker (sets `consumed_at`), and transitions to `disabled` —
+   all in one transaction.
 
 **Privilege boundary:**
 - **Operator DB role (`gitwire_operator`):** may INSERT recovery markers and

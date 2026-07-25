@@ -17,14 +17,11 @@
 -- application-layer evaluator; no raw secret is referenced here.
 --
 -- Idempotency: every INSERT uses ON CONFLICT DO NOTHING on a natural key, so a
--- direct re-execution of 040 (e.g. by the seed-proof fixture) is a no-op.
--- Canonical drift (a row that already exists with different attributes) is NOT
--- silently overwritten — the canonical-content CHECK enforced by the
--- seed-proof fixture rejects drift at the proof layer. To keep this migration
--- itself idempotent rather than fail-closed on re-apply after rollback, we use
--- ON CONFLICT (name) DO NOTHING for roles and ON CONFLICT (role_id, permission)
--- DO NOTHING for permissions; the seed-proof fixture verifies the post-state
--- matches the canonical set exactly.
+-- direct re-execution of 040 (e.g. by the seed-proof fixture) is a no-op for
+-- INSERT. Canonical drift is rejected explicitly by the verification block
+-- below: a canonical row that already exists with DIFFERENT attributes is NOT
+-- silently preserved — the verification raises. (ON CONFLICT DO NOTHING alone
+-- would preserve a drifted row; the verification closes that gap.)
 
 SET search_path = gitwire_auth, pg_catalog;
 
@@ -92,5 +89,81 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO gitwire_auth.auth_enforcement_state (id, state)
 VALUES (1, 'observed')
 ON CONFLICT (id) DO NOTHING;
+
+-- ── 5. Canonical drift verification (fail-closed) ──────────────────────────
+-- A canonical row that already exists with DIFFERENT attributes is drift.
+-- ON CONFLICT DO NOTHING above would silently preserve it; this block raises
+-- instead, so a drifted canonical seed fails 040 on re-execution. Each
+-- assertion compares the stored row to its canonical expected value.
+
+DO $$
+DECLARE
+  v_drift text := '';
+  v_n int;
+BEGIN
+  -- Role attribute drift: each canonical role must have exactly the expected
+  -- description, is_builtin=true, status='active'.
+  IF EXISTS (
+    SELECT 1 FROM gitwire_auth.auth_roles
+    WHERE name = 'admin'
+      AND (description IS DISTINCT FROM 'Full administrative access (fleet scope). Assigned to the bootstrap administrator.'
+           OR is_builtin IS DISTINCT FROM true
+           OR status IS DISTINCT FROM 'active')
+  ) THEN
+    v_drift := v_drift || ' admin-role-attributes';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM gitwire_auth.auth_roles
+    WHERE name = 'operator'
+      AND (description IS DISTINCT FROM 'Operational inspection and cutover transitions. No direct table UPDATE.'
+           OR is_builtin IS DISTINCT FROM true
+           OR status IS DISTINCT FROM 'active')
+  ) THEN
+    v_drift := v_drift || ' operator-role-attributes';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM gitwire_auth.auth_roles
+    WHERE name = 'legacy-key'
+      AND (description IS DISTINCT FROM 'Narrow bridge for existing shared-key clients during migration.'
+           OR is_builtin IS DISTINCT FROM true
+           OR status IS DISTINCT FROM 'active')
+  ) THEN
+    v_drift := v_drift || ' legacy-key-role-attributes';
+  END IF;
+
+  -- Permission-set drift: the canonical permission set per role must match
+  -- EXACTLY (no missing, no extra). Compare as sorted text aggregates.
+  IF EXISTS (
+    SELECT 1
+    FROM (
+      SELECT r.name,
+             string_agg(arp.permission, ',' ORDER BY arp.permission) AS actual
+      FROM gitwire_auth.auth_role_permissions arp
+      JOIN gitwire_auth.auth_roles r ON r.id = arp.role_id
+      WHERE r.name IN ('admin','operator','legacy-key') AND r.is_builtin
+      GROUP BY r.name
+    ) cur
+    FULL JOIN (
+      VALUES
+        ('admin', 'installation:list,installation:read,repository:create,repository:github:act,repository:list,repository:read,repository:update'),
+        ('operator', 'installation:list,installation:read,repository:list,repository:read'),
+        ('legacy-key', 'repository:create,repository:list,repository:read,repository:update')
+    ) AS exp(name, perms) ON cur.name = exp.name
+    WHERE cur.actual IS DISTINCT FROM exp.perms
+  ) THEN
+    v_drift := v_drift || ' permission-set';
+  END IF;
+
+  -- Canonical built-in role count drift: exactly the 3 canonical roles exist
+  -- as is_builtin (no extra built-in roles injected).
+  SELECT count(*) INTO v_n FROM gitwire_auth.auth_roles WHERE is_builtin;
+  IF v_n != 3 THEN
+    v_drift := v_drift || ' builtin-role-count';
+  END IF;
+
+  IF v_drift != '' THEN
+    RAISE EXCEPTION 'canonical seed drift detected:%', v_drift;
+  END IF;
+END $$;
 
 RESET search_path;
