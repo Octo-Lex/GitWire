@@ -82,15 +82,34 @@ jobs:
       # it against the version-controlled exception registry. No || true, no
       # continue-on-error, no unconditional success path. The evaluator decides
       # whether all high/critical findings are actively excepted.
+      #
+      # CRITICAL: the audit and evaluator MUST run against the candidate checkout
+      # at /opt/gitwire (the exact tested SHA), NOT the currently-running
+      # production container. Auditing the running container would scan the
+      # previously-deployed release's dependencies, not the candidate's, and
+      # could either block a fixed release or pass a broken one. The running app
+      # image is used ONLY as a Node.js runtime (the self-hosted runner has no
+      # working npm/node); the candidate repository is mounted read-only so the
+      # audit reads the candidate's package-lock.json and the candidate's
+      # audit-exceptions.json, never the image's baked-in /app.
       - name: Generate production audit report
         id: audit
         run: |
           cd /opt/gitwire
           # The self-hosted runner does not have a working npm/node installation
-          # (the runner's bundled externals npm is missing lib/cli.js). Run the
-          # audit inside the app container, which has a complete Node.js.
+          # (the runner's bundled externals npm is missing lib/cli.js). Borrow
+          # the running app image's complete Node.js, but audit the candidate
+          # checkout — not the image's /app — by mounting /opt/gitwire
+          # read-only and setting the working directory to it.
+          AUDIT_RUNTIME_IMAGE="$(docker inspect --format '{{.Image}}' gitwire-gitwire-app-1)"
           set +e
-          docker exec -w /app gitwire-gitwire-app-1 npm audit --omit=dev --json > /tmp/production-audit.json 2>/tmp/audit-stderr.log
+          docker run --rm \
+            --entrypoint npm \
+            -v /opt/gitwire:/candidate:ro \
+            -w /candidate \
+            "$AUDIT_RUNTIME_IMAGE" \
+            audit --omit=dev --json \
+            > /tmp/production-audit.json 2>/tmp/audit-stderr.log
           AUDIT_EXIT=$?
           set -e
           echo "exit=$AUDIT_EXIT" >> "$GITHUB_OUTPUT"
@@ -104,13 +123,19 @@ jobs:
       - name: Evaluate audit against exception registry
         run: |
           cd /opt/gitwire
-          # Run the evaluator inside the app container (has working node).
-          docker cp scripts/enforce-production-audit.mjs gitwire-gitwire-app-1:/tmp/enforce-production-audit.mjs
-          docker cp audit-exceptions.json gitwire-gitwire-app-1:/tmp/audit-exceptions.json
-          docker cp /tmp/production-audit.json gitwire-gitwire-app-1:/tmp/production-audit.json
-          docker exec -w /app gitwire-gitwire-app-1 node /tmp/enforce-production-audit.mjs \
+          # Evaluate using the candidate checkout's exception registry and
+          # evaluator script (read-only mount), with the candidate audit report
+          # produced above. Same runtime image as the audit step — Node.js only.
+          AUDIT_RUNTIME_IMAGE="$(docker inspect --format '{{.Image}}' gitwire-gitwire-app-1)"
+          docker run --rm \
+            --entrypoint node \
+            -v /opt/gitwire:/candidate:ro \
+            -v /tmp/production-audit.json:/tmp/production-audit.json:ro \
+            -w /candidate \
+            "$AUDIT_RUNTIME_IMAGE" \
+            scripts/enforce-production-audit.mjs \
             /tmp/production-audit.json \
-            /tmp/audit-exceptions.json
+            audit-exceptions.json
 
   # ── Job 2: Deploy ─────────────────────────────────────────────
   # The ONLY job with `environment: production`. Production-scoped secrets and
