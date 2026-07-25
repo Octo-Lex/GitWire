@@ -1,0 +1,35 @@
+name: Audit diagnose
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: Capture residual audit diagnosis
+        run: |
+          set +e
+          npm audit --omit=dev --json > /tmp/audit.json
+          node scripts/enforce-production-audit.mjs /tmp/audit.json audit-exceptions.json > /tmp/evaluator.log 2>&1
+          set -e
+          cat /tmp/evaluator.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: residual-audit-diagnosis
+          path: |
+            /tmp/audit.json
+            /tmp/evaluator.log
+          if-no-files-found: error
+          retention-days: 1
