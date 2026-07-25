@@ -9,6 +9,33 @@
       "justification": "Transitive dependency via @anthropic-ai/sdk -> @types/node-fetch -> form-data@4.0.5. fixAvailable requires an upstream SDK bump or npm override. The affected code path (multipart field names/filenames CRLF injection) is not exercised by GitWire's server-side use of the Anthropic SDK. Time-bounded to force re-evaluation.",
       "owner": "Alajmah",
       "tracking_issue": "https://github.com/Octo-Lex/GitWire/issues/47"
+    },
+    {
+      "advisory": "https://github.com/advisories/GHSA-6g55-p6wh-862q",
+      "package": "postcss",
+      "range": "<=8.5.11",
+      "expires": "2026-10-14T23:59:59Z",
+      "justification": "Transitive dependency via Next.js. Used in build pipeline only. Fix requires Next.js upgrade.",
+      "owner": "Alajmah",
+      "tracking_issue": "https://github.com/Octo-Lex/GitWire/issues/47"
+    },
+    {
+      "advisory": "https://github.com/advisories/GHSA-r28c-9q8g-f849",
+      "package": "postcss",
+      "range": "<=8.5.17",
+      "expires": "2026-10-14T23:59:59Z",
+      "justification": "Transitive dependency via Next.js. Used in build pipeline only. Fix requires Next.js upgrade.",
+      "owner": "Alajmah",
+      "tracking_issue": "https://github.com/Octo-Lex/GitWire/issues/47"
+    },
+    {
+      "advisory": "https://github.com/advisories/GHSA-f88m-g3jw-g9cj",
+      "package": "sharp",
+      "range": "<0.35.0",
+      "expires": "2026-10-14T23:59:59Z",
+      "justification": "Transitive dependency. Update to 0.35.0+ available.",
+      "owner": "Alajmah",
+      "tracking_issue": "https://github.com/Octo-Lex/GitWire/issues/47"
     }
   ]
 }
