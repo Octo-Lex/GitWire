@@ -92,43 +92,53 @@ auth_principals
 - `auth_epoch` increments on credential revocation, role revocation, or
   admin-forced session invalidation.
 
-### Bootstrap state machine
+### Bootstrap state machine (zero-administrator, recovery-marker model)
 
-Bootstrap has two states:
+Bootstrap has two states. The canonical implementation (Wave 1 / issue #81,
+migrations 038/039/040) uses a singleton `auth_bootstrap_state` table and a
+separate `auth_bootstrap_recovery_markers` table. The earlier
+`auth_bootstrap_allow` sketch is superseded by this recovery-marker model.
 
 | State | Meaning | How to reach |
 |-------|---------|-------------|
-| `enabled` | Bootstrap endpoint is mounted and accepts the operational secret | Initial state (fresh deploy with no admins); or `disabled` → `enabled` when application detects `auth_bootstrap_allow` marker |
-| `disabled` | Bootstrap endpoint is removed from the route table | After successful bootstrap; marker consumed |
+| `enabled` | Bootstrap endpoint is mounted and accepts the operational secret | Initial state (fresh deploy with no admins); or `disabled` → `enabled` via `enable_bootstrap_from_marker()` after an operator inserts a recovery marker |
+| `disabled` | Bootstrap endpoint is removed from the route table | After successful bootstrap; recovery marker consumed |
 
-**State transitions:**
-1. Fresh deployment starts in `enabled` (zero admin principals).
-2. Successful bootstrap → `disabled` (admin created, endpoint unmounted,
-   marker consumed).
+**State transitions (implemented by SECURITY DEFINER functions in 039):**
+1. Fresh deployment starts in `enabled` (zero admin principals). 040 seeds
+   this initial state and creates **no** administrator.
+2. Successful bootstrap → `disabled`. `complete_bootstrap()` atomically
+   creates the administrator principal + credential + fleet role assignment
+   in one transaction, then disables bootstrap.
 3. If all admins are disabled (lockout), an operator with production DB
-   credentials inserts into `auth_bootstrap_allow(consumer_secret_hash,
-   created_by_db_session, created_at)`.
-4. The application detects the marker on startup/health check and
-   transitions to `enabled` via the stored function.
-5. On successful bootstrap, the stored function transitions to `disabled`
-   and consumes (deletes) the marker in the same transaction.
+   credentials inserts a row into
+   `auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version,
+   created_by_db_session)`. **Only the derived `consumer_secret_hash` is
+   stored; the raw consumer secret never enters SQL, repository files, logs,
+   or proof evidence.**
+4. `enable_bootstrap_from_marker(p_consumer_secret, p_pepper_version)`
+   hashes the supplied secret (salted by `pepper_version`) and compares it
+   to the stored derived hash; on match it flips state to `enabled`. The
+   marker is **not** consumed at this step.
+5. On successful bootstrap, `complete_bootstrap()` requires the marker (for
+   any bootstrap after the first), validates the supplied recovery secret
+   against the stored derived hash, consumes exactly one marker (sets
+   `consumed_at`), and transitions to `disabled` — all in one transaction.
 
 **Privilege boundary:**
-- **Operator DB role:** can INSERT into `auth_bootstrap_allow`. Cannot
-  authenticate to the application API.
-- **Application DB role:** cannot INSERT/UPDATE/DELETE
-  `auth_bootstrap_allow` or `auth_bootstrap_state` directly. All
-  transitions go through stored functions:
-  - `transition_bootstrap_state(new_state text)` — accepts `'enabled'`
-    or `'disabled'`. When transitioning to `'enabled'`, it verifies a
-    marker exists in `auth_bootstrap_allow`. When transitioning to
-    `'disabled'` after bootstrap, it deletes the marker in the same
-    transaction.
-  - The application calls `transition_bootstrap_state('enabled')` when
-    it detects a marker, and `transition_bootstrap_state('disabled')`
-    after successful bootstrap.
-  - Neither function accepts arbitrary SQL; they are SECURITY DEFINER
-    functions owned by the operator DB role.
+- **Operator DB role (`gitwire_operator`):** may INSERT recovery markers and
+  call `enable_bootstrap_from_marker()`. Cannot authenticate to the
+  application API. Cannot complete bootstrap.
+- **Application DB role (`gitwire_app`):** calls `complete_bootstrap()`
+  (the bootstrap endpoint). Cannot INSERT/UPDATE/DELETE
+  `auth_bootstrap_state` or `auth_bootstrap_recovery_markers` directly — all
+  transitions go through the SECURITY DEFINER functions.
+- **Function ownership:** the bootstrap functions are owned by
+  `gitwire_auth_fn_owner` (a NOLOGIN role), **not** `gitwire_operator` — so
+  no login role can redefine the bootstrap logic. Each function uses a fixed
+  safe `search_path` and derives attribution from `session_user`.
+- A recovery marker is consumed **exactly once**; re-using a consumed marker
+  is rejected. Re-bootstrap without any marker is rejected.
 
 ---
 
@@ -182,7 +192,7 @@ system (fleet-wide)
 | Category | Resources | Scope |
 |----------|-----------|-------|
 | **Installation-scoped** | repository and all its children; policy_definition, policy_waiver, quality_gate, policy_rollout_plan, maintainer_setting; decision_log; repair_proposal_event; managed_action; rollback_event; policy_repo_config; reconciliation_run; config_validation_result; pipeline_event; test_result; gate_evaluation; backend_isolation_evidence; action_reconciliation_log | Tenant-scoped |
-| **Identity-scoped** | auth_principal, auth_role, auth_credential, auth_delegation, auth_resource_grant, auth_bootstrap_allow | System-scoped; not tenant-filtered |
+| **Identity-scoped** | auth_principal, auth_role, auth_credential, auth_delegation, auth_resource_grant, auth_bootstrap_recovery_markers | System-scoped; not tenant-filtered |
 | **System-scoped** | audit_trail_entry, audit_export, compliance_report, system configuration | Fleet-wide |
 | **Transport-scoped** | queue_job | Not a tenant resource — see queue authority model below |
 | **Worker-internal** | execution_receipt, source_snapshot, patch_artifact, fix_attempt, ai_review, duplicate_signal, dependency_manifest, dependency_update_batch, vulnerability_advisory, flaky_test, issue_embedding, member, repo_collaborator, branch_rule | Installation-scoped (child of repository or installation) |
@@ -1245,10 +1255,20 @@ installation-scoped tables, not system-scoped identity resources).
 If all administrators are locked out, bootstrap is re-enabled by direct
 database access (§2). The operator:
 1. Has production DB credentials (separate from application credentials).
-2. Inserts a row into `auth_bootstrap_allow(consumer_secret_hash, created_by_db_session, created_at)`.
-3. The application checks this table on startup and during health checks.
-4. The marker is consumed exactly once (deleted after successful bootstrap).
-5. This is the ONLY way to re-enable bootstrap — there is no API route for it.
+2. Inserts a row into
+   `auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version,
+   created_by_db_session)`. Only the **derived** `consumer_secret_hash` is
+   stored; the raw consumer secret never enters SQL, repository files, logs,
+   or proof evidence.
+3. Calls `enable_bootstrap_from_marker(consumer_secret, pepper_version)`,
+   which hashes the supplied secret and compares it to the stored derived
+   hash; on match it flips state to `enabled`.
+4. The application's bootstrap endpoint then calls `complete_bootstrap()`,
+   which consumes the marker exactly once and atomically creates the new
+   administrator.
+5. This is the ONLY way to re-enable bootstrap — there is no API route for
+   re-enable. The marker is validated against its derived hash and consumed
+   exactly once; re-use of a consumed marker is rejected.
 
 ### Legacy-key fail-closed
 
@@ -1940,7 +1960,7 @@ derived from this table.
 | `auth_delegation` | — | UUID | `auth_delegations` | read, list, create, revoke |
 | `auth_resource_grant` | — | UUID | `auth_resource_grants` | read, list, manage, revoke |
 | `auth_worker_ceiling` | `auth_principal` | UUID | `auth_worker_ceilings` | read, list, manage |
-| `auth_bootstrap_allow` | — | UUID | `auth_bootstrap_allow` | (operator DB only) |
+| `auth_bootstrap_recovery_markers` | — | UUID | `auth_bootstrap_recovery_markers` | (operator DB only — derived hash only) |
 | `auth_bootstrap_state` | — | text | `auth_bootstrap_state` | (stored function only) |
 | `audit_trail_entry` | — | text (hash) | `audit_trail_entries` | read, list, create, audit:read |
 | `audit_export` | — | bigint | `audit_exports` | read, list, create, audit:export |

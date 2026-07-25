@@ -65,10 +65,16 @@ all active administrators.
 
 ### Bootstrap re-enable authority
 
-If all administrators are locked out, bootstrap is re-enabled by
-direct DB access: an operator with production DB credentials inserts
-into `auth_bootstrap_allow` (permission-model.md:1243-1251). The
-marker is consumed exactly once. There is no API route for this.
+If all administrators are locked out, bootstrap is re-enabled by direct DB
+access: an operator with production DB credentials inserts a row into
+`auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version,
+created_by_db_session)` (permission-model.md §2). Only the **derived**
+`consumer_secret_hash` is stored — the raw consumer secret never enters SQL,
+repository files, logs, or proof evidence. The marker is validated against
+its derived hash by `enable_bootstrap_from_marker()` and consumed exactly
+once by `complete_bootstrap()`. There is no API route for re-enable.
+The bootstrap SECURITY DEFINER functions are owned by
+`gitwire_auth_fn_owner` (NOLOGIN), not `gitwire_operator`.
 
 ### Least-privilege DB roles
 
@@ -153,7 +159,9 @@ An implementation conforms to this ADR when:
 - The `break_glass` role exists with a short absolute expiry and
   alerting.
 - Bootstrap re-enable requires a direct DB INSERT into
-  `auth_bootstrap_allow`; no API route exists.
+  `auth_bootstrap_recovery_markers` (derived hash only); the marker is
+  validated against its derived consumer-secret hash and consumed exactly
+  once. No API route exists for re-enable.
 - The `gitwire_operator` role has SELECT everywhere and EXECUTE on
   `transition_enforcement_state()`, and no direct table UPDATE.
 - The `gitwire_auth_fn_owner` role is `NOLOGIN`.

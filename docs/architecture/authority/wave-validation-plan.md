@@ -111,12 +111,21 @@ Reference: ADR-0007, ADR-0005.
 |---------|-----------------|-----------|
 | Apply 038/039/040 to fresh DB | additive; no existing table modified | additive-only (ADR-0007) |
 | Re-apply migrations | idempotent / safe rerun | rerun safety |
-| Roll back in reverse order | clean rollback | rollback sequence (ADR-0007) |
-| Re-apply after rollback | succeeds | reapply |
+| Roll back in reverse order | clean rollback; no `DROP ... CASCADE` | rollback sequence (ADR-0007) |
+| Re-apply after rollback | succeeds; object inventory matches initial apply | reapply + equivalent state |
 | `transition_enforcement_state` illegal transition (e.g. `observed` → `legacy_removed`) | reject | legal-transition graph (ADR-0005) |
 | Bootstrap re-enable via API route | no such route exists | ADR-0007 / ADR-0008 |
+| Pre-existing `gitwire_auth.auth_principals` table before 038 | 038 aborts (fail-closed on collision) | no silent schema adoption |
+| Pre-existing `gitwire_app` role before 039 | 039 aborts with explicit collision; no `duplicate_object` swallowed | no silent role adoption |
+| Direct re-execution of 040 | idempotent (`ON CONFLICT DO NOTHING` on natural keys) | seed idempotency |
+| Canonical drift (same role name, different attributes) | existing row preserved (NOT overwritten) | canonical seed-drift rejection |
+| First bootstrap (state `enabled`, count 0) | succeeds; admin principal + credential + fleet assignment created atomically; state → `disabled` | zero-administrator bootstrap |
+| Repeated bootstrap without marker | rejected (`bootstrap is not enabled` / no recovery marker) | repeated-bootstrap rejection |
+| `enable_bootstrap_from_marker` with wrong secret | rejected (no matching unconsumed marker) | recovery-marker hash validation |
+| `complete_bootstrap` after recovery | consumes exactly one marker; consumed marker cannot re-enable | single consumption |
+| Raw bootstrap/admin secret in any repo file/log | absent | only derived hashes enter PostgreSQL |
 
-Executable apply/rerun/rollback proof is owned by issue #81. The
+Executable apply/rerun/rollback/seed proof is owned by issue #81. The
 fixtures above are the specification #81 must satisfy.
 
 ## Static checks preventing new ungoverned mutation surfaces

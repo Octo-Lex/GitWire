@@ -18,7 +18,7 @@ the derivation provenance, and this block is authoritative on disagreement.
   "version": "0.23.1",
   "services": ["gitwire-app", "gitwire-executor-service", "postgres", "redis", "bot", "landing", "tunnel", "dashboard", "docs", "demo"],
   "workers": ["startWebhookWorker", "startTriageWorker", "startCIHealWorker", "startCIEvidenceWorker", "startDiagnosisWorker", "startPatchWorker", "startVerificationWorker", "startCriticWorker", "startSyncWorker", "startMaintainerWorker", "startIssueFixWorker", "startMergeQueueWorker", "startPhase3Worker", "startPhase4Worker"],
-  "migrations": { "first": "001", "last": "037", "count": 37 }
+  "migrations": { "first": "001", "last": "040", "count": 40 }
 }
 ```
 <!-- gitwire:source-of-truth:end -->

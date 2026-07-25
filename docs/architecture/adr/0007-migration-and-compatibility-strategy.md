@@ -17,15 +17,25 @@ The Level 1 schema is added by three migration files
 (level-1-core.md §12, :1141-1148):
 
 ```text
-038_level1_schema.sql  — schema, tables, triggers, indexes
-039_level1_roles.sql   — roles, schema grants, table privileges
-040_level1_seed.sql    — bootstrap admin principal + credential
+038_level1_schema.sql  — extensions, gitwire_auth schema, tables, indexes,
+                         SECURITY INVOKER trigger functions and triggers,
+                         singleton bootstrap-state and recovery-marker tables
+039_level1_roles.sql   — five database roles, column-level grants,
+                         all SECURITY DEFINER functions, ownership,
+                         execution restrictions (admit/transition/bootstrap)
+040_level1_seed.sql    — canonical built-in roles, canonical permissions,
+                         initial bootstrap state only (NO admin principal)
 ```
 
-Object creation proceeds in 19 numbered steps; rollback is the reverse
-in 22 numbered steps (level-1-core.md:1155-1204). All changes are
-additive — no existing tables are modified destructively
-(level-1-core.md:553-554).
+Boundary (Wave 1 / issue #81): roles, grants, and all SECURITY DEFINER
+functions live in **039**; SECURITY INVOKER trigger functions live in **038**;
+040 seeds canonical roles/permissions and the initial bootstrap state only and
+creates **no** administrator. Level 1 objects use plain `CREATE` (fail-closed
+on collision); only the shared extension and schema use `IF NOT EXISTS`. No
+`DROP ... CASCADE` is used; rollback names exact objects in dependency order.
+Object creation proceeds in the numbered steps recorded in
+`level-1-core.md §12`; rollback is the reverse. All changes are additive — no
+existing tables are modified destructively (level-1-core.md:553-554).
 
 ### Enforcement cutover — four states
 
@@ -81,13 +91,18 @@ The following paths remain unauthenticated by design
 - `/api/auth/logout` (cookie)
 - `/api/auth/check` (session probe)
 
-### Bootstrap state machine
+### Bootstrap state machine (zero-administrator, recovery-marker model)
 
-Bootstrap has two states, `enabled` / `disabled`
-(permission-model.md §2, :95-132). Re-enable requires a direct DB
-INSERT into `auth_bootstrap_allow` by an operator with production DB
-credentials — this is the **only** way to re-enable bootstrap; there
-is no API route for it (permission-model.md:1251). See ADR-0008.
+Bootstrap has two states, `enabled` / `disabled` (permission-model.md §2).
+Fresh state is `enabled`; migration **040 does not create an administrator**
+— the administrator is created atomically by `complete_bootstrap()` (039) at
+first run. Re-enable after lockout requires an operator (with production DB
+credentials) to INSERT a row into
+`auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version,
+created_by_db_session)`; only the **derived** hash is stored. The marker is
+validated against its derived consumer-secret hash by
+`enable_bootstrap_from_marker()` and consumed exactly once by
+`complete_bootstrap()`. There is no API route for re-enable. See ADR-0008.
 
 ## Rationale
 
@@ -135,7 +150,9 @@ An implementation conforms to this ADR when:
 - The five anonymous paths remain reachable without authentication;
   every other path requires an authenticated principal.
 - Bootstrap re-enable requires a direct DB INSERT into
-  `auth_bootstrap_allow`; no API route exists for it.
+  `auth_bootstrap_recovery_markers` (derived hash only); the marker is
+  validated against its derived consumer-secret hash and consumed exactly
+  once. No API route exists for re-enable.
 
 ## Cross-references
 

@@ -77,8 +77,8 @@ describe("source-of-truth gate — current repo is consistent", () => {
     const { derived } = checkSourceOfTruth(MODULE_REPO_ROOT);
     expect(derived.migrations).not.toBeNull();
     expect(derived.migrations.first).toBe("001");
-    expect(derived.migrations.last).toBe("037");
-    expect(derived.migrations.count).toBe(37);
+    expect(derived.migrations.last).toBe("040");
+    expect(derived.migrations.count).toBe(40);
   });
 
   it("derives the version from root package.json", () => {
@@ -94,7 +94,7 @@ describe("source-of-truth gate — current repo is consistent", () => {
       expect(data.version).toBe("0.23.1");
       expect(data.services.length).toBe(10);
       expect(data.workers.length).toBe(14);
-      expect(data.migrations).toEqual({ first: "001", last: "037", count: 37 });
+      expect(data.migrations).toEqual({ first: "001", last: "040", count: 40 });
       // also proves the key is the governed-doc relative path
       expect(doc).toMatch(/AGENTS\.md$|infrastructure\.md$|source-of-truth-inventory\.md$/);
     }
