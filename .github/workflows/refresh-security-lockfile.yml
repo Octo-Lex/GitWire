@@ -1,0 +1,35 @@
+name: Refresh security lockfile
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.head_ref == 'security/fix-july-2026-dependency-audit'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Regenerate lockfile
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Commit lockfile
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo 'Lockfile already current'
+            exit 0
+          fi
+          git config user.name 'Alajmah'
+          git config user.email '55954113+Alajmah@users.noreply.github.com'
+          git add package-lock.json
+          git commit -s -m 'security(deps): regenerate patched lockfile'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
