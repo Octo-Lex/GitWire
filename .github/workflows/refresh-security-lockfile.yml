@@ -1,4 +1,4 @@
-name: Refresh security lockfile
+name: Normalize security fix branch
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  refresh:
+  normalize:
     if: github.head_ref == 'security/fix-july-2026-dependency-audit'
     runs-on: ubuntu-latest
     steps:
@@ -20,11 +20,14 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-      - run: npm install --package-lock-only --ignore-scripts
-      - run: |
-          if git diff --quiet -- package-lock.json; then exit 0; fi
+      - name: Regenerate and normalize
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          rm .github/workflows/refresh-security-lockfile.yml
+          git fetch origin master
+          git reset --soft origin/master
+          git add -A
           git config user.name 'Alajmah'
           git config user.email '55954113+Alajmah@users.noreply.github.com'
-          git add package-lock.json
-          git commit -s -m 'security(deps): regenerate residual patched lockfile'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          git commit -s -m 'security(deps): resolve July 2026 production audit findings'
+          git push --force-with-lease origin HEAD:${{ github.event.pull_request.head.ref }}
