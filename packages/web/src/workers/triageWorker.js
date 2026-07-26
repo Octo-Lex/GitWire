@@ -38,6 +38,9 @@ export function startTriageWorker() {
   });
 }
 
+// Exported for Wave 2 integration testing (issue #94).
+export { triageIssue, triagePR };
+
 // ── Issue triage ─────────────────────────────────────────────────────────────
 async function triageIssue({ payload }) {
   const { issue, repository, installation } = payload;
