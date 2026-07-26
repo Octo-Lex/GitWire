@@ -80,13 +80,14 @@ export async function propose({
   const result = await db.query(
     `INSERT INTO managed_actions
       (repo_full_name, pillar, action_type, action_key, source, status, proposed_at, evidence,
-       parent_action_id, repo_id, target_type, target_number, retries, max_retries)
-     VALUES ($1, $2, $3, $10, $4, 'proposed', NOW(), $5, $6, $7, $8, $9, 0, 3)
+       parent_action_id, repo_id, target_type, target_number, retries, max_retries, principal_id)
+     VALUES ($1, $2, $3, $10, $4, 'proposed', NOW(), $5, $6, $7, $8, $9, 0, 3, $11)
      RETURNING *`,
     [
       repoFullName, pillar, actionType, source,
       JSON.stringify(evidence), parentActionId, repoId, targetType, targetNumber,
       actionKey,
+      evidence?.principalId || null, // Wave 2 dual-write
     ]
   );
 

@@ -837,8 +837,8 @@ export async function createProposal(params = {}) {
     const { rows: inserted } = await client.query(
       `INSERT INTO repair_proposals
          (repo_id, workflow_run_id, job_id, head_sha, base_sha, failure_type,
-          source_fingerprint, task_envelope, created_by, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'detected')
+          source_fingerprint, task_envelope, created_by, status, principal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'detected', $10)
        ON CONFLICT (repo_id, source_fingerprint)
        DO NOTHING
        RETURNING *`,
@@ -852,6 +852,7 @@ export async function createProposal(params = {}) {
         fingerprint,
         JSON.stringify(envelope),
         created_by,
+        source.principalId || null, // Wave 2 dual-write
       ]
     );
 
@@ -877,14 +878,15 @@ export async function createProposal(params = {}) {
     if (!isExisting) {
       await client.query(
         `INSERT INTO repair_proposal_events
-           (proposal_id, event_type, to_status, actor, evidence_snapshot)
-         VALUES ($1, $2, $3, $4, $5)`,
+           (proposal_id, event_type, to_status, actor, evidence_snapshot, principal_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
         [
           proposal.id,
           "proposal_created",
           "detected",
           created_by,
           JSON.stringify(buildEvidenceSnapshot({ envelope })),
+          source.principalId || null, // Wave 2 dual-write
         ]
       );
     }
