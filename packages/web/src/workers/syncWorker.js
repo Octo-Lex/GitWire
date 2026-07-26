@@ -15,6 +15,7 @@ import { syncMembers, syncCollaborators, syncBranchRules } from "../services/mai
 import { backfillEmbeddings } from "../services/duplicateDetectionService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 // ── Start the worker ─────────────────────────────────────────────────────────
 export function startSyncWorker() {
@@ -58,6 +59,13 @@ export async function scheduleSyncJobs() {
 
 // ── Full sync: walk every installation ───────────────────────────────────────
 async function runFullSync() {
+  // Wave 2: resolve trusted system principal for the scheduled full-sync.
+  await adoptWorker({
+    workerId: "scheduled:sync",
+    permission: "installation:read",
+    resourceType: "fleet",
+    systemPrincipalName: "system:scheduler",
+  });
   logger.info("Starting full sync across all installations");
   const start = Date.now();
   let repoCount = 0;

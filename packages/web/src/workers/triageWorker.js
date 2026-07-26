@@ -18,6 +18,7 @@ import { checkAndMark } from "../services/idempotencyService.js";
 import { isWaived } from "../services/waiverService.js";
 import { notifyTriage } from "../services/telegramNotifyService.js";
 import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 const anthropic = new Anthropic({ 
   apiKey: config.anthropic.apiKey,
@@ -41,6 +42,18 @@ export function startTriageWorker() {
 async function triageIssue({ payload }) {
   const { issue, repository, installation } = payload;
   if (!issue || !installation) return;
+
+  // Wave 2: resolve trusted installation principal from the webhook-verified
+  // installation.id. The sender login from the payload is non-authoritative.
+  const adoption = await adoptWorker({
+    workerId: "worker:triage",
+    permission: "issue:update",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { payload },
+    legacyActor: issue.user?.login,
+  });
+  const principalId = workerPrincipalId(adoption.context);
 
   logger.info({ repo: repository?.full_name, issue: issue.number }, "Triaging issue");
 
@@ -273,6 +286,17 @@ async function triageIssue({ payload }) {
 async function triagePR({ payload }) {
   const { pull_request: pr, repository, installation } = payload;
   if (!pr || !installation) return;
+
+  // Wave 2: resolve trusted installation principal.
+  const adoption = await adoptWorker({
+    workerId: "worker:triage",
+    permission: "issue:update",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { payload },
+    legacyActor: pr.user?.login,
+  });
+  const principalId = workerPrincipalId(adoption.context);
 
   logger.info({ repo: repository.full_name, pr: pr.number }, "Triaging PR");
 

@@ -21,6 +21,7 @@ import { notifyCustomRule, notifyGateResult } from "../services/telegramNotifySe
 import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFromDecision } from "../lib/checkStatus.js";
 import { sanitizeWebhookPayload } from "../lib/githubSanitize.js";
 import { routeWebhookToQueue } from "../lib/webhookHandlers/index.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 export const webhookRouter = Router();
 
@@ -72,6 +73,20 @@ webhookRouter.post(
 
     // ── 2b. Sanitize payload (strip token-scoped fields) ──────────────────
     payload = sanitizeWebhookPayload(payload);
+
+    // ── 2c. Wave 2: resolve trusted installation principal ────────────────
+    // The webhook HMAC proves ingress authenticity. The installation_id comes
+    // from the verified payload, NOT from a client-supplied field. The sender
+    // login is retained only as non-authoritative compatibility metadata.
+    const webhookAdoption = await adoptWorker({
+      workerId: "webhook:github",
+      permission: "installation:read",
+      resourceType: "installation",
+      installationId: payload.installation?.id,
+      jobData: { payload },
+      legacyActor: payload.sender?.login,
+    });
+    const webhookPrincipalId = workerPrincipalId(webhookAdoption.context);
 
     // ── 3. Create GitWire check for PR open events BEFORE queuing jobs ───
     // Only create on open/reopen/ready — NOT on every pull_request event.
