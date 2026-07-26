@@ -71,6 +71,7 @@ async function triageIssue({ payload }) {
       targetType: "issue", targetNumber: issue.number, pillar: "triage",
       decision: "skipped", reason: "Pillar triage disabled in config",
       conditions: [{ check: "pillar_enabled(triage)", result: false }],
+      principalId,
     });
     return;
   }
@@ -83,6 +84,7 @@ async function triageIssue({ payload }) {
       targetType: "issue", targetNumber: issue.number, pillar: "triage",
       decision: "skipped", reason: "Trigger filter: author ignored",
       conditions: [{ check: "trigger_filter(triage)", result: false, author: issue.user?.login }],
+      principalId,
     });
     return;
   }
@@ -97,6 +99,7 @@ async function triageIssue({ payload }) {
       decision: "skipped",
       reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
       conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
+      principalId,
     });
     return;
   }
@@ -224,6 +227,7 @@ async function triageIssue({ payload }) {
       { check: "labels_match_repo(" + labelsToApply.length + ")", result: labelsToApply.length > 0 },
     ],
     configUsed: { auto_label: triageOpts.auto_label !== false },
+    principalId,
   });
 
   // ── Post triage comment if needed ─────────────────────────────────────────
@@ -314,6 +318,7 @@ async function triagePR({ payload }) {
       targetType: "pr", targetNumber: pr.number, pillar: "triage",
       decision: "skipped", reason: "Pillar triage disabled in config",
       conditions: [{ check: "pillar_enabled(triage)", result: false }],
+      principalId,
     });
     return;
   }
@@ -326,6 +331,7 @@ async function triagePR({ payload }) {
       targetType: "pr", targetNumber: pr.number, pillar: "triage",
       decision: "skipped", reason: "Trigger filter: author/branch not matched",
       conditions: [{ check: "trigger_filter(triage)", result: false }],
+      principalId,
     });
     return;
   }
@@ -340,6 +346,7 @@ async function triagePR({ payload }) {
       decision: "skipped",
       reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
       conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
+      principalId,
     });
     return;
   }
@@ -422,6 +429,7 @@ async function triagePR({ payload }) {
       { check: "is_dry_run()", result: isDryRun(repoConfig) },
     ],
     configUsed: { auto_label: triageOpts.auto_label !== false },
+    principalId,
   });
 
   notifyTriage(repository.full_name, {
