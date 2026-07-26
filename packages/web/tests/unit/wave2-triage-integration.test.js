@@ -212,15 +212,85 @@ describe("Wave 2 — triage integration: adopted path", () => {
 
     await triageIssue(jobData);
 
-    // Count auth_decision_log INSERTs (the observe-only decision)
+    // Count auth_decision_log INSERTs (the observe-only decision).
+    // adoptWorker calls authorize() which logs one decision. There must be
+    // exactly one — not zero (missing), not two (duplicate from a generic
+    // route observer or double-call).
     const decisionLogInserts = mockQuery.mock.calls.filter(
       ([text]) => text && text.includes("INSERT INTO gitwire_auth.auth_decision_log")
     );
-    // adoptWorker calls authorize() which logs one decision.
-    expect(decisionLogInserts.length).toBeGreaterThanOrEqual(1);
+    expect(decisionLogInserts.length).toBe(1);
   });
 
-  it("does not crash when the installation principal is unresolved", async () => {
+  it("uses the exact declared permission 'issue:update' in the authorize query", async () => {
+    const jobData = {
+      payload: {
+        action: "opened",
+        installation: { id: 99999 },
+        repository: { id: 123, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+        issue: { number: 42, title: "Bug", user: { login: "real-user" } },
+      },
+    };
+
+    await triageIssue(jobData);
+
+    // The authorize() call queries auth_principal_roles with the permission.
+    // It must use the exact declared permission "issue:update", not a generic.
+    const authzQueries = mockQuery.mock.calls.filter(
+      ([text]) => text && text.includes("auth_principal_roles") && text.includes("auth_role_permissions")
+    );
+    expect(authzQueries.length).toBeGreaterThanOrEqual(1);
+    // Check that "issue:update" appears in the params of at least one authz query
+    const hasDeclaredPermission = authzQueries.some(
+      ([, params]) => params && params.includes("issue:update")
+    );
+    expect(hasDeclaredPermission).toBe(true);
+  });
+
+  it("does not produce duplicate authorization evidence (no generic observer)", async () => {
+    // The triage worker is a non-HTTP surface — the routeAuthObserver middleware
+    // only runs for HTTP requests. This test asserts that only ONE decision_log
+    // INSERT occurs, proving no second observer creates duplicate evidence.
+    const jobData = {
+      payload: {
+        action: "opened",
+        installation: { id: 99999 },
+        repository: { id: 123, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+        issue: { number: 42, title: "Bug", user: { login: "real-user" } },
+      },
+    };
+
+    await triageIssue(jobData);
+
+    const decisionLogInserts = mockQuery.mock.calls.filter(
+      ([text]) => text && text.includes("INSERT INTO gitwire_auth.auth_decision_log")
+    );
+    expect(decisionLogInserts.length).toBe(1);
+  });
+
+  it("all decision_log writes contain the resolved principalId (no silent nulls)", async () => {
+    const jobData = {
+      payload: {
+        action: "opened",
+        installation: { id: 99999 },
+        repository: { id: 123, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+        issue: { number: 42, title: "Bug", user: { login: "real-user" } },
+      },
+    };
+
+    await triageIssue(jobData);
+
+    // Every INSERT INTO decision_log must have "inst-principal-uuid" in its params
+    const decisionLogInserts = mockQuery.mock.calls.filter(
+      ([text]) => text && text.includes("INSERT INTO decision_log")
+    );
+    expect(decisionLogInserts.length).toBeGreaterThanOrEqual(1);
+    for (const [, params] of decisionLogInserts) {
+      expect(params).toContain("inst-principal-uuid");
+    }
+  });
+
+  it("unresolved installation principal produces a fail-closed authoritative decision", async () => {
     // Override: return no principal for this test
     mockQuery.mockImplementation(async (text) => {
       if (text && text.includes("auth_principals")) return { rows: [] };
@@ -237,7 +307,23 @@ describe("Wave 2 — triage integration: adopted path", () => {
       },
     };
 
-    // Should not throw — observe-only proceeds with null context
-    await expect(triageIssue(jobData)).resolves.not.toThrow();
+    await triageIssue(jobData);
+
+    // The authorize() call must still fire (adoptWorker is called), producing
+    // exactly one auth_decision_log record with allowed=false and a stable
+    // denial code (not a fabricated principal, not a crash).
+    const decisionLogInserts = mockQuery.mock.calls.filter(
+      ([text]) => text && text.includes("INSERT INTO gitwire_auth.auth_decision_log")
+    );
+    expect(decisionLogInserts.length).toBe(1);
+
+    // The decision record must have allowed=false (the principal was null →
+    // UNAUTHENTICATED). The params include the structured fields.
+    const decisionParams = decisionLogInserts[0][1];
+    // allowed is parameter $8 in the INSERT, code is $9
+    // Verify 'false' is in the params (the allowed boolean)
+    expect(decisionParams).toContain(false);
+    // Verify a denial code is in the params (not 'allowed')
+    expect(decisionParams).toContain("unauthenticated");
   });
 });

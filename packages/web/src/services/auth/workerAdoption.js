@@ -67,9 +67,13 @@ export async function adoptWorker({
   }
 
   // Build the resource descriptor from trusted job data (not from actor fields).
+  // Repository IDs come from the webhook-verified payload (repository.id),
+  // NOT from any client-supplied field.
+  const trustedRepoId = jobData?.payload?.repository?.id || jobData?.repositoryId || null;
   const resource = {
     type: resourceType,
     installationId: context?.installationId || (installationId ? Number(installationId) : null),
+    repositoryId: resourceType === "repository" ? Number(trustedRepoId) : null,
   };
 
   // Call authorize() once (observe-only: records decision, does not block).
