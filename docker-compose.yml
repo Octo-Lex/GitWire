@@ -120,7 +120,12 @@ services:
       POSTGRES_DB: gitops_hub
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./packages/web/db/migrations:/docker-entrypoint-initdb.d
+      # Migrations are applied solely by `scripts/migrate.js` (the sole
+      # migration applier). The previous bind mount into
+      # /docker-entrypoint-initdb.d is removed: that path only runs on first
+      # initialization of an empty data volume and cannot reach a populated
+      # volume, so it was an unreliable and partial migration path.
+      # The named postgres_data volume and data mount above are unchanged.
     networks:
       - gitwire-net
     healthcheck:

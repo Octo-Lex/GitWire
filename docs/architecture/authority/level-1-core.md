@@ -556,9 +556,12 @@ tables are additive — no existing tables are modified destructively.
 ### Schema and extensions
 
 ```sql
+-- Shared extension: permitted to use CREATE EXTENSION IF NOT EXISTS.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE SCHEMA IF NOT EXISTS gitwire_auth;
+-- Dedicated schema: plain CREATE (fail-closed). A pre-existing gitwire_auth
+-- schema aborts the migration rather than being silently adopted.
+CREATE SCHEMA gitwire_auth;
 REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;
 ```
 
@@ -1143,76 +1146,114 @@ CREATE TRIGGER trg_receipts_no_delete
 ### Migration files
 
 ```
-038_level1_schema.sql          — schema, tables, triggers, indexes
-039_level1_roles.sql           — roles, schema grants, table privileges
-040_level1_seed.sql            — bootstrap admin principal + credential
+038_level1_schema.sql  — extensions, gitwire_auth schema, tables, indexes,
+                         SECURITY INVOKER trigger functions and triggers,
+                         singleton bootstrap-state and recovery-marker tables
+039_level1_roles.sql   — five database roles, column-level grants,
+                         all SECURITY DEFINER functions, ownership,
+                         execution restrictions (admit/transition/bootstrap)
+040_level1_seed.sql    — canonical built-in roles, canonical permissions,
+                         initial bootstrap state only (NO admin principal)
 ```
+
+> **Boundary (Wave 1 / issue #81).** Roles, grants, and all SECURITY DEFINER
+> functions live in **039** (not 038). SECURITY INVOKER trigger functions live
+> in **038**. 040 contains no application runtime adoption and no
+> administrator. No application runtime adoption belongs in this wave.
+
+### Fail-closed policy
+
+Level 1 schema objects use plain `CREATE` (no `IF NOT EXISTS` for the schema,
+tables, indexes, triggers, functions, or roles) so an unexpected collision
+aborts the migration rather than silently adopting a foreign object. Only the
+shared `pgcrypto` **extension** uses `CREATE EXTENSION IF NOT EXISTS` (permitted
+shared bootstrap). Roles are created with a `DO` block that raises
+`duplicate_object` explicitly rather than swallowing it — there is **no**
+`EXCEPTION WHEN duplicate_object THEN NULL` for authority roles. No
+`DROP ... CASCADE` is used anywhere; rollback names exact objects and removes
+them in dependency order.
 
 ### Stage 038: Schema creation
 
-Each file opens with `SET search_path = gitwire_auth, public;`.
+Each file opens with `SET search_path = gitwire_auth, pg_catalog;` so the
+effective search_path cannot redirect object creation. (The `public` schema
+is deliberately excluded from SECURITY DEFINER function search_paths;
+pgcrypto's `hmac` is invoked fully-qualified as `public.hmac` where needed.)
 
 **Object creation order:**
-1. `CREATE EXTENSION IF NOT EXISTS pgcrypto;`
-2. `CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`
-3. `CREATE SCHEMA gitwire_auth; REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;`
-4. Create roles (idempotent): `gitwire_auth_fn_owner` NOLOGIN, `gitwire_app`, `gitwire_executor`, `gitwire_operator`
-5. `GRANT USAGE ON SCHEMA gitwire_auth TO gitwire_auth_fn_owner, gitwire_app, gitwire_admission, gitwire_executor, gitwire_operator;`
-2. `CREATE TABLE auth_principals` + unique indexes
-3. `CREATE TABLE auth_credentials` + index
-4. `CREATE TABLE auth_roles`
-5. `CREATE TABLE auth_role_permissions`
-6. `CREATE TABLE auth_principal_roles` + index
-7. `CREATE TABLE mutation_commands` + idempotency constraint
-8. `CREATE TABLE mutation_events` + index
-9. `CREATE TABLE execution_receipts` + index
-10. `CREATE TABLE auth_sessions` + index
-11. `CREATE TABLE auth_enforcement_state` + seed insert
-12. `CREATE FUNCTION enforce_legal_lifecycle_transition` + trigger
-13. `CREATE FUNCTION enforce_command_immutability` + trigger
-14. `CREATE FUNCTION enforce_event_source_partition` + trigger
-15. `CREATE FUNCTION enforce_events_append_only` + triggers
-16. `CREATE FUNCTION enforce_receipts_append_only` + triggers
-17. `CREATE FUNCTION admit_command` + ALTER OWNER + REVOKE FROM PUBLIC + GRANT
-18. `CREATE FUNCTION transition_admission` + ALTER OWNER + REVOKE FROM PUBLIC + GRANT
-19. `CREATE FUNCTION transition_execution` + ALTER OWNER + REVOKE FROM PUBLIC + GRANT
+1. `CREATE EXTENSION IF NOT EXISTS pgcrypto;` (shared; provides `digest`/`hmac`
+   for recovery-marker hash validation in 039)
+2. `CREATE SCHEMA gitwire_auth; REVOKE CREATE ON SCHEMA gitwire_auth FROM PUBLIC;` (plain CREATE — fail-closed on a pre-existing schema)
+3. `CREATE TABLE auth_principals` + unique indexes
+4. `CREATE TABLE auth_credentials` + index
+5. `CREATE TABLE auth_roles`
+6. `CREATE TABLE auth_role_permissions`
+7. `CREATE TABLE auth_principal_roles` + index
+8. `CREATE TABLE mutation_commands` + idempotency constraint
+9. `CREATE TABLE mutation_events` + index
+10. `CREATE TABLE execution_receipts` + index
+11. `CREATE TABLE auth_sessions` + index
+12. `CREATE TABLE auth_enforcement_state` + singleton seed (`observed`)
+13. `CREATE TABLE auth_bootstrap_state` + singleton seed (`enabled`)
+14. `CREATE TABLE auth_bootstrap_recovery_markers`
+15. `CREATE FUNCTION enforce_legal_lifecycle_transition` + trigger
+16. `CREATE FUNCTION enforce_command_immutability` + trigger
+17. `CREATE FUNCTION enforce_event_source_partition` + trigger
+18. `CREATE FUNCTION enforce_events_append_only` + triggers
+19. `CREATE FUNCTION enforce_receipts_append_only` + triggers
 
-**Rollback (reverse order):**
-1. `DROP FUNCTION admit_command(uuid, uuid);`
-2. `DROP FUNCTION transition_admission(uuid, text, text, bigint);`
-3. `DROP FUNCTION transition_execution(uuid, text, text, bigint);`
-2. `DROP TRIGGER trg_receipts_no_delete; DROP TRIGGER trg_receipts_no_update;`
-3. `DROP FUNCTION enforce_receipts_append_only;`
-4. `DROP TRIGGER trg_events_no_delete; DROP TRIGGER trg_events_no_update;`
-5. `DROP FUNCTION enforce_events_append_only;`
-6. `DROP TRIGGER trg_event_source_partition;`
-7. `DROP FUNCTION enforce_event_source_partition;`
-8. `DROP TRIGGER trg_command_immutability;`
-9. `DROP FUNCTION enforce_command_immutability;`
-10. `DROP TRIGGER trg_legal_lifecycle_transition;`
-11. `DROP FUNCTION enforce_legal_lifecycle_transition;`
-12. `DROP TABLE auth_enforcement_state;`
-13. `DROP TABLE auth_sessions;`
-14. `DROP TABLE execution_receipts;`
-15. `DROP TABLE mutation_events;`
-16. `DROP TABLE mutation_commands;`
-17. `DROP TABLE auth_principal_roles;`
-18. `DROP TABLE auth_role_permissions;`
-19. `DROP TABLE auth_roles;`
-20. `DROP TABLE auth_credentials;`
-21. `DROP TABLE auth_principals;`
-22. `DROP SCHEMA gitwire_auth;`
+(`uuid-ossp` is **not** required: `gen_random_uuid()` is core in PostgreSQL
+13+ and is used for UUID primary keys.)
 
-### Stage 039: Roles and privileges
+### Stage 039: Roles, grants, and SECURITY DEFINER functions
+
+Creates the five roles, schema usage grants, column-level table privileges,
+and **all** SECURITY DEFINER functions with a fixed safe search_path, ownership
+by `gitwire_auth_fn_owner`, `REVOKE FROM PUBLIC`, and `GRANT EXECUTE` only to
+the intended boundary role:
+
+* `admit_command(uuid, uuid)` → execute granted to `gitwire_admission`;
+* `transition_admission(uuid, text, text, bigint)` → `gitwire_admission`;
+* `transition_execution(uuid, text, text, bigint)` → `gitwire_executor`;
+* `transition_enforcement_state(text, text, text)` → `gitwire_operator`;
+* `enable_bootstrap_from_marker(text, int)` → `gitwire_operator`;
+* `complete_bootstrap(...)` → `gitwire_app` (the bootstrap endpoint).
+
+Each function's body enforces the caller via `session_user` (not a
+parameter); `transition_enforcement_state` and the bootstrap transitions
+derive attribution (`updated_by`, `last_transition_by`) from `session_user`.
+A non-granted role is rejected at the Postgres EXECUTE-privilege gate before
+the function body runs — the stronger, earlier of two layered wrong-caller
+rejections.
+
+Roles are created fail-closed:
 
 ```sql
-SET search_path = gitwire_auth, public;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gitwire_app') THEN
+    CREATE ROLE gitwire_app LOGIN NOINHERIT
+      NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  ELSE
+    RAISE EXCEPTION 'colliding role already exists: gitwire_app (Level 1 refuses to adopt a pre-existing role)';
+  END IF;
+END $$;
+```
 
--- Create roles (idempotent for production vs. smoke test)
-DO $$ BEGIN CREATE ROLE gitwire_auth_fn_owner NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE ROLE gitwire_app; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE ROLE gitwire_admission; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE ROLE gitwire_executor; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+(Repeated for `gitwire_auth_fn_owner` NOLOGIN, `gitwire_admission`,
+`gitwire_executor`, `gitwire_operator`. No memberships among the five roles;
+no passwords in migrations.)
+
+**Rollback:** drop the SECURITY DEFINER functions first, then triggers,
+SECURITY INVOKER trigger functions, tables (child before parent for FK order),
+the schema, and finally the five roles. The exact rollback sequence lives in
+`packages/web/db/proof/rollback_level1.sql`; it uses no `CASCADE`.
+
+### Stage 040: Canonical seed (zero-administrator)
+
+See the dedicated "Stage 040" subsection above. 040 seeds canonical built-in
+roles, canonical permissions, and the initial bootstrap state only — it does
+**not** create an administrator principal, credential, or assignment.
 DO $$ BEGIN CREATE ROLE gitwire_operator; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Schema usage
@@ -1239,110 +1280,78 @@ GRANT SELECT ON auth_principal_roles TO gitwire_app;
 -- Application can SELECT commands but NOT INSERT (admission role only)
 GRANT SELECT ON mutation_commands TO gitwire_app;
 -- Application can SELECT events/receipts but NOT INSERT (admission/executor only)
-GRANT SELECT ON mutation_events TO gitwire_app;
-GRANT SELECT ON execution_receipts TO gitwire_app;
-GRANT SELECT ON auth_enforcement_state TO gitwire_app;
+### Stage 040: Canonical seed (zero-administrator)
 
--- Admission (trusted command-admission boundary): creates+admits commands,
--- manages role assignments, emits admission events
-GRANT SELECT, INSERT ON mutation_commands TO gitwire_admission;
-GRANT SELECT, INSERT ON auth_role_permissions TO gitwire_admission;
-GRANT SELECT, INSERT ON auth_principal_roles TO gitwire_admission;
-GRANT UPDATE (revoked_at) ON auth_principal_roles TO gitwire_admission;
-GRANT SELECT, INSERT ON mutation_events TO gitwire_admission;
+040 seeds the **canonical built-in roles, canonical permissions, and the
+initial bootstrap state only**. It does **NOT** create an administrator
+principal, credential, or assignment. This is the zero-administrator
+bootstrap model (Wave 1 binding architecture): fresh state is `enabled`, and
+the administrator is created atomically by `complete_bootstrap` (039) at
+first run — never by a migration.
 
--- Executor: commands (read), execution events, receipts
-GRANT SELECT ON mutation_commands TO gitwire_executor;
-GRANT SELECT, INSERT ON mutation_events TO gitwire_executor;
-GRANT SELECT, INSERT ON execution_receipts TO gitwire_executor;
-
--- Function execution grants (PUBLIC revoked on each function at creation)
-GRANT EXECUTE ON FUNCTION admit_command(uuid, uuid) TO gitwire_admission;
-GRANT EXECUTE ON FUNCTION transition_admission(uuid, text, text, bigint) TO gitwire_admission;
-GRANT EXECUTE ON FUNCTION transition_execution(uuid, text, text, bigint) TO gitwire_executor;
-
--- Operator: inspect everything, transition enforcement state
-GRANT SELECT ON auth_principals TO gitwire_operator;
-GRANT SELECT ON auth_credentials TO gitwire_operator;
-GRANT SELECT ON auth_roles TO gitwire_operator;
-GRANT SELECT ON auth_role_permissions TO gitwire_operator;
-GRANT SELECT ON auth_principal_roles TO gitwire_operator;
-GRANT SELECT ON mutation_commands TO gitwire_operator;
-GRANT SELECT ON mutation_events TO gitwire_operator;
-GRANT SELECT ON execution_receipts TO gitwire_operator;
-GRANT SELECT ON auth_sessions TO gitwire_operator;
-GRANT SELECT ON auth_enforcement_state TO gitwire_operator;
--- Operator transitions enforcement state via function only (not direct UPDATE)
-GRANT EXECUTE ON FUNCTION transition_enforcement_state(text, text, text) TO gitwire_operator;
+```text
+038_level1_schema.sql  — extensions, gitwire_auth schema, tables, indexes,
+                         SECURITY INVOKER trigger functions and triggers,
+                         singleton bootstrap-state and recovery-marker tables
+039_level1_roles.sql   — five database roles, column-level grants,
+                         all SECURITY DEFINER functions, ownership,
+                         execution restrictions (admit/transition/bootstrap)
+040_level1_seed.sql    — canonical built-in roles, canonical permissions,
+                         initial bootstrap state only (NO admin principal)
 ```
 
-**Rollback:** REVOKE all grants from each role. Do NOT drop
-`gitwire_app` (may be shared with existing application). Drop
-`gitwire_auth_fn_owner`, `gitwire_executor` if created by this
-migration.
+Boundary (Wave 1 / issue #81):
 
-### Stage 040: Bootstrap seed
+* roles, grants, and all SECURITY DEFINER functions live in **039** (not 038);
+* SECURITY INVOKER trigger functions live in **038**;
+* 040 contains **no application runtime adoption** and **no administrator**.
 
-Creates the initial admin role, principal, credential, and role
-assignment using deterministic UUIDs for rollback identification.
-Requires `uuid-ossp` (installed in stage 038):
+Canonical built-in roles (seeded by 040):
+
+* `admin` — full administrative access (fleet scope). Assigned to the
+  bootstrap administrator by `complete_bootstrap`, not by 040.
+* `operator` — operational inspection and cutover transitions.
+* `legacy-key` — narrow bridge for existing shared-key clients.
+
+Idempotency: every 040 INSERT uses `ON CONFLICT DO NOTHING` on a natural key
+(`auth_roles.name`, `auth_role_permissions (role_id, permission)`), so a
+direct re-execution of 040 is a no-op. Canonical drift — a row that already
+exists with different attributes — is **not** silently overwritten
+(`DO NOTHING` preserves the existing row); the seed-proof fixture asserts the
+post-state matches the canonical set exactly. No passwords or production
+credentials appear in 040.
 
 ```sql
-SET search_path = gitwire_auth, public;
+SET search_path = gitwire_auth, pg_catalog;
 
--- 1. Seed built-in roles and permissions
-INSERT INTO auth_roles (id, name, description, is_builtin)
-VALUES (uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'role-admin'),
-        'admin', 'Full administrative access', true)
+-- Canonical built-in roles
+INSERT INTO gitwire_auth.auth_roles (name, description, is_builtin, status)
+VALUES
+  ('admin',     'Full administrative access (fleet scope). ...', true, 'active'),
+  ('operator',  'Operational inspection and cutover transitions. ...', true, 'active'),
+  ('legacy-key','Narrow bridge for existing shared-key clients. ...', true, 'active')
 ON CONFLICT (name) DO NOTHING;
 
--- Seed minimal admin permissions (Level 1 uses application-layer
--- evaluation; these permissions are the authoritative source)
-INSERT INTO auth_role_permissions (role_id, permission)
-SELECT id, perm FROM auth_roles
-CROSS JOIN (VALUES ('repository:read'), ('repository:list'), ('repository:update'),
-                   ('repository:create'), ('repository:github:act'),
-                   ('installation:read'), ('installation:list'))
-AS t(perm)
-WHERE name = 'admin'
-ON CONFLICT DO NOTHING;
+-- Canonical permissions (attached to built-in roles)
+INSERT INTO gitwire_auth.auth_role_permissions (role_id, permission)
+SELECT r.id, t.perm FROM gitwire_auth.auth_roles r
+CROSS JOIN ( VALUES ('admin','repository:read'), ... ) AS t(role, perm)
+WHERE r.name = t.role AND r.is_builtin
+ON CONFLICT (role_id, permission) DO NOTHING;
 
--- 2. Bootstrap admin principal
-INSERT INTO auth_principals (id, principal_type, display_name)
-VALUES (uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin'),
-        'user', 'Bootstrap Admin')
-ON CONFLICT (id) DO NOTHING;
-
--- 3. Bootstrap admin credential
-INSERT INTO auth_credentials (id, principal_id, lookup_id, secret_hash,
-  pepper_version, audience, display_prefix)
-VALUES (uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin-credential'),
-        uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin'),
-        'bootstrap-admin', '<hash-from-environment>', 1, 'gitwire-app', 'gw_pat_')
-ON CONFLICT (id) DO NOTHING;
-
--- 4. Bootstrap admin role assignment (fleet scope)
-INSERT INTO auth_principal_roles (principal_id, role_id, scope_type, granted_by)
-SELECT p.id, r.id, 'fleet', p.id
-FROM auth_principals p
-CROSS JOIN auth_roles r
-WHERE p.id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin')
-  AND r.name = 'admin'
-ON CONFLICT DO NOTHING;
+-- Initial bootstrap state (fresh = enabled). The recovery marker table is
+-- created empty by 038; 040 only asserts the enabled default.
+INSERT INTO gitwire_auth.auth_bootstrap_state (id, state, bootstrap_count)
+VALUES (1, 'enabled', 0) ON CONFLICT (id) DO NOTHING;
 ```
 
-**Rollback:** delete only the deterministic seed rows:
+**Rollback (040):** the canonical roles/permissions are removed when their
+tables are dropped by the 038 rollback. No administrator rows exist in 040 to
+remove.
+
 ```sql
-DELETE FROM auth_principal_roles
-WHERE principal_id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin');
-DELETE FROM auth_role_permissions
-WHERE role_id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'role-admin');
-DELETE FROM auth_credentials
-WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin-credential');
-DELETE FROM auth_principals
-WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'bootstrap-admin');
-DELETE FROM auth_roles
-WHERE id = uuid_generate_v5('6b8a1c2e-d5f4-4a7b-9e3d-1f2c3b4a5d6e'::uuid, 'role-admin');
+-- No principal/credential/assignment rows to delete (none were created).
+-- Roles + permissions are dropped with their tables in the 038 rollback.
 ```
 
 ### Cutover sequence
@@ -1387,7 +1396,7 @@ manages role assignments, emits admission events.
 
 | Privilege | Scope |
 |---|---|
-| `SELECT, INSERT` | `mutation_commands` (creates commands with `admitted=false`) |
+| `SELECT` + column-level `INSERT` (provenance fields only) | `mutation_commands` — the INSERT **excludes** server-controlled fields (`admitted`, `admitting_service`, `lifecycle_state`, `lifecycle_version`, `transitioned_at`, `id`), so a direct INSERT receives the canonical defaults `admitted=false`, `lifecycle_state='pending'`, `lifecycle_version=0`. The immutability/lifecycle triggers are `BEFORE UPDATE` only, so this column-level grant is the enforcement boundary against forged initial values. |
 | `SELECT, INSERT` | `auth_role_permissions`, `auth_principal_roles` |
 | `UPDATE (revoked_at)` | `auth_principal_roles` |
 | `SELECT, INSERT` | `mutation_events` (admission event types only — enforced by trigger) |
@@ -1400,7 +1409,7 @@ manages role assignments, emits admission events.
 | `SELECT` | `mutation_commands` |
 | `SELECT, INSERT` | `mutation_events` (execution event types only — enforced by trigger) |
 | `SELECT, INSERT` | `execution_receipts` |
-| `EXECUTE` | `transition_execution()` |
+| `EXECUTE` | `transition_execution()` — additionally requires the command be `admitted=true`; an unadmitted command cannot reach execution |
 
 ### Operator role (`gitwire_operator`)
 
@@ -1543,6 +1552,10 @@ in the append-only triggers. Level 1 does not implement this.
 
 ---
 
-*End of Level 1 authority core specification. Documentation-only.
-No executable migrations. No database execution. No runtime changes.
-W0-D remains blocked until explicit acceptance.*
+*End of Level 1 authority core specification. The executable migrations
+(038/039/040), rollback SQL, and disposable proof harness implementing this
+design are owned by [issue #81](https://github.com/Octo-Lex/GitWire/issues/81)
+(Wave 1) and live under `packages/web/db/migrations/` and
+`packages/web/db/proof/`. This document's SQL is the design contract; the
+disposable PostgreSQL 16 proof (apply/rerun/fixtures/rollback/reapply/seed/
+compose) is the executable verification.*

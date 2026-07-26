@@ -65,10 +65,20 @@ all active administrators.
 
 ### Bootstrap re-enable authority
 
-If all administrators are locked out, bootstrap is re-enabled by
-direct DB access: an operator with production DB credentials inserts
-into `auth_bootstrap_allow` (permission-model.md:1243-1251). The
-marker is consumed exactly once. There is no API route for this.
+If all administrators are locked out, bootstrap is re-enabled by direct DB
+access: an operator with production DB credentials inserts a row into
+`auth_bootstrap_recovery_markers(consumer_secret_hash, pepper_version)`
+(permission-model.md §2). The operator's INSERT grant is column-level on only
+those two columns; `created_by_db_session` is **not** insertable by the
+operator — it is database-derived (`DEFAULT current_user`) — so attribution
+cannot be forged. Only the **derived** `consumer_secret_hash` is stored; the
+raw consumer secret never enters SQL, repository files, logs, or proof
+evidence. Recovery is permitted only when **no active administrator exists**
+(the all-admins-locked-out condition). The marker is matched by derived-hash
+equality in `enable_bootstrap_from_marker()` and consumed exactly once by
+`complete_bootstrap()`. There is no API route for re-enable. The bootstrap
+SECURITY DEFINER functions are owned by `gitwire_auth_fn_owner` (NOLOGIN), not
+`gitwire_operator`.
 
 ### Least-privilege DB roles
 
@@ -79,17 +89,25 @@ Five roles (level-1-core.md §13, :1366-1421):
 - **`gitwire_executor`** — may INSERT execution events and receipts;
   sole holder of GitHub write credentials in the `executor_only` and
   `legacy_removed` states.
-- **`gitwire_operator`** — may SELECT everything and call
-  `transition_enforcement_state()`; **no** direct table UPDATE
+- **`gitwire_operator`** — may SELECT everything; its only mutating surfaces
+  are (a) the audited `transition_enforcement_state()` function, (b) a
+  column-level INSERT of recovery markers
+  `(consumer_secret_hash, pepper_version)` — `created_by_db_session` is
+  database-derived and not insertable — and (c)
+  `enable_bootstrap_from_marker()` (recovery only, gated on no active
+  administrator). It has **no** direct table UPDATE
   (level-1-core.md:1405-1410).
 - **`gitwire_auth_fn_owner`** — `NOLOGIN`; owns the SECURITY DEFINER
   functions. Function ownership is separated from login roles so no
   login role can redefine the enforcement functions.
 
-The operator role deliberately cannot UPDATE tables directly: the only
-mutating path available to it is the audited
-`transition_enforcement_state()` function, whose `updated_by` is
-derived from `session_user` (see ADR-0005).
+The operator role deliberately cannot UPDATE tables directly: its mutating
+paths are the audited `transition_enforcement_state()` function (whose
+`updated_by` is derived from `session_user`), the recovery-marker INSERT
+(attribution derived from `current_user`), and
+`enable_bootstrap_from_marker()` (recovery, gated on no active
+administrator). It cannot complete bootstrap, cannot authenticate to the
+application API, and cannot forge marker attribution.
 
 ### Threat-model control
 
@@ -120,10 +138,12 @@ Level 1 mechanism.
 3. **Break-glass is audited and short.** Emergency authority exists
    but is time-bounded, tagged, and alerting — usable for recovery,
    useless for quiet persistence.
-4. **Operator role is read-mostly.** Giving the operator SELECT
-   everywhere plus one audited transition function — and no direct
-   UPDATE — means operational authority cannot silently mutate
-   enforcement state.
+4. **Operator role is read-mostly.** Giving the operator SELECT everywhere
+   plus audited, narrowly-scoped mutating surfaces (the enforcement-state
+   transition function, recovery-marker INSERT with derived attribution, and
+   bootstrap-enable gated on no active admin) — and no direct table UPDATE —
+   means operational authority cannot silently mutate enforcement state or
+   forge attribution.
 5. **Function ownership separation.** A `NOLOGIN` owner for SECURITY
    DEFINER functions prevents any login role from redefining the
    enforcement logic.
@@ -153,9 +173,14 @@ An implementation conforms to this ADR when:
 - The `break_glass` role exists with a short absolute expiry and
   alerting.
 - Bootstrap re-enable requires a direct DB INSERT into
-  `auth_bootstrap_allow`; no API route exists.
-- The `gitwire_operator` role has SELECT everywhere and EXECUTE on
-  `transition_enforcement_state()`, and no direct table UPDATE.
+  `auth_bootstrap_recovery_markers` (derived hash only); the marker is
+  validated against its derived consumer-secret hash and consumed exactly
+  once. No API route exists for re-enable.
+- The `gitwire_operator` role has SELECT everywhere; its mutating surfaces are
+  EXECUTE on `transition_enforcement_state()`, a column-level INSERT of
+  recovery markers `(consumer_secret_hash, pepper_version)`, and EXECUTE on
+  `enable_bootstrap_from_marker()` (recovery, gated on no active admin). It has
+  no direct table UPDATE and cannot forge marker attribution.
 - The `gitwire_auth_fn_owner` role is `NOLOGIN`.
 
 ## Cross-references
