@@ -126,6 +126,10 @@ ALTER TABLE public.repair_proposal_events ADD COLUMN IF NOT EXISTS principal_id 
 -- public.managed_actions: created_by-style column -> + principal_id
 ALTER TABLE public.managed_actions ADD COLUMN IF NOT EXISTS principal_id uuid;
 
+-- public.audit_trail_entries: the canonical audit table (auditTrailService).
+-- Has actor/actor_type TEXT columns; add principal_id alongside for dual-write.
+ALTER TABLE public.audit_trail_entries ADD COLUMN IF NOT EXISTS principal_id uuid;
+
 -- public.decision_log: index principal_id for principal-scoped queries
 CREATE INDEX IF NOT EXISTS ix_decision_log_principal
   ON public.decision_log (principal_id)

@@ -36,13 +36,14 @@ export async function logDecision({
   pillar, decision, reason,
   conditions, configUsed, commitSha,
   actor,
+  principalId = null, // Wave 2 dual-write: server-derived principal UUID
 }) {
   try {
     const { rows: [row] } = await db.query(
       "INSERT INTO decision_log " +
       "  (repo_id, source, trigger_event, target_type, target_number, " +
-      "   pillar, decision, reason, conditions, config_used, commit_sha, actor) " +
-      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) " +
+      "   pillar, decision, reason, conditions, config_used, commit_sha, actor, principal_id) " +
+      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) " +
       "RETURNING *",
       [
         repoId, source, triggerEvent,
@@ -52,6 +53,7 @@ export async function logDecision({
         configUsed ? JSON.stringify(configUsed) : null,
         commitSha ?? null,
         actor || "gitwire[bot]",
+        principalId, // Wave 2: server-derived principal (null if unknown)
       ]
     );
 

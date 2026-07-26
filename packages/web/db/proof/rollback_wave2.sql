@@ -24,6 +24,7 @@ ALTER TABLE public.decision_log DROP COLUMN IF EXISTS principal_id;
 ALTER TABLE public.repair_proposals DROP COLUMN IF EXISTS principal_id;
 ALTER TABLE public.repair_proposal_events DROP COLUMN IF EXISTS principal_id;
 ALTER TABLE public.managed_actions DROP COLUMN IF EXISTS principal_id;
+ALTER TABLE public.audit_trail_entries DROP COLUMN IF EXISTS principal_id;
 
 -- ── 5. Remove migration ledger record for 041 ──────────────────────────────
 -- schema_migrations lives in the public schema; schema-qualify explicitly

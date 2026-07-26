@@ -48,6 +48,7 @@ const CONTROL_MAP = {
 export async function appendEntry({
   category, eventType, actor, actorType = "bot",
   repoFullName, prNumber, commitSha, payload = {},
+  principalId = null, // Wave 2 dual-write: server-derived principal UUID
 }) {
   try {
     const controls    = CONTROL_MAP[category] ?? { frameworks: [], control: null };
@@ -65,8 +66,8 @@ export async function appendEntry({
       "  (category, event_type, actor, actor_type, " +
       "   repo_full_name, pr_number, commit_sha, " +
       "   payload, framework, control_id, " +
-      "   payload_hash, prev_hash) " +
-      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) " +
+      "   payload_hash, prev_hash, principal_id) " +
+      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) " +
       "RETURNING id, seq",
       [
         category, eventType, actor, actorType,
@@ -74,6 +75,7 @@ export async function appendEntry({
         payloadJson,
         controls.frameworks, controls.control ?? null,
         payloadHash, prevHash,
+        principalId, // Wave 2: server-derived principal (null if unknown)
       ]
     );
 

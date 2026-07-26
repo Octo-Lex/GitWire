@@ -35,6 +35,10 @@ import { logger } from "../../lib/logger.js";
 export async function observeAuthorize(req, { permission, resource, legacyActor }) {
   const principal = req.auth || null;
 
+  // Mark this request as explicitly observed so routeAuthObserver doesn't
+  // double-record.
+  req._wave2Observed = true;
+
   try {
     const decision = await authorize({ principal, permission, resource });
 
