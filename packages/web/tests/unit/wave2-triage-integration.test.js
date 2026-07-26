@@ -173,11 +173,17 @@ describe("Wave 2 — triage integration: complete adoption proof", () => {
     }
   });
 
-  it("the existing triage side effect executes exactly once", async () => {
-    // getConfigForRepo is the first domain side effect the triage handler calls
-    // after adoptWorker. It must be called exactly once per invocation.
+  it("the domain decision write (triage side effect) executes exactly once", async () => {
+    // In the skip path (pillar disabled), the observable triage side effect is
+    // the domain logDecision INSERT — recording the decision IS the triage action.
+    // This is not a read; it is a persistence write that constitutes the
+    // externally observable triage operation for this code path.
     await triageIssue(makeJobData());
-    expect(mockGetConfigForRepo).toHaveBeenCalledTimes(1);
+    const inserts = mockQuery.mock.calls.filter(
+      ([t]) => t && t.includes("INSERT INTO decision_log")
+    );
+    // Exactly one domain decision write (the triage action for the skip path).
+    expect(inserts.length).toBe(1);
   });
 
   it("unresolved principal → fail-closed decision with stable denial code", async () => {
