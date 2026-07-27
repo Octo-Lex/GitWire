@@ -23,6 +23,7 @@ import {
   resolveSystemWorkerContext,
   resolveInstallationWorkerContext,
 } from "./workerContext.js";
+import { resolveRepositoryResource } from "./resourceResolver.js";
 import { logger } from "../../lib/logger.js";
 
 /**
@@ -66,15 +67,26 @@ export async function adoptWorker({
     logger.warn({ workerId }, "adoptWorker: no principal resolved — recording gap");
   }
 
-  // Build the resource descriptor from trusted job data (not from actor fields).
-  // Repository IDs come from the webhook-verified payload (repository.id),
-  // NOT from any client-supplied field.
-  const trustedRepoId = jobData?.payload?.repository?.id || jobData?.repositoryId || null;
-  const resource = {
-    type: resourceType,
-    installationId: context?.installationId || (installationId ? Number(installationId) : null),
-    repositoryId: resourceType === "repository" ? Number(trustedRepoId) : null,
-  };
+  // Resolve the resource from server-owned state. For repository resources,
+  // query the trusted repositories table to verify the repo exists and belongs
+  // to the asserted installation. The payload's repositoryId is a LOOKUP KEY
+  // ONLY — the authoritative resource comes from the DB row.
+  let resource;
+  const payloadRepoId = jobData?.payload?.repository?.id || jobData?.repositoryId || null;
+  const trustedInstId = context?.installationId || (installationId ? Number(installationId) : null);
+
+  if (resourceType === "repository" && trustedInstId && payloadRepoId) {
+    resource = await resolveRepositoryResource(trustedInstId, Number(payloadRepoId));
+    if (!resource) {
+      // Trusted lookup failed — use a minimal resource that will fail-closed
+      // in authorize() (no installationId/repositoryId from DB).
+      resource = { type: "repository" };
+      logger.warn({ workerId, installationId: trustedInstId, repositoryId: payloadRepoId },
+        "adoptWorker: trusted repository lookup failed — resource will fail-closed");
+    }
+  } else {
+    resource = { type: resourceType, installationId: trustedInstId };
+  }
 
   // Call authorize() once (observe-only: records decision, does not block).
   const decision = await authorize({

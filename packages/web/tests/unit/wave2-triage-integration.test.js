@@ -104,6 +104,10 @@ beforeEach(() => {
     if (text && text.includes("auth_principals") && text.includes("WHERE id =")) {
       return { rows: [{ id: "inst-principal-uuid", principal_type: "installation", display_name: "test-inst", status: "active", auth_epoch: 0, github_user_id: null, installation_id: 99999 }] };
     }
+    // Trusted repository lookup (resolveRepositoryResource)
+    if (text && text.includes("FROM repositories r") && text.includes("WHERE r.github_id")) {
+      return { rows: [{ github_id: 123, installation_id: 99999, full_name: "org/repo", owner: "org", name: "repo" }] };
+    }
     if (text && text.includes("INSERT INTO decision_log")) {
       return { rows: [{ id: 1 }] };
     }
