@@ -221,6 +221,8 @@ export async function evaluateAndExecuteCustomRules(eventName, payload, installa
         { check: "custom_rule(" + rule.name + ")", result: true },
         { check: "actions_count", result: rule.actions.length },
       ],
+      principalId: null, // Wave 2 gap: customRulesService has no principal context yet
+      surfaceId: "custom_rules:evaluate",
     });
   }
 

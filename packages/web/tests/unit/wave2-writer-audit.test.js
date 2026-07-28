@@ -30,15 +30,15 @@ const AUDIT = {
     // customRulesService.js — worker context
     { file: "services/customRulesService.js", line: 211, func: "evaluateAndExecuteCustomRules", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "data.actor", classification: "explicit_compatibility_gap" },
     // ciHealWorker.js — 9 calls; worker not yet adopted
-    { file: "workers/ciHealWorker.js", line: 219, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 237, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 253, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 265, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 277, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 290, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 311, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 337, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 365, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
+    { file: "workers/ciHealWorker.js", line: 231, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 250, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 267, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 280, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 293, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 307, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 329, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 356, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 385, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
     // triageWorker.js — 8 calls; ALL ADOPTED (worker_auth_context)
     { file: "workers/triageWorker.js", line: 72, func: "triageIssue", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "issue.user.login", classification: "worker_auth_context" },
     { file: "workers/triageWorker.js", line: 85, func: "triageIssue", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "issue.user.login", classification: "worker_auth_context" },
@@ -51,9 +51,9 @@ const AUDIT = {
   ],
 
   audit_trail_entries: [
-    { file: "services/aiReviewService.js", line: 361, func: "reviewPR", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "services/aiReviewService.js", line: 373, func: "reviewPR gate block", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 801, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "gitwire[bot]", classification: "explicit_compatibility_gap" },
+    { file: "services/aiReviewService.js", line: 361, func: "reviewPR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "services/aiReviewService.js", line: 373, func: "reviewPR gate block", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 830, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
   ],
 
   repair_proposals: [
@@ -72,15 +72,15 @@ const AUDIT = {
   ],
 
   managed_actions: [
-    { file: "services/customRulesService.js", line: 237, func: "evaluateAndExecuteCustomRules", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 538, func: "ciHealWorker", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 714, func: "ciHealWorker labelAction", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 739, func: "ciHealWorker revAction", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
-    { file: "workers/ciHealWorker.js", line: 789, func: "ciHealWorker healAction", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
-    { file: "workers/issueFix/validate.js", line: 92, func: "validate", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
+    { file: "services/customRulesService.js", line: 237, func: "evaluateAndExecuteCustomRules", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 559, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 737, func: "ciHealWorker labelAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 764, func: "ciHealWorker revAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 816, func: "ciHealWorker healAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/issueFix/validate.js", line: 92, func: "validate", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/triageWorker.js", line: 168, func: "triageIssue", principalIdExpr: "not passed (null)", contextSource: "adoptWorker context exists but not yet wired to propose()", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
-    { file: "workers/triageWorker.js", line: 248, func: "triageIssue commentAction", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
-    { file: "workers/triageWorker.js", line: 399, func: "triagePR sizeAction", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "n/a", classification: "explicit_compatibility_gap" },
+    { file: "workers/triageWorker.js", line: 248, func: "triageIssue commentAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/triageWorker.js", line: 399, func: "triagePR sizeAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
   ],
 };
 
