@@ -54,7 +54,7 @@ export async function appendEntry({
 }) {
   // Wave 2: centralized attribution guard. If principalId is missing, record
   // exactly one attribution-gap event before proceeding with the write.
-  await validateAttribution({
+  const attribution = await validateAttribution({
     principalId,
     surfaceId: surfaceId || `audit_trail:${category}:${eventType}`,
     writer: "auditTrailService.appendEntry",
@@ -97,7 +97,8 @@ export async function appendEntry({
       "Audit trail: entry appended"
     );
 
-    return entry;
+    // Wave 2: expose attribution result for observability.
+    return { ...entry, attribution: { principalId, gapEvidence: attribution.gapResult ?? null } };
   } catch (err) {
     // Never propagate — audit failure must not break the calling flow
     logger.error({ err: err.message, category, eventType }, "Audit trail: write failed (non-fatal)");

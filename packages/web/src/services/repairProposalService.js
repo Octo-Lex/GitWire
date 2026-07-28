@@ -796,7 +796,7 @@ async function insertProposalEvent(client, {
   proposalId, eventType, toStatus, actor, evidenceSnapshot,
   principalId = null, surfaceId = null,
 }) {
-  await validateAttribution({
+  const attribution = await validateAttribution({
     principalId,
     surfaceId: surfaceId || `repair_proposal_events:${eventType}`,
     writer: "repairProposalService.insertProposalEvent",
@@ -805,7 +805,7 @@ async function insertProposalEvent(client, {
     legacyActor: actor,
   });
 
-  await client.query(
+  const result = await client.query(
     `INSERT INTO repair_proposal_events
        (proposal_id, event_type, to_status, actor, evidence_snapshot, principal_id)
      VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -813,6 +813,7 @@ async function insertProposalEvent(client, {
      typeof evidenceSnapshot === "string" ? evidenceSnapshot : JSON.stringify(evidenceSnapshot || {}),
      principalId]
   );
+  return { ...result.rows[0], attribution: { principalId, gapEvidence: attribution.gapResult ?? null } };
 }
 // ASYNC CRUD + STATE MACHINE (database operations)
 // ════════════════════════════════════════════════════════════════════════════
@@ -833,7 +834,7 @@ export async function createProposal(params = {}) {
   if (!envelope) throw new Error("envelope is required");
 
   // Wave 2: centralized attribution guard.
-  await validateAttribution({
+  const proposalAttribution = await validateAttribution({
     principalId: params.principalId ?? null,
     surfaceId: params.surfaceId || `repair_proposals:create:${repo}`,
     writer: "repairProposalService.createProposal",
@@ -935,7 +936,9 @@ export async function createProposal(params = {}) {
     }
 
     logger.info({ proposal_id: proposal.id, repo, fingerprint, isExisting }, "Repair proposal created or retrieved");
-    return redactProposal(proposal);
+    const result = redactProposal(proposal);
+    result.attribution = { principalId: params.principalId ?? null, gapEvidence: proposalAttribution.gapResult ?? null };
+    return result;
   });
 }
 

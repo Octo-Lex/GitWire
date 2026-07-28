@@ -69,7 +69,7 @@ export async function propose({
   actionKey = null,
 }) {
   // Wave 2: centralized attribution guard.
-  await validateAttribution({
+  const attribution = await validateAttribution({
     principalId: evidence?.principalId ?? null,
     surfaceId: evidence?.surfaceId || `managed_actions:propose:${pillar}:${actionType}`,
     writer: "actionStateMachine.propose",
@@ -107,7 +107,8 @@ export async function propose({
     { actionId: action.id, repo: repoFullName, pillar, actionType, source },
     "Action proposed"
   );
-  return action;
+  // Wave 2: expose attribution result for observability.
+  return { ...action, attribution: { principalId: evidence?.principalId ?? null, gapEvidence: attribution.gapResult ?? null } };
 }
 
 /**

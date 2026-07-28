@@ -125,7 +125,7 @@ async function main() {
     // Call decisionLogService.logDecision WITH principalId
     const dlsUrl = pathToFileURL(join(REPO_ROOT, "packages/web/src/services/decisionLogService.js"));
     const { logDecision } = await import(dlsUrl.href);
-    await logDecision({
+    const result1 = await logDecision({
       repoId: 90002, source: "guard_test", triggerEvent: "test",
       targetType: "issue", targetNumber: 1,
       decision: "acted", reason: "guard test",
@@ -141,6 +141,11 @@ async function main() {
     // Verify the decision_log row has the principalId
     const dlRow = await pool.query(`SELECT principal_id FROM decision_log WHERE source='guard_test' ORDER BY created_at DESC LIMIT 1`);
     check("valid principalId: decision_log row has principal", dlRow.rows[0]?.principal_id === testPrincipalId);
+
+    // Wave 2: writer result observability — attributed write reports no gap
+    check("observability: attributed write has attribution.gapEvidence=null",
+      result1?.attribution?.gapEvidence === null || result1?.attribution?.gapEvidence === undefined,
+      `gapEvidence=${JSON.stringify(result1?.attribution?.gapEvidence)}`);
 
     // ═══ 2. Null principal WITH envelope → exactly one gap event ════════════
     console.log("\n=== 2. Null principal + envelope → one gap event ===");
@@ -158,8 +163,27 @@ async function main() {
     const gapsAfter2 = (await pool.query("SELECT count(*)::int n FROM gitwire_auth.attribution_gap_evidence")).rows[0].n;
     check("null principal: exactly one gap event emitted", gapsAfter2 === gapsBefore2 + 1, `before=${gapsBefore2} after=${gapsAfter2}`);
 
-    // Verify the gap event content
-    const gapRow = await pool.query(`SELECT * FROM gitwire_auth.attribution_gap_evidence ORDER BY occurred_at DESC LIMIT 1`);
+    // Wave 2: call again to capture result for observability check
+    const result2 = await logDecision({
+      repoId: 90002, source: "guard_test_null_obs", triggerEvent: "test",
+      targetType: "issue", targetNumber: 3,
+      decision: "skipped", reason: "guard test null obs",
+      actor: "legacy-actor-obs",
+      principalId: null,
+      surfaceId: "test:guard:null_principal_obs",
+    });
+    check("observability: evidenced write has gapEvidence.recorded=true",
+      result2?.attribution?.gapEvidence?.recorded === true,
+      `gapEvidence=${JSON.stringify(result2?.attribution?.gapEvidence)}`);
+    check("observability: evidenced write has evidenceId",
+      !!result2?.attribution?.gapEvidence?.evidenceId,
+      `evidenceId=${result2?.attribution?.gapEvidence?.evidenceId}`);
+    check("observability: evidenced write has code=recorded",
+      result2?.attribution?.gapEvidence?.code === "recorded",
+      `code=${result2?.attribution?.gapEvidence?.code}`);
+
+    // Verify the gap event content — query the specific one we just checked
+    const gapRow = await pool.query(`SELECT * FROM gitwire_auth.attribution_gap_evidence WHERE surface_id='test:guard:null_principal' ORDER BY occurred_at DESC LIMIT 1`);
     check("gap event: reason_code present", !!gapRow.rows[0]?.reason_code);
     check("gap event: surface_id is exact", gapRow.rows[0]?.surface_id === "test:guard:null_principal");
     check("gap event: writer is exact", gapRow.rows[0]?.writer === "decisionLogService.logDecision");
@@ -204,6 +228,16 @@ async function main() {
     check("gap-table failure: recorded=false", failResult.recorded === false);
     check("gap-table failure: code=attribution_gap_evidence_error", failResult.code === "attribution_gap_evidence_error");
     check("gap-table failure: evidenceId=null", failResult.evidenceId === null);
+    // Verify the failure result contains ONLY approved secret-safe fields
+    const failKeys = Object.keys(failResult).sort();
+    check("gap-table failure: result has only {code, evidenceId, recorded}",
+      failKeys.length === 3 && failKeys.includes("code") && failKeys.includes("evidenceId") && failKeys.includes("recorded"),
+      `keys=${failKeys.join(",")}`);
+    // Verify no SQL text, params, payloads, tokens, or secrets in the result
+    const failJson = JSON.stringify(failResult);
+    check("gap-table failure: result contains no SQL/payload/secrets",
+      !failJson.includes("INSERT") && !failJson.includes("VALUES") && !failJson.includes("password") && !failJson.includes("token"),
+      `json=${failJson}`);
 
     // ═══ 5. Forged legacy actor → stored principal unchanged ════════════════
     console.log("\n=== 5. Forged legacy actor → principal unchanged ===");

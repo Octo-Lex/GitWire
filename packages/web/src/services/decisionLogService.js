@@ -41,7 +41,7 @@ export async function logDecision({
   surfaceId = null,   // Wave 2: attribution surface id
 }) {
   // Wave 2: centralized attribution guard.
-  await validateAttribution({
+  const attribution = await validateAttribution({
     principalId,
     surfaceId: surfaceId || `decision_log:${source}`,
     writer: "decisionLogService.logDecision",
@@ -74,7 +74,8 @@ export async function logDecision({
       "Decision logged"
     );
 
-    return row;
+    // Wave 2: expose attribution result for observability.
+    return { ...row, attribution: { principalId, gapEvidence: attribution.gapResult ?? null } };
   } catch (err) {
     // Decision log failure must never break the calling flow
     logger.error({ err: err.message, source, decision }, "Decision log write failed (non-fatal)");
