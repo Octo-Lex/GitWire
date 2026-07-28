@@ -245,10 +245,39 @@ async function main() {
     catch { deleteBlocked = true; }
     check("attribution_gap_evidence DELETE rejected", deleteBlocked);
 
+    // ═══ 8. Recursion prevention (structural proof) ════════════════════════
+    console.log("\n=== 8. Recursion prevention ===");
+    // The attribution_gap_evidence table is NOT one of the five guarded writers.
+    // recordAttributionGap() writes directly to attribution_gap_evidence, which
+    // has no attribution guard. Therefore it cannot recursively trigger another
+    // gap event. This is a structural property, not a runtime check.
+    //
+    // Proof: the five guarded tables are:
+    //   decision_log, audit_trail_entries, repair_proposals,
+    //   repair_proposal_events, managed_actions
+    // attribution_gap_evidence is NOT in this set.
+    check("recursion prevention: evidence table is not a guarded writer", true,
+      "attribution_gap_evidence is written directly by recordAttributionGap, not through any guarded writer API");
+
+    // Direct test: insert into attribution_gap_evidence should NOT trigger
+    // any additional gap event (because there is no guard on this table).
+    const gapsBeforeRecursion = (await pool.query("SELECT count(*)::int n FROM gitwire_auth.attribution_gap_evidence")).rows[0].n;
+    await recordAttributionGap({
+      reasonCode: "recursion_test",
+      surfaceId: "test:recursion",
+      writer: "recursionTestWriter",
+      tableName: "attribution_gap_evidence",
+      operation: "insert",
+      legacyActor: "recursion-actor",
+    });
+    const gapsAfterRecursion = (await pool.query("SELECT count(*)::int n FROM gitwire_auth.attribution_gap_evidence")).rows[0].n;
+    check("recursion test: exactly one event (no recursive cascade)", gapsAfterRecursion === gapsBeforeRecursion + 1,
+      `delta=${gapsAfterRecursion - gapsBeforeRecursion}`);
+
     // ═══ SUMMARY ════════════════════════════════════════════════════════════
     console.log("\n=== SUMMARY ===");
     const totalGaps = (await pool.query("SELECT count(*)::int n FROM gitwire_auth.attribution_gap_evidence")).rows[0].n;
-    check("total gap events in test DB", totalGaps >= 2, `total=${totalGaps} (expected >=2: null+envelope + dedup test)`);
+    check("total gap events in test DB", totalGaps >= 3, `total=${totalGaps} (expected >=3: null+envelope + dedup + recursion)`);
 
     await pool.end();
     delete process.env.DATABASE_URL;

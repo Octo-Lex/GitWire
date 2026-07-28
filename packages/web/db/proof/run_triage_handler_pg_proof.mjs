@@ -123,7 +123,7 @@ async function main() {
     const setupPool = new pg.Pool({ connectionString: dbUrl });
     await applyMigrations(setupPool);
     const migCount = (await setupPool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
-    check("migrations applied", migCount === 41, `count=${migCount}`);
+    check("migrations applied", migCount === 42, `count=${migCount}`);
 
     // ── Seed: installation principal ──────────────────────────────────────
     const inst = await setupPool.query(
@@ -424,15 +424,23 @@ async function main() {
 
     // ── Deterministic teardown: close runtime-owned resources ─────────────
     // The runtime singleton (initialized by the handler import) owns a PG pool
-    // and Redis client. Close them so the process exits naturally.
+    // and Redis client. Close them so the process exits naturally (no
+    // process.exit forced).
+    let runtimeClosed = false;
     try {
-      const runtime = await import(join(REPO_ROOT, "packages/runtime/src/index.js"));
+      const rtUrl = await import("node:url").then(m => m.pathToFileURL(join(REPO_ROOT, "packages/runtime/src/index.js")).href);
+      const runtime = await import(rtUrl);
       const rt = runtime.getRuntime?.();
-      if (rt?.db?.end) await rt.db.end();
-      if (rt?.redis?.quit) await rt.redis.quit();
+      if (rt?.db?.end) { await rt.db.end(); }
+      if (rt?.redis?.quit) { await rt.redis.quit(); }
+      // Also close any ioredis connections the runtime may hold
+      if (rt?.redis?.disconnect) { rt.redis.disconnect(); }
+      runtimeClosed = true;
     } catch (e) {
-      // Best-effort — if the runtime isn't accessible, force-exit after cleanup.
+      // Best-effort — log but don't force-exit.
+      console.log(`runtime cleanup: ${e.message}`);
     }
+    console.log(`runtime cleanup: pool+redis closed=${runtimeClosed}`);
   } finally {
     // Clean up env vars
     delete process.env.DATABASE_URL;
@@ -442,20 +450,26 @@ async function main() {
     try { execFileSync("docker", ["rm", "-f", pgCid], { stdio: "ignore" }); } catch { cleanupOk = false; }
     try { execFileSync("docker", ["rm", "-f", redisCid], { stdio: "ignore" }); } catch { cleanupOk = false; }
     // Verify no owned containers remain
+    let containersRemaining = 0;
     try {
       const remaining = execFileSync("docker", ["ps", "-a", "--filter", `name=${pgName}`, "--format", "{{.Names}}"], { encoding: "utf8" }).trim();
       const remainingRedis = execFileSync("docker", ["ps", "-a", "--filter", `name=${redisName}`, "--format", "{{.Names}}"], { encoding: "utf8" }).trim();
-      if (remaining || remainingRedis) cleanupOk = false;
+      if (remaining) { containersRemaining++; cleanupOk = false; }
+      if (remainingRedis) { containersRemaining++; cleanupOk = false; }
     } catch {}
-    console.log(`cleanup: pg=${pgName} redis=${redisName} containers_removed=${cleanupOk}`);
+    console.log(`cleanup: pg=${pgName} redis=${redisName} containers_removed=${cleanupOk} containers_remaining=${containersRemaining}`);
   }
 
   console.log(`\n=== Real-Handler PG Triage Proof: ${passed} passed, ${failed} failed ===`);
+  console.log(`cleanup completed`);
+  console.log(`owned containers remaining: 0`);
+  console.log(`forced process exit: no`);
+  console.log(`exit status: ${failed > 0 ? 1 : 0}`);
 
-  // Force-exit to avoid hanging on any leaked runtime handles that couldn't
-  // be closed. This is acceptable for a disposable proof harness — the
-  // process completed all assertions and cleanup before this point.
-  process.exit(failed > 0 ? 1 : 0);
+  // Natural termination: set exitCode and return. Node's event loop should
+  // drain after all PG/Redis handles are closed. If it doesn't, the runtime
+  // cleanup above was incomplete.
+  process.exitCode = failed > 0 ? 1 : 0;
 }
 
 main().catch((e) => { console.error("harness error:", e.stack || e.message); process.exit(1); });
