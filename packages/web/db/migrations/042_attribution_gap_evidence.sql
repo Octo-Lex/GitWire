@@ -31,6 +31,13 @@ CREATE INDEX ix_attribution_gap_surface
 CREATE INDEX ix_attribution_gap_reason
   ON gitwire_auth.attribution_gap_evidence (reason_code, occurred_at DESC);
 
+-- Wave 2 grants: the attribution gap table is written by the application
+-- (recordAttributionGap runs as gitwire_app) and inspected by the operator.
+-- USAGE on the schema is already granted by 039; table-level privileges are
+-- specified here.
+GRANT INSERT ON gitwire_auth.attribution_gap_evidence TO gitwire_app;
+GRANT SELECT ON gitwire_auth.attribution_gap_evidence TO gitwire_operator;
+
 -- Append-only trigger
 CREATE FUNCTION gitwire_auth.enforce_attribution_gap_append_only()
 RETURNS trigger

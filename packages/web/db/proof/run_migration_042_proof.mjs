@@ -137,6 +137,66 @@ async function main() {
     await pool.query("DROP TABLE gitwire_auth.attribution_gap_evidence");
     await applyMigrations(pool);
 
+    // ═══ 9. Privilege tests ════════════════════════════════════════════════
+    console.log("\n=== 9. Privilege tests ===");
+    // Set a disposable password on gitwire_app so we can connect as it
+    const DISP = "m042-disp-pw";
+    await pool.query(`ALTER ROLE gitwire_app WITH PASSWORD '${DISP}'`);
+    await pool.query(`ALTER ROLE gitwire_operator WITH PASSWORD '${DISP}'`);
+
+    // gitwire_app INSERT succeeds
+    const appUrl = url.replace(/^postgresql:\/\/[^@]*@/, `postgresql://gitwire_app:${DISP}@`);
+    const appClient = new pg.Client({ connectionString: appUrl });
+    await appClient.connect();
+    let appInsertOk = false;
+    try {
+      await appClient.query(`INSERT INTO gitwire_auth.attribution_gap_evidence (reason_code, surface_id, writer, table_name, operation) VALUES ('priv_test', 's_priv', 'w', 't', 'insert')`);
+      appInsertOk = true;
+    } catch {}
+    check("gitwire_app can INSERT into attribution_gap_evidence", appInsertOk);
+
+    // gitwire_app UPDATE rejected
+    let appUpdateBlocked = false;
+    try { await appClient.query("UPDATE gitwire_auth.attribution_gap_evidence SET reason_code='hack' WHERE reason_code='priv_test'"); } catch { appUpdateBlocked = true; }
+    check("gitwire_app cannot UPDATE attribution_gap_evidence", appUpdateBlocked);
+
+    // gitwire_app DELETE rejected
+    let appDeleteBlocked = false;
+    try { await appClient.query("DELETE FROM gitwire_auth.attribution_gap_evidence WHERE reason_code='priv_test'"); } catch { appDeleteBlocked = true; }
+    check("gitwire_app cannot DELETE attribution_gap_evidence", appDeleteBlocked);
+    await appClient.end();
+
+    // gitwire_operator SELECT succeeds
+    const opUrl = url.replace(/^postgresql:\/\/[^@]*@/, `postgresql://gitwire_operator:${DISP}@`);
+    const opClient = new pg.Client({ connectionString: opUrl });
+    await opClient.connect();
+    let opSelectOk = false;
+    try {
+      const r = await opClient.query("SELECT count(*)::int AS n FROM gitwire_auth.attribution_gap_evidence");
+      opSelectOk = r.rows.length > 0;
+    } catch {}
+    check("gitwire_operator can SELECT from attribution_gap_evidence", opSelectOk);
+
+    // gitwire_operator cannot INSERT (read-only for evidence)
+    let opInsertBlocked = false;
+    try { await opClient.query("INSERT INTO gitwire_auth.attribution_gap_evidence (reason_code, surface_id, writer, table_name, operation) VALUES ('op_test', 's', 'w', 't', 'insert')"); } catch { opInsertBlocked = true; }
+    check("gitwire_operator cannot INSERT into attribution_gap_evidence", opInsertBlocked);
+    await opClient.end();
+
+    // Verify NO unexpected privileges on PUBLIC
+    const pubGrant = (await pool.query(`
+      SELECT has_table_privilege('public', 'gitwire_auth.attribution_gap_evidence', 'INSERT') AS can_insert,
+             has_table_privilege('public', 'gitwire_auth.attribution_gap_evidence', 'UPDATE') AS can_update,
+             has_table_privilege('public', 'gitwire_auth.attribution_gap_evidence', 'DELETE') AS can_delete
+    `)).rows[0];
+    check("PUBLIC has no INSERT on attribution_gap_evidence", pubGrant.can_insert === false);
+    check("PUBLIC has no UPDATE on attribution_gap_evidence", pubGrant.can_update === false);
+    check("PUBLIC has no DELETE on attribution_gap_evidence", pubGrant.can_delete === false);
+
+    // Verify table ownership (should be owned by the migration runner, not PUBLIC)
+    const owner = (await pool.query("SELECT tableowner FROM pg_tables WHERE schemaname='gitwire_auth' AND tablename='attribution_gap_evidence'")).rows[0]?.tableowner;
+    check("attribution_gap_evidence has explicit owner", !!owner, `owner=${owner}`);
+
     await pool.end();
   } finally {
     try { execFileSync("docker", ["rm", "-f", cid], { stdio: "ignore" }); } catch {}
