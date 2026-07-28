@@ -57,18 +57,17 @@ const AUDIT = {
   ],
 
   repair_proposals: [
-    { file: "services/repairProposalService.js", line: 881, func: "createProposal", principalIdExpr: "source.principalId", contextSource: "caller", legacyActor: "created_by", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 903, func: "createProposal", principalIdExpr: "source.principalId", contextSource: "caller", legacyActor: "created_by", classification: "worker_auth_context" },
   ],
 
   repair_proposal_events: [
-    { file: "services/repairProposalService.js", line: 809, func: "insertProposalEvent", principalIdExpr: "principalId param", contextSource: "caller", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 923, func: "createProposal event", principalIdExpr: "source.principalId", contextSource: "caller", legacyActor: "created_by", classification: "worker_auth_context" },
-    { file: "services/repairProposalService.js", line: 1201, func: "transitionProposalStatus", principalIdExpr: "NULL (raw INSERT with explicit principal_id column)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 1364, func: "assignProposal", principalIdExpr: "NULL (raw INSERT with explicit principal_id column)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 1507, func: "addProposalComment", principalIdExpr: "NULL (raw INSERT with explicit principal_id column)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 1919, func: "approveProposal", principalIdExpr: "NULL (raw INSERT with explicit principal_id column)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 2331, func: "rejectProposal", principalIdExpr: "NULL (raw INSERT with explicit principal_id column)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 3278, func: "closeProposal", principalIdExpr: "NULL (raw INSERT with explicit principal_id column)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
+    { file: "services/repairProposalService.js", line: 944, func: "createProposal event", principalIdExpr: "source.principalId", contextSource: "caller", legacyActor: "created_by", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 1220, func: "attachEvidence", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
+    { file: "services/repairProposalService.js", line: 1380, func: "transitionProposal", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
+    { file: "services/repairProposalService.js", line: 1519, func: "recordCiEvidenceCollection", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
+    { file: "services/repairProposalService.js", line: 1927, func: "recordPatchProposal", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
+    { file: "services/repairProposalService.js", line: 2335, func: "recordVerificationResult", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
+    { file: "services/repairProposalService.js", line: 3278, func: "recordCriticReview", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
   ],
 
   managed_actions: [
@@ -122,7 +121,7 @@ describe("Wave 2 — executable writer-call-site audit", () => {
             table === "decision_log" ? "logDecision(" :
             table === "audit_trail_entries" ? "Trail." :
             table === "repair_proposals" ? "INSERT INTO repair_proposals" :
-            table === "repair_proposal_events" ? "INSERT INTO repair_proposal_events" :
+            table === "repair_proposal_events" ? "insertProposalEvent(" :
             "propose(";
           expect(nearby).toContain(searchPattern);
         }

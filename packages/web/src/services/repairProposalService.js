@@ -789,13 +789,22 @@ export function redactProposal(proposal) {
 
 /**
  * Internal: insert a repair_proposal_event with centralized attribution guard.
- * @param {object} client - pg client/PoolClient (inside transaction)
+ * Transaction-aware: accepts a client (PoolClient inside a transaction) or
+ * falls back to the pool singleton. The guard runs on the SAME executor so
+ * that commit/rollback semantics apply to both the event and any gap evidence.
+ *
+ * @param {object} executor - pg PoolClient (inside transaction) or the db pool
  * @param {object} opts
  */
-async function insertProposalEvent(client, {
-  proposalId, eventType, toStatus, actor, evidenceSnapshot,
+async function insertProposalEvent(executor, {
+  proposalId, eventType, fromStatus, toStatus, actor,
+  evidenceSnapshot, correlationId, sourceDeliveryId,
   principalId = null, surfaceId = null,
 }) {
+  const client = executor || db;
+
+  // Wave 2: centralized attribution guard on the same executor.
+  // If principalId is null, a gap event is recorded in the same transaction.
   const attribution = await validateAttribution({
     principalId,
     surfaceId: surfaceId || `repair_proposal_events:${eventType}`,
@@ -805,13 +814,25 @@ async function insertProposalEvent(client, {
     legacyActor: actor,
   });
 
+  const cols = ["proposal_id", "event_type"];
+  const vals = [proposalId, eventType];
+  let idx = cols.length + 1;
+
+  if (fromStatus !== undefined) { cols.push("from_status"); vals.push(fromStatus); }
+  cols.push("to_status"); vals.push(toStatus ?? "detected");
+  cols.push("actor"); vals.push(actor ?? "system");
+  cols.push("evidence_snapshot"); vals.push(
+    typeof evidenceSnapshot === "string" ? evidenceSnapshot : JSON.stringify(evidenceSnapshot || {}));
+  if (correlationId !== undefined) { cols.push("correlation_id"); vals.push(correlationId); }
+  if (sourceDeliveryId !== undefined) { cols.push("source_delivery_id"); vals.push(sourceDeliveryId); }
+  cols.push("principal_id"); vals.push(principalId);
+
+  const placeholders = vals.map((_, i) => `$${i + 1}`).join(", ");
+  const colList = cols.join(", ");
+
   const result = await client.query(
-    `INSERT INTO repair_proposal_events
-       (proposal_id, event_type, to_status, actor, evidence_snapshot, principal_id)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [proposalId, eventType, toStatus, actor,
-     typeof evidenceSnapshot === "string" ? evidenceSnapshot : JSON.stringify(evidenceSnapshot || {}),
-     principalId]
+    `INSERT INTO repair_proposal_events (${colList}) VALUES (${placeholders}) RETURNING *`,
+    vals
   );
   return { ...result.rows[0], attribution: { principalId, gapEvidence: attribution.gapResult ?? null } };
 }
@@ -920,19 +941,15 @@ export async function createProposal(params = {}) {
 
     // Record creation event ONLY for genuinely new proposals
     if (!isExisting) {
-      await client.query(
-        `INSERT INTO repair_proposal_events
-           (proposal_id, event_type, to_status, actor, evidence_snapshot, principal_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          proposal.id,
-          "proposal_created",
-          "detected",
-          created_by,
-          JSON.stringify(buildEvidenceSnapshot({ envelope })),
-          source.principalId || null, // Wave 2 dual-write
-        ]
-      );
+      await insertProposalEvent(client, {
+        proposalId: proposal.id,
+        eventType: "proposal_created",
+        toStatus: "detected",
+        actor: created_by,
+        evidenceSnapshot: buildEvidenceSnapshot({ envelope }),
+        principalId: source.principalId || null,
+        surfaceId: "repair_proposal_events:proposal_created",
+      });
     }
 
     logger.info({ proposal_id: proposal.id, repo, fingerprint, isExisting }, "Repair proposal created or retrieved");
@@ -1200,20 +1217,16 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
 
     // Record evidence event with full snapshot + content hashes + correlation
     const snapshot = buildEvidenceSnapshot(Object.fromEntries(providedFields));
-    await client.query(
-      `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, principal_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)`,
-      [
-        id,
-        "evidence_attached",
-        proposal.status,
-        proposal.status,
-        actor,
-        JSON.stringify(snapshot),
-        correlation_id || null,
-      ]
-    );
+    await insertProposalEvent(client, {
+      proposalId: id,
+      eventType: "evidence_attached",
+      fromStatus: proposal.status,
+      toStatus: proposal.status,
+      actor,
+      evidenceSnapshot: snapshot,
+      correlationId: correlation_id || null,
+      surfaceId: "repair_proposal_events:evidence_attached",
+    });
 
     logger.info({ proposal_id: id, fields: providedFields.map(([f]) => f) }, "Evidence attached to repair proposal");
     return redactProposal(updated);
@@ -1362,21 +1375,18 @@ export async function transitionProposal(id, params = {}) {
 
     const updated = rows[0];
 
-    // Record transition event in the SAME transaction (with correlation)
-    await client.query(
-      `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, reason, correlation_id, principal_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)`,
-      [
-        id,
-        "state_transition",
-        currentStatus,
-        targetStatus,
-        actor,
-        reason || null,
-        correlation_id || null,
-      ]
-    );
+    // Record transition event in the SAME transaction (with correlation).
+    // `reason` has no dedicated column in insertProposalEvent — carry it in evidenceSnapshot.
+    await insertProposalEvent(client, {
+      proposalId: id,
+      eventType: "state_transition",
+      fromStatus: currentStatus,
+      toStatus: targetStatus,
+      actor,
+      evidenceSnapshot: { reason: reason || null },
+      correlationId: correlation_id || null,
+      surfaceId: "repair_proposal_events:state_transition",
+    });
 
     logger.info(
       { proposal_id: id, from: currentStatus, to: targetStatus, actor },
@@ -1506,21 +1516,17 @@ export async function recordCiEvidenceCollection(id, evidence = {}, options = {}
     // Record ONE collection event — carries both the evidence snapshot
     // and the state transition info, with correlation_id and source_delivery_id
     const snapshot = buildEvidenceSnapshot({ evidence_refs: evidence.evidence_refs });
-    await client.query(
-      `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id, principal_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
-      [
-        id,
-        "ci_evidence_collected",
-        "detected",
-        "evidence_collected",
-        actor,
-        JSON.stringify(snapshot),
-        correlation_id || null,
-        source_delivery_id || null,
-      ]
-    );
+    await insertProposalEvent(client, {
+      proposalId: id,
+      eventType: "ci_evidence_collected",
+      fromStatus: "detected",
+      toStatus: "evidence_collected",
+      actor,
+      evidenceSnapshot: snapshot,
+      correlationId: correlation_id || null,
+      sourceDeliveryId: source_delivery_id || null,
+      surfaceId: "repair_proposal_events:ci_evidence_collected",
+    });
 
     logger.info(
       { proposal_id: id, evidence_count: evidence.evidence_refs.length, correlation_id },
@@ -1918,21 +1924,17 @@ export async function recordPatchProposal(id, patchInput = {}, options = {}) {
       diagnosis_hash: lockedDiagnosisHash,
       input_bundle_hash: persistedPatch.input_bundle_hash,
     });
-    await client.query(
-      `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id, principal_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
-      [
-        id,
-        "patch_proposal_recorded",
-        "evidence_collected",
-        "proposed",
-        actor,
-        JSON.stringify(snapshot),
-        correlation_id || null,
-        source_delivery_id || null,
-      ]
-    );
+    await insertProposalEvent(client, {
+      proposalId: id,
+      eventType: "patch_proposal_recorded",
+      fromStatus: "evidence_collected",
+      toStatus: "proposed",
+      actor,
+      evidenceSnapshot: snapshot,
+      correlationId: correlation_id || null,
+      sourceDeliveryId: source_delivery_id || null,
+      surfaceId: "repair_proposal_events:patch_proposal_recorded",
+    });
 
     logger.info(
       { proposal_id: id, artifact_hash: patchInput.artifact_hash, correlation_id },
@@ -2330,21 +2332,17 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
       validation_result: persistedResult,
       verification_fingerprint: verificationInput.verification_fingerprint,
     });
-    await client.query(
-      `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id, principal_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
-      [
-        id,
-        "verification_result_recorded",
-        "proposed",
-        targetStatus,
-        actor,
-        JSON.stringify(snapshot),
-        correlation_id || null,
-        source_delivery_id || null,
-      ]
-    );
+    await insertProposalEvent(client, {
+      proposalId: id,
+      eventType: "verification_result_recorded",
+      fromStatus: "proposed",
+      toStatus: targetStatus,
+      actor,
+      evidenceSnapshot: snapshot,
+      correlationId: correlation_id || null,
+      sourceDeliveryId: source_delivery_id || null,
+      surfaceId: "repair_proposal_events:verification_result_recorded",
+    });
 
     logger.info(
       { proposal_id: id, target_status: targetStatus, fingerprint: verificationInput.verification_fingerprint, correlation_id },
@@ -3277,21 +3275,17 @@ export async function recordCriticReview(id, reviewInput = {}, options = {}) {
       critic_review: persistedReview,
       review_fingerprint: canonicalReviewFingerprint,
     });
-    await client.query(
-      `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id, principal_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
-      [
-        id,
-        "critic_review_recorded",
-        "verified",
-        targetStatus,
-        actor,
-        JSON.stringify(snapshot),
-        correlation_id || null,
-        source_delivery_id || null,
-      ]
-    );
+    await insertProposalEvent(client, {
+      proposalId: id,
+      eventType: "critic_review_recorded",
+      fromStatus: "verified",
+      toStatus: targetStatus,
+      actor,
+      evidenceSnapshot: snapshot,
+      correlationId: correlation_id || null,
+      sourceDeliveryId: source_delivery_id || null,
+      surfaceId: "repair_proposal_events:critic_review_recorded",
+    });
 
     logger.info(
       { proposal_id: id, target_status: targetStatus, verdict, correlation_id },
