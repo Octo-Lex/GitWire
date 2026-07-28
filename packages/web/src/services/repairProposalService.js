@@ -1047,7 +1047,7 @@ export async function listProposals(params = {}) {
  * @param {string} [correlation_id] - optional correlation ID for audit trail
  * @returns {Promise<object>} updated proposal
  */
-export async function attachEvidence(id, evidence = {}, actor = "system", expected_version, correlation_id, actor_kind) {
+export async function attachEvidence(id, evidence = {}, actor = "system", expected_version, correlation_id, actor_kind, principalId = null) {
   if (!id) throw new Error("id is required");
 
   // MANDATORY expected_version
@@ -1228,6 +1228,7 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
       evidenceSnapshot: snapshot,
       correlationId: correlation_id || null,
       surfaceId: "repair_proposal_events:evidence_attached",
+      principalId,
     });
 
     logger.info({ proposal_id: id, fields: providedFields.map(([f]) => f) }, "Evidence attached to repair proposal");
@@ -1256,6 +1257,7 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
  * @returns {Promise<object>} updated proposal
  */
 export async function transitionProposal(id, params = {}) {
+  const { principalId = null } = params;
   const { status: targetStatus, actor = "system", reason, expected_version, correlation_id, actor_kind } = params;
 
   if (!id) throw new Error("id is required");
@@ -1388,6 +1390,7 @@ export async function transitionProposal(id, params = {}) {
       evidenceSnapshot: { reason: reason || null },
       correlationId: correlation_id || null,
       surfaceId: "repair_proposal_events:state_transition",
+      principalId,
     });
 
     logger.info(
@@ -1420,6 +1423,7 @@ export async function transitionProposal(id, params = {}) {
  * @returns {Promise<object>} updated proposal
  */
 export async function recordCiEvidenceCollection(id, evidence = {}, options = {}) {
+  const { principalId = null } = options;
   const {
     actor = "ci_evidence_collector",
     expected_version,
@@ -1528,6 +1532,7 @@ export async function recordCiEvidenceCollection(id, evidence = {}, options = {}
       correlationId: correlation_id || null,
       sourceDeliveryId: source_delivery_id || null,
       surfaceId: "repair_proposal_events:ci_evidence_collected",
+      principalId,
     });
 
     logger.info(
@@ -1681,6 +1686,7 @@ export function validatePatchEvidenceBinding(patch, evidenceRefs, diagnosis) {
  * @returns {Promise<object>} updated proposal
  */
 export async function recordPatchProposal(id, patchInput = {}, options = {}) {
+  const { principalId = null } = options;
   const {
     actor = "patch_worker",
     expected_version,
@@ -1936,6 +1942,7 @@ export async function recordPatchProposal(id, patchInput = {}, options = {}) {
       correlationId: correlation_id || null,
       sourceDeliveryId: source_delivery_id || null,
       surfaceId: "repair_proposal_events:patch_proposal_recorded",
+      principalId,
     });
 
     logger.info(
@@ -1983,6 +1990,7 @@ export async function recordPatchProposal(id, patchInput = {}, options = {}) {
  * @returns {Promise<object>} updated proposal
  */
 export async function recordVerificationResult(id, verificationInput = {}, options = {}) {
+  const { principalId = null } = options;
   const {
     actor = "verification_worker",
     expected_version,
@@ -2344,6 +2352,7 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
       correlationId: correlation_id || null,
       sourceDeliveryId: source_delivery_id || null,
       surfaceId: "repair_proposal_events:verification_result_recorded",
+      principalId,
     });
 
     logger.info(
@@ -3016,6 +3025,7 @@ function validateCriticFindings(verdict, findings, blockingFindings, bundleValue
  * @returns {Promise<object>} updated proposal
  */
 export async function recordCriticReview(id, reviewInput = {}, options = {}) {
+  const { principalId = null } = options;
   const {
     actor = "critic_worker",
     expected_version,
@@ -3287,6 +3297,7 @@ export async function recordCriticReview(id, reviewInput = {}, options = {}) {
       correlationId: correlation_id || null,
       sourceDeliveryId: source_delivery_id || null,
       surfaceId: "repair_proposal_events:critic_review_recorded",
+      principalId,
     });
 
     logger.info(

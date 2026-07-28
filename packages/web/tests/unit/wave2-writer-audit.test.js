@@ -61,13 +61,13 @@ const AUDIT = {
   ],
 
   repair_proposal_events: [
-    { file: "services/repairProposalService.js", line: 944, func: "createProposal event", principalIdExpr: "source.principalId", contextSource: "caller", legacyActor: "created_by", classification: "worker_auth_context" },
-    { file: "services/repairProposalService.js", line: 1220, func: "attachEvidence", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 1380, func: "transitionProposal", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 1519, func: "recordCiEvidenceCollection", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 1927, func: "recordPatchProposal", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 2335, func: "recordVerificationResult", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
-    { file: "services/repairProposalService.js", line: 3278, func: "recordCriticReview", principalIdExpr: "null (params.principalId not yet propagated)", contextSource: "worker context (not yet propagated)", legacyActor: "actor param", classification: "explicit_compatibility_gap" },
+    { file: "services/repairProposalService.js", line: 946, func: "createProposal event", principalIdExpr: "source.principalId", contextSource: "caller", legacyActor: "created_by", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 1222, func: "attachEvidence", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 1384, func: "transitionProposal", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 1525, func: "recordCiEvidenceCollection", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 1935, func: "recordPatchProposal", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 2345, func: "recordVerificationResult", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 3290, func: "recordCriticReview", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
   ],
 
   managed_actions: [
