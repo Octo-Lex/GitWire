@@ -11,6 +11,7 @@
 
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { validateAttribution } from "./auth/attributionGuard.js";
 
 /**
  * Record a decision made by a GitWire worker.
@@ -37,7 +38,18 @@ export async function logDecision({
   conditions, configUsed, commitSha,
   actor,
   principalId = null, // Wave 2 dual-write: server-derived principal UUID
+  surfaceId = null,   // Wave 2: attribution surface id
 }) {
+  // Wave 2: centralized attribution guard.
+  await validateAttribution({
+    principalId,
+    surfaceId: surfaceId || `decision_log:${source}`,
+    writer: "decisionLogService.logDecision",
+    tableName: "decision_log",
+    operation: "insert",
+    legacyActor: actor,
+  });
+
   try {
     const { rows: [row] } = await db.query(
       "INSERT INTO decision_log " +

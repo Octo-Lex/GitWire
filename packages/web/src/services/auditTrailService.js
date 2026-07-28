@@ -22,6 +22,7 @@
 import { db }     from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import crypto     from "crypto";
+import { validateAttribution } from "./auth/attributionGuard.js";
 
 // ── Framework -> control mapping ────────────────────────────────────────────────
 const CONTROL_MAP = {
@@ -49,7 +50,19 @@ export async function appendEntry({
   category, eventType, actor, actorType = "bot",
   repoFullName, prNumber, commitSha, payload = {},
   principalId = null, // Wave 2 dual-write: server-derived principal UUID
+  surfaceId = null,   // Wave 2: attribution surface id (required for gap evidence)
 }) {
+  // Wave 2: centralized attribution guard. If principalId is missing, record
+  // exactly one attribution-gap event before proceeding with the write.
+  await validateAttribution({
+    principalId,
+    surfaceId: surfaceId || `audit_trail:${category}:${eventType}`,
+    writer: "auditTrailService.appendEntry",
+    tableName: "audit_trail_entries",
+    operation: "insert",
+    legacyActor: actor,
+  });
+
   try {
     const controls    = CONTROL_MAP[category] ?? { frameworks: [], control: null };
     const payloadJson = JSON.stringify(payload);
