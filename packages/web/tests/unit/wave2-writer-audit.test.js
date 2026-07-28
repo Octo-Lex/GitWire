@@ -27,8 +27,8 @@ const AUDIT = {
     { file: "services/auth/authorize.js", line: 157, func: "denyAndLog", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
     // observeAdopt.js — auth layer; principal from req.auth
     { file: "services/auth/observeAdopt.js", line: 52, func: "observeAuthorize", principalIdExpr: "decision.principalId", contextSource: "req.auth", legacyActor: "legacyActor param", classification: "http_auth_context" },
-    // customRulesService.js — worker context
-    { file: "services/customRulesService.js", line: 211, func: "evaluateAndExecuteCustomRules", principalIdExpr: "not passed (null)", contextSource: "none", legacyActor: "data.actor", classification: "explicit_compatibility_gap" },
+    // customRulesService.js — worker context (webhook handler passes webhookPrincipalId)
+    { file: "services/customRulesService.js", line: 211, func: "evaluateAndExecuteCustomRules", principalIdExpr: "principalId param", contextSource: "webhook handler (webhookPrincipalId)", legacyActor: "data.actor", classification: "worker_auth_context" },
     // ciHealWorker.js — 9 calls; worker not yet adopted
     { file: "workers/ciHealWorker.js", line: 231, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 250, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
