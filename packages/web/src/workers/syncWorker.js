@@ -58,7 +58,8 @@ export async function scheduleSyncJobs() {
 }
 
 // ── Full sync: walk every installation ───────────────────────────────────────
-async function runFullSync() {
+// Exported for Wave 2 integration testing (issue #94).
+export async function runFullSync() {
   // Wave 2: resolve trusted system principal for the scheduled full-sync.
   await adoptWorker({
     workerId: "scheduled:sync",
