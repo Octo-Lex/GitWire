@@ -11,6 +11,7 @@
 
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { validateAttribution } from "./auth/attributionGuard.js";
 
 // ── Typed blocked reasons ───────────────────────────────────────────────────
 // "blocked" means a deterministic guard deliberately prevented execution.
@@ -67,6 +68,16 @@ export async function propose({
   parentActionId = null, repoId = null, targetType = null, targetNumber = null,
   actionKey = null,
 }) {
+  // Wave 2: centralized attribution guard.
+  await validateAttribution({
+    principalId: evidence?.principalId ?? null,
+    surfaceId: evidence?.surfaceId || `managed_actions:propose:${pillar}:${actionType}`,
+    writer: "actionStateMachine.propose",
+    tableName: "managed_actions",
+    operation: "insert",
+    legacyActor: source,
+  });
+
   // Dedup: deactivate previous active actions with the same key
   if (actionKey && repoId) {
     await db.query(

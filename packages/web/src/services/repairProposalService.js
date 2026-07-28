@@ -17,6 +17,7 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import crypto from "crypto";
+import { validateAttribution } from "./auth/attributionGuard.js";
 import { compileValidationPlan } from "../lib/validationPlanAdapter.js";
 import { computeValidationPlanHash, resolveDescriptorActivation } from "@gitwire/core";
 import {
@@ -781,6 +782,38 @@ export function redactProposal(proposal) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Wave 2: centralized repair_proposal_events writer boundary.
+// All 7 event INSERTs route through this function so the attribution guard
+// fires automatically. Runs the guard BEFORE the transaction INSERT.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Internal: insert a repair_proposal_event with centralized attribution guard.
+ * @param {object} client - pg client/PoolClient (inside transaction)
+ * @param {object} opts
+ */
+async function insertProposalEvent(client, {
+  proposalId, eventType, toStatus, actor, evidenceSnapshot,
+  principalId = null, surfaceId = null,
+}) {
+  await validateAttribution({
+    principalId,
+    surfaceId: surfaceId || `repair_proposal_events:${eventType}`,
+    writer: "repairProposalService.insertProposalEvent",
+    tableName: "repair_proposal_events",
+    operation: "insert",
+    legacyActor: actor,
+  });
+
+  await client.query(
+    `INSERT INTO repair_proposal_events
+       (proposal_id, event_type, to_status, actor, evidence_snapshot, principal_id)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [proposalId, eventType, toStatus, actor,
+     typeof evidenceSnapshot === "string" ? evidenceSnapshot : JSON.stringify(evidenceSnapshot || {}),
+     principalId]
+  );
+}
 // ASYNC CRUD + STATE MACHINE (database operations)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -798,6 +831,16 @@ export async function createProposal(params = {}) {
 
   if (!repo) throw new Error("repo is required");
   if (!envelope) throw new Error("envelope is required");
+
+  // Wave 2: centralized attribution guard.
+  await validateAttribution({
+    principalId: params.principalId ?? null,
+    surfaceId: params.surfaceId || `repair_proposals:create:${repo}`,
+    writer: "repairProposalService.createProposal",
+    tableName: "repair_proposals",
+    operation: "insert",
+    legacyActor: created_by,
+  });
 
   // MANDATORY actor-kind enforcement — unconditional, before any validation
   requireActorKind(actor_kind);
