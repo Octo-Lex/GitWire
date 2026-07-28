@@ -126,7 +126,7 @@ webhookRouter.post(
     // ── 4a. Evaluate custom rules ────────────────────────────────────────────
     if (["issues", "pull_request", "issue_comment"].includes(eventName)) {
       try {
-        const customResults = await evaluateAndExecuteCustomRules(eventName, payload, payload.installation);
+        const customResults = await evaluateAndExecuteCustomRules(eventName, payload, payload.installation, webhookPrincipalId);
         if (customResults.length > 0) {
           logger.info(
             { deliveryId, rules: customResults.map((r) => r.name) },

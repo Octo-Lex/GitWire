@@ -128,7 +128,7 @@ async function enrichWithPRFiles(octokit, owner, repo, prNumber, ctx) {
  * @param {object} installation — installation object from payload
  * @returns {Promise<Array<{name: string, actions: Array, results: Array}>>}
  */
-export async function evaluateAndExecuteCustomRules(eventName, payload, installation) {
+export async function evaluateAndExecuteCustomRules(eventName, payload, installation, principalId = null) {
   const repo = payload.repository;
   if (!repo) return [];
 
@@ -221,7 +221,7 @@ export async function evaluateAndExecuteCustomRules(eventName, payload, installa
         { check: "custom_rule(" + rule.name + ")", result: true },
         { check: "actions_count", result: rule.actions.length },
       ],
-      principalId: null, // Wave 2 gap: customRulesService has no principal context yet
+      principalId: principalId,
       surfaceId: "custom_rules:evaluate",
     });
   }
