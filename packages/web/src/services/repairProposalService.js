@@ -804,7 +804,8 @@ async function insertProposalEvent(executor, {
   const client = executor || db;
 
   // Wave 2: centralized attribution guard on the same executor.
-  // If principalId is null, a gap event is recorded in the same transaction.
+  // If principalId is null, a gap event is recorded in the same transaction
+  // inside a SAVEPOINT so evidence failure doesn't abort the transaction.
   const attribution = await validateAttribution({
     principalId,
     surfaceId: surfaceId || `repair_proposal_events:${eventType}`,
@@ -812,6 +813,7 @@ async function insertProposalEvent(executor, {
     tableName: "repair_proposal_events",
     operation: "insert",
     legacyActor: actor,
+    executor: client,
   });
 
   const cols = ["proposal_id", "event_type"];

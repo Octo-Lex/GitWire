@@ -29,7 +29,7 @@ import { recordAttributionGap } from "./attributionGap.js";
  * @returns {Promise<{attributed: boolean, gapResult?: object}>}
  */
 export async function validateAttribution(envelope) {
-  const { principalId, surfaceId, writer, tableName, operation, legacyActor, reasonCode } = envelope;
+  const { principalId, surfaceId, writer, tableName, operation, legacyActor, reasonCode, executor } = envelope;
 
   if (principalId) {
     // Authoritative attribution — no gap event.
@@ -37,6 +37,8 @@ export async function validateAttribution(envelope) {
   }
 
   // Missing principalId — record exactly one attribution-gap event.
+  // If executor is provided (transaction client), the gap INSERT runs inside
+  // a SAVEPOINT so a failure doesn't abort the enclosing transaction.
   const gapResult = await recordAttributionGap({
     reasonCode: reasonCode || "missing_principal_context",
     surfaceId: surfaceId || "unknown_surface",
@@ -44,6 +46,7 @@ export async function validateAttribution(envelope) {
     tableName,
     operation,
     legacyActor: legacyActor ?? null,
+    executor: executor || null,
   });
 
   return { attributed: false, gapResult };
