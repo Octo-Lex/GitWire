@@ -148,8 +148,12 @@ export const Trail = {
     actor:     "gitwire[bot]",
     actorType: "bot",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:ai_decision",
     prNumber:  data.prNumber,
     commitSha: data.commitSha,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:ai_decision",
     payload: {
       verdict:            data.verdict,
       confidence:         data.confidence,
@@ -169,6 +173,8 @@ export const Trail = {
     actor:     "gitwire[bot]",
     actorType: "bot",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:auto_merge",
     prNumber:  data.prNumber,
     commitSha: data.mergeSha,
     payload: {
@@ -188,6 +194,8 @@ export const Trail = {
     actor:     data.actor,
     actorType: "human",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:policy_bypass",
     payload: {
       policy_name:  data.policyName,
       bypass_type:  data.bypassType,
@@ -205,6 +213,8 @@ export const Trail = {
     actor:     data.actor,
     actorType: data.actorType ?? "human",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:branch_rule",
     payload: {
       branch: data.branch,
       action: data.action,
@@ -220,7 +230,11 @@ export const Trail = {
     actor:     "gitwire[bot]",
     actorType: "bot",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:heal",
     commitSha: data.commitSha,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:ci_heal",
     payload: {
       failure_type: data.failureType,
       root_cause:   data.rootCause,
@@ -239,6 +253,8 @@ export const Trail = {
     actor:     "gitwire[bot]",
     actorType: "bot",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:rollback",
     prNumber:  data.prNumber,
     payload: {
       trigger_reason: data.triggerReason,
@@ -257,6 +273,8 @@ export const Trail = {
     actor:     data.actor,
     actorType: "human",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:vulnerability_dismissed",
     payload: {
       package_name: data.packageName,
       ghsa_id:      data.ghsaId,
@@ -272,6 +290,8 @@ export const Trail = {
     actor:     "gitwire[bot]",
     actorType: "bot",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:quarantine",
     payload: {
       test_count: data.testCount,
       tests:      data.tests,
@@ -286,8 +306,12 @@ export const Trail = {
     actor:     "gitwire[bot]",
     actorType: "bot",
     repoFullName: data.repoFullName,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:review_gate",
     prNumber:  data.prNumber,
     commitSha: data.commitSha,
+    principalId: data.principalId ?? null,
+    surfaceId: data.surfaceId || "audit_trail:review_gate_block",
     payload: {
       verdict:  data.verdict,
       reason:   data.reason,
