@@ -851,7 +851,7 @@ async function insertProposalEvent(executor, {
  * at the database level — no state/version heuristics.
  */
 export async function createProposal(params = {}) {
-  const { repo, envelope, created_by = "system", actor_kind } = params;
+  const { repo, envelope, created_by = "system", actor_kind, principalId = null } = params;
 
   if (!repo) throw new Error("repo is required");
   if (!envelope) throw new Error("envelope is required");
@@ -919,7 +919,7 @@ export async function createProposal(params = {}) {
         fingerprint,
         JSON.stringify(envelope),
         created_by,
-        source.principalId || null, // Wave 2 dual-write
+        principalId, // Wave 2 dual-write
       ]
     );
 
@@ -949,7 +949,7 @@ export async function createProposal(params = {}) {
         toStatus: "detected",
         actor: created_by,
         evidenceSnapshot: buildEvidenceSnapshot({ envelope }),
-        principalId: source.principalId || null,
+        principalId: principalId,
         surfaceId: "repair_proposal_events:proposal_created",
       });
     }
