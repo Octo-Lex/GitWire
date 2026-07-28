@@ -1202,8 +1202,8 @@ export async function attachEvidence(id, evidence = {}, actor = "system", expect
     const snapshot = buildEvidenceSnapshot(Object.fromEntries(providedFields));
     await client.query(
       `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, principal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)`,
       [
         id,
         "evidence_attached",
@@ -1365,8 +1365,8 @@ export async function transitionProposal(id, params = {}) {
     // Record transition event in the SAME transaction (with correlation)
     await client.query(
       `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, reason, correlation_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (proposal_id, event_type, from_status, to_status, actor, reason, correlation_id, principal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)`,
       [
         id,
         "state_transition",
@@ -1508,8 +1508,8 @@ export async function recordCiEvidenceCollection(id, evidence = {}, options = {}
     const snapshot = buildEvidenceSnapshot({ evidence_refs: evidence.evidence_refs });
     await client.query(
       `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id, principal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
       [
         id,
         "ci_evidence_collected",
@@ -1920,8 +1920,8 @@ export async function recordPatchProposal(id, patchInput = {}, options = {}) {
     });
     await client.query(
       `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id, principal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
       [
         id,
         "patch_proposal_recorded",
@@ -2332,8 +2332,8 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
     });
     await client.query(
       `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id, principal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
       [
         id,
         "verification_result_recorded",
@@ -3279,8 +3279,8 @@ export async function recordCriticReview(id, reviewInput = {}, options = {}) {
     });
     await client.query(
       `INSERT INTO repair_proposal_events
-         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (proposal_id, event_type, from_status, to_status, actor, evidence_snapshot, correlation_id, source_delivery_id, principal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
       [
         id,
         "critic_review_recorded",

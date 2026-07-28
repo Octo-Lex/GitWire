@@ -170,7 +170,7 @@ async function triageIssue({ payload }) {
         pillar: "triage",
         actionType: "add-label",
         source: "ai_triage",
-        evidence: { issue_number: issue.number, labels: labelsToApply, classification },
+        evidence: { issue_number: issue.number, labels: labelsToApply, classification, principalId, surfaceId: "worker:triage" },
         repoId: repository.id,
         targetType: "issue",
         targetNumber: issue.number,
@@ -247,7 +247,7 @@ async function triageIssue({ payload }) {
       // Managed action via state machine
       const commentAction = await propose({
         repoFullName: repository.full_name, pillar: "triage", actionType: "add-comment",
-        source: "ai_triage", evidence: { summary: classification.triage_summary },
+        source: "ai_triage", evidence: { summary: classification.triage_summary, principalId, surfaceId: "worker:triage" },
         repoId: repository.id, targetType: "issue", targetNumber: issue.number,
         actionKey: "comment:triage:summary",
       });
@@ -398,7 +398,7 @@ async function triagePR({ payload }) {
     } else {
       const sizeAction = await propose({
         repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
-        source: "ai_triage", evidence: { size_label: classification.size_label, classification },
+        source: "ai_triage", evidence: { size_label: classification.size_label, classification, principalId, surfaceId: "worker:triage" },
         repoId: repository.id, targetType: "pr", targetNumber: pr.number,
         actionKey: "label:" + classification.size_label,
       });
