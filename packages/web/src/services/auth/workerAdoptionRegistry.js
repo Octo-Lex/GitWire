@@ -203,7 +203,7 @@ const WIRING = {
     principal_destination: "principalId passed to reviewPR",
   },
 
-  // ── Ingress (1 proven) ────────────────────────────────────────────────────
+  // ── Ingress (2 proven) ────────────────────────────────────────────────────
   "telegram:fix": {
     entry_module: "packages/bot/src/commands.js",
     exported_symbol: "registerCommands → bot.command('fix')",
@@ -214,9 +214,16 @@ const WIRING = {
     first_side_effect: "issueFixQueue.add (via /api/fix route)",
     principal_destination: "auth_decision_log.principal_id (via route observer)",
   },
-  // telegram:heal — declared but NOT wired. The bot command exists and targets
-  // POST /api/ci/:runId/heal (which exists), but no integration proof has been
-  // run. Do NOT count as wired without a passing proof.
+  "telegram:heal": {
+    entry_module: "packages/bot/src/commands.js",
+    exported_symbol: "registerCommands → bot.command('heal')",
+    adoption_location: "commands.js:451 (resolveInstallationId → POST /api/ci/:runId/heal)",
+    principal_origin: "API key from Redis → Bearer header → route observer resolves principal",
+    permission: "repository:github:act",
+    resource_origin: "resolveInstallationId (GET /api/repos/:owner/:repo → installation_id)",
+    first_side_effect: "ciHealQueue.add (via /api/ci/:runId/heal route)",
+    principal_destination: "auth_decision_log.principal_id (via route observer)",
+  },
   // webhook:github — the webhook HTTP route enqueues to worker:webhook, which
   // IS wired. But the ingress surface itself is a separate entry point.
 };
@@ -287,6 +294,7 @@ const PROVEN = {
   "worker:webhook":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
   "worker:sync":     { proof_command: "node packages/web/db/proof/run_sync_vertical_proof.mjs",     proof_checks: 25 },
   "telegram:fix":    { proof_command: "node packages/web/db/proof/run_telegram_bot_proof.mjs",      proof_checks: 15 },
+  "telegram:heal":   { proof_command: "node packages/web/db/proof/run_telegram_heal_proof.mjs",     proof_checks: 8 },
 };
 
 // ── Read-only accessors ────────────────────────────────────────────────────

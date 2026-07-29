@@ -62,12 +62,11 @@ describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
     // Every surface is declared
     expect(states.counts.declared).toBe(22);
     // Wired: only surfaces with adoptWorker at entry + structured metadata.
-    // Does NOT include telegram:heal (no proof) or scheduled:* (scheduler
-    // producers not adopted).
-    expect(states.counts.wired).toBeGreaterThanOrEqual(14); // 14 workers
-    expect(states.counts.wired).toBeLessThanOrEqual(15);    // + telegram:fix
+    // 14 workers + telegram:fix + telegram:heal = 16.
+    // Does NOT include scheduled:* (tracked separately) or webhook:github.
+    expect(states.counts.wired).toBe(16);
     // Proven: only surfaces with passing integration proofs
-    expect(states.counts.proven).toBe(4);
+    expect(states.counts.proven).toBe(5);
     // Proven ⊆ wired ⊆ declared (set invariant)
     for (const id of states.proven) {
       expect(states.wired).toContain(id);
@@ -104,10 +103,9 @@ describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
     }
   });
 
-  it("telegram:heal is declaredOnly (not wired) — no proof exists yet", () => {
-    expect(isWired("telegram:heal")).toBe(false);
-    const states = classifyAdoptionStates(NON_HTTP_IDS);
-    expect(states.declaredOnly).toContain("telegram:heal");
+  it("telegram:heal is wired and proven (POST /api/ci/:runId/heal exists + proof)", () => {
+    expect(isWired("telegram:heal")).toBe(true);
+    expect(isProven("telegram:heal")).toBe(true);
   });
 
   it("declared-but-not-wired surfaces are explicitly listed (not hidden)", () => {
@@ -125,6 +123,7 @@ describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
     expect(isProven("worker:webhook")).toBe(true);
     expect(isProven("worker:sync")).toBe(true);
     expect(isProven("telegram:fix")).toBe(true);
+    expect(isProven("telegram:heal")).toBe(true);
   });
 
   it("scheduler producers are tracked separately from worker consumers", () => {
