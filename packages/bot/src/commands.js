@@ -436,7 +436,7 @@ export function registerCommands(bot) {
     }
 
     const repoArg = parts[1];
-    const issueNumber = parts[2];
+    const runId = parts[2];
 
     try {
       const apiUrl = process.env.GITWIRE_API_URL || "http://gitwire-app:3000";
@@ -449,7 +449,7 @@ export function registerCommands(bot) {
         return ctx.reply("⚠️ Repository not found: <code>" + escHtml(repoArg) + "</code>", { parse_mode: "HTML" });
       }
       const res = await fetch(
-        apiUrl + "/api/fix/" + repoArg + "/issues/" + issueNumber + "?installation_id=" + installationId,
+        apiUrl + "/api/ci/" + runId + "/heal?installation_id=" + installationId,
         {
           method: "POST",
           headers: { Authorization: "Bearer " + apiKey },

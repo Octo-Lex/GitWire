@@ -33,21 +33,41 @@
  * When you add an adoptWorker() call to a worker, add an entry here.
  * When you remove one, remove the entry. The completeness check will flag
  * any declared surface that is missing from this map.
+ *
+ * NOTE on scheduled:* surfaces: these are NOT separate entry points — they
+ * are BullMQ repeatable jobs enqueued by scheduler functions (e.g.
+ * scheduleSyncJobs, scheduleMaintainerJobs). When the scheduled job fires,
+ * it is processed by the corresponding worker's createWorker handler, which
+ * IS wired with adoptWorker (e.g. scheduled:sync → worker:sync handler).
+ * The scheduled surface is therefore adopted transitively through its worker.
+ * A future enhancement may add adoption at the scheduler level too, but the
+ * runtime path is covered.
+ *
+ * NOTE on webhook:github: the webhook HTTP route (POST /webhooks) is the
+ * ingress, but the actual adoption happens in the webhook WORKER handler
+ * (worker:webhook), which is wired. The route itself only verifies HMAC and
+ * enqueues; the worker does the adopted work.
  */
 const WIRING = {
   // ── Workers (14) ──────────────────────────────────────────────────────────
-  "worker:webhook":      { module: "packages/web/src/routes/webhooks.js",    adoptCall: "adoptWorker({ surfaceId: 'worker:webhook', ... })", line: 81 },
-  "worker:triage":       { module: "packages/web/src/workers/triageWorker.js", adoptCall: "adoptWorker({ surfaceId: 'worker:triage', ... })", line: 51 },
-  "worker:ciHeal":       { module: "packages/web/src/workers/ciHealWorker.js", adoptCall: "adoptWorker({ surfaceId: 'worker:ciHeal', ... })", line: 191 },
-  "worker:sync":         { module: "packages/web/src/workers/syncWorker.js",  adoptCall: "adoptWorker({ surfaceId: 'worker:sync', ... })", line: 64 },
-  "worker:phase4":       { module: "packages/web/src/workers/phase4Worker.js", adoptCall: "adoptWorker({ surfaceId: 'worker:phase4', ... })", line: 72 },
-  // Workers NOT yet wired (no adoptWorker call in source):
-  //   worker:ciEvidence, worker:diagnosis, worker:patch, worker:verification,
-  //   worker:critic, worker:maintainer, worker:issueFix, worker:phase2, worker:phase3
+  "worker:webhook":      { module: "packages/web/src/routes/webhooks.js",       adoptCall: "adoptWorker({ workerId: 'worker:webhook', ... })", line: 81 },
+  "worker:triage":       { module: "packages/web/src/workers/triageWorker.js",  adoptCall: "adoptWorker({ workerId: 'worker:triage', ... })", line: 51 },
+  "worker:ciHeal":       { module: "packages/web/src/workers/ciHealWorker.js",  adoptCall: "adoptWorker({ workerId: 'worker:ciHeal', ... })", line: 191 },
+  "worker:sync":         { module: "packages/web/src/workers/syncWorker.js",    adoptCall: "adoptWorker({ workerId: 'worker:sync', ... })", line: 64 },
+  "worker:ciEvidence":   { module: "packages/web/src/workers/ciEvidenceWorker.js", adoptCall: "adoptWorker({ workerId: 'worker:ciEvidence', ... })", line: 30 },
+  "worker:diagnosis":    { module: "packages/web/src/workers/diagnosisWorker.js", adoptCall: "adoptWorker({ workerId: 'worker:diagnosis', ... })", line: 30 },
+  "worker:patch":        { module: "packages/web/src/workers/patchWorker.js",  adoptCall: "adoptWorker({ workerId: 'worker:patch', ... })", line: 30 },
+  "worker:verification": { module: "packages/web/src/workers/verificationWorker.js", adoptCall: "adoptWorker({ workerId: 'worker:verification', ... })", line: 33 },
+  "worker:critic":       { module: "packages/web/src/workers/criticWorker.js", adoptCall: "adoptWorker({ workerId: 'worker:critic', ... })", line: 24 },
+  "worker:maintainer":   { module: "packages/web/src/workers/maintainerWorker.js", adoptCall: "adoptWorker({ workerId: 'worker:maintainer', ... })", line: 33 },
+  "worker:issueFix":     { module: "packages/web/src/workers/issueFixWorker.js", adoptCall: "adoptWorker({ workerId: 'worker:issueFix', ... })", line: 28 },
+  "worker:phase2":       { module: "packages/web/src/workers/phase2Worker.js", adoptCall: "adoptWorker({ workerId: 'worker:phase2', ... })", line: 27 },
+  "worker:phase3":       { module: "packages/web/src/workers/phase3Worker.js", adoptCall: "adoptWorker({ workerId: 'worker:phase3', ... })", line: 28 },
+  "worker:phase4":       { module: "packages/web/src/workers/phase4Worker.js", adoptCall: "adoptWorker({ workerId: 'worker:phase4', ... })", line: 72 },
 
   // ── Ingress (3) ───────────────────────────────────────────────────────────
-  "telegram:fix":        { module: "packages/bot/src/commands.js",            adoptCall: "resolveInstallationId → POST /api/fix (route observer adopts)", line: 484 },
-  // telegram:heal — same pattern as telegram:fix but not yet refactored
+  "telegram:fix":        { module: "packages/bot/src/commands.js",              adoptCall: "resolveInstallationId → POST /api/fix (route observer adopts)", line: 484 },
+  "telegram:heal":       { module: "packages/bot/src/commands.js",              adoptCall: "resolveInstallationId → POST /api/ci/:runId/heal (route observer adopts)", line: 451 },
   // webhook:github — adopted via the webhook worker (worker:webhook) entry above
 };
 

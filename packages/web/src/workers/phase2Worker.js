@@ -10,6 +10,7 @@ import { evaluateRollback } from "../services/errorRecoveryService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { logger } from "../lib/logger.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 // ── Merge queue worker ────────────────────────────────────────────────────────
 export function startMergeQueueWorker() {
@@ -18,6 +19,18 @@ export function startMergeQueueWorker() {
     const repository  = payload.repository;
     const installation = payload.installation;
     if (!repository || !installation) return;
+
+    // Wave 2: resolve trusted installation principal from the webhook-verified
+    // installation.id. Adoption happens after the early-return guard so a
+    // malformed payload doesn't waste an adoption call.
+    const adoption = await adoptWorker({
+      workerId: "worker:phase2",
+      permission: "merge_queue_entry:update",
+      resourceType: "repository",
+      installationId: installation.id,
+      jobData: job.data,
+    });
+    const principalId = workerPrincipalId(adoption.context);
 
     const octokit = wrapOctokit(await getInstallationClient(installation.id));
 
