@@ -180,7 +180,7 @@ ciRouter.post("/:runId/heal", async (req, res, next) => {
       `SELECT cr.id, cr.github_run_id, r.owner, r.name, r.github_id as repo_github_id
        FROM ci_runs cr
        JOIN repositories r ON r.github_id = cr.repo_id
-       WHERE cr.id = `,
+       WHERE cr.id = $1`,
       [req.params.runId]
     );
 
