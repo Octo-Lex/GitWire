@@ -131,11 +131,11 @@ describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
     const states = classifyAdoptionStates(NON_HTTP_IDS);
     // All 5 scheduled surfaces have scheduler status entries
     expect(states.schedulerStatus.length).toBe(5);
-    // Currently NONE of the scheduler producers are wired
-    // (they enqueue without resolving a principal)
-    expect(states.counts.schedulersWired).toBe(0);
+    // All 5 scheduler producers are now wired (they resolve a system principal
+    // before enqueuing, separate from the worker consumer adoption)
+    expect(states.counts.schedulersWired).toBe(5);
     for (const s of states.schedulerStatus) {
-      expect(s.wired).toBe(false);
+      expect(s.wired).toBe(true);
       expect(s.note.length).toBeGreaterThan(0);
     }
   });
@@ -147,7 +147,9 @@ describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
       expect(sw).not.toBeNull();
       expect(sw.entry_module).toBeDefined();
       expect(sw.exported_symbol).toBeDefined();
-      expect(sw.status).toBe("declaredOnly");
+      expect(sw.adoption_location).toBeDefined();
+      expect(sw.principal_origin).toBeDefined();
+      expect(sw.status).toBe("wired");
     }
   });
 });

@@ -120,6 +120,16 @@ export function startPhase4Worker() {
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 export async function schedulePhase4Jobs() {
+  // Wave 2: the scheduler producer resolves a server-owned principal before
+  // enqueuing. The system:phase4-worker principal is the trusted identity
+  // for the scheduling decision.
+  await adoptWorker({
+    workerId: "scheduled:phase4",
+    permission: "ai_review:create",
+    resourceType: "fleet",
+    systemPrincipalName: "system:phase4-worker",
+  });
+
   // Nightly audit export at 01:00 UTC
   await phase4Queue.add(
     "nightly-audit-export",

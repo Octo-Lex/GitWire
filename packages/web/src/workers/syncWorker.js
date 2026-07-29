@@ -39,6 +39,17 @@ export function startSyncWorker() {
 // ── Schedule the repeating full-sync job ─────────────────────────────────────
 // Call this once at startup. BullMQ deduplicates repeatable jobs by key.
 export async function scheduleSyncJobs() {
+  // Wave 2: the scheduler producer resolves a server-owned principal before
+  // enqueuing. This attributes the scheduling decision itself (separate from
+  // the consumer worker's adoption). The system:scheduler principal is the
+  // trusted identity for all scheduled producers.
+  await adoptWorker({
+    workerId: "scheduled:sync",
+    permission: "installation:read",
+    resourceType: "fleet",
+    systemPrincipalName: "system:scheduler",
+  });
+
   const syncQueue = createQueue(QUEUES.SYNC);
 
   await syncQueue.add(

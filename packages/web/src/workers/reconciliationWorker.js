@@ -15,12 +15,23 @@ import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
+import { adoptWorker } from "../services/auth/workerAdoption.js";
 
 /**
  * Run reconciliation for all eligible actions.
  * Called periodically (every 6 hours) or via API trigger.
  */
 export async function runReconciliation() {
+  // Wave 2: the scheduled producer resolves a server-owned principal before
+  // doing any work. The system:reconciliation-worker principal is the trusted
+  // identity for the reconciliation scheduling decision.
+  await adoptWorker({
+    workerId: "scheduled:reconciliation",
+    permission: "installation:read",
+    resourceType: "fleet",
+    systemPrincipalName: "system:reconciliation-worker",
+  });
+
   logger.info("Reconciliation scan starting");
 
   // Phase 1: Stale actions cleanup

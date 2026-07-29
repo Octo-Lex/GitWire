@@ -139,6 +139,16 @@ export function startPhase3Worker() {
 
 // ── Scheduler: enqueue recurring Phase 3 jobs ─────────────────────────────────
 export async function schedulePhase3Jobs() {
+  // Wave 2: the scheduler producer resolves a server-owned principal before
+  // enqueuing. The system:phase3-worker principal is the trusted identity
+  // for the scheduling decision.
+  await adoptWorker({
+    workerId: "scheduled:phase3",
+    permission: "installation:read",
+    resourceType: "fleet",
+    systemPrincipalName: "system:phase3-worker",
+  });
+
   // Policy reconciliation: nightly at 02:00 UTC
   await phase3Queue.add("policy-reconcile-fleet", {}, {
     repeat: { cron: "0 2 * * *" }, jobId: "policy-reconcile-fleet-cron",

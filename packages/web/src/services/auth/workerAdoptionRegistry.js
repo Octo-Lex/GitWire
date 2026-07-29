@@ -240,37 +240,42 @@ const SCHEDULER_WIRING = {
   "scheduled:sync": {
     entry_module: "packages/web/src/workers/syncWorker.js",
     exported_symbol: "scheduleSyncJobs",
-    adoption_location: null, // NOT YET WIRED — scheduler enqueues without adoption
-    status: "declaredOnly",
-    note: "Scheduler producer enqueues directly. Consumer (worker:sync) is wired, but the scheduler itself does not resolve a principal before enqueueing.",
+    adoption_location: "syncWorker.js:48 (inside scheduleSyncJobs, before enqueue)",
+    principal_origin: "systemPrincipalName='system:scheduler'",
+    status: "wired",
+    note: "Scheduler producer resolves system:scheduler before enqueuing full-sync. Consumer (runFullSync) also adopts with the same principal.",
   },
   "scheduled:maintainer": {
     entry_module: "packages/web/src/workers/maintainerWorker.js",
     exported_symbol: "scheduleMaintainerJobs",
-    adoption_location: null, // NOT YET WIRED
-    status: "declaredOnly",
-    note: "Scheduler producer enqueues directly. Consumer (worker:maintainer) is wired.",
+    adoption_location: "maintainerWorker.js:407 (inside scheduleMaintainerJobs, before enqueue loop)",
+    principal_origin: "systemPrincipalName='system:maintainer-worker'",
+    status: "wired",
+    note: "Scheduler producer resolves system:maintainer-worker before enqueuing stale-scan and branch-cleanup. Consumer (worker:maintainer) also adopts.",
   },
   "scheduled:phase3": {
     entry_module: "packages/web/src/workers/phase3Worker.js",
     exported_symbol: "schedulePhase3Jobs",
-    adoption_location: null, // NOT YET WIRED
-    status: "declaredOnly",
-    note: "Scheduler producer enqueues directly. Consumer (worker:phase3) is wired.",
+    adoption_location: "phase3Worker.js:147 (inside schedulePhase3Jobs, before enqueue)",
+    principal_origin: "systemPrincipalName='system:phase3-worker'",
+    status: "wired",
+    note: "Scheduler producer resolves system:phase3-worker before enqueuing fleet reconciliation, dep scan, graduation. Consumer (worker:phase3) also adopts.",
   },
   "scheduled:phase4": {
     entry_module: "packages/web/src/workers/phase4Worker.js",
     exported_symbol: "schedulePhase4Jobs",
-    adoption_location: null, // NOT YET WIRED
-    status: "declaredOnly",
-    note: "Scheduler producer enqueues directly. Consumer (worker:phase4) is wired.",
+    adoption_location: "phase4Worker.js:128 (inside schedulePhase4Jobs, before enqueue)",
+    principal_origin: "systemPrincipalName='system:phase4-worker'",
+    status: "wired",
+    note: "Scheduler producer resolves system:phase4-worker before enqueuing nightly-audit-export. Consumer (worker:phase4) also adopts.",
   },
   "scheduled:reconciliation": {
     entry_module: "packages/web/src/workers/reconciliationWorker.js",
-    exported_symbol: "scheduleReconciliation",
-    adoption_location: null, // NOT YET WIRED
-    status: "declaredOnly",
-    note: "Scheduler producer enqueues directly. No consumer adoption proof yet.",
+    exported_symbol: "runReconciliation",
+    adoption_location: "reconciliationWorker.js:26 (inside runReconciliation, before scan)",
+    principal_origin: "systemPrincipalName='system:reconciliation-worker'",
+    status: "wired",
+    note: "Scheduled via setInterval (not BullMQ repeatable). Producer resolves system:reconciliation-worker before scanning.",
   },
 };
 

@@ -398,6 +398,16 @@ async function findRepo(fullName) {
 // ── Scheduled Jobs ────────────────────────────────────────────────────────────
 
 export async function scheduleMaintainerJobs() {
+  // Wave 2: the scheduler producer resolves a server-owned principal before
+  // enqueuing. The system:maintainer-worker principal is the trusted identity
+  // for the scheduling decision (separate from the consumer worker's adoption).
+  await adoptWorker({
+    workerId: "scheduled:maintainer",
+    permission: "repository:github:act",
+    resourceType: "fleet",
+    systemPrincipalName: "system:maintainer-worker",
+  });
+
   // Find all installed repos
   const { rows: repos } = await db.query(
     "SELECT r.github_id, r.full_name, r.installation_id FROM repositories r"
