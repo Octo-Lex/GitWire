@@ -62,11 +62,11 @@ describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
     // Every surface is declared
     expect(states.counts.declared).toBe(22);
     // Wired: only surfaces with adoptWorker at entry + structured metadata.
-    // 14 workers + telegram:fix + telegram:heal = 16.
-    // Does NOT include scheduled:* (tracked separately) or webhook:github.
-    expect(states.counts.wired).toBe(16);
+    // 14 workers + telegram:fix + telegram:heal + webhook:github = 17.
+    // Does NOT include scheduled:* (tracked separately).
+    expect(states.counts.wired).toBe(17);
     // Proven: only surfaces with passing integration proofs
-    expect(states.counts.proven).toBe(5);
+    expect(states.counts.proven).toBe(6);
     // Proven ⊆ wired ⊆ declared (set invariant)
     for (const id of states.proven) {
       expect(states.wired).toContain(id);
@@ -121,6 +121,7 @@ describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
   it("specific proven surfaces have known proof commands", () => {
     expect(isProven("worker:triage")).toBe(true);
     expect(isProven("worker:webhook")).toBe(true);
+    expect(isProven("webhook:github")).toBe(true);
     expect(isProven("worker:sync")).toBe(true);
     expect(isProven("telegram:fix")).toBe(true);
     expect(isProven("telegram:heal")).toBe(true);

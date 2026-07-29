@@ -224,8 +224,19 @@ const WIRING = {
     first_side_effect: "ciHealQueue.add (via /api/ci/:runId/heal route)",
     principal_destination: "auth_decision_log.principal_id (via route observer)",
   },
-  // webhook:github — the webhook HTTP route enqueues to worker:webhook, which
-  // IS wired. But the ingress surface itself is a separate entry point.
+  // webhook:github — the webhook HTTP route (POST /webhooks/github) is the
+  // ingress surface. It verifies HMAC, then calls adoptWorker before enqueuing.
+  // The webhook vertical proof covers this path end-to-end.
+  "webhook:github": {
+    entry_module: "packages/web/src/routes/webhooks.js",
+    exported_symbol: "webhookRouter POST /github",
+    adoption_location: "webhooks.js:81 (after HMAC verification, before enqueue)",
+    principal_origin: "installationId from HMAC-verified webhook payload.installation.id",
+    permission: "installation:read",
+    resource_origin: "resolveInstallationWorkerContext(installationId)",
+    first_side_effect: "triageQueue.add / ciHealQueue.add (via evaluateAndExecuteCustomRules)",
+    principal_destination: "job.data via webhookPrincipalId → downstream worker adoption",
+  },
 };
 
 /**
@@ -292,6 +303,7 @@ const SCHEDULER_WIRING = {
 const PROVEN = {
   "worker:triage":   { proof_command: "node packages/web/db/proof/run_triage_handler_pg_proof.mjs", proof_checks: 28 },
   "worker:webhook":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
+  "webhook:github":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36, note: "Same proof covers the ingress surface (HMAC POST /webhooks/github → adoptWorker)" },
   "worker:sync":     { proof_command: "node packages/web/db/proof/run_sync_vertical_proof.mjs",     proof_checks: 25 },
   "telegram:fix":    { proof_command: "node packages/web/db/proof/run_telegram_bot_proof.mjs",      proof_checks: 15 },
   "telegram:heal":   { proof_command: "node packages/web/db/proof/run_telegram_heal_proof.mjs",     proof_checks: 8 },
