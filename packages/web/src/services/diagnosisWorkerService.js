@@ -165,7 +165,7 @@ export function diagnoseFromEvidence(evidenceRefs) {
  * @returns {Promise<object>} updated proposal with diagnosis attached
  */
 export async function diagnoseProposal(proposalId, options = {}) {
-  const { correlation_id } = options;
+  const { correlation_id, principalId } = options;
 
   if (!proposalId) throw new Error("proposalId is required");
 
@@ -221,7 +221,8 @@ export async function diagnoseProposal(proposalId, options = {}) {
     ACTOR,
     proposal.version,
     correlation_id,
-    ACTOR_KINDS.DIAGNOSIS_WORKER
+    ACTOR_KINDS.DIAGNOSIS_WORKER,
+    principalId
   );
 
   logger.info(

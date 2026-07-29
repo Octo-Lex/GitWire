@@ -85,7 +85,7 @@ export function assessCriticInput(inputBundle) {
  * @returns {Promise<object>} updated proposal with critic_review
  */
 export async function reviewProposal(proposalId, options = {}) {
-  const { correlation_id, source_delivery_id } = options;
+  const { correlation_id, source_delivery_id, principalId } = options;
 
   if (!proposalId) throw new Error("proposalId is required");
 
@@ -147,6 +147,7 @@ export async function reviewProposal(proposalId, options = {}) {
       expected_version: proposal.version,
       correlation_id,
       source_delivery_id,
+      principalId,
     }
   );
 
