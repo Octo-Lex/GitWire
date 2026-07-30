@@ -62,15 +62,19 @@
  */
 const WIRING = {
   // ── Workers (14) ──────────────────────────────────────────────────────────
+  // NOTE: worker:webhook is the BullMQ consumer in webhookWorker.js that
+  // processes sync-installation and sync-repo jobs. It does NOT have an
+  // adoptWorker call — this is an explicit gap. The webhook HTTP ingress
+  // (webhook:github) is a SEPARATE surface that IS wired (see INGRESS below).
   "worker:webhook": {
-    entry_module: "packages/web/src/routes/webhooks.js",
-    exported_symbol: "webhookRouter POST /",
-    adoption_location: "webhooks.js:81",
-    principal_origin: "installationId from HMAC-verified webhook payload",
+    entry_module: "packages/web/src/workers/webhookWorker.js",
+    exported_symbol: "startWebhookWorker (handleInstallationSync, handleRepoSync)",
+    adoption_location: null, // NOT WIRED — no adoptWorker call in webhookWorker.js
+    principal_origin: null, // consumer does not resolve a principal
     permission: "installation:read",
-    resource_origin: "resolveRepositoryResource (DB lookup by installation + repo)",
-    first_side_effect: "triageQueue.add / ciHealQueue.add",
-    principal_destination: "job.data via webhookPrincipalId → downstream worker adoption",
+    resource_origin: null,
+    first_side_effect: "db.query (installations/repositories UPSERT)",
+    principal_destination: null, // no principalId threaded to db.query
   },
   "worker:triage": {
     entry_module: "packages/web/src/workers/triageWorker.js",
@@ -349,7 +353,6 @@ const ADOPTION_PROVEN = {
   "scheduled:reconciliation": { proof_command: "node packages/web/db/proof/run_scheduler_adoption_proof.mjs", proof_checks: 16 },
   // Integration-proven surfaces are also adoption-proven (stronger implies weaker)
   "worker:triage":    { proof_command: "node packages/web/db/proof/run_triage_handler_pg_proof.mjs", proof_checks: 28 },
-  "worker:webhook":   { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
   "webhook:github":   { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
   "worker:sync":      { proof_command: "node packages/web/db/proof/run_sync_vertical_proof.mjs",     proof_checks: 25 },
   "telegram:fix":     { proof_command: "node packages/web/db/proof/run_telegram_bot_proof.mjs",      proof_checks: 15 },
@@ -370,8 +373,7 @@ const ADOPTION_PROVEN = {
  */
 const INTEGRATION_PROVEN = {
   "worker:triage":   { proof_command: "node packages/web/db/proof/run_triage_handler_pg_proof.mjs", proof_checks: 28 },
-  "worker:webhook":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
-  "webhook:github":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36, note: "Shares the same proof as worker:webhook — see ambiguousMappings" },
+  "webhook:github":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
   "worker:sync":     { proof_command: "node packages/web/db/proof/run_sync_vertical_proof.mjs",     proof_checks: 25 },
   "telegram:fix":    { proof_command: "node packages/web/db/proof/run_telegram_bot_proof.mjs",      proof_checks: 15 },
   "telegram:heal":   { proof_command: "node packages/web/db/proof/run_telegram_heal_proof.mjs",     proof_checks: 8 },
@@ -398,9 +400,11 @@ export function getSchedulerWiring(surfaceId) {
 
 /**
  * Check if a surface is wired (has an adoptWorker call at entry).
+ * A surface in WIRING with adoption_location=null is declared but NOT wired.
  */
 export function isWired(surfaceId) {
-  return Object.prototype.hasOwnProperty.call(WIRING, surfaceId);
+  const w = WIRING[surfaceId];
+  return w != null && w.adoption_location != null;
 }
 
 /**

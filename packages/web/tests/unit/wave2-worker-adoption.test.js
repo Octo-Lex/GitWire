@@ -43,10 +43,12 @@ describe("Wave 2 — four-state adoption gate", () => {
     expect(states.counts.declared).toBe(22);
   });
 
-  it("wired count = declared count (all 22 have adoption)", () => {
-    // 14 workers (WIRING) + 5 schedulers (SCHEDULER_WIRING) + 3 ingress (WIRING)
-    expect(states.counts.wired).toBe(states.counts.declared);
-    expect(states.declaredOnly).toEqual([]);
+  it("wired count is 21/22 (worker:webhook consumer not wired)", () => {
+    // worker:webhook is the BullMQ consumer in webhookWorker.js — it does NOT
+    // have an adoptWorker call. The webhook:github HTTP ingress IS wired
+    // (webhooks.js:81). They are distinct boundaries.
+    expect(states.counts.wired).toBe(21);
+    expect(states.declaredOnly).toEqual(["worker:webhook"]);
   });
 
   it("adoption-proven count is derived from ADOPTION_PROVEN map", () => {
@@ -66,6 +68,30 @@ describe("Wave 2 — four-state adoption gate", () => {
   it("ciHeal and phase4 ARE adoption-proven (extended installation proof)", () => {
     expect(isAdoptionProven("worker:ciHeal")).toBe(true);
     expect(isAdoptionProven("worker:phase4")).toBe(true);
+  });
+
+  it("worker:webhook consumer is NOT wired (no adoptWorker in webhookWorker.js)", () => {
+    expect(isWired("worker:webhook")).toBe(false);
+    expect(states.declaredOnly).toContain("worker:webhook");
+  });
+
+  it("webhook:github ingress IS wired (adoptWorker at webhooks.js:81)", () => {
+    expect(isWired("webhook:github")).toBe(true);
+  });
+
+  it("webhook:github and worker:webhook are distinct boundaries (no ambiguity)", () => {
+    // After resolution: webhook:github = HTTP ingress (wired), worker:webhook =
+    // BullMQ consumer (not wired). Different modules, different symbols.
+    const githubRow = states.rows.find(r => r.surface_id === "webhook:github");
+    const workerRow = states.rows.find(r => r.surface_id === "worker:webhook");
+    expect(githubRow.module).not.toBe(workerRow.module);
+    expect(githubRow.wired).toBe(true);
+    expect(workerRow.wired).toBe(false);
+    // No more ambiguous mapping between these two
+    const webhookAmbiguity = states.ambiguousMappings.find(
+      (a) => a.surfaces.includes("worker:webhook") && a.surfaces.includes("webhook:github")
+    );
+    expect(webhookAmbiguity).toBeUndefined();
   });
 
   it("wired rows have complete per-surface metadata", () => {
@@ -108,28 +134,25 @@ describe("Wave 2 — four-state adoption gate", () => {
     }
   });
 
-  it("declaredOnly is empty (all surfaces wired)", () => {
-    expect(states.declaredOnly).toEqual([]);
+  it("declaredOnly contains only worker:webhook (consumer not wired)", () => {
+    expect(states.declaredOnly).toEqual(["worker:webhook"]);
   });
 
-  it("ambiguousMappings detects webhook double mapping", () => {
-    // worker:webhook and webhook:github share the same module + adoption location
-    const webhookAmbiguity = states.ambiguousMappings.find(
-      (a) => a.surfaces.includes("worker:webhook") && a.surfaces.includes("webhook:github")
-    );
-    expect(webhookAmbiguity).toBeDefined();
-    expect(webhookAmbiguity.surfaces).toContain("worker:webhook");
-    expect(webhookAmbiguity.surfaces).toContain("webhook:github");
-    expect(webhookAmbiguity.module).toBe("packages/web/src/routes/webhooks.js");
+  it("ambiguousMappings is empty (webhook double mapping resolved)", () => {
+    // worker:webhook and webhook:github were previously ambiguous (same module
+    // + adoption line). Now resolved: webhook:github = HTTP ingress (wired),
+    // worker:webhook = BullMQ consumer (not wired, different module).
+    expect(states.ambiguousMappings).toEqual([]);
   });
 
   it("specific integration-proven surfaces", () => {
     expect(isProven("worker:triage")).toBe(true);
-    expect(isProven("worker:webhook")).toBe(true);
     expect(isProven("webhook:github")).toBe(true);
     expect(isProven("worker:sync")).toBe(true);
     expect(isProven("telegram:fix")).toBe(true);
     expect(isProven("telegram:heal")).toBe(true);
+    // worker:webhook consumer is NOT integration-proven (not even wired)
+    expect(isProven("worker:webhook")).toBe(false);
   });
 });
 
