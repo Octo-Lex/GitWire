@@ -21,17 +21,20 @@ import { declareProtectedSurfaces } from "./protectedSurfaces.js";
 // Permission tokens follow '<resource_type>:<action>' (ADR-0002 vocabulary).
 const ROUTE_SURFACES = [
   // maintainer.js — highest-risk: real GitHub mutations (collaborators, branch protection)
-  { id: "route:POST:/api/maintainer/:owner/:repo/collaborators", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:DELETE:/api/maintainer/:owner/:repo/collaborators/:username", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:PUT:/api/maintainer/:owner/:repo/branches/:branch/protection", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/maintainer/:owner/:repo/comment", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  // Corrected to match actual route paths (investigation issue #94):
+  //   POST collaborators: MISSING handler — removed (no backing route exists)
+  //   DELETE collaborators: actual path is /collaborators/:owner/:repo/:login
+  //   PUT branch protection: actual path is /branch-rules/:owner/:repo/:pattern
+  //   POST comment: MISSING handler — removed (no backing route exists)
+  { id: "route:DELETE:/api/maintainer/collaborators/:owner/:repo/:login", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:PUT:/api/maintainer/branch-rules/:owner/:repo/:pattern", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
-  // config.js — privileged config changes (x-actor-login today)
+  // config.js — privileged config changes
+  // POST override: OBSOLETE — removed (covered by PUT /api/config/:owner/:repo)
   { id: "route:PUT:/api/config/:owner/:repo", kind: "route", permission: "repository:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/config/:owner/:repo/override", kind: "route", permission: "repository:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:POST:/api/config/:owner/:repo/restore/:historyId", kind: "route", permission: "repository:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
-  // rollouts.js — governed policy mutations (req.body.actor today)
+  // rollouts.js — governed policy mutations
   { id: "route:POST:/api/rollouts", kind: "route", permission: "policy_definition:create", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:POST:/api/rollouts/:id/transition", kind: "route", permission: "policy_rollout_plan:update", resourceType: "policy_rollout_plan", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:POST:/api/rollouts/:id/approve", kind: "route", permission: "policy_rollout_plan:approve", resourceType: "policy_rollout_plan", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
@@ -48,12 +51,18 @@ const ROUTE_SURFACES = [
   { id: "route:POST:/api/enforcement/run", kind: "route", permission: "repository:github:act", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
   // phase2/phase3/phase4 — installation-scoped automation mutations
-  { id: "route:POST:/api/phase2/:owner/:repo/admit", kind: "route", permission: "merge_queue_entry:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/phase3/run", kind: "route", permission: "installation:read", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/review/:owner/:repo/pr/:number", kind: "route", permission: "ai_review:create", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  // Corrected to match actual route paths:
+  //   phase2 admit: actual is /phase2/queue/:owner/:repo/:pr/admit
+  //   phase3 run: actual is /phase3/reconciler/run
+  //   review: actual is /review/trigger/:owner/:repo/:pr (phase4Router mounted at /api)
+  { id: "route:POST:/api/phase2/queue/:owner/:repo/:pr/admit", kind: "route", permission: "merge_queue_entry:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:POST:/api/phase3/reconciler/run", kind: "route", permission: "installation:read", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:POST:/api/review/trigger/:owner/:repo/:pr", kind: "route", permission: "ai_review:create", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
   // repos.js — sync enqueue
-  { id: "route:POST:/api/repos/reconcile", kind: "route", permission: "repository:update", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  // POST /api/repos/reconcile: MISSING handler — removed (GET exists at transfers.js,
+  // POST /merge and /discard exist, but bare POST /reconcile does not)
+  { id: "route:POST:/api/repos/:owner/:repo/sync", kind: "route", permission: "repository:update", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
   // gates.js — posts check runs
   { id: "route:POST:/api/gates/:owner/:repo/evaluate", kind: "route", permission: "quality_gate:evaluate", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
