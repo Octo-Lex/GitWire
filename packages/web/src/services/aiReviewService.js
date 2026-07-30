@@ -59,7 +59,7 @@ const DEFAULT_MODEL = "claude-sonnet-4-20250514";
  * @param {object} opts.octokit
  * @param {boolean} [opts.commentFindings=true]
  */
-export async function reviewPR({ pr, repository, octokit, commentFindings = true }) {
+export async function reviewPR({ pr, repository, octokit, commentFindings = true, principalId = null, surfaceId = null }) {
   const owner  = repository.owner.login;
   const repo   = repository.name;
   const repoId = repository.id;
@@ -367,6 +367,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       criticalFindings,
       tokensUsed,
       reviewId:         reviewRow.id,
+      principalId: principalId,
+      surfaceId: surfaceId || "audit_trail:ai_decision",
     });
 
     if (shouldBlock) {
@@ -377,6 +379,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         verdict,
         reason:       criticalFindings + " critical finding" + (criticalFindings !== 1 ? "s" : ""),
         findings:     findings.filter(function (f) { return f.severity === "critical"; }).map(function (f) { return f.title; }),
+        principalId: principalId,
+        surfaceId: surfaceId || "audit_trail:review_gate_block",
       });
     }
 

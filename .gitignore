@@ -59,6 +59,7 @@ benchmark-results-*.json
 # Disposable proof harness output (regenerated each run; contains ephemeral
 # container IDs/timestamps, never a committed artifact)
 packages/web/db/proof/proof-evidence.json
+packages/web/db/proof/wave2-proof-evidence.json
 packages/demo-dashboard/.next/
 packages/demo-dashboard/out/
 packages/demo-dashboard/node_modules/

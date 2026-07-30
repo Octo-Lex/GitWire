@@ -6,17 +6,32 @@ import { createWorker, QUEUES } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { getInstallationClient } from "../lib/github.js";
 import { logger } from "../lib/logger.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 export function startWebhookWorker() {
   return createWorker(QUEUES.WEBHOOK_EVENTS, async (job) => {
     const { eventName, payload } = job.data;
 
+    // Wave 2: resolve trusted installation principal from the webhook-verified
+    // payload. The installation.id was placed in the job data by the webhook
+    // ingress route after HMAC verification — it is trusted. Any principal/auth
+    // fields in the payload are non-authoritative metadata and ignored.
+    const adoption = await adoptWorker({
+      workerId: "worker:webhook",
+      permission: "installation:read",
+      resourceType: "installation",
+      installationId: payload?.installation?.id,
+      jobData: job.data,
+      legacyActor: payload?.sender?.login,
+    });
+    const principalId = workerPrincipalId(adoption.context);
+
     switch (job.name) {
       case "sync-installation":
-        await handleInstallationSync(payload);
+        await handleInstallationSync(payload, principalId);
         break;
       case "sync-repo":
-        await handleRepoSync(payload);
+        await handleRepoSync(payload, principalId);
         break;
       default:
         logger.debug({ event: eventName, jobName: job.name }, "Generic event logged");
@@ -25,7 +40,7 @@ export function startWebhookWorker() {
 }
 
 // ── Upsert installation record ───────────────────────────────────────────────
-async function handleInstallationSync(payload) {
+async function handleInstallationSync(payload, principalId) {
   const installation = payload.installation;
   if (!installation) return;
 
@@ -61,7 +76,7 @@ async function handleInstallationSync(payload) {
 }
 
 // ── Upsert repository record on push ────────────────────────────────────────
-async function handleRepoSync(payload) {
+async function handleRepoSync(payload, principalId) {
   const repo         = payload.repository;
   const installation = payload.installation;
   if (!repo || !installation) return;

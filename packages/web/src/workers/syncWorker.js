@@ -15,6 +15,7 @@ import { syncMembers, syncCollaborators, syncBranchRules } from "../services/mai
 import { backfillEmbeddings } from "../services/duplicateDetectionService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 // ── Start the worker ─────────────────────────────────────────────────────────
 export function startSyncWorker() {
@@ -38,6 +39,17 @@ export function startSyncWorker() {
 // ── Schedule the repeating full-sync job ─────────────────────────────────────
 // Call this once at startup. BullMQ deduplicates repeatable jobs by key.
 export async function scheduleSyncJobs() {
+  // Wave 2: the scheduler producer resolves a server-owned principal before
+  // enqueuing. This attributes the scheduling decision itself (separate from
+  // the consumer worker's adoption). The system:scheduler principal is the
+  // trusted identity for all scheduled producers.
+  await adoptWorker({
+    workerId: "scheduled:sync",
+    permission: "installation:read",
+    resourceType: "fleet",
+    systemPrincipalName: "system:scheduler",
+  });
+
   const syncQueue = createQueue(QUEUES.SYNC);
 
   await syncQueue.add(
@@ -57,7 +69,15 @@ export async function scheduleSyncJobs() {
 }
 
 // ── Full sync: walk every installation ───────────────────────────────────────
-async function runFullSync() {
+// Exported for Wave 2 integration testing (issue #94).
+export async function runFullSync() {
+  // Wave 2: resolve trusted system principal for the scheduled full-sync.
+  await adoptWorker({
+    workerId: "scheduled:sync",
+    permission: "installation:read",
+    resourceType: "fleet",
+    systemPrincipalName: "system:scheduler",
+  });
   logger.info("Starting full sync across all installations");
   const start = Date.now();
   let repoCount = 0;

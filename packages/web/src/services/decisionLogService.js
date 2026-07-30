@@ -11,6 +11,7 @@
 
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { validateAttribution } from "./auth/attributionGuard.js";
 
 /**
  * Record a decision made by a GitWire worker.
@@ -36,13 +37,25 @@ export async function logDecision({
   pillar, decision, reason,
   conditions, configUsed, commitSha,
   actor,
+  principalId = null, // Wave 2 dual-write: server-derived principal UUID
+  surfaceId = null,   // Wave 2: attribution surface id
 }) {
+  // Wave 2: centralized attribution guard.
+  const attribution = await validateAttribution({
+    principalId,
+    surfaceId: surfaceId || `decision_log:${source}`,
+    writer: "decisionLogService.logDecision",
+    tableName: "decision_log",
+    operation: "insert",
+    legacyActor: actor,
+  });
+
   try {
     const { rows: [row] } = await db.query(
       "INSERT INTO decision_log " +
       "  (repo_id, source, trigger_event, target_type, target_number, " +
-      "   pillar, decision, reason, conditions, config_used, commit_sha, actor) " +
-      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) " +
+      "   pillar, decision, reason, conditions, config_used, commit_sha, actor, principal_id) " +
+      "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) " +
       "RETURNING *",
       [
         repoId, source, triggerEvent,
@@ -52,6 +65,7 @@ export async function logDecision({
         configUsed ? JSON.stringify(configUsed) : null,
         commitSha ?? null,
         actor || "gitwire[bot]",
+        principalId, // Wave 2: server-derived principal (null if unknown)
       ]
     );
 
@@ -60,7 +74,8 @@ export async function logDecision({
       "Decision logged"
     );
 
-    return row;
+    // Wave 2: expose attribution result for observability.
+    return { ...row, attribution: { principalId, gapEvidence: attribution.gapResult ?? null } };
   } catch (err) {
     // Decision log failure must never break the calling flow
     logger.error({ err: err.message, source, decision }, "Decision log write failed (non-fatal)");

@@ -22,6 +22,7 @@ import { isWaived } from "../services/waiverService.js";
 import { Trail } from "../services/auditTrailService.js";
 import { notifyCIFailure } from "../services/telegramNotifyService.js";
 import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 import { extractReviewJSON } from "@gitwire/rules/reviewSchema";
 import { redis } from "../lib/queue.js";
 
@@ -138,6 +139,17 @@ async function reconcilePR({ payload }) {
   const { repository, pull_request, installation } = payload;
   if (!pull_request || !installation) return;
 
+  // Wave 2: resolve trusted principal before any domain write.
+  const adoption = await adoptWorker({
+    workerId: "worker:ciHeal",
+    permission: "repository:github:act",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { payload },
+    legacyActor: pull_request.user?.login,
+  });
+  const principalId = workerPrincipalId(adoption.context);
+
   const octokit = wrapOctokit(await getInstallationClient(installation.id));
   const owner = repository.owner.login;
   const repo = repository.name;
@@ -186,6 +198,17 @@ async function healWorkflowRun({ payload }) {
   const { workflow_run: run, repository, installation } = payload;
   if (!run || !installation) return;
 
+  // Wave 2: resolve trusted installation principal.
+  const adoption = await adoptWorker({
+    workerId: "worker:ciHeal",
+    permission: "repository:github:act",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { payload },
+    legacyActor: run.head_commit?.author?.username,
+  });
+  const principalId = workerPrincipalId(adoption.context);
+
   const octokit = wrapOctokit(await getInstallationClient(installation.id));
   const owner   = repository.owner.login;
   const repo    = repository.name;
@@ -220,6 +243,7 @@ async function healWorkflowRun({ payload }) {
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "blocked", reason: "Circuit breaker open on branch " + branch + " (" + cbFailures + " consecutive failures)",
+      principalId,
       conditions: [{ check: "circuit_breaker", result: "open", failures: cbFailures, branch }],
     });
     return;
@@ -238,6 +262,7 @@ async function healWorkflowRun({ payload }) {
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "skipped", reason: "Pillar ci_healing disabled in config",
+      principalId,
       conditions: [{ check: "pillar_enabled(ci_healing)", result: false }],
     });
     return;
@@ -254,6 +279,7 @@ async function healWorkflowRun({ payload }) {
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "blocked", reason: "Heal cooldown active for branch " + branch + " (24h after " + maxAttempts + " attempts)",
+    principalId,
       conditions: [{ check: "heal_cooldown", result: true, branch }],
     });
     return;
@@ -266,6 +292,7 @@ async function healWorkflowRun({ payload }) {
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "blocked", reason: "Heal attempt limit for branch " + branch + " (" + recentAttempts + "/" + maxAttempts + " in 24h) — cooldown activated",
+    principalId,
       conditions: [{ check: "max_fix_attempts", result: false, recent: recentAttempts, max: maxAttempts, branch }],
     });
     return;
@@ -278,6 +305,7 @@ async function healWorkflowRun({ payload }) {
       repoId: repository.id, source: "ci_heal", triggerEvent: "workflow_run.completed",
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "skipped", reason: "Trigger filter: branch/author not matched",
+  principalId,
       conditions: [{ check: "trigger_filter(ci_healing)", result: false, branch: run.head_branch }],
     });
     return;
@@ -292,6 +320,7 @@ async function healWorkflowRun({ payload }) {
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "skipped",
       reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
+principalId,
       conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
     });
     return;
@@ -314,6 +343,7 @@ async function healWorkflowRun({ payload }) {
       decision: "skipped", reason: "Could not retrieve CI run logs",
       conditions: [{ check: "logs_available", result: false }],
       commitSha: run.head_sha,
+    principalId,
     });
     return;
   }
@@ -340,6 +370,7 @@ async function healWorkflowRun({ payload }) {
       decision: "blocked", reason: "Failure signature dedup: already attempted fix for " + diagnosis.failure_type + " in " + (diagnosis.source_file || diagnosis.failing_file || "unknown"),
       conditions: [{ check: "failure_signature_dedup", result: true, failure_type: diagnosis.failure_type, failing_file: diagnosis.source_file || diagnosis.failing_file }],
       commitSha: run.head_sha,
+  principalId,
     });
     return;
   }
@@ -374,11 +405,12 @@ async function healWorkflowRun({ payload }) {
         ],
         configUsed: { min_confidence: minConf, risk_level: risk.level },
         commitSha: run.head_sha,
+  principalId,
       });
       return;
     }
 
-    await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation);
+    await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation, principalId);
     // Reset circuit breaker on successful heal (per-branch)
     await updateCircuitBreaker(repository.full_name, branch, true);
   } else {
@@ -395,7 +427,7 @@ async function healWorkflowRun({ payload }) {
 
 // ── Attempt automated heal via patch PR ───────────────────────────────────────
 
-async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation) {
+async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation, principalId) {
   // Flaky test: just re-run
   if (diagnosis.failure_type === "test_flaky" && diagnosis.confidence !== "low") {
     await healByRerun(octokit, owner, repo, run, diagnosis, repoConfig);
@@ -424,7 +456,7 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repositor
       });
       return;
     }
-    await healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation);
+    await healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation, principalId);
   } else {
     // No file identified — fall back to comment-only
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
@@ -476,7 +508,7 @@ async function healByRerun(octokit, owner, repo, run, diagnosis, repoConfig) {
 
 // ── Heal strategy: create a patch PR with the fix ─────────────────────────────
 
-async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation) {
+async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation, principalId) {
   const repoFullName = repository.full_name;
 
   // ── Duplicate patch-PR guard (loop prevention) ─────────────────────────
@@ -542,6 +574,8 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     actionKey: patchActionKey,
     source: "ai_heal",
     evidence: {
+      principalId,
+      surfaceId: "worker:ciHeal",
       run_id: run.id,
       failure_type: diagnosis.failure_type,
       failing_file: diagnosis.failing_file,
@@ -713,7 +747,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       for (const lbl of ["ci-heal", diagnosis.failure_type]) {
         const labelAction = await propose({
           repoFullName: repository.full_name, pillar: "ci_healing", actionType: "add-label",
-          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha },
+          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, principalId, surfaceId: "worker:ciHeal" },
           repoId: repository.id, targetType: "pr", targetNumber: pr.number,
           actionKey: "label:" + lbl,
         });
@@ -738,7 +772,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
         // Managed action via state machine
         const revAction = await propose({
           repoFullName: repository.full_name, pillar: "ci_healing", actionType: "add-reviewer",
-          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha },
+          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, principalId, surfaceId: "worker:ciHeal" },
           repoId: repository.id, targetType: "pr", targetNumber: pr.number,
           actionKey: "reviewer:" + lastCommitter,
         });
@@ -788,7 +822,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     // Managed action via state machine: record the heal PR creation
     const healAction = await propose({
       repoFullName: repository.full_name, pillar: "ci_healing", actionType: "create-branch",
-      source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, failureType: diagnosis.failure_type },
+      source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, failureType: diagnosis.failure_type, principalId, surfaceId: "worker:ciHeal" },
       repoId: repository.id, targetType: "pr", targetNumber: pr.number,
       actionKey: "heal_pr",
     });
@@ -806,6 +840,8 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       prNumber: pr.number,
       commitSha: run.head_sha,
       confidence: diagnosis.confidence,
+      principalId,
+      surfaceId: "worker:ciHeal",
       evidence: {
         decision: "acted",
         reason: "CI heal patch PR created",
@@ -1078,6 +1114,17 @@ export function scoreFixQuality(originalContent, fixedContent, diagnosis) {
 // Feature 3: If a heal PR has been open > STALE_PR_DAYS with no activity, auto-close it.
 async function checkHealPRStatus({ repository, installation }) {
   if (!repository || !installation) return;
+
+  // Wave 2: resolve trusted principal before any domain write.
+  const adoption = await adoptWorker({
+    workerId: "worker:ciHeal",
+    permission: "repository:github:act",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { repository, installation },
+  });
+  const principalId = workerPrincipalId(adoption.context);
+
   const octokit = wrapOctokit(await getInstallationClient(installation.id));
   const owner = repository.owner.login;
   const repo = repository.name;

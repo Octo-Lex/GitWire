@@ -5,6 +5,11 @@ await jest.unstable_mockModule('../../src/lib/db.js', () => ({ db: { query: mock
 await jest.unstable_mockModule('../../src/lib/logger.js', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(), child: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }) },
 }));
+// Mock the attribution guard so the existing audit trail tests don't need
+// to account for the guard's gap-evidence INSERT.
+await jest.unstable_mockModule('../../src/services/auth/attributionGuard.js', () => ({
+  validateAttribution: jest.fn().mockResolvedValue({ attributed: false }),
+}));
 const { appendEntry, verifyChain, generateReport } = await import('../../src/services/auditTrailService.js');
 
 describe('auditTrailService', () => {
@@ -15,7 +20,9 @@ describe('auditTrailService', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 1 }] });
       await appendEntry({ eventType: 'ai_decision', actor: 'ai', repoId: 5, payload: { verdict: 'approved' }, complianceTags: ['SOC2'], repoFullName: 'o/r' });
       expect(mockQuery).toHaveBeenCalled();
-      expect(mockQuery.mock.calls[0][0]).toContain('audit_trail_entries');
+      // The attribution guard fires first; the audit_trail INSERT is the last query.
+      const auditInsert = mockQuery.mock.calls.find(([sql]) => sql && sql.includes('audit_trail_entries'));
+      expect(auditInsert).toBeTruthy();
     });
     test('handles DB error gracefully (returns null)', async () => {
       mockQuery.mockRejectedValueOnce(new Error('down'));

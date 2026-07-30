@@ -14,12 +14,25 @@ import { collectForFailedRun } from "../services/ciEvidenceCollectorService.js";
 import { logger } from "../lib/logger.js";
 
 import { diagnosisQueue } from "../lib/queue.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 export function startCIEvidenceWorker() {
   const worker = createWorker(
     "ci-evidence",
     async (job) => {
       const { installationId, repoFullName, runId, headSha, workflowPath, action, conclusion, deliveryId } = job.data;
+
+      // Wave 2: resolve trusted installation principal. The installationId
+      // in job data is trusted because the webhook ingress verified the HMAC
+      // signature before enqueuing the ci-evidence job.
+      const adoption = await adoptWorker({
+        workerId: "worker:ciEvidence",
+        permission: "ci_run:read",
+        resourceType: "repository",
+        installationId,
+        jobData: job.data,
+      });
+      const principalId = workerPrincipalId(adoption.context);
 
       logger.info({ jobId: job.id, runId, repoFullName, deliveryId }, "Processing CI evidence collection job");
 
@@ -46,7 +59,7 @@ export function startCIEvidenceWorker() {
       const octokit = wrapOctokit(rawOctokit);
 
       // Run the full collection pipeline
-      const proposal = await collectForFailedRun(octokit, payload, deliveryId);
+      const proposal = await collectForFailedRun(octokit, payload, deliveryId, { principalId });
 
       logger.info(
         { jobId: job.id, proposalId: proposal.id, runId },

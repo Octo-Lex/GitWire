@@ -17,6 +17,7 @@ import { createWorker } from "../lib/queue.js";
 import { verificationQueue } from "../lib/queue.js";
 import { generatePatchForProposal } from "../services/patchWorkerService.js";
 import { logger } from "../lib/logger.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 export function startPatchWorker() {
   const worker = createWorker(
@@ -24,10 +25,22 @@ export function startPatchWorker() {
     async (job) => {
       const { proposalId, correlationId } = job.data;
 
+      // Wave 2: resolve trusted system principal for the patch worker.
+      // Pure system worker — no installation context, no GitHub mutation.
+      const adoption = await adoptWorker({
+        workerId: "worker:patch",
+        permission: "patch_artifact:create",
+        resourceType: "repository",
+        systemPrincipalName: "system:patch-worker",
+        jobData: job.data,
+      });
+      const principalId = workerPrincipalId(adoption.context);
+
       logger.info({ jobId: job.id, proposalId, correlationId }, "Processing patch generation job");
 
       const proposal = await generatePatchForProposal(proposalId, {
         correlation_id: correlationId,
+        principalId,
       });
 
       logger.info(

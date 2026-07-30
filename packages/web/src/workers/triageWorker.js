@@ -18,6 +18,7 @@ import { checkAndMark } from "../services/idempotencyService.js";
 import { isWaived } from "../services/waiverService.js";
 import { notifyTriage } from "../services/telegramNotifyService.js";
 import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 const anthropic = new Anthropic({ 
   apiKey: config.anthropic.apiKey,
@@ -37,10 +38,25 @@ export function startTriageWorker() {
   });
 }
 
+// Exported for Wave 2 integration testing (issue #94).
+export { triageIssue, triagePR };
+
 // ── Issue triage ─────────────────────────────────────────────────────────────
 async function triageIssue({ payload }) {
   const { issue, repository, installation } = payload;
   if (!issue || !installation) return;
+
+  // Wave 2: resolve trusted installation principal from the webhook-verified
+  // installation.id. The sender login from the payload is non-authoritative.
+  const adoption = await adoptWorker({
+    workerId: "worker:triage",
+    permission: "issue:update",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { payload },
+    legacyActor: issue.user?.login,
+  });
+  const principalId = workerPrincipalId(adoption.context);
 
   logger.info({ repo: repository?.full_name, issue: issue.number }, "Triaging issue");
 
@@ -58,6 +74,7 @@ async function triageIssue({ payload }) {
       targetType: "issue", targetNumber: issue.number, pillar: "triage",
       decision: "skipped", reason: "Pillar triage disabled in config",
       conditions: [{ check: "pillar_enabled(triage)", result: false }],
+      principalId,
     });
     return;
   }
@@ -70,6 +87,7 @@ async function triageIssue({ payload }) {
       targetType: "issue", targetNumber: issue.number, pillar: "triage",
       decision: "skipped", reason: "Trigger filter: author ignored",
       conditions: [{ check: "trigger_filter(triage)", result: false, author: issue.user?.login }],
+      principalId,
     });
     return;
   }
@@ -84,6 +102,7 @@ async function triageIssue({ payload }) {
       decision: "skipped",
       reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
       conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
+      principalId,
     });
     return;
   }
@@ -151,7 +170,7 @@ async function triageIssue({ payload }) {
         pillar: "triage",
         actionType: "add-label",
         source: "ai_triage",
-        evidence: { issue_number: issue.number, labels: labelsToApply, classification },
+        evidence: { issue_number: issue.number, labels: labelsToApply, classification, principalId, surfaceId: "worker:triage" },
         repoId: repository.id,
         targetType: "issue",
         targetNumber: issue.number,
@@ -211,6 +230,7 @@ async function triageIssue({ payload }) {
       { check: "labels_match_repo(" + labelsToApply.length + ")", result: labelsToApply.length > 0 },
     ],
     configUsed: { auto_label: triageOpts.auto_label !== false },
+    principalId,
   });
 
   // ── Post triage comment if needed ─────────────────────────────────────────
@@ -227,7 +247,7 @@ async function triageIssue({ payload }) {
       // Managed action via state machine
       const commentAction = await propose({
         repoFullName: repository.full_name, pillar: "triage", actionType: "add-comment",
-        source: "ai_triage", evidence: { summary: classification.triage_summary },
+        source: "ai_triage", evidence: { summary: classification.triage_summary, principalId, surfaceId: "worker:triage" },
         repoId: repository.id, targetType: "issue", targetNumber: issue.number,
         actionKey: "comment:triage:summary",
       });
@@ -274,6 +294,17 @@ async function triagePR({ payload }) {
   const { pull_request: pr, repository, installation } = payload;
   if (!pr || !installation) return;
 
+  // Wave 2: resolve trusted installation principal.
+  const adoption = await adoptWorker({
+    workerId: "worker:triage",
+    permission: "issue:update",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { payload },
+    legacyActor: pr.user?.login,
+  });
+  const principalId = workerPrincipalId(adoption.context);
+
   logger.info({ repo: repository.full_name, pr: pr.number }, "Triaging PR");
 
   // Guard 1: Idempotency
@@ -290,6 +321,7 @@ async function triagePR({ payload }) {
       targetType: "pr", targetNumber: pr.number, pillar: "triage",
       decision: "skipped", reason: "Pillar triage disabled in config",
       conditions: [{ check: "pillar_enabled(triage)", result: false }],
+      principalId,
     });
     return;
   }
@@ -302,6 +334,7 @@ async function triagePR({ payload }) {
       targetType: "pr", targetNumber: pr.number, pillar: "triage",
       decision: "skipped", reason: "Trigger filter: author/branch not matched",
       conditions: [{ check: "trigger_filter(triage)", result: false }],
+      principalId,
     });
     return;
   }
@@ -316,6 +349,7 @@ async function triagePR({ payload }) {
       decision: "skipped",
       reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
       conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
+      principalId,
     });
     return;
   }
@@ -364,7 +398,7 @@ async function triagePR({ payload }) {
     } else {
       const sizeAction = await propose({
         repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
-        source: "ai_triage", evidence: { size_label: classification.size_label, classification },
+        source: "ai_triage", evidence: { size_label: classification.size_label, classification, principalId, surfaceId: "worker:triage" },
         repoId: repository.id, targetType: "pr", targetNumber: pr.number,
         actionKey: "label:" + classification.size_label,
       });
@@ -398,6 +432,7 @@ async function triagePR({ payload }) {
       { check: "is_dry_run()", result: isDryRun(repoConfig) },
     ],
     configUsed: { auto_label: triageOpts.auto_label !== false },
+    principalId,
   });
 
   notifyTriage(repository.full_name, {

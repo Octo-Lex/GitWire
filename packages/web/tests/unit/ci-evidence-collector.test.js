@@ -400,9 +400,9 @@ describe("CI Evidence Collector — source delivery identity", () => {
     expect(section[1]).toMatch(/source_delivery_id/);
   });
 
-  it("collection event INSERT includes source_delivery_id", () => {
+  it("collection event routes through insertProposalEvent", () => {
     const section = repairService.split("export async function recordCiEvidenceCollection");
-    expect(section[1]).toMatch(/source_delivery_id\)/);
+    expect(section[1]).toMatch(/insertProposalEvent/);
   });
 
   it("collector passes deliveryId as source_delivery_id", () => {

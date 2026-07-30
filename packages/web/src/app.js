@@ -35,7 +35,10 @@ import { auditBundlesRouter } from "./routes/auditBundles.js";
 import { rolloutRouter }        from "./routes/rollouts.js";
 import setupRouter               from "./routes/setup.js";
 import repairsRouter              from "./routes/repairs.js";
+import bootstrapRouter            from "./routes/bootstrap.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
+import { authContext }          from "./middleware/authContext.js";
+import { routeAuthObserver }    from "./middleware/routeAuthObserver.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
 import { getDeploymentInfo } from "./lib/deploymentInfo.js";
@@ -81,8 +84,26 @@ export function createApp() {
   // ── Auth routes (no API key required) ─────────────────────────────────────
   app.use("/api/auth", authRouter);
 
+  // ── Bootstrap endpoint (anonymous; the bootstrap path IS the first admin)
+  // Wave 2 / issue #94. Enforces its own security contract immediately
+  // (bootstrap-state gate + derived-hash + atomic creation). Mounted BEFORE
+  // apiKeyAuth so it is reachable when no admin/principal exists yet.
+  app.use("/api/bootstrap", bootstrapRouter);
+
   // ── API key authentication ─────────────────────────────────────────────────
   app.use(apiKeyAuth);
+
+  // ── Wave 2 principal hydration (observe-only) ────────────────────────────
+  // Resolves a server-owned principal onto req.auth for every request. Observe-
+  // only in Wave 2: does NOT globally block legacy-authorized paths; records
+  // structured decisions + disagreements to auth_decision_log. Enforcement is
+  // a later wave.
+  app.use(authContext);
+
+  // ── Wave 2 route-level observe-only observer ─────────────────────────────
+  // Records observe-only decisions for mutation routes not already explicitly
+  // adopted (maintainer/config/rollouts set req._wave2Observed and skip this).
+  app.use(routeAuthObserver);
 
   // ── Routes ────────────────────────────────────────────────────────────────
   app.get("/health", async (_req, res) => {

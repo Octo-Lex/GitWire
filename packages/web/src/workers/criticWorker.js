@@ -14,6 +14,7 @@
 import { createWorker } from "../lib/queue.js";
 import { reviewProposal } from "../services/criticWorkerService.js";
 import { logger } from "../lib/logger.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 export function startCriticWorker() {
   const worker = createWorker(
@@ -21,10 +22,24 @@ export function startCriticWorker() {
     async (job) => {
       const { proposalId, correlationId } = job.data;
 
+      // Wave 2: resolve trusted system principal for the critic worker.
+      // This is a pure system worker — no installation context, no GitHub
+      // mutation. The principal is resolved from the server-side constant
+      // 'system:critic-worker', not from job payload.
+      const adoption = await adoptWorker({
+        workerId: "worker:critic",
+        permission: "ai_review:create",
+        resourceType: "repository",
+        systemPrincipalName: "system:critic-worker",
+        jobData: job.data,
+      });
+      const principalId = workerPrincipalId(adoption.context);
+
       logger.info({ jobId: job.id, proposalId, correlationId }, "Processing critic review job");
 
       const proposal = await reviewProposal(proposalId, {
         correlation_id: correlationId,
+        principalId,
       });
 
       logger.info(

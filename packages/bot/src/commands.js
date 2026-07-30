@@ -3,6 +3,7 @@
 
 import {
   requireAuth,
+  resolveInstallationId,
   fmtNum,
   fmtPct,
   trunc,
@@ -439,8 +440,16 @@ export function registerCommands(bot) {
 
     try {
       const apiUrl = process.env.GITWIRE_API_URL || "http://gitwire-app:3000";
+      // Trusted resource lookup: resolve installation_id from server state
+      // (GET /api/repos/:owner/:repo), NOT from Telegram metadata. The
+      // Telegram user is authenticated only to obtain the API key; the
+      // installation binding is server-owned.
+      const installationId = await resolveInstallationId(repoArg, apiUrl, apiKey);
+      if (!installationId) {
+        return ctx.reply("⚠️ Repository not found: <code>" + escHtml(repoArg) + "</code>", { parse_mode: "HTML" });
+      }
       const res = await fetch(
-        apiUrl + "/api/ci/" + runId + "/heal",
+        apiUrl + "/api/ci/" + runId + "/heal?installation_id=" + installationId,
         {
           method: "POST",
           headers: { Authorization: "Bearer " + apiKey },
@@ -483,8 +492,17 @@ export function registerCommands(bot) {
 
     try {
       const apiUrl = process.env.GITWIRE_API_URL || "http://gitwire-app:3000";
+
+      // Wave 2: resolve installation_id from trusted server state.
+      // Not from chat text, username, or any Telegram metadata.
+      const { resolveInstallationId } = await import("./auth.js");
+      const installationId = await resolveInstallationId(repoArg, apiUrl, apiKey);
+      if (!installationId) {
+        return ctx.reply("❌ Repository not found: " + escHtml(repoArg));
+      }
+
       const res = await fetch(
-        apiUrl + "/api/fix/" + repoArg + "/issues/" + issueNumber,
+        apiUrl + "/api/fix/" + repoArg + "/issues/" + issueNumber + "?installation_id=" + installationId,
         {
           method: "POST",
           headers: { Authorization: "Bearer " + apiKey },

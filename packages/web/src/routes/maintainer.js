@@ -31,6 +31,7 @@ import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
 import { logger } from "../lib/logger.js";
+import { observeAuthorize, authoritativePrincipalId } from "../services/auth/observeAdopt.js";
 
 export const maintainerRouter = Router();
 maintainerRouter.use(paginationMiddleware);
@@ -246,6 +247,14 @@ maintainerRouter.put("/collaborators/:owner/:repo/:login", async (req, res, next
     const ctx = await getRepoAndOctokit(owner, repo);
     if (!ctx) return res.status(404).json({ error: "Repository not found" });
 
+    // Wave 2: observe-only authorization decision (records but does not block).
+    // The legacy actor string is retained as compatibility metadata only.
+    await observeAuthorize(req, {
+      permission: "repository:github:act",
+      resource: { type: "repository", installationId: ctx.repo.installation_id, repositoryId: ctx.repo.github_id, organization: owner, repository: repo },
+      legacyActor: actor,
+    });
+
     const { rows: [old] } = await db.query(
       "SELECT permission FROM repo_collaborators WHERE repo_id = $1 AND github_login = $2",
       [ctx.repo.github_id, login]
@@ -275,6 +284,13 @@ maintainerRouter.delete("/collaborators/:owner/:repo/:login", async (req, res, n
 
     const ctx = await getRepoAndOctokit(owner, repo);
     if (!ctx) return res.status(404).json({ error: "Repository not found" });
+
+    // Wave 2: observe-only authorization decision.
+    await observeAuthorize(req, {
+      permission: "repository:github:act",
+      resource: { type: "repository", installationId: ctx.repo.installation_id, repositoryId: ctx.repo.github_id, organization: owner, repository: repo },
+      legacyActor: actor,
+    });
 
     await ctx.octokit.request('DELETE /repos/{owner}/{repo}/collaborators/{username}', { owner, repo, username: login });
 
@@ -360,6 +376,13 @@ maintainerRouter.put("/branch-rules/:owner/:repo/:pattern", async (req, res, nex
 
     const ctx = await getRepoAndOctokit(owner, repo);
     if (!ctx) return res.status(404).json({ error: "Repository not found" });
+
+    // Wave 2: observe-only authorization decision.
+    await observeAuthorize(req, {
+      permission: "repository:github:act",
+      resource: { type: "repository", installationId: ctx.repo.installation_id, repositoryId: ctx.repo.github_id, organization: owner, repository: repo },
+      legacyActor: actor,
+    });
 
     const ghPayload = {
       owner, repo, branch: pattern,

@@ -23,12 +23,26 @@ import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 export function startVerificationWorker() {
   const worker = createWorker(
     "verification",
     async (job) => {
       const { proposalId, correlationId } = job.data;
+
+      // Wave 2: resolve trusted system principal for the verification worker.
+      // System worker — the octokit acquired below is read-only source snapshot
+      // acquisition, not for identity. The principal is the server-side constant
+      // 'system:verification-worker'.
+      const adoption = await adoptWorker({
+        workerId: "worker:verification",
+        permission: "execution_receipt:read",
+        resourceType: "repository",
+        systemPrincipalName: "system:verification-worker",
+        jobData: job.data,
+      });
+      const principalId = workerPrincipalId(adoption.context);
 
       logger.info({ jobId: job.id, proposalId, correlationId }, "Processing verification job");
 
@@ -62,6 +76,7 @@ export function startVerificationWorker() {
       const proposal = await verifyProposal(proposalId, {
         correlation_id: correlationId,
         octokit,
+        principalId,
       });
 
       logger.info(

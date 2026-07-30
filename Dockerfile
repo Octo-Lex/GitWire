@@ -43,7 +43,9 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 # The app command itself stays in CMD below; the entrypoint only prepends
 # the migration step and then execs the supplied command.
 COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Normalize line endings to LF (Windows checkouts produce CRLF which breaks
+# Alpine's /bin/sh — "env: can't execute 'sh': No such file or directory")
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
 ENTRYPOINT ["docker-entrypoint.sh"]
 
 # Run the web package server

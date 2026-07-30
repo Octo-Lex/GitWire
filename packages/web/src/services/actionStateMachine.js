@@ -11,6 +11,7 @@
 
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { validateAttribution } from "./auth/attributionGuard.js";
 
 // ── Typed blocked reasons ───────────────────────────────────────────────────
 // "blocked" means a deterministic guard deliberately prevented execution.
@@ -67,6 +68,16 @@ export async function propose({
   parentActionId = null, repoId = null, targetType = null, targetNumber = null,
   actionKey = null,
 }) {
+  // Wave 2: centralized attribution guard.
+  const attribution = await validateAttribution({
+    principalId: evidence?.principalId ?? null,
+    surfaceId: evidence?.surfaceId || `managed_actions:propose:${pillar}:${actionType}`,
+    writer: "actionStateMachine.propose",
+    tableName: "managed_actions",
+    operation: "insert",
+    legacyActor: source,
+  });
+
   // Dedup: deactivate previous active actions with the same key
   if (actionKey && repoId) {
     await db.query(
@@ -80,13 +91,14 @@ export async function propose({
   const result = await db.query(
     `INSERT INTO managed_actions
       (repo_full_name, pillar, action_type, action_key, source, status, proposed_at, evidence,
-       parent_action_id, repo_id, target_type, target_number, retries, max_retries)
-     VALUES ($1, $2, $3, $10, $4, 'proposed', NOW(), $5, $6, $7, $8, $9, 0, 3)
+       parent_action_id, repo_id, target_type, target_number, retries, max_retries, principal_id)
+     VALUES ($1, $2, $3, $10, $4, 'proposed', NOW(), $5, $6, $7, $8, $9, 0, 3, $11)
      RETURNING *`,
     [
       repoFullName, pillar, actionType, source,
       JSON.stringify(evidence), parentActionId, repoId, targetType, targetNumber,
       actionKey,
+      evidence?.principalId || null, // Wave 2 dual-write
     ]
   );
 
@@ -95,7 +107,8 @@ export async function propose({
     { actionId: action.id, repo: repoFullName, pillar, actionType, source },
     "Action proposed"
   );
-  return action;
+  // Wave 2: expose attribution result for observability.
+  return { ...action, attribution: { principalId: evidence?.principalId ?? null, gapEvidence: attribution.gapResult ?? null } };
 }
 
 /**

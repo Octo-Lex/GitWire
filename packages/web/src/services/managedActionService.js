@@ -17,6 +17,7 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import crypto from "crypto";
+import { validateAttribution } from "./auth/attributionGuard.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Record a managed action
@@ -44,11 +45,25 @@ export async function recordAction({
   prNumber, issueNumber,
   actionType, actionKey, actionValue,
   githubId, context,
+  principalId = null,
 }) {
   logger.warn(
     { source, actionType, actionKey, repoId, prNumber },
     "DEPRECATED: recordAction() called — migrate to actionStateMachine.propose()"
   );
+
+  // Wave 2: centralized attribution guard — records a gap event if
+  // principalId is null, before the INSERT reaches managed_actions.
+  // No executor is passed — we're not in a transaction, so the gap recorder
+  // uses its own db connection (with no savepoint).
+  await validateAttribution({
+    principalId,
+    surfaceId: "managedActionService.recordAction",
+    writer: "managedActionService.recordAction",
+    tableName: "managed_actions",
+    operation: "insert",
+  });
+
   const contextHash = context ? hashContext(context) : null;
 
   // Deactivate any previous active action with the same key for dedup
@@ -62,14 +77,15 @@ export async function recordAction({
   const { rows: [row] } = await db.query(
     "INSERT INTO managed_actions " +
     "  (repo_id, source, source_id, pr_number, issue_number, " +
-    "   action_type, action_key, action_value, github_id, context_hash) " +
-    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) " +
+    "   action_type, action_key, action_value, github_id, context_hash, principal_id) " +
+    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) " +
     "RETURNING *",
     [
       repoId, source, sourceId ?? null,
       prNumber ?? null, issueNumber ?? null,
       actionType, actionKey, actionValue ?? null,
       githubId ?? null, contextHash,
+      principalId,
     ]
   );
 

@@ -6,6 +6,7 @@
 
 import { Router } from "express";
 import { logger } from "../lib/logger.js";
+import { observeAuthorize, authoritativePrincipalId } from "../services/auth/observeAdopt.js";
 import {
   createRolloutPlan,
   getRolloutPlan,
@@ -38,6 +39,15 @@ rolloutRouter.post("/", async (req, res) => {
     if (!created_by || typeof created_by !== "string") {
       return res.status(400).json({ error: "created_by is required (GitHub username)" });
     }
+
+    // Wave 2: observe-only authorization decision. The principal_id from
+    // req.auth is authoritative; created_by is compatibility metadata.
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_definition:create",
+      resource: { type: "policy_definition" },
+      legacyActor: created_by,
+    });
 
     const plan = await createRolloutPlan({ repo, proposed_config, created_by });
     res.status(201).json(plan);
@@ -142,6 +152,13 @@ rolloutRouter.post("/:id/transition", async (req, res) => {
       return res.status(400).json({ error: "status is required" });
     }
 
+    // Wave 2: observe-only authorization decision.
+    await observeAuthorize(req, {
+      permission: "policy_rollout_plan:update",
+      resource: { type: "policy_rollout_plan", resourceId: String(id) },
+      legacyActor: actor,
+    });
+
     const plan = await transitionRolloutPlan(id, { status, actor, review_notes });
     res.json(plan);
   } catch (err) {
@@ -177,6 +194,13 @@ rolloutRouter.post("/:id/approve", async (req, res) => {
     if (!actor || typeof actor !== "string") {
       return res.status(400).json({ error: "actor is required (GitHub username)" });
     }
+
+    // Wave 2: observe-only authorization decision.
+    await observeAuthorize(req, {
+      permission: "policy_rollout_plan:approve",
+      resource: { type: "policy_rollout_plan", resourceId: String(id) },
+      legacyActor: actor,
+    });
 
     const plan = await approveRolloutPlan(id, {
       actor,
@@ -214,6 +238,13 @@ rolloutRouter.post("/:id/reject", async (req, res) => {
     if (!actor || typeof actor !== "string") {
       return res.status(400).json({ error: "actor is required (GitHub username)" });
     }
+
+    // Wave 2: observe-only authorization decision.
+    await observeAuthorize(req, {
+      permission: "policy_rollout_plan:approve",
+      resource: { type: "policy_rollout_plan", resourceId: String(id) },
+      legacyActor: actor,
+    });
 
     const plan = await rejectRolloutPlan(id, { actor, reason });
 
@@ -253,6 +284,13 @@ rolloutRouter.post("/:id/promote", async (req, res) => {
     if (!actor || typeof actor !== "string") {
       return res.status(400).json({ error: "actor is required (GitHub username)" });
     }
+
+    // Wave 2: observe-only authorization decision.
+    await observeAuthorize(req, {
+      permission: "policy_rollout_plan:approve",
+      resource: { type: "policy_rollout_plan", resourceId: String(id) },
+      legacyActor: actor,
+    });
 
     const plan = await promoteRolloutPlan(id, { actor, reason });
 
@@ -297,6 +335,13 @@ rolloutRouter.post("/:id/rollback", async (req, res) => {
     if (!reason || typeof reason !== "string") {
       return res.status(400).json({ error: "reason is required for rollback" });
     }
+
+    // Wave 2: observe-only authorization decision.
+    await observeAuthorize(req, {
+      permission: "policy_rollout_plan:approve",
+      resource: { type: "policy_rollout_plan", resourceId: String(id) },
+      legacyActor: actor,
+    });
 
     const plan = await rollbackRolloutPlan(id, { actor, reason });
 

@@ -302,7 +302,7 @@ export async function generateCandidatePatch(bundle) {
  * @returns {Promise<object>} updated proposal with patch_proposal
  */
 export async function generatePatchForProposal(proposalId, options = {}) {
-  const { correlation_id, source_delivery_id } = options;
+  const { correlation_id, source_delivery_id, principalId } = options;
 
   if (!proposalId) throw new Error("proposalId is required");
 
@@ -385,6 +385,7 @@ export async function generatePatchForProposal(proposalId, options = {}) {
       expected_version: proposal.version,
       correlation_id,
       source_delivery_id,
+      principalId,
     }
   );
 

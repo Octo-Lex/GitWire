@@ -6,6 +6,7 @@ import { createWorker, createQueue } from "../lib/queue.js";
 import { getInstallationClient }     from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { reviewPR }      from "../services/aiReviewService.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
@@ -66,11 +67,25 @@ export function startPhase4Worker() {
         }
         const octokit = wrapOctokit(await getInstallationClient(installation.id));
         const reviewOpts = repoConfig.pillars?.ai_review || {};
+
+        // Wave 2: resolve trusted installation principal.
+        const ph4Adoption = await adoptWorker({
+          workerId: "worker:phase4",
+          permission: "ai_review:create",
+          resourceType: "repository",
+          installationId: installation.id,
+          jobData: { payload: job.data },
+          legacyActor: pr.user?.login,
+        });
+        const ph4PrincipalId = workerPrincipalId(ph4Adoption.context);
+
         const result = await reviewPR({
           pr,
           repository: { ...repository, id: repository.id },
           octokit,
           commentFindings: reviewOpts.comment_findings !== false,
+          principalId: ph4PrincipalId,
+          surfaceId: "audit_trail:ai_decision",
         });
 
         // Finalize the top-level "GitWire" check run (created in webhook route)
@@ -105,6 +120,16 @@ export function startPhase4Worker() {
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 export async function schedulePhase4Jobs() {
+  // Wave 2: the scheduler producer resolves a server-owned principal before
+  // enqueuing. The system:phase4-worker principal is the trusted identity
+  // for the scheduling decision.
+  await adoptWorker({
+    workerId: "scheduled:phase4",
+    permission: "ai_review:create",
+    resourceType: "fleet",
+    systemPrincipalName: "system:phase4-worker",
+  });
+
   // Nightly audit export at 01:00 UTC
   await phase4Queue.add(
     "nightly-audit-export",

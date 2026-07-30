@@ -14,6 +14,7 @@ import { isPillarEnabled, getStaleConfig, isStaleExempt, isDryRun } from "@gitwi
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { dispatchCommand } from "./maintainer/commands.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 const DEFAULT_STALE_ISSUE_DAYS = 60;
 const DEFAULT_STALE_PR_DAYS = 30;
@@ -22,15 +23,28 @@ const GITWIRE_BRANCH_PREFIX = "gitwire/heal-";
 
 export function startMaintainerWorker() {
   return createWorker(QUEUES.MAINTAINER, async (job) => {
+    // Wave 2: resolve trusted installation principal. All maintainer job
+    // types (stale-scan, branch-cleanup, comment-command) carry
+    // installationId in their job data, set by the scheduler from the
+    // trusted repositories table.
+    const adoption = await adoptWorker({
+      workerId: "worker:maintainer",
+      permission: "repository:github:act",
+      resourceType: "repository",
+      installationId: job.data?.installationId,
+      jobData: job.data,
+    });
+    const principalId = workerPrincipalId(adoption.context);
+
     switch (job.name) {
       case "stale-scan":
-        await runStaleScan(job.data);
+        await runStaleScan(job.data, principalId);
         break;
       case "branch-cleanup":
-        await runBranchCleanup(job.data);
+        await runBranchCleanup(job.data, principalId);
         break;
       case "comment-command":
-        await runCommentCommand(job.data);
+        await runCommentCommand(job.data, principalId);
         break;
     }
   });
@@ -38,7 +52,7 @@ export function startMaintainerWorker() {
 
 // ── Stale Issue/PR Scanner ────────────────────────────────────────────────────
 
-async function runStaleScan({ installationId, repoFullName }) {
+async function runStaleScan({ installationId, repoFullName }, principalId) {
   logger.info({ repo: repoFullName }, "Stale scan started");
 
   const octokit = wrapOctokit(await getInstallationClient(installationId));
@@ -244,7 +258,7 @@ async function closeStaleItem(octokit, owner, repo, type, number, staleDays, rep
 
 // ── Merged Branch Cleanup ─────────────────────────────────────────────────────
 
-async function runBranchCleanup({ installationId, repoFullName }) {
+async function runBranchCleanup({ installationId, repoFullName }, principalId) {
   logger.info({ repo: repoFullName }, "Branch cleanup started");
 
   const octokit = wrapOctokit(await getInstallationClient(installationId));
@@ -351,7 +365,7 @@ async function runBranchCleanup({ installationId, repoFullName }) {
 
 // ── Comment Command Handler ──────────────────────────────────────────────────
 
-async function runCommentCommand(data) {
+async function runCommentCommand(data, principalId) {
   const { installationId, repoFullName, issueNumber } = data;
   logger.info({ action: data.action, repo: repoFullName, author: data.authorLogin }, "Processing comment command");
 
@@ -384,6 +398,16 @@ async function findRepo(fullName) {
 // ── Scheduled Jobs ────────────────────────────────────────────────────────────
 
 export async function scheduleMaintainerJobs() {
+  // Wave 2: the scheduler producer resolves a server-owned principal before
+  // enqueuing. The system:maintainer-worker principal is the trusted identity
+  // for the scheduling decision (separate from the consumer worker's adoption).
+  await adoptWorker({
+    workerId: "scheduled:maintainer",
+    permission: "repository:github:act",
+    resourceType: "fleet",
+    systemPrincipalName: "system:maintainer-worker",
+  });
+
   // Find all installed repos
   const { rows: repos } = await db.query(
     "SELECT r.github_id, r.full_name, r.installation_id FROM repositories r"

@@ -405,7 +405,8 @@ export async function collectEvidenceRefs(octokit, params) {
  * @param {string} [deliveryId] - Webhook delivery ID for dedup
  * @returns {Promise<object>} updated proposal
  */
-export async function collectForFailedRun(octokit, payload, deliveryId) {
+export async function collectForFailedRun(octokit, payload, deliveryId, options = {}) {
+  const { principalId } = options;
   // ── 1. Validate eligibility ──────────────────────────────────────────────
   const eligibility = checkEligibility(payload);
   if (!eligibility.eligible) {
@@ -424,6 +425,7 @@ export async function collectForFailedRun(octokit, payload, deliveryId) {
     envelope,
     created_by: ACTOR,
     actor_kind: ACTOR,
+    principalId,
   });
 
   logger.info({ proposal_id: proposal.id, repo: repoFullName, runId: run.id }, "Proposal for CI failure");
@@ -462,6 +464,7 @@ export async function collectForFailedRun(octokit, payload, deliveryId) {
       expected_version: proposal.version,
       correlation_id,
       source_delivery_id: deliveryId,
+      principalId,
     }
   );
 

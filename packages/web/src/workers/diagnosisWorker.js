@@ -16,6 +16,7 @@ import { getConfigForRepo } from "../services/configService.js";
 import { getProposal } from "../services/repairProposalService.js";
 import { patchQueue } from "../lib/queue.js";
 import { logger } from "../lib/logger.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 export function startDiagnosisWorker() {
   const worker = createWorker(
@@ -23,10 +24,22 @@ export function startDiagnosisWorker() {
     async (job) => {
       const { proposalId, correlationId } = job.data;
 
+      // Wave 2: resolve trusted system principal for the diagnosis worker.
+      // Pure system worker — no installation context, no GitHub mutation.
+      const adoption = await adoptWorker({
+        workerId: "worker:diagnosis",
+        permission: "repair_proposal:read",
+        resourceType: "repository",
+        systemPrincipalName: "system:diagnosis-worker",
+        jobData: job.data,
+      });
+      const principalId = workerPrincipalId(adoption.context);
+
       logger.info({ jobId: job.id, proposalId, correlationId }, "Processing diagnosis job");
 
       const proposal = await diagnoseProposal(proposalId, {
         correlation_id: correlationId,
+        principalId,
       });
 
       logger.info(

@@ -66,6 +66,7 @@ export async function verifyProposal(proposalId, options = {}) {
     octokit,
     sourceFiles: injectedSourceFiles,
     source_snapshot_hash: injectedSnapshotHash,
+    principalId,
   } = options;
 
   if (!proposalId) throw new Error("proposalId is required");
@@ -212,6 +213,7 @@ export async function verifyProposal(proposalId, options = {}) {
       expected_version: proposal.version,
       correlation_id,
       source_delivery_id,
+      principalId,
     }
   );
 

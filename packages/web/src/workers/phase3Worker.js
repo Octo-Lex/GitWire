@@ -12,10 +12,29 @@ import { getConfigForRepo } from "../services/configService.js";
 import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { logger } from "../lib/logger.js";
 import { db }     from "../lib/db.js";
+import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 
 // ── Worker ────────────────────────────────────────────────────────────────────
 export function startPhase3Worker() {
   return createWorker("phase3", async (job) => {
+    // Wave 2: resolve trusted principal. Phase3 has mixed job types:
+    //   - installation-scoped (ingest-test-results, dependency-scan-repo)
+    //     → use installationId from job data when available
+    //   - fleet-wide (graduation-check, policy-reconcile-fleet,
+    //     dependency-scan-fleet) → system principal
+    // Adoption uses the system principal as the base; installation-scoped
+    // jobs additionally carry the installationId for resource resolution.
+    const jobInstId = job.data?.installation?.id || job.data?.installationId;
+    const adoption = await adoptWorker({
+      workerId: "worker:phase3",
+      permission: "installation:read",
+      resourceType: "installation",
+      systemPrincipalName: "system:phase3-worker",
+      installationId: jobInstId,
+      jobData: job.data,
+    });
+    const principalId = workerPrincipalId(adoption.context);
+
     switch (job.name) {
 
       case "ingest-test-results": {
@@ -120,6 +139,16 @@ export function startPhase3Worker() {
 
 // ── Scheduler: enqueue recurring Phase 3 jobs ─────────────────────────────────
 export async function schedulePhase3Jobs() {
+  // Wave 2: the scheduler producer resolves a server-owned principal before
+  // enqueuing. The system:phase3-worker principal is the trusted identity
+  // for the scheduling decision.
+  await adoptWorker({
+    workerId: "scheduled:phase3",
+    permission: "installation:read",
+    resourceType: "fleet",
+    systemPrincipalName: "system:phase3-worker",
+  });
+
   // Policy reconciliation: nightly at 02:00 UTC
   await phase3Queue.add("policy-reconcile-fleet", {}, {
     repeat: { cron: "0 2 * * *" }, jobId: "policy-reconcile-fleet-cron",

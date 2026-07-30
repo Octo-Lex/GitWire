@@ -16,6 +16,7 @@ import { diffPolicyImpact } from "../services/policyDiffService.js";
 import { recommendGuardrails } from "../services/policyRecommendationService.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { observeAuthorize } from "../services/auth/observeAdopt.js";
 
 export const configRouter = Router();
 
@@ -70,9 +71,9 @@ configRouter.put("/:owner/:repo", async (req, res) => {
     return res.status(400).json({ error: "Invalid config", details: validation.errors });
   }
 
-  // Verify repo exists
+  // Verify repo exists + resolve installation_id for authorization scope
   const { rows } = await db.query(
-    "SELECT github_id FROM repositories WHERE full_name = $1",
+    "SELECT github_id, installation_id FROM repositories WHERE full_name = $1",
     [fullName]
   );
   if (!rows.length) {
@@ -81,6 +82,12 @@ configRouter.put("/:owner/:repo", async (req, res) => {
 
   try {
     const actor = req.headers["x-actor-login"] || "dashboard";
+    // Wave 2: observe-only authorization decision.
+    await observeAuthorize(req, {
+      permission: "repository:update",
+      resource: { type: "repository", installationId: rows[0].installation_id, repositoryId: rows[0].github_id, organization: owner, repository: repo },
+      legacyActor: actor,
+    });
     await setConfigOverrides(fullName, overrides, actor, "set");
 
     // Return the newly resolved config
@@ -121,6 +128,15 @@ configRouter.patch("/:owner/:repo", async (req, res) => {
     }
 
     const actor = req.headers["x-actor-login"] || "dashboard";
+    // Wave 2: observe-only authorization decision.
+    const repoRows = await db.query("SELECT github_id, installation_id FROM repositories WHERE full_name = $1", [fullName]);
+    if (repoRows.rows.length) {
+      await observeAuthorize(req, {
+        permission: "repository:update",
+        resource: { type: "repository", installationId: repoRows.rows[0].installation_id, repositoryId: repoRows.rows[0].github_id, organization: owner, repository: repo },
+        legacyActor: actor,
+      });
+    }
     await setConfigOverrides(fullName, merged, actor, "patch");
 
     const config = await getConfigForRepo(fullName);
@@ -143,6 +159,15 @@ configRouter.delete("/:owner/:repo", async (req, res) => {
 
   try {
     const actor = req.headers["x-actor-login"] || "dashboard";
+    // Wave 2: observe-only authorization decision.
+    const repoRows = await db.query("SELECT github_id, installation_id FROM repositories WHERE full_name = $1", [fullName]);
+    if (repoRows.rows.length) {
+      await observeAuthorize(req, {
+        permission: "repository:update",
+        resource: { type: "repository", installationId: repoRows.rows[0].installation_id, repositoryId: repoRows.rows[0].github_id, organization: owner, repository: repo },
+        legacyActor: actor,
+      });
+    }
     await deleteConfigOverrides(fullName, actor);
     const config = await getConfigForRepo(fullName);
 
@@ -179,6 +204,15 @@ configRouter.post("/:owner/:repo/restore/:historyId", async (req, res) => {
 
   try {
     const actor = req.headers["x-actor-login"] || "dashboard";
+    // Wave 2: observe-only authorization decision.
+    const repoRows = await db.query("SELECT github_id, installation_id FROM repositories WHERE full_name = $1", [fullName]);
+    if (repoRows.rows.length) {
+      await observeAuthorize(req, {
+        permission: "repository:update",
+        resource: { type: "repository", installationId: repoRows.rows[0].installation_id, repositoryId: repoRows.rows[0].github_id, organization: owner, repository: repo },
+        legacyActor: actor,
+      });
+    }
     const config = await restoreConfigVersion(fullName, parseInt(historyId), actor);
     res.json({ ok: true, config, message: `Restored from version ${historyId}` });
   } catch (err) {
