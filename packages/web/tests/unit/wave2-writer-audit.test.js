@@ -23,8 +23,8 @@ const SRC_ROOT = path.join(__dirname, "..", "..", "src");
 const AUDIT = {
   decision_log: [
     // authorize.js — internal auth layer; principalId from authorize decision
-    { file: "services/auth/authorize.js", line: 133, func: "authorize (allow path)", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
-    { file: "services/auth/authorize.js", line: 157, func: "denyAndLog", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
+    { file: "services/auth/authorize.js", line: 131, func: "authorize (allow path)", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
+    { file: "services/auth/authorize.js", line: 152, func: "denyAndLog", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
     // observeAdopt.js — auth layer; principal from req.auth
     { file: "services/auth/observeAdopt.js", line: 52, func: "observeAuthorize", principalIdExpr: "decision.principalId", contextSource: "req.auth", legacyActor: "legacyActor param", classification: "http_auth_context" },
     // customRulesService.js — worker context (webhook handler passes webhookPrincipalId)
@@ -83,8 +83,6 @@ const AUDIT = {
   ],
 };
 
-// ── Verification helpers ────────────────────────────────────────────────────
-
 function readSrcFile(relPath) {
   const abs = path.join(SRC_ROOT, relPath);
   if (!fs.existsSync(abs)) return null;
@@ -103,8 +101,6 @@ function findCallSites(sourceFile, pattern) {
   return matches;
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────
-
 describe("Wave 2 — executable writer-call-site audit", () => {
   const tables = Object.keys(AUDIT);
 
@@ -115,7 +111,6 @@ describe("Wave 2 — executable writer-call-site audit", () => {
           const src = readSrcFile(entry.file);
           expect(src).not.toBeNull();
           const lines = src.split("\n");
-          // Line numbers may shift slightly; verify the pattern exists near the expected line.
           const nearby = lines.slice(Math.max(0, entry.line - 3), entry.line + 3).join("\n");
           const searchPattern =
             table === "decision_log" ? "logDecision(" :
@@ -155,19 +150,23 @@ describe("Wave 2 — executable writer-call-site audit", () => {
       ).length;
       const gaps = AUDIT[table].filter(e => e.classification === "explicit_compatibility_gap").length;
       console.log(`  ${table}: adopted ${adopted} / total ${total}; gaps ${gaps}`);
-      expect(total).toBe(adopted + gaps); // every caller is classified
+      expect(total).toBe(adopted + gaps);
     }
   });
 
   it("forged legacy actor metadata cannot affect principalId (structural assertion)", () => {
-    // For every adopted caller, the principalId expression is independent of
-    // the legacy actor expression. The legacy actor is compatibility metadata only.
     const adopted = tables.flatMap(t =>
-      AUDIT[t].filter(e => e.classification === "worker_auth_context" || e.classification === "http_auth_context")
+      AUDIT[t].filter(e => e.classification !== "explicit_compatibility_gap")
     );
     for (const entry of adopted) {
-      // The principalId must NOT reference the legacy actor expression.
       expect(entry.principalIdExpr).not.toBe(entry.legacyActor);
     }
+  });
+
+  it("all 42 discovered call sites are attributed with zero gaps", () => {
+    const total = tables.reduce((n, t) => n + AUDIT[t].length, 0);
+    const gaps = tables.reduce((n, t) => n + AUDIT[t].filter(e => e.classification === "explicit_compatibility_gap").length, 0);
+    expect(total).toBe(42);
+    expect(gaps).toBe(0);
   });
 });
