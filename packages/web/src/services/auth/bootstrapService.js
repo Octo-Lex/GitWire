@@ -51,6 +51,14 @@ export async function getBootstrapState() {
 /**
  * Execute first bootstrap. Calls complete_bootstrap() with DERIVED hashes only.
  *
+ * The production Compose deployment currently authenticates the shared pool as
+ * the legacy `gitwire` database owner, while complete_bootstrap() deliberately
+ * checks `session_user = 'gitwire_app'`. SET ROLE is insufficient because it
+ * does not change session_user. Run the call in a dedicated transaction with
+ * SET LOCAL SESSION AUTHORIZATION so the SECURITY DEFINER boundary sees the
+ * configured application role, and PostgreSQL restores the original identity
+ * automatically when the transaction ends.
+ *
  * @param {object} opts
  * @param {string} opts.adminDisplayName
  * @param {string} opts.credentialLookupId
@@ -81,20 +89,26 @@ export async function executeFirstBootstrap({
   // (passed as a placeholder derived hash that will not match any marker).
   // The function enforces state='enabled' and increments bootstrap_count.
   try {
-    const { rows } = await db.query(
-      `SELECT gitwire_auth.complete_bootstrap(
-         $1, $2, $3, $4, $5, $6, $7, $8) AS principal_id`,
-      [
-        adminDisplayName,
-        credentialLookupId,
-        adminSecretHash,         // p_admin_secret_hash (derived)
-        1,                       // p_admin_pepper_version
-        adminAudience,           // p_admin_audience
-        adminDisplayPrefix,      // p_admin_display_prefix
-        "unused-recovery-hash",  // p_consumer_secret_hash (unused for first bootstrap)
-        1,                       // p_recovery_pepper_version
-      ]
-    );
+    const { rows } = await db.transaction(async (client) => {
+      // This is intentionally SESSION AUTHORIZATION, not SET ROLE: the frozen
+      // function contract checks session_user. LOCAL scopes the identity change
+      // to this transaction so pooled connections cannot retain it.
+      await client.query("SET LOCAL SESSION AUTHORIZATION gitwire_app");
+      return client.query(
+        `SELECT gitwire_auth.complete_bootstrap(
+           $1, $2, $3, $4, $5, $6, $7, $8) AS principal_id`,
+        [
+          adminDisplayName,
+          credentialLookupId,
+          adminSecretHash,         // p_admin_secret_hash (derived)
+          1,                       // p_admin_pepper_version
+          adminAudience,           // p_admin_audience
+          adminDisplayPrefix,      // p_admin_display_prefix
+          "unused-recovery-hash",  // p_consumer_secret_hash (unused for first bootstrap)
+          1,                       // p_recovery_pepper_version
+        ]
+      );
+    });
     const principalId = rows[0]?.principal_id;
     if (!principalId) {
       throw new Error("executeFirstBootstrap: complete_bootstrap returned no principal id");
