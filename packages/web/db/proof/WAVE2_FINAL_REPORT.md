@@ -10,13 +10,15 @@ The original complete local proof package was frozen at:
 9d3791090ead52de4475818d45a901747becaba8
 ```
 
-Independent review of PR #95 identified four correctness defects. They were fixed forward on the same branch. The current reviewed PR head is:
+Independent review of PR #95 identified four correctness defects. They were fixed forward on the same branch. The corrective source-and-test delta ends at:
 
 ```text
 72d0c158145809423a2de5245926ed319e0331f3
 ```
 
-The corrective delta adds targeted unit coverage and passes repository CI, DCO, and CodeQL. The complete 19-harness disposable proof package must be rerun locally at the current head before merge authorization; results below distinguish original complete-proof evidence from current-head CI evidence.
+A documentation-only reconciliation commit follows that delta. The authoritative PR head is recorded in the PR description and GitHub metadata rather than hard-coded here, avoiding a self-referential stale SHA.
+
+The corrective delta adds targeted unit coverage and passes repository CI, DCO, and CodeQL. The complete 19-harness disposable proof package must be rerun locally at the current PR head before merge authorization; results below distinguish original complete-proof evidence from current-head CI evidence.
 
 ## Observe-only invariant
 
@@ -84,7 +86,7 @@ Docker build/health:     green
 Cumulative local review: no blocking findings
 ```
 
-### Current PR head `72d0c158...`
+### Corrective source/test head `72d0c158...`
 
 ```text
 Repository CI:             success
@@ -97,7 +99,7 @@ Docker app build/health CI: success
 Release tooling validation: success
 ```
 
-The complete 19-harness disposable package has not yet been rerun at `72d0c158...`; do not describe the current head as final-proof complete until that rerun is recorded.
+The complete 19-harness disposable package has not yet been rerun at the current PR head; do not describe that head as final-proof complete until the rerun is recorded.
 
 ## Tier 3 disposition
 
@@ -120,7 +122,6 @@ No actor-column removal
 
 ```text
 PR:                         #95
-PR head:                    72d0c158145809423a2de5245926ed319e0331f3
 Independent diff review:    corrective delta pending rereview
 Merge:                      not authorized
 Deployment:                 not authorized
