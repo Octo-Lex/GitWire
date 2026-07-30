@@ -63,12 +63,9 @@ describe("Wave 2 — four-state adoption gate", () => {
     expect(states.counts.integrationProven).toBe(states.integrationProven.length);
   });
 
-  it("ciHeal and phase4 are NOT adoption-proven (no dynamic entry-point proof)", () => {
-    // These two workers have adoptWorker in source but no dynamic proof
-    expect(isAdoptionProven("worker:ciHeal")).toBe(false);
-    expect(isAdoptionProven("worker:phase4")).toBe(false);
-    expect(states.adoptionProven).not.toContain("worker:ciHeal");
-    expect(states.adoptionProven).not.toContain("worker:phase4");
+  it("ciHeal and phase4 ARE adoption-proven (extended installation proof)", () => {
+    expect(isAdoptionProven("worker:ciHeal")).toBe(true);
+    expect(isAdoptionProven("worker:phase4")).toBe(true);
   });
 
   it("wired rows have complete per-surface metadata", () => {

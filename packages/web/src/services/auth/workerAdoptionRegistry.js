@@ -334,11 +334,13 @@ const ADOPTION_PROVEN = {
   "worker:verification": { proof_command: "node packages/web/db/proof/run_system_worker_adoption_proof.mjs", proof_checks: 41 },
   "worker:critic":       { proof_command: "node packages/web/db/proof/run_system_worker_adoption_proof.mjs", proof_checks: 41 },
   // Installation workers — proven by run_installation_worker_adoption_proof.mjs
-  "worker:ciEvidence":   { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
-  "worker:maintainer":   { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
-  "worker:issueFix":     { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
-  "worker:phase2":       { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
-  "worker:phase3":       { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
+  "worker:ciEvidence":   { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 44 },
+  "worker:maintainer":   { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 44 },
+  "worker:issueFix":     { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 44 },
+  "worker:phase2":       { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 44 },
+  "worker:phase3":       { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 44 },
+  "worker:ciHeal":       { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 44 },
+  "worker:phase4":       { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 44 },
   // Schedulers — proven by run_scheduler_adoption_proof.mjs
   "scheduled:sync":           { proof_command: "node packages/web/db/proof/run_scheduler_adoption_proof.mjs", proof_checks: 16 },
   "scheduled:maintainer":     { proof_command: "node packages/web/db/proof/run_scheduler_adoption_proof.mjs", proof_checks: 16 },

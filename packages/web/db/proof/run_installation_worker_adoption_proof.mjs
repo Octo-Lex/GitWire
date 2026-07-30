@@ -85,10 +85,13 @@ try {
   // ═══ Test each installation-scoped worker's adoption path ═══════════════
   const installWorkers = [
     { workerId: "worker:ciEvidence", permission: "ci_run:read" },
+    { workerId: "worker:ciEvidence", permission: "ci_run:read" },
     { workerId: "worker:maintainer", permission: "repository:github:act" },
     { workerId: "worker:issueFix", permission: "pull_request:create" },
     { workerId: "worker:phase2", permission: "merge_queue_entry:update" },
     { workerId: "worker:phase3", permission: "installation:read" },
+    { workerId: "worker:ciHeal", permission: "repository:github:act" },
+    { workerId: "worker:phase4", permission: "ai_review:create" },
   ];
 
   const adoptUrl = pathToFileURL(join(REPO_ROOT, "packages/web/src/services/auth/workerAdoption.js"));
