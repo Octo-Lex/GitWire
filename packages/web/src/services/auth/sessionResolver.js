@@ -16,9 +16,10 @@
 //     revocation handle; a row with revoked_at IS NOT NULL is revoked.
 //
 // The session_hash stored in auth_sessions is the DERIVED hash of the token
-// (HMAC-SHA256, pepper-versioned), never the raw token. Lookup here is by
-// matching the derived hash, so the raw token traverses only the Redis
-// fast-path and the in-memory hash computation.
+// (HMAC-SHA256, pepper-versioned), never the raw token. The durable lookup is
+// bound to the presented token's hash and, when Redis supplies one, the exact
+// session row id. A token can never borrow the validity of a newer session for
+// the same principal.
 
 import { redis } from "../../lib/queue.js";
 import { db } from "../../lib/db.js";
@@ -75,8 +76,13 @@ export async function resolveSession(token) {
     return { context: null, code: "session_revoked" };
   }
 
-  // Durable check: auth_sessions row must exist, be non-revoked, non-expired,
-  // and the principal's auth_epoch must match what was captured at login.
+  // Bind the durable lookup to the presented token. The Redis session id is an
+  // additional cross-check, not the primary selector; legacy mappings that lack
+  // sessionId still resolve by the canonical derived session_hash.
+  const sessionHash = await deriveSessionHash(token);
+
+  // Durable check: the exact auth_sessions row for this token must exist, be
+  // non-revoked, non-expired, and have the principal's current auth_epoch.
   try {
     const { rows } = await db.query(
       `SELECT s.id, s.principal_id, s.auth_epoch, s.expires_at, s.revoked_at,
@@ -84,9 +90,10 @@ export async function resolveSession(token) {
          FROM gitwire_auth.auth_sessions s
          JOIN gitwire_auth.auth_principals p ON p.id = s.principal_id
         WHERE s.principal_id = $1
-        ORDER BY s.created_at DESC
+          AND s.session_hash = $2
+          AND ($3::text IS NULL OR s.id::text = $3::text)
         LIMIT 1`,
-      [principalId]
+      [principalId, sessionHash, sessionId]
     );
     if (rows.length === 0) {
       return { context: null, code: "session_revoked" };
@@ -115,7 +122,7 @@ export async function resolveSession(token) {
     const context = createContext({
       principalId: principal.id,
       principalType: principal.principalType,
-      sessionId: sessionId ?? s.id,
+      sessionId: s.id,
       credentialId: null,
       authenticationMethod: "session",
       assuranceLevel: "level1",
