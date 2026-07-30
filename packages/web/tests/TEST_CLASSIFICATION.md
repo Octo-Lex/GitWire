@@ -1,128 +1,97 @@
 # Test Suite Classification (Wave 2 / issue #94)
 
-## Overview
+## Authority
 
-The GitWire test suite has three tiers. This document classifies each tier
-and documents the final-gate status for Wave 2.
+This document records **existing CI behavior**, not a new exclusion. The CI
+configuration at `.github/workflows/ci.yml` already enforces the tier
+structure:
 
-## Tier 1: Unit Tests (run without a server)
+- **web-tests** (line 124-130): `jest --roots tests/unit` — scoped to
+  `tests/unit/` only. No `GITWIRE_BASE_URL` injected.
+- **web-receipt-integration-tests** (line 144-157): `jest tests/integration`
+  with `--testPathIgnorePatterns='quality-gate-provenance\.test\.js$'`.
+  Comment at line 146: "requires a live API — excluded until PR 4."
+  No `GITWIRE_BASE_URL`, `API_KEY`, or stress env vars injected.
+- **All other suites** (`tests/api/`, `tests/e2e/`, `tests/stress/`): NOT
+  executed by any CI job. They are outside the Jest `--roots` scope.
 
-These tests run in-process with mocked DB/Redis. They execute in every CI
-run and every local `npm test`.
+## Per-Suite Classification (45 suites)
 
-**Status: GREEN**
+### Category: API integration tests (9 suites)
 
-```
-Wave 2 unit tests:     76/76  (7 suites)
-Rules tests:          251/251 (6 suites)
-Runtime tests:         16/16  (1 suite)
-Web full unit suite: 3171/3171 passed, 6 skipped
-```
+| Path | Tier | CI job | CI command | Selected by CI? | Required env | Requires real GitHub? | Status |
+|------|------|--------|------------|-----------------|--------------|----------------------|--------|
+| `tests/api.ci.test.js` | server-backed | none | — | No | `GITWIRE_BASE_URL`, `API_KEY`, `GITWIRE_STRESS_ENV=isolated` | No (uses stress fixtures) | Excluded by CI scope |
+| `tests/api.core.test.js` | server-backed | none | — | No | same | No | Excluded by CI scope |
+| `tests/api.duplicates.test.js` | server-backed | none | — | No | same | No | Excluded by CI scope |
+| `tests/api.fix.test.js` | server-backed | none | — | No | same | No | Excluded by CI scope |
+| `tests/api.maintainer.test.js` | server-backed | none | — | No | same | No | Excluded by CI scope |
+| `tests/api.phase2.test.js` | server-backed | none | — | No | same | No | Excluded by CI scope |
+| `tests/api.phase3.test.js` | server-backed | none | — | No | same | No | Excluded by CI scope |
+| `tests/api.phase4.test.js` | server-backed | none | — | No | same | No | Excluded by CI scope |
+| `tests/api.triage.test.js` | server-backed | none | — | No | same | No | Excluded by CI scope |
 
-## Tier 2: Disposable Proof Harnesses (run with disposable containers)
+### Category: End-to-end tests (21 suites)
 
-These scripts spin up disposable PG+Redis Docker containers, apply all 42
-migrations, run real handlers/Express/workers against them, and tear down.
+| Path | Tier | CI job | Selected by CI? | Required env | Requires real GitHub? | Status |
+|------|------|--------|-----------------|--------------|----------------------|--------|
+| `tests/e2e/ai-review.test.js` | server-backed | none | No | `GITWIRE_BASE_URL`, `API_KEY`, `GITWIRE_STRESS_ENV` | No (fixtures) | Excluded |
+| `tests/e2e/api-actions.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/api-auth.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/api-config.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/api-deliveries.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/api-gates.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/api-readiness.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/api-relay.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/api-transfers.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/api-waivers.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/ci-heal.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/cross-cutting.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/full-pipeline.test.js` | server-backed | none | No | `GITWIRE_API_KEY`, `gh CLI` | **YES — creates real PRs** | Excluded |
+| `tests/e2e/heal-outcome.test.js` | server-backed | none | No | `GITWIRE_BASE_URL`, `API_KEY` | No | Excluded |
+| `tests/e2e/issue-fix.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/maintainer.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/reconciliation.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/sync.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/triage-issue.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/triage-pr.test.js` | server-backed | none | No | same | No | Excluded |
+| `tests/e2e/webhook-intake.test.js` | server-backed | none | No | same | No | Excluded |
 
-**Status: GREEN — all pass from final HEAD**
+### Category: Integration tests (1 suite)
 
-| Proof | Checks | Exit |
-|-------|--------|------|
-| Triage handler | 28 | 0 |
-| Webhook vertical | 36 | 0 |
-| Sync vertical | 25 | 0 |
-| Telegram bot (/fix) | 15 | 0 |
-| Telegram heal (/heal) | 8 | 0 |
-| Positive attribution | 27 | 0 |
-| Attribution guard | 30 | 0 |
-| Transaction boundary | 15 | 0 |
-| Migration 042 | 24 | 0 |
-| Full migration 001-042 | 39 | 0 |
-| System worker adoption | 41 | 0 |
-| Installation worker adoption | 29 | 0 |
-| Scheduler producer adoption | 16 | 0 |
-| HTTP route matrix | 36 | 0 |
+| Path | Tier | CI job | CI command | Selected by CI? | Runtime skip condition | Status |
+|------|------|--------|------------|-----------------|----------------------|--------|
+| `tests/integration/quality-gate-provenance.test.js` | server-backed | web-receipt-integration-tests | `jest tests/integration --testPathIgnorePatterns='quality-gate-provenance\.test\.js$'` | **Excluded by name** | Throws if `GITWIRE_API_URL` unset | Excluded by `--testPathIgnorePatterns` at CI line 157 |
 
-## Tier 3: Server-Backed Integration/E2E Tests (require deployed server)
+### Category: Stress tests (14 suites)
 
-**Status: NOT EXECUTED — documented exclusion**
+| Path | Tier | CI job | Selected by CI? | Required env | Requires real GitHub? | Status |
+|------|------|--------|-----------------|--------------|----------------------|--------|
+| `tests/stress/api-flood.test.js` | stress | none | No | `GITWIRE_BASE_URL`, `API_KEY`, `GITWIRE_STRESS_ENV=isolated`, `GITWIRE_STRESS_MUTATION_BUDGET` | No (fixtures) | Excluded |
+| `tests/stress/auth-edge-cases.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/db-concurrency.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/longevity.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/mutation-enforcement.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/mutation-maintainer.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/mutation-phase2.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/mutation-phase3.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/mutation-phase4.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/mutation-repos-sync-fix.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/pagination-boundary.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/payload-validation.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/rate-limit.test.js` | stress | none | No | same | No | Excluded |
+| `tests/stress/webhook-simulation.test.js` | stress | none | No | same | No | Excluded |
 
-These 45 test suites require:
-- `GITWIRE_BASE_URL` — a running GitWire server URL
-- `API_KEY` — a valid API key for that server
-- `GITWIRE_STRESS_ENV=isolated` — stress gate
-- `GITWIRE_STRESS_MUTATION_BUDGET` — mutation budget
-- Real GitHub App credentials and fixture repositories
+## Summary
 
-They are designed to run against a deployed test environment with real
-GitHub App credentials, fixture repos, and installation IDs. The production
-denylist (in `tests/target-policy.js`) rejects known production hostnames,
-so these tests cannot accidentally target production.
-
-### Why they cannot run in the Wave 2 local gate
-
-1. **No running server**: These tests send HTTP requests to a running
-   GitWire instance. The Wave 2 branch is local-only (not pushed, not
-   deployed). Starting a local server requires valid GitHub App credentials
-   (`GITHUB_PRIVATE_KEY`, `GITHUB_APP_ID`, etc.) which are not available
-   in the dev environment.
-
-2. **Fixture repos**: The stress tests mutate real GitHub repos (branches,
-   PRs, labels). These repos must exist and be configured as fixtures.
-   The production denylist prevents using real repos.
-
-3. **Mutation budget**: The stress framework consumes a mutation budget
-   that must be reset per run via `GITWIRE_STRESS_RUN_ID`. This is a
-   safety mechanism to prevent accidental double-mutation.
-
-### Classification
-
-Per the reviewer's requirement: "classify each suite under an explicit,
-documented final-gate exclusion already permitted by the repository's
-test policy."
-
-**Exclusion: TIER 3 — SERVER-BACKED INTEGRATION/E2E**
-
-These suites are excluded from the Wave 2 local final gate because they
-require a deployed GitWire server with real GitHub App credentials and
-fixture repositories. They are designed for the deployed test environment,
-not the local dev environment. The production denylist ensures they cannot
-target production.
-
-The 45 suites are:
-
-```
-tests/api.ci.test.js
-tests/api.core.test.js
-tests/api.duplicates.test.js
-tests/api.fix.test.js
-tests/api.maintainer.test.js
-tests/api.phase2.test.js
-tests/api.phase3.test.js
-tests/api.phase4.test.js
-tests/api.triage.test.js
-tests/e2e/ai-review.test.js
-tests/e2e/api-actions.test.js
-tests/e2e/api-auth.test.js
-tests/e2e/api-config.test.js
-tests/e2e/api-deliveries.test.js
-tests/e2e/api-gates.test.js
-tests/e2e/api-readiness.test.js
-tests/e2e/api-relay.test.js
-tests/e2e/api-transfers.test.js
-tests/e2e/api-waivers.test.js
-tests/e2e/ci-heal.test.js
-tests/e2e/cross-cutting.test.js
-tests/e2e/full-pipeline.test.js
-tests/e2e/heal-outcome.test.js
-tests/e2e/issue-fix.test.js
-tests/e2e/maintainer.test.js
-(+ 20 more in tests/stress/)
-```
-
-### What replaces them in Wave 2
-
-The disposable proof harnesses (Tier 2) provide the integration coverage
-that these suites would otherwise provide, but without requiring a deployed
-server. Each proof exercises real handlers against real PG+Redis, asserting
-observable effects (auth_decision_log rows, domain writes, gap=0).
+- **44 suites** require `GITWIRE_BASE_URL` / `GITWIRE_STRESS_ENV` (via
+  `tests/helpers.js` → `tests/target-policy.js` `loadPolicy()`).
+- **1 suite** (`tests/e2e/full-pipeline.test.js`) requires `GITWIRE_API_KEY`
+  and `gh CLI` with push access — creates real PRs on GitHub.
+- **1 suite** (`tests/integration/quality-gate-provenance.test.js`) requires
+  `GITWIRE_API_URL` and `GITWIRE_API_KEY` — explicitly excluded by
+  `--testPathIgnorePatterns` in the CI job that runs `tests/integration`.
+- **None** of the 45 are selected by any CI job. They are outside the Jest
+  `--roots tests/unit` scope or explicitly ignored.
+- **Disposable substitutes** (Tier 2 proof harnesses) cover the same
+  integration paths without requiring a deployed server.
