@@ -3,8 +3,8 @@
 **Issue:** #94
 **Branch:** `wave/2-runtime-identity-authorization`
 **Base:** `fcbaace` (Wave 1 merged)
-**HEAD:** `3f7b31a`
-**Commits:** 65
+**HEAD:** `99b2beb` (pending final-head rerun)
+**Commits:** 71
 
 ## Summary
 
@@ -47,20 +47,22 @@ correctly classified as declaredOnly.
 ## HTTP Route Matrix
 
 ```
-Declared HTTP surfaces:    22 (was 25 — reconciled drift)
-Auth observer verified:    22/22
-Handler ran at path:       16/22
-Handler setup-500:          3/22 (route exists, setup-dependent)
-Handler 200/202:           16/22
+Declared HTTP surfaces:    22
+Matched handlers:          22
+Fully verified:            22
 Unmatched declarations:     0
+Undeclared protected routes: 0
+Ambiguous mappings:         0
+HTTP 500 responses:         0
+Duplicate decisions:        0
+Gate exit status:           0
 ```
 
 ### Declaration Reconciliation (resolved)
 
 9 originally-mismatched routes classified and resolved:
 - **5 typo/mount-prefix mismatch** — declarations corrected to match actual Express paths
-- **1 obsolete declaration** — removed (covered by existing route)
-- **3 missing handlers** — removed (no backing route; implementing is outside Wave 2 scope)
+- **4 stale declarations** — removed (proven: no handler, no caller, no test, no doc)
 
 ## Test Results
 
@@ -110,16 +112,38 @@ Unmatched declarations:     0
 - Natural process termination (no forced exit)
 - Secret scan: CLEAN
 
+## Cumulative Source/Security Review
+
+**Verdict: NO BLOCKING (frozen-security-baseline) violations**
+
+Review covered the complete `fcbaace..99b2beb` diff (96 files). Three
+independent review agents inspected all 10 concerns.
+
+### Defects Fixed (NON-BLOCKING)
+- F1: ciHealWorker.healByPatchPR ReferenceError crash (principalId scoping)
+- F2: ciHealWorker reconcile-pr/check-heal-prs had no adoption
+- F3: reconciliationWorker discarded adoptWorker return (raw UPDATE bypass)
+
+### Clean (no issues)
+- Client-controlled authority: principal/resource always from server DB
+- Secret leakage: all secrets HMAC-hashed before SQL/log
+- Accidental enforcement: authorize() never blocks; observe-only
+- Migration privileges: correct least-privilege grants
+- Bootstrap exposure: one-time via DB FOR UPDATE lock
+
+### Deferred (tracked future work)
+- D1: syncWorker/maintainerWorker/phase2/phase3 principalId not yet threaded to all domain writers
+- D2: F-06 payload-vs-delegation comparison (Level 2/3)
+- D3: System principals not auto-created
+
 ## Known Issues
 
 1. System principals not auto-created (must be seeded)
 2. Docker entrypoint CRLF (fixed in Dockerfile, pre-existing on master)
-3. 3 declared routes were removed (missing handlers — outside Wave 2 scope)
 
 ## What Remains for Wave 5
 
 - Flip observe-only → enforced (fail-closed)
-- Implement the 3 removed routes (collaborators POST, comment POST, reconcile POST)
 - Full-domain integration proofs for 16 adoption-proven workers
 - Auto-create system principals
-- HTTP gate mode (fail on unresolved drift)
+- Thread principalId to all domain writers (maintainer recordAction, sync upserts)
