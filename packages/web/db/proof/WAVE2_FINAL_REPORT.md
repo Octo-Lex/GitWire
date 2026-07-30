@@ -3,8 +3,8 @@
 **Issue:** #94
 **Branch:** `wave/2-runtime-identity-authorization`
 **Base:** `fcbaace` (Wave 1 merged)
-**HEAD:** `2a90fd2`
-**Commits:** 55
+**HEAD:** `540a6fd`
+**Commits:** 61
 
 ## Summary
 
@@ -13,40 +13,56 @@ Wave 2 completes runtime adoption of the Level 1 authority foundation in
 principal, calls the central `authorize()`, and records structured evidence.
 No enforcement blocking occurs yet (that is Wave 5).
 
-## Adoption State (3-State Gate with Per-Surface Metadata)
+## Adoption State (Four-State Gate with Ambiguity Detection)
 
-| State              | Count | Meaning |
-|--------------------|-------|---------|
-| Declared           | 22    | Surface in declarations.js |
-| Wired              | 17    | adoptWorker() at entry + structured metadata |
-| Proven             | 6     | Passing disposable integration proof |
-| Schedulers wired   | 5/5   | Each scheduler producer resolves a principal |
+| State | Count | Meaning |
+|-------|-------|---------|
+| Declared | 22/22 | Surface in declarations.js |
+| Wired | 21/22 | adoptWorker() at entry (worker:webhook consumer NOT wired) |
+| Adoption-proven | 21/22 | Dynamic entry-point principal resolution proof |
+| Integration-proven | 5/22 | Full vertical proof with domain effect + gaps + negatives |
 
-### Proven Surfaces (6)
+### Declared-Only (1)
 
-| Surface          | Proof                                  | Checks |
-|------------------|----------------------------------------|--------|
-| `worker:triage`   | `run_triage_handler_pg_proof.mjs`     | 28     |
-| `worker:webhook`  | `run_webhook_vertical_proof.mjs`      | 36     |
-| `webhook:github`  | `run_webhook_vertical_proof.mjs`      | 36     |
-| `worker:sync`     | `run_sync_vertical_proof.mjs`         | 25     |
-| `telegram:fix`    | `run_telegram_bot_proof.mjs`          | 15     |
-| `telegram:heal`   | `run_telegram_heal_proof.mjs`         | 8      |
+`worker:webhook` — the BullMQ consumer in `webhookWorker.js` does NOT have
+an `adoptWorker` call. The `webhook:github` HTTP ingress IS wired (separate
+module). This is an explicit gap.
 
-### Wired But Not Proven (11)
+### Integration-Proven Surfaces (5 unique boundaries)
 
-All 9 repair-pipeline and installation-scoped workers, plus phase4 and
-ciHeal. These are dynamically proven at the adoption level (system +
-installation worker adoption proofs) but not yet at the full-domain level.
+| Surface | Proof | Checks |
+|---------|-------|--------|
+| `worker:triage` | `run_triage_handler_pg_proof.mjs` | 28 |
+| `webhook:github` | `run_webhook_vertical_proof.mjs` | 36 |
+| `worker:sync` | `run_sync_vertical_proof.mjs` | 25 |
+| `telegram:fix` | `run_telegram_bot_proof.mjs` | 15 |
+| `telegram:heal` | `run_telegram_heal_proof.mjs` | 8 |
 
-### Scheduler Producers (5/5 wired + proven)
+### Ambiguous Mappings
 
-Each scheduler resolves a system principal before enqueuing:
-- `scheduleSyncJobs` → `system:scheduler`
-- `scheduleMaintainerJobs` → `system:maintainer-worker`
-- `schedulePhase3Jobs` → `system:phase3-worker`
-- `schedulePhase4Jobs` → `system:phase4-worker`
-- `runReconciliation` → `system:reconciliation-worker`
+None (resolved). `worker:webhook` and `webhook:github` were previously
+ambiguous (same module + adoption line). Investigation revealed they are
+distinct boundaries in different modules. `worker:webhook` is now
+correctly classified as declaredOnly.
+
+## HTTP Route Matrix
+
+```
+Declared HTTP surfaces:    25
+Tested through Express:    25
+Auth observer verified:    25/25
+Handler ran at path:       15/25
+Handler 404 (drift):        9/25
+```
+
+### Declaration-vs-Implementation Drift (9 routes)
+
+9 declared routes have no matching Express handler at the declared path.
+The routeAuthObserver still fires for each (matching the declaration
+pattern), so the auth contract is verifiable. But the handler body never
+runs because Express returns 404.
+
+This is a Wave 2 declaration accuracy issue for future correction.
 
 ## Test Results
 
@@ -54,55 +70,59 @@ Each scheduler resolves a system principal before enqueuing:
 - Wave 2 unit tests: **76/76** (7 suites)
 - Rules: **251/251**
 - Runtime: **16/16**
-- Web full unit suite: 3171 passed, 6 skipped
 
-### Tier 2: Disposable Proofs (GREEN — 14 harnesses, 369 total checks)
-- Triage handler: 28/28 ✓
-- Webhook vertical: 36/36 ✓
-- Sync vertical: 25/25 ✓
-- Telegram bot (/fix): 15/15 ✓
-- Telegram heal (/heal): 8/8 ✓
-- Positive attribution: 27/27 ✓
-- Attribution guard: 30/30 ✓
-- Transaction boundary: 15/15 ✓
-- Migration 042: 24/24 ✓
-- Full migration 001-042: 39/39 ✓
-- System worker adoption: 41/41 ✓
-- Installation worker adoption: 29/29 ✓
-- Scheduler producer adoption: 16/16 ✓
-- HTTP route matrix: 36/36 ✓
+### Tier 2: Disposable Proofs (GREEN)
 
-All proofs exit 0 with natural termination.
+| Proof | Checks | Exit |
+|-------|--------|------|
+| Triage handler | 28 | 0 |
+| Webhook vertical | 36 | 0 |
+| Sync vertical | 25 | 0 |
+| Telegram bot (/fix) | 15 | 0 |
+| Telegram heal (/heal) | 8 | 0 |
+| Positive attribution | 27 | 0 |
+| Attribution guard | 30 | 0 |
+| Transaction boundary | 15 | 0 |
+| Migration 042 | 24 | 0 |
+| Full migration 001-042 | 39 | 0 |
+| System worker adoption | 41 | 0 |
+| Installation worker adoption | 44 | 0 |
+| Scheduler producer adoption | 16 | 0 |
+| HTTP route matrix | 178 | 0 |
+| Docker build + health | 11 | 0 |
 
-### Tier 3: Server-Backed Integration/E2E (DOCUMENTED EXCLUSION)
-45 suites require a deployed GitWire server with GitHub App credentials.
-Classified under explicit documented exclusion in `TEST_CLASSIFICATION.md`.
+### Tier 3: Server-Backed Integration/E2E (EXISTING CI EXCLUSION)
+45 suites not executed by any CI job. Classified per-suite in
+`TEST_CLASSIFICATION.md` with existing CI policy authority
+(`.github/workflows/ci.yml:124-157`).
+
+### Docker Build + Health (GREEN)
+- Image builds with OCI labels, correct SHA
+- Health endpoint: status=ok, git_sha matches build, migrations=42
+- Bug fix: CRLF entrypoint normalized to LF in Dockerfile
 
 ## Security Constraints Honored
 
-- ✅ Observe-only mode (no enforcement blocking)
-- ✅ No push, PR, GitHub mutation, deployment, or production access
-- ✅ No raw secrets in SQL/logs/evidence
-- ✅ DCO sign-off on all commits
-- ✅ No Co-Authored-By
-- ✅ All proofs use disposable PG+Redis containers (cleaned up after)
-- ✅ Natural process termination (no forced exit)
-- ✅ Secret scan: CLEAN
+- Observe-only mode (no enforcement blocking)
+- No push, PR, GitHub mutation, deployment, or production access
+- No raw secrets in SQL/logs/evidence
+- DCO sign-off on all commits
+- No Co-Authored-By
+- All proofs use disposable containers (cleaned up)
+- Natural process termination (no forced exit)
+- Secret scan: CLEAN
 
-## Schema Changes
+## Known Issues
 
-- **Migration 041:** `legacy_key_mappings`, `auth_decision_log`,
-  dual-write `principal_id` columns on 5 tables
-- **Migration 042:** `attribution_gap_evidence` (append-only, with grants
-  and triggers)
-- **Rollback scripts:** `rollback_wave2.sql`, `rollback_wave2_042.sql`
-  (no CASCADE, exact rollback)
-- Also fixed: SQL injection bug in `POST /api/ci/:runId/heal` (missing `$1`)
+1. `worker:webhook` consumer not wired (declaredOnly)
+2. 9 declared HTTP routes have path drift (auth observer fires, handler 404)
+3. System principals not auto-created (must be seeded)
+4. Docker entrypoint CRLF (fixed in Dockerfile, pre-existing on master)
 
-## What Remains for Wave 5 (Enforcement)
+## What Remains for Wave 5
 
-- Flip observe-only → enforced (fail-closed on authorization decisions)
-- Add full-domain integration proofs for the 11 wired-but-not-proven workers
-- Auto-create system principals on first use (currently must be seeded)
-- Live HTTP middleware integration tests against running Express
-- Documentation reconciliation
+- Flip observe-only → enforced (fail-closed)
+- Wire `worker:webhook` consumer
+- Fix 9 declaration path drifts
+- Full-domain integration proofs for 16 adoption-proven workers
+- Auto-create system principals
