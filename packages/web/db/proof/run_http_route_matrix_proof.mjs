@@ -36,6 +36,12 @@
 //   fully verified        — every assertion passed
 //
 // Exit 0 on natural completion. Containers are torn down in `finally`.
+//
+// Gate mode: pass --gate as the first argument to exit nonzero when any
+// route has no matching handler (declaration-vs-implementation drift).
+// Without --gate, the proof runs in report mode (prints drift, exits 0
+// for development).
+
 
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
@@ -589,4 +595,16 @@ console.log("\n=== HTTP Route Matrix Proof: " + passed + " passed, " + failed + 
 console.log("cleanup completed");
 console.log("owned containers remaining: 0");
 console.log("forced process exit: no");
-process.exitCode = failed > 0 ? 1 : 0;
+
+// Gate mode: exit nonzero if any route has no matching handler.
+const isGateMode = process.argv.includes("--gate");
+const driftRoutes = matrix.filter(r => !r.handlerExistsAtDeclaredPath);
+if (isGateMode && driftRoutes.length > 0) {
+  console.log("\n=== GATE MODE: FAILING — " + driftRoutes.length + " routes with no matching handler ===");
+  for (const r of driftRoutes) {
+    console.log("  " + r.surfaceId + " [status=" + r.httpResponse + "]");
+  }
+  process.exitCode = 1;
+} else {
+  process.exitCode = failed > 0 ? 1 : 0;
+}
