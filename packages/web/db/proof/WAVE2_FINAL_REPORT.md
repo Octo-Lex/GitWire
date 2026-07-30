@@ -3,8 +3,8 @@
 **Issue:** #94
 **Branch:** `wave/2-runtime-identity-authorization`
 **Base:** `fcbaace` (Wave 1 merged)
-**HEAD:** `540a6fd`
-**Commits:** 61
+**HEAD:** `3f7b31a`
+**Commits:** 65
 
 ## Summary
 
@@ -18,21 +18,20 @@ No enforcement blocking occurs yet (that is Wave 5).
 | State | Count | Meaning |
 |-------|-------|---------|
 | Declared | 22/22 | Surface in declarations.js |
-| Wired | 21/22 | adoptWorker() at entry (worker:webhook consumer NOT wired) |
-| Adoption-proven | 21/22 | Dynamic entry-point principal resolution proof |
-| Integration-proven | 5/22 | Full vertical proof with domain effect + gaps + negatives |
+| Wired | 22/22 | adoptWorker() at entry |
+| Adoption-proven | 22/22 | Dynamic entry-point principal resolution proof |
+| Integration-proven | 6/22 | Full vertical proof with domain effect + gaps + negatives |
 
-### Declared-Only (1)
+### Declared-Only (0)
 
-`worker:webhook` — the BullMQ consumer in `webhookWorker.js` does NOT have
-an `adoptWorker` call. The `webhook:github` HTTP ingress IS wired (separate
-module). This is an explicit gap.
+All surfaces are wired and adoption-proven.
 
-### Integration-Proven Surfaces (5 unique boundaries)
+### Integration-Proven Surfaces (6 unique boundaries)
 
 | Surface | Proof | Checks |
 |---------|-------|--------|
 | `worker:triage` | `run_triage_handler_pg_proof.mjs` | 28 |
+| `worker:webhook` | `run_webhook_worker_proof.mjs` | 26 |
 | `webhook:github` | `run_webhook_vertical_proof.mjs` | 36 |
 | `worker:sync` | `run_sync_vertical_proof.mjs` | 25 |
 | `telegram:fix` | `run_telegram_bot_proof.mjs` | 15 |
@@ -48,21 +47,20 @@ correctly classified as declaredOnly.
 ## HTTP Route Matrix
 
 ```
-Declared HTTP surfaces:    25
-Tested through Express:    25
-Auth observer verified:    25/25
-Handler ran at path:       15/25
-Handler 404 (drift):        9/25
+Declared HTTP surfaces:    22 (was 25 — reconciled drift)
+Auth observer verified:    22/22
+Handler ran at path:       16/22
+Handler setup-500:          3/22 (route exists, setup-dependent)
+Handler 200/202:           16/22
+Unmatched declarations:     0
 ```
 
-### Declaration-vs-Implementation Drift (9 routes)
+### Declaration Reconciliation (resolved)
 
-9 declared routes have no matching Express handler at the declared path.
-The routeAuthObserver still fires for each (matching the declaration
-pattern), so the auth contract is verifiable. But the handler body never
-runs because Express returns 404.
-
-This is a Wave 2 declaration accuracy issue for future correction.
+9 originally-mismatched routes classified and resolved:
+- **5 typo/mount-prefix mismatch** — declarations corrected to match actual Express paths
+- **1 obsolete declaration** — removed (covered by existing route)
+- **3 missing handlers** — removed (no backing route; implementing is outside Wave 2 scope)
 
 ## Test Results
 
@@ -114,15 +112,14 @@ This is a Wave 2 declaration accuracy issue for future correction.
 
 ## Known Issues
 
-1. `worker:webhook` consumer not wired (declaredOnly)
-2. 9 declared HTTP routes have path drift (auth observer fires, handler 404)
-3. System principals not auto-created (must be seeded)
-4. Docker entrypoint CRLF (fixed in Dockerfile, pre-existing on master)
+1. System principals not auto-created (must be seeded)
+2. Docker entrypoint CRLF (fixed in Dockerfile, pre-existing on master)
+3. 3 declared routes were removed (missing handlers — outside Wave 2 scope)
 
 ## What Remains for Wave 5
 
 - Flip observe-only → enforced (fail-closed)
-- Wire `worker:webhook` consumer
-- Fix 9 declaration path drifts
+- Implement the 3 removed routes (collaborators POST, comment POST, reconcile POST)
 - Full-domain integration proofs for 16 adoption-proven workers
 - Auto-create system principals
+- HTTP gate mode (fail on unresolved drift)
