@@ -53,13 +53,15 @@ export async function authorize({ principal, permission, resource }) {
     return denyAndLog(vcode, principal, permission, resource, null, null);
   }
 
-  // Resource validation: must have a type; repo/installation resources need
-  // server-owned identifiers (installationId/repositoryId). Request-supplied
-  // names alone never establish scope.
+  // Resource validation: server-owned identifiers are mandatory for scoped
+  // resources. Request-supplied names alone never establish scope.
   if (!resource || !resource.type) {
     return denyAndLog(DecisionCode.RESOURCE_MISSING, principal, permission, resource, null, null);
   }
   if (resource.type === "repository" && (!resource.installationId || !resource.repositoryId)) {
+    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null);
+  }
+  if (resource.type === "installation" && !resource.installationId) {
     return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null);
   }
 
@@ -99,9 +101,6 @@ export async function authorize({ principal, permission, resource }) {
     );
 
     if (rows.length === 0) {
-      // Distinguish permission_missing (principal has no assignment granting
-      // this permission at all) from scope_mismatch (has the permission but
-      // not in a scope that encompasses this resource).
       const scopeRows = await db.query(
         `SELECT 1 FROM gitwire_auth.auth_principal_roles apr
           JOIN gitwire_auth.auth_role_permissions arp ON arp.role_id = apr.role_id
@@ -116,7 +115,6 @@ export async function authorize({ principal, permission, resource }) {
       return denyAndLog(code, principal, permission, resource, null, null);
     }
 
-    // First matching assignment wins (any matching assignment authorizes).
     const match = rows[0];
     const decision = createDecision({
       allowed: true,
@@ -138,9 +136,6 @@ export async function authorize({ principal, permission, resource }) {
   }
 }
 
-/**
- * Build + log a deny decision.
- */
 async function denyAndLog(code, principal, permission, resource, assignmentId, scopeType, err) {
   const decision = createDecision({
     allowed: false,
