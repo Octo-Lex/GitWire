@@ -747,9 +747,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
       for (const lbl of ["ci-heal", diagnosis.failure_type]) {
         const labelAction = await propose({
           repoFullName: repository.full_name, pillar: "ci_healing", actionType: "add-label",
-          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha },
-          principalId,
-          surfaceId: "worker:ciHeal",
+          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, principalId, surfaceId: "worker:ciHeal" },
           repoId: repository.id, targetType: "pr", targetNumber: pr.number,
           actionKey: "label:" + lbl,
         });
@@ -774,9 +772,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
         // Managed action via state machine
         const revAction = await propose({
           repoFullName: repository.full_name, pillar: "ci_healing", actionType: "add-reviewer",
-          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha },
-          principalId,
-          surfaceId: "worker:ciHeal",
+          source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, principalId, surfaceId: "worker:ciHeal" },
           repoId: repository.id, targetType: "pr", targetNumber: pr.number,
           actionKey: "reviewer:" + lastCommitter,
         });
@@ -826,9 +822,7 @@ async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, reposit
     // Managed action via state machine: record the heal PR creation
     const healAction = await propose({
       repoFullName: repository.full_name, pillar: "ci_healing", actionType: "create-branch",
-      source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, failureType: diagnosis.failure_type },
-      principalId,
-      surfaceId: "worker:ciHeal",
+      source: "ci_heal", evidence: { runId: run.id, headSha: run.head_sha, failureType: diagnosis.failure_type, principalId, surfaceId: "worker:ciHeal" },
       repoId: repository.id, targetType: "pr", targetNumber: pr.number,
       actionKey: "heal_pr",
     });
