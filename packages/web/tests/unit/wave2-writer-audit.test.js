@@ -53,7 +53,7 @@ const AUDIT = {
   audit_trail_entries: [
     { file: "services/aiReviewService.js", line: 361, func: "reviewPR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
     { file: "services/aiReviewService.js", line: 373, func: "reviewPR gate block", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
-    { file: "workers/ciHealWorker.js", line: 841, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 835, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
   ],
 
   repair_proposals: [
@@ -75,7 +75,7 @@ const AUDIT = {
     { file: "workers/ciHealWorker.js", line: 570, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 748, func: "ciHealWorker labelAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 775, func: "ciHealWorker revAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
-    { file: "workers/ciHealWorker.js", line: 827, func: "ciHealWorker healAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/ciHealWorker.js", line: 823, func: "ciHealWorker healAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/issueFix/validate.js", line: 92, func: "validate", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/triageWorker.js", line: 168, func: "triageIssue", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/triageWorker.js", line: 248, func: "triageIssue commentAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
