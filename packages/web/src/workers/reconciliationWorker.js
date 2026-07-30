@@ -10,12 +10,13 @@
 // Drifted actions are logged to action_reconciliation_log.
 // Actions confirmed still in effect are marked as 'reconciled'.
 
-import { getActionsNeedingReconciliation, getStaleActions, reconcile, logReconciliationCheck } from "../services/actionStateMachine.js";
+import { getActionsNeedingReconciliation, getStaleActions, reconcile, logReconciliationCheck, fail, cancel } from "../services/actionStateMachine.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { logger } from "../lib/logger.js";
 import { db } from "../lib/db.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
+import { validateAttribution } from "../services/auth/attributionGuard.js";
 
 /**
  * Run reconciliation for all eligible actions.
@@ -41,18 +42,14 @@ export async function runReconciliation() {
   let staleCancelled = 0;
   for (const action of staleActions) {
     try {
-      // Transition stale actions to failed or cancelled depending on state
+      // Wave 2: route through canonical actionStateMachine transitions instead
+      // of raw UPDATE managed_actions. The canonical path applies the
+      // attribution guard and records gap evidence on null principalId.
       if (action.status === "executing") {
-        await db.query(
-          `UPDATE managed_actions SET status = 'failed', resolved_at = NOW(), error_message = 'Reconciled: stuck in executing for >6h' WHERE id = $1`,
-          [action.id]
-        );
+        await fail(action.id, "Reconciled: stuck in executing for >6h");
         staleFailed++;
       } else {
-        await db.query(
-          `UPDATE managed_actions SET status = 'cancelled', resolved_at = NOW(), error_message = 'Reconciled: stuck in ' || status || ' state' WHERE id = $1`,
-          [action.id]
-        );
+        await cancel(action.id, "Reconciled: stuck in " + action.status + " state");
         staleCancelled++;
       }
     } catch (err) {
@@ -240,6 +237,11 @@ async function reconcileHealPRs() {
             }
           }
 
+          // Wave 2: explicit guarded attribution before raw monitored-table UPDATE.
+          await validateAttribution({
+            principalId, surfaceId: "scheduled:reconciliation",
+            writer: "managed_actions", db,
+          });
           await db.query(
             `UPDATE managed_actions SET heal_outcome = $1
              WHERE pillar = 'ci_healing'
@@ -254,6 +256,11 @@ async function reconcileHealPRs() {
           else if (outcome === "ineffective") ineffective++;
         } else {
           // Closed without merge — human rejected
+          // Wave 2: explicit guarded attribution before raw monitored-table UPDATE.
+          await validateAttribution({
+            principalId, surfaceId: "scheduled:reconciliation",
+            writer: "managed_actions", db,
+          });
           await db.query(
             `UPDATE managed_actions SET heal_outcome = 'rejected'
              WHERE pillar = 'ci_healing'
