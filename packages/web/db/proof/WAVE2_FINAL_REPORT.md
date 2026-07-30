@@ -1,149 +1,129 @@
-# Wave 2 Final Report — Runtime Principal Identity & Scoped Authorization
+# Wave 2 Final Local Report — Issue #94
 
-**Issue:** #94
-**Branch:** `wave/2-runtime-identity-authorization`
-**Base:** `fcbaace` (Wave 1 merged)
-**HEAD:** `99b2beb` (pending final-head rerun)
-**Commits:** 71
+## Status
 
-## Summary
+Wave 2 runtime principal identity and scoped authorization is implemented in **observe-only mode**.
 
-Wave 2 completes runtime adoption of the Level 1 authority foundation in
-**observe-only mode**. Every protected surface resolves a server-owned
-principal, calls the central `authorize()`, and records structured evidence.
-No enforcement blocking occurs yet (that is Wave 5).
+The original complete local proof package was frozen at:
 
-## Adoption State (Four-State Gate with Ambiguity Detection)
-
-| State | Count | Meaning |
-|-------|-------|---------|
-| Declared | 22/22 | Surface in declarations.js |
-| Wired | 22/22 | adoptWorker() at entry |
-| Adoption-proven | 22/22 | Dynamic entry-point principal resolution proof |
-| Integration-proven | 6/22 | Full vertical proof with domain effect + gaps + negatives |
-
-### Declared-Only (0)
-
-All surfaces are wired and adoption-proven.
-
-### Integration-Proven Surfaces (6 unique boundaries)
-
-| Surface | Proof | Checks |
-|---------|-------|--------|
-| `worker:triage` | `run_triage_handler_pg_proof.mjs` | 28 |
-| `worker:webhook` | `run_webhook_worker_proof.mjs` | 26 |
-| `webhook:github` | `run_webhook_vertical_proof.mjs` | 36 |
-| `worker:sync` | `run_sync_vertical_proof.mjs` | 25 |
-| `telegram:fix` | `run_telegram_bot_proof.mjs` | 15 |
-| `telegram:heal` | `run_telegram_heal_proof.mjs` | 8 |
-
-### Ambiguous Mappings
-
-None (resolved). `worker:webhook` and `webhook:github` were previously
-ambiguous (same module + adoption line). Investigation revealed they are
-distinct boundaries in different modules. `worker:webhook` is now
-correctly classified as declaredOnly.
-
-## HTTP Route Matrix
-
-```
-Declared HTTP surfaces:    22
-Matched handlers:          22
-Fully verified:            22
-Unmatched declarations:     0
-Undeclared protected routes: 0
-Ambiguous mappings:         0
-HTTP 500 responses:         0
-Duplicate decisions:        0
-Gate exit status:           0
+```text
+9d3791090ead52de4475818d45a901747becaba8
 ```
 
-### Declaration Reconciliation (resolved)
+Independent review of PR #95 identified four correctness defects. They were fixed forward on the same branch. The current reviewed PR head is:
 
-9 originally-mismatched routes classified and resolved:
-- **5 typo/mount-prefix mismatch** — declarations corrected to match actual Express paths
-- **4 stale declarations** — removed (proven: no handler, no caller, no test, no doc)
+```text
+72d0c158145809423a2de5245926ed319e0331f3
+```
 
-## Test Results
+The corrective delta adds targeted unit coverage and passes repository CI, DCO, and CodeQL. The complete 19-harness disposable proof package must be rerun locally at the current head before merge authorization; results below distinguish original complete-proof evidence from current-head CI evidence.
 
-### Tier 1: Unit Tests (GREEN)
-- Wave 2 unit tests: **76/76** (7 suites)
-- Rules: **251/251**
-- Runtime: **16/16**
+## Observe-only invariant
 
-### Tier 2: Disposable Proofs (GREEN)
+Wave 2 records authorization decisions and authoritative attribution without globally blocking legacy operations. It does not perform enforcement cutover, legacy shutdown, centralized mutation execution, governed-policy implementation, production credential rotation, or destructive schema retirement.
 
-| Proof | Checks | Exit |
-|-------|--------|------|
-| Triage handler | 28 | 0 |
-| Webhook vertical | 36 | 0 |
-| Sync vertical | 25 | 0 |
-| Telegram bot (/fix) | 15 | 0 |
-| Telegram heal (/heal) | 8 | 0 |
-| Positive attribution | 27 | 0 |
-| Attribution guard | 30 | 0 |
-| Transaction boundary | 15 | 0 |
-| Migration 042 | 24 | 0 |
-| Full migration 001-042 | 39 | 0 |
-| System worker adoption | 41 | 0 |
-| Installation worker adoption | 44 | 0 |
-| Scheduler producer adoption | 16 | 0 |
-| HTTP route matrix | 178 | 0 |
-| Docker build + health | 11 | 0 |
+## Protected surfaces
 
-### Tier 3: Server-Backed Integration/E2E (EXISTING CI EXCLUSION)
-45 suites not executed by any CI job. Classified per-suite in
-`TEST_CLASSIFICATION.md` with existing CI policy authority
-(`.github/workflows/ci.yml:124-157`).
+```text
+Non-HTTP declared:           22 / 22
+Non-HTTP wired:              22 / 22
+Non-HTTP adoption-proven:    22 / 22
+Non-HTTP integration-proven:  6 / 22
+HTTP protected routes:       22 / 22
+```
 
-### Docker Build + Health (GREEN)
-- Image builds with OCI labels, correct SHA
-- Health endpoint: status=ok, git_sha matches build, migrations=42
-- Bug fix: CRLF entrypoint normalized to LF in Dockerfile
+The 22 non-HTTP surfaces are not claimed as 22 full vertical integrations. Six have deep end-to-end integration proofs; the remaining surfaces have executable adoption-completeness evidence.
 
-## Security Constraints Honored
+## Writer attribution
 
-- Observe-only mode (no enforcement blocking)
-- No push, PR, GitHub mutation, deployment, or production access
-- No raw secrets in SQL/logs/evidence
-- DCO sign-off on all commits
-- No Co-Authored-By
-- All proofs use disposable containers (cleaned up)
-- Natural process termination (no forced exit)
-- Secret scan: CLEAN
+```text
+Canonical writer boundaries: 5 / 5
+Writer callers attributed:   42 / 42
+Positive attribution gaps:    0
+```
 
-## Cumulative Source/Security Review
+Guarded tables:
 
-**Verdict: NO BLOCKING (frozen-security-baseline) violations**
+- `decision_log`
+- `audit_trail_entries`
+- `repair_proposals`
+- `repair_proposal_events`
+- `managed_actions`
 
-Review covered the complete `fcbaace..99b2beb` diff (96 files). Three
-independent review agents inspected all 10 concerns.
+## Migrations
 
-### Defects Fixed (NON-BLOCKING)
-- F1: ciHealWorker.healByPatchPR ReferenceError crash (principalId scoping)
-- F2: ciHealWorker reconcile-pr/check-heal-prs had no adoption
-- F3: reconciliationWorker discarded adoptWorker return (raw UPDATE bypass)
+- `041_wave2_runtime_identity.sql`
+- `042_attribution_gap_evidence.sql`
 
-### Clean (no issues)
-- Client-controlled authority: principal/resource always from server DB
-- Secret leakage: all secrets HMAC-hashed before SQL/log
-- Accidental enforcement: authorize() never blocks; observe-only
-- Migration privileges: correct least-privilege grants
-- Bootstrap exposure: one-time via DB FOR UPDATE lock
+Both are additive. The disposable proof package covers apply, rerun, collision handling, privilege boundaries, rollback, ledger removal, reapply, and schema/grant equivalence. Rollbacks contain no `CASCADE`.
 
-### Deferred (tracked future work)
-- D1: syncWorker/maintainerWorker/phase2/phase3 principalId not yet threaded to all domain writers
-- D2: F-06 payload-vs-delegation comparison (Level 2/3)
-- D3: System principals not auto-created
+## Independent review corrections
 
-## Known Issues
+PR #95 review findings fixed forward:
 
-1. System principals not auto-created (must be seeded)
-2. Docker entrypoint CRLF (fixed in Dockerfile, pre-existing on master)
+1. Bootstrap now calls `complete_bootstrap()` under transaction-local `SESSION AUTHORIZATION gitwire_app`, matching the database function's `session_user` contract while restoring the pooled connection identity automatically at transaction end.
+2. Session validity is bound to the presented token's derived `session_hash` and, when available, the Redis `sessionId`; a token cannot borrow another session's validity.
+3. CI-heal resolves `runId` through trusted `ci_runs -> repositories` state before authorization.
+4. Repository-targeted installation routes resolve an exact server-owned installation ID. Aggregate routes are explicitly fleet-scoped. Unresolved installation resources fail closed as `resource_unknown`.
 
-## What Remains for Wave 5
+Targeted correction tests cover all four findings.
 
-- Flip observe-only → enforced (fail-closed)
-- Full-domain integration proofs for 16 adoption-proven workers
-- Auto-create system principals
-- Thread principalId to all domain writers (maintainer recordAction, sync upserts)
+## Validation evidence
+
+### Complete local package at `9d379109...`
+
+```text
+Wave 2 unit tests:       79 / 79
+Rules tests:            251 / 251
+Runtime tests:           16 / 16
+Disposable harnesses:    19 / 19
+Disposable assertions:  622
+HTTP gate:               exit 0
+Secret scan:             clean
+Docker build/health:     green
+Cumulative local review: no blocking findings
+```
+
+### Current PR head `72d0c158...`
+
+```text
+Repository CI:             success
+DCO:                       success
+CodeQL:                    success
+Web unit suites:           118 / 118
+Web unit assertions:       3165 / 3165
+Targeted correction tests: 7 / 7
+Docker app build/health CI: success
+Release tooling validation: success
+```
+
+The complete 19-harness disposable package has not yet been rerun at `72d0c158...`; do not describe the current head as final-proof complete until that rerun is recorded.
+
+## Tier 3 disposition
+
+Forty-five server-backed suites are not selected by current CI policy and were not run. They require a deployed test environment, external fixtures, and in some cases real GitHub operations. They are not described as passed.
+
+## Production exclusions
+
+```text
+No authorization enforcement transition
+No legacy API-key shutdown
+No session cutover
+No direct-writer shutdown
+No credential rotation
+No bootstrap recovery
+No destructive migration
+No actor-column removal
+```
+
+## Delivery disposition
+
+```text
+PR:                         #95
+PR head:                    72d0c158145809423a2de5245926ed319e0331f3
+Independent diff review:    corrective delta pending rereview
+Merge:                      not authorized
+Deployment:                 not authorized
+Production access:          not authorized
+Enforcement transition:     not authorized
+```
