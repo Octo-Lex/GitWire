@@ -260,6 +260,10 @@ const SCHEDULER_WIRING = {
     exported_symbol: "scheduleSyncJobs",
     adoption_location: "syncWorker.js:48 (inside scheduleSyncJobs, before enqueue)",
     principal_origin: "systemPrincipalName='system:scheduler'",
+    permission: "installation:read",
+    resource_origin: "resolveSystemWorkerContext (fleet-wide)",
+    first_side_effect: "syncQueue.add (full-sync repeatable + startup)",
+    principal_destination: "auth_decision_log.principal_id (scheduler adoption)",
     status: "wired",
     note: "Scheduler producer resolves system:scheduler before enqueuing full-sync. Consumer (runFullSync) also adopts with the same principal.",
   },
@@ -268,6 +272,10 @@ const SCHEDULER_WIRING = {
     exported_symbol: "scheduleMaintainerJobs",
     adoption_location: "maintainerWorker.js:407 (inside scheduleMaintainerJobs, before enqueue loop)",
     principal_origin: "systemPrincipalName='system:maintainer-worker'",
+    permission: "repository:github:act",
+    resource_origin: "resolveSystemWorkerContext (fleet-wide)",
+    first_side_effect: "maintainerQueue.add (stale-scan + branch-cleanup per repo)",
+    principal_destination: "auth_decision_log.principal_id (scheduler adoption)",
     status: "wired",
     note: "Scheduler producer resolves system:maintainer-worker before enqueuing stale-scan and branch-cleanup. Consumer (worker:maintainer) also adopts.",
   },
@@ -276,6 +284,10 @@ const SCHEDULER_WIRING = {
     exported_symbol: "schedulePhase3Jobs",
     adoption_location: "phase3Worker.js:147 (inside schedulePhase3Jobs, before enqueue)",
     principal_origin: "systemPrincipalName='system:phase3-worker'",
+    permission: "installation:read",
+    resource_origin: "resolveSystemWorkerContext (fleet-wide)",
+    first_side_effect: "phase3Queue.add (reconcile + dep scan + graduation)",
+    principal_destination: "auth_decision_log.principal_id (scheduler adoption)",
     status: "wired",
     note: "Scheduler producer resolves system:phase3-worker before enqueuing fleet reconciliation, dep scan, graduation. Consumer (worker:phase3) also adopts.",
   },
@@ -284,6 +296,10 @@ const SCHEDULER_WIRING = {
     exported_symbol: "schedulePhase4Jobs",
     adoption_location: "phase4Worker.js:128 (inside schedulePhase4Jobs, before enqueue)",
     principal_origin: "systemPrincipalName='system:phase4-worker'",
+    permission: "ai_review:create",
+    resource_origin: "resolveSystemWorkerContext (fleet-wide)",
+    first_side_effect: "phase4Queue.add (nightly-audit-export)",
+    principal_destination: "auth_decision_log.principal_id (scheduler adoption)",
     status: "wired",
     note: "Scheduler producer resolves system:phase4-worker before enqueuing nightly-audit-export. Consumer (worker:phase4) also adopts.",
   },
@@ -292,22 +308,75 @@ const SCHEDULER_WIRING = {
     exported_symbol: "runReconciliation",
     adoption_location: "reconciliationWorker.js:26 (inside runReconciliation, before scan)",
     principal_origin: "systemPrincipalName='system:reconciliation-worker'",
+    permission: "installation:read",
+    resource_origin: "resolveSystemWorkerContext (fleet-wide)",
+    first_side_effect: "getStaleActions + reconcile",
+    principal_destination: "auth_decision_log.principal_id (scheduler adoption)",
     status: "wired",
     note: "Scheduled via setInterval (not BullMQ repeatable). Producer resolves system:reconciliation-worker before scanning.",
   },
 };
 
 /**
- * PROVEN: surfaces with a passing disposable integration proof.
+ * ADOPTION_PROVEN: surfaces with a passing disposable proof that exercises
+ * the real entry symbol → canonical principal resolver → authorize
+ * observation → no side effect before adoption.
+ *
+ * This is WEAKER than integration-proven. An adoption proof establishes
+ * that the principal resolves and the authorize decision is recorded. It
+ * does NOT establish exact permission/resource match, domain effect,
+ * or zero-gap attribution.
  */
-const PROVEN = {
+const ADOPTION_PROVEN = {
+  // System workers — proven by run_system_worker_adoption_proof.mjs
+  "worker:diagnosis":    { proof_command: "node packages/web/db/proof/run_system_worker_adoption_proof.mjs", proof_checks: 41 },
+  "worker:patch":        { proof_command: "node packages/web/db/proof/run_system_worker_adoption_proof.mjs", proof_checks: 41 },
+  "worker:verification": { proof_command: "node packages/web/db/proof/run_system_worker_adoption_proof.mjs", proof_checks: 41 },
+  "worker:critic":       { proof_command: "node packages/web/db/proof/run_system_worker_adoption_proof.mjs", proof_checks: 41 },
+  // Installation workers — proven by run_installation_worker_adoption_proof.mjs
+  "worker:ciEvidence":   { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
+  "worker:maintainer":   { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
+  "worker:issueFix":     { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
+  "worker:phase2":       { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
+  "worker:phase3":       { proof_command: "node packages/web/db/proof/run_installation_worker_adoption_proof.mjs", proof_checks: 29 },
+  // Schedulers — proven by run_scheduler_adoption_proof.mjs
+  "scheduled:sync":           { proof_command: "node packages/web/db/proof/run_scheduler_adoption_proof.mjs", proof_checks: 16 },
+  "scheduled:maintainer":     { proof_command: "node packages/web/db/proof/run_scheduler_adoption_proof.mjs", proof_checks: 16 },
+  "scheduled:phase3":         { proof_command: "node packages/web/db/proof/run_scheduler_adoption_proof.mjs", proof_checks: 16 },
+  "scheduled:phase4":         { proof_command: "node packages/web/db/proof/run_scheduler_adoption_proof.mjs", proof_checks: 16 },
+  "scheduled:reconciliation": { proof_command: "node packages/web/db/proof/run_scheduler_adoption_proof.mjs", proof_checks: 16 },
+  // Integration-proven surfaces are also adoption-proven (stronger implies weaker)
+  "worker:triage":    { proof_command: "node packages/web/db/proof/run_triage_handler_pg_proof.mjs", proof_checks: 28 },
+  "worker:webhook":   { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
+  "webhook:github":   { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
+  "worker:sync":      { proof_command: "node packages/web/db/proof/run_sync_vertical_proof.mjs",     proof_checks: 25 },
+  "telegram:fix":     { proof_command: "node packages/web/db/proof/run_telegram_bot_proof.mjs",      proof_checks: 15 },
+  "telegram:heal":    { proof_command: "node packages/web/db/proof/run_telegram_heal_proof.mjs",     proof_checks: 8 },
+};
+
+/**
+ * INTEGRATION_PROVEN: surfaces with a passing disposable proof that
+ * additionally establishes:
+ *   → exact permission and resource
+ *   → expected domain effect exactly once
+ *   → authoritative principal at persistence
+ *   → zero positive attribution gaps
+ *   → negative matrix
+ *   → natural exit 0
+ *
+ * This is the STRONGEST evidence level.
+ */
+const INTEGRATION_PROVEN = {
   "worker:triage":   { proof_command: "node packages/web/db/proof/run_triage_handler_pg_proof.mjs", proof_checks: 28 },
   "worker:webhook":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36 },
-  "webhook:github":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36, note: "Same proof covers the ingress surface (HMAC POST /webhooks/github → adoptWorker)" },
+  "webhook:github":  { proof_command: "node packages/web/db/proof/run_webhook_vertical_proof.mjs",  proof_checks: 36, note: "Shares the same proof as worker:webhook — see ambiguousMappings" },
   "worker:sync":     { proof_command: "node packages/web/db/proof/run_sync_vertical_proof.mjs",     proof_checks: 25 },
   "telegram:fix":    { proof_command: "node packages/web/db/proof/run_telegram_bot_proof.mjs",      proof_checks: 15 },
   "telegram:heal":   { proof_command: "node packages/web/db/proof/run_telegram_heal_proof.mjs",     proof_checks: 8 },
 };
+
+// PROVEN kept as backward-compatible alias for INTEGRATION_PROVEN
+const PROVEN = INTEGRATION_PROVEN;
 
 // ── Read-only accessors ────────────────────────────────────────────────────
 
@@ -350,7 +419,21 @@ export function getProof(surfaceId) {
  * Check if a surface is proven (has a passing integration proof).
  */
 export function isProven(surfaceId) {
-  return Object.prototype.hasOwnProperty.call(PROVEN, surfaceId);
+  return Object.prototype.hasOwnProperty.call(INTEGRATION_PROVEN, surfaceId);
+}
+
+/**
+ * Check if a surface is adoption-proven (has a passing adoption proof).
+ */
+export function isAdoptionProven(surfaceId) {
+  return Object.prototype.hasOwnProperty.call(ADOPTION_PROVEN, surfaceId);
+}
+
+/**
+ * Get the adoption proof info for a surface (or null).
+ */
+export function getAdoptionProof(surfaceId) {
+  return ADOPTION_PROVEN[surfaceId] || null;
 }
 
 /**
@@ -368,59 +451,116 @@ export function listProvenSurfaces() {
 }
 
 /**
- * The 3-state adoption gate with full per-surface metadata.
+ * The four-state adoption gate with ambiguity detection.
  *
- * Classifies every declared non-HTTP surface into one of three states
- * (declared, wired, proven) and returns the structured metadata for each
- * wired surface. Also separately tracks scheduler producer adoption.
+ * Derives state from ALL authoritative maps:
+ *   WIRING + SCHEDULER_WIRING → wired
+ *   ADOPTION_PROVEN           → adoption_proven
+ *   INTEGRATION_PROVEN        → integration_proven
+ *
+ * Returns exact sets so counts can be derived without hard-coding.
+ * Detects ambiguous mappings (two surface IDs sharing the same module +
+ * adoption location without an explicit boundary distinction).
  *
  * @param {string[]} expectedNonHttpIds - the non-HTTP surface ids from declarations
  * @returns {{
  *   declared: string[],
  *   wired: string[],
- *   proven: string[],
+ *   adoptionProven: string[],
+ *   integrationProven: string[],
  *   declaredOnly: string[],
  *   wiredOnly: string[],
- *   schedulerStatus: Array<{id: string, wired: boolean, note: string}>,
- *   metadata: Record<string, SurfaceMetadata>,
- *   counts: { declared: number, wired: number, proven: number, schedulersWired: number }
+ *   adoptionProvenOnly: string[],
+ *   ambiguousMappings: Array<{ surfaces: string[], module: string, adoptionLocation: string }>,
+ *   rows: Array<object>,
+ *   counts: { declared: number, wired: number, adoptionProven: number, integrationProven: number }
  * }}
  */
 export function classifyAdoptionStates(expectedNonHttpIds) {
   const declared = [...expectedNonHttpIds].sort();
-  const wired = declared.filter((id) => isWired(id));
-  const proven = declared.filter((id) => isProven(id));
-  const declaredOnly = declared.filter((id) => !isWired(id));
-  const wiredOnly = wired.filter((id) => !isProven(id));
 
-  // Build metadata map for wired surfaces
-  const metadata = {};
+  // Wired = in WIRING OR in SCHEDULER_WIRING
+  const wired = declared.filter((id) => isWired(id) || isSchedulerWired(id));
+
+  // Adoption-proven = in ADOPTION_PROVEN
+  const adoptionProven = declared.filter((id) => isAdoptionProven(id));
+
+  // Integration-proven = in INTEGRATION_PROVEN
+  const integrationProven = declared.filter((id) => isProven(id));
+
+  // Derived sets
+  const declaredOnly = declared.filter((id) => !(isWired(id) || isSchedulerWired(id)));
+  const wiredOnly = wired.filter((id) => !isAdoptionProven(id));
+  const adoptionProvenOnly = adoptionProven.filter((id) => !isProven(id));
+
+  // Ambiguity detection: two+ surfaces sharing the same module + adoption line.
+  // Normalizes adoption_location to just the file:line part for comparison,
+  // ignoring parenthetical annotations.
+  const locationMap = new Map();
   for (const id of wired) {
-    metadata[id] = WIRING[id];
+    const w = WIRING[id] || SCHEDULER_WIRING[id];
+    if (!w || !w.adoption_location) continue;
+    // Extract just the filename:line portion (before any space/paren)
+    const locBase = w.adoption_location.split(/[ (]/)[0];
+    const loc = w.entry_module + ":" + locBase;
+    if (!locationMap.has(loc)) locationMap.set(loc, []);
+    locationMap.get(loc).push(id);
+  }
+  const ambiguousMappings = [];
+  for (const [loc, surfaces] of locationMap) {
+    if (surfaces.length > 1) {
+      const w = WIRING[surfaces[0]] || SCHEDULER_WIRING[surfaces[0]];
+      ambiguousMappings.push({
+        surfaces: surfaces.sort(),
+        module: w.entry_module,
+        adoptionLocation: w.adoption_location,
+      });
+    }
   }
 
-  // Scheduler producer status
-  const schedulerStatus = declared
-    .filter((id) => id.startsWith("scheduled:"))
-    .map((id) => ({
-      id,
-      wired: isSchedulerWired(id),
-      note: SCHEDULER_WIRING[id]?.note || "no scheduler wiring metadata",
-    }));
+  // Build per-surface rows for the full matrix
+  const rows = declared.map((id) => {
+    const w = WIRING[id] || SCHEDULER_WIRING[id];
+    const ap = ADOPTION_PROVEN[id];
+    const ip = INTEGRATION_PROVEN[id];
+    return {
+      surface_id: id,
+      category: id.startsWith("worker:") ? "worker"
+        : id.startsWith("scheduled:") ? "scheduled"
+        : id.startsWith("telegram:") ? "telegram"
+        : id.startsWith("webhook:") ? "webhook"
+        : "unknown",
+      module: w?.entry_module || null,
+      exported_symbol: w?.exported_symbol || null,
+      declared: true,
+      wired: isWired(id) || isSchedulerWired(id),
+      adoption_proven: isAdoptionProven(id),
+      integration_proven: isProven(id),
+      principal_origin: w?.principal_origin || null,
+      permission: w?.permission || null,
+      resource_origin: w?.resource_origin || null,
+      adoption_location: w?.adoption_location || null,
+      first_side_effect: w?.first_side_effect || null,
+      principal_destination: w?.principal_destination || null,
+      proof_command: ip?.proof_command || ap?.proof_command || null,
+    };
+  });
 
   return {
     declared,
     wired,
-    proven,
+    adoptionProven,
+    integrationProven,
     declaredOnly,
     wiredOnly,
-    schedulerStatus,
-    metadata,
+    adoptionProvenOnly,
+    ambiguousMappings,
+    rows,
     counts: {
       declared: declared.length,
       wired: wired.length,
-      proven: proven.length,
-      schedulersWired: schedulerStatus.filter((s) => s.wired).length,
+      adoptionProven: adoptionProven.length,
+      integrationProven: integrationProven.length,
     },
   };
 }

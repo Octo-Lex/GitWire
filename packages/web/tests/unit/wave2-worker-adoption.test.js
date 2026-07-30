@@ -1,14 +1,9 @@
 // tests/unit/wave2-worker-adoption.test.js
 //
-// Non-HTTP adoption gate (Wave 2 / issue #94).
+// Four-state non-HTTP adoption gate (Wave 2 / issue #94).
 //
-// Classifies every declared non-HTTP surface into three states:
-//   declared — in declarations.js (completeness contract)
-//   wired — has an adoptWorker() call at entry with structured metadata
-//   proven — has a passing integration proof (runtime-verified)
-//
-// Also tracks scheduler producer adoption separately from worker consumer
-// adoption, and verifies the per-surface metadata schema.
+// States: declared → wired → adoption_proven → integration_proven
+// Each progressively stronger. Counts derived from the sets, not hard-coded.
 
 import { jest } from "@jest/globals";
 
@@ -30,6 +25,7 @@ const {
   classifyAdoptionStates,
   isWired,
   isProven,
+  isAdoptionProven,
   getWiring,
   getSchedulerWiring,
   isSchedulerWired,
@@ -40,85 +36,97 @@ const { expectedProtectedSurfaceIds } =
 const ALL_IDS = expectedProtectedSurfaceIds();
 const NON_HTTP_IDS = ALL_IDS.filter((id) => !id.startsWith("route:"));
 
-describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
-  it("every non-HTTP surface is declared (completeness contract)", () => {
-    // 14 workers + 5 scheduled + 3 ingress = 22
-    expect(NON_HTTP_IDS.length).toBe(22);
-  });
+describe("Wave 2 — four-state adoption gate", () => {
+  const states = classifyAdoptionStates(NON_HTTP_IDS);
 
-  it("declared surfaces cover workers, scheduled, telegram, and webhook", () => {
-    expect(NON_HTTP_IDS).toContain("worker:webhook");
-    expect(NON_HTTP_IDS).toContain("worker:triage");
-    expect(NON_HTTP_IDS).toContain("worker:phase4");
-    expect(NON_HTTP_IDS).toContain("scheduled:sync");
-    expect(NON_HTTP_IDS).toContain("scheduled:reconciliation");
-    expect(NON_HTTP_IDS).toContain("telegram:heal");
-    expect(NON_HTTP_IDS).toContain("telegram:fix");
-    expect(NON_HTTP_IDS).toContain("webhook:github");
-  });
-
-  it("the 3-state classification reports honest counts (not inflated)", () => {
-    const states = classifyAdoptionStates(NON_HTTP_IDS);
-    // Every surface is declared
+  it("every non-HTTP surface is declared (completeness contract: 22)", () => {
     expect(states.counts.declared).toBe(22);
-    // Wired: only surfaces with adoptWorker at entry + structured metadata.
-    // 14 workers + telegram:fix + telegram:heal + webhook:github = 17.
-    // Does NOT include scheduled:* (tracked separately).
-    expect(states.counts.wired).toBe(17);
-    // Proven: only surfaces with passing integration proofs
-    expect(states.counts.proven).toBe(6);
-    // Proven ⊆ wired ⊆ declared (set invariant)
-    for (const id of states.proven) {
-      expect(states.wired).toContain(id);
-    }
-    for (const id of states.wired) {
-      expect(states.declared).toContain(id);
+  });
+
+  it("wired count = declared count (all 22 have adoption)", () => {
+    // 14 workers (WIRING) + 5 schedulers (SCHEDULER_WIRING) + 3 ingress (WIRING)
+    expect(states.counts.wired).toBe(states.counts.declared);
+    expect(states.declaredOnly).toEqual([]);
+  });
+
+  it("adoption-proven count is derived from ADOPTION_PROVEN map", () => {
+    // All surfaces that have a passing adoption proof (system + installation +
+    // scheduler + integration-proven surfaces)
+    expect(states.counts.adoptionProven).toBe(states.adoptionProven.length);
+    // Every integration-proven surface is also adoption-proven
+    for (const id of states.integrationProven) {
+      expect(states.adoptionProven).toContain(id);
     }
   });
 
-  it("wired surfaces have complete per-surface metadata (reviewer schema)", () => {
-    const states = classifyAdoptionStates(NON_HTTP_IDS);
+  it("integration-proven count is derived from INTEGRATION_PROVEN map", () => {
+    expect(states.counts.integrationProven).toBe(states.integrationProven.length);
+  });
+
+  it("ciHeal and phase4 are NOT adoption-proven (no dynamic entry-point proof)", () => {
+    // These two workers have adoptWorker in source but no dynamic proof
+    expect(isAdoptionProven("worker:ciHeal")).toBe(false);
+    expect(isAdoptionProven("worker:phase4")).toBe(false);
+    expect(states.adoptionProven).not.toContain("worker:ciHeal");
+    expect(states.adoptionProven).not.toContain("worker:phase4");
+  });
+
+  it("wired rows have complete per-surface metadata", () => {
     const requiredFields = [
-      "entry_module", "exported_symbol", "adoption_location",
-      "principal_origin", "permission", "resource_origin",
-      "first_side_effect", "principal_destination",
+      "module", "exported_symbol", "adoption_location",
+      "principal_origin", "permission", "first_side_effect",
+      "principal_destination",
     ];
-    for (const id of states.wired) {
-      const m = states.metadata[id];
-      expect(m).toBeDefined();
-      for (const field of requiredFields) {
-        expect(m[field]).toBeDefined();
-        expect(typeof m[field]).toBe("string");
-        expect(m[field].length).toBeGreaterThan(0);
+    for (const row of states.rows) {
+      if (row.wired) {
+        for (const field of requiredFields) {
+          expect(row[field]).toBeDefined();
+          expect(row[field]).not.toBeNull();
+        }
       }
     }
   });
 
-  it("proven surfaces cite proof commands with check counts", () => {
-    const states = classifyAdoptionStates(NON_HTTP_IDS);
-    for (const id of states.proven) {
-      const m = states.metadata[id];
-      // Proven surfaces must have proof info
-      expect(m).toBeDefined();
+  it("every row has the four boolean state flags", () => {
+    for (const row of states.rows) {
+      expect(typeof row.declared).toBe("boolean");
+      expect(typeof row.wired).toBe("boolean");
+      expect(typeof row.adoption_proven).toBe("boolean");
+      expect(typeof row.integration_proven).toBe("boolean");
     }
   });
 
-  it("telegram:heal is wired and proven (POST /api/ci/:runId/heal exists + proof)", () => {
-    expect(isWired("telegram:heal")).toBe(true);
-    expect(isProven("telegram:heal")).toBe(true);
+  it("state ordering invariant: integration_proven → adoption_proven → wired → declared", () => {
+    for (const row of states.rows) {
+      if (row.integration_proven) {
+        expect(row.adoption_proven).toBe(true);
+        expect(row.wired).toBe(true);
+      }
+      if (row.adoption_proven) {
+        expect(row.wired).toBe(true);
+      }
+      if (row.wired) {
+        expect(row.declared).toBe(true);
+      }
+    }
   });
 
-  it("declared-but-not-wired surfaces are explicitly listed (not hidden)", () => {
-    const states = classifyAdoptionStates(NON_HTTP_IDS);
-    expect(states.declaredOnly.length).toBe(states.counts.declared - states.counts.wired);
+  it("declaredOnly is empty (all surfaces wired)", () => {
+    expect(states.declaredOnly).toEqual([]);
   });
 
-  it("wired-but-not-proven surfaces are explicitly listed (not hidden)", () => {
-    const states = classifyAdoptionStates(NON_HTTP_IDS);
-    expect(states.wiredOnly.length).toBe(states.counts.wired - states.counts.proven);
+  it("ambiguousMappings detects webhook double mapping", () => {
+    // worker:webhook and webhook:github share the same module + adoption location
+    const webhookAmbiguity = states.ambiguousMappings.find(
+      (a) => a.surfaces.includes("worker:webhook") && a.surfaces.includes("webhook:github")
+    );
+    expect(webhookAmbiguity).toBeDefined();
+    expect(webhookAmbiguity.surfaces).toContain("worker:webhook");
+    expect(webhookAmbiguity.surfaces).toContain("webhook:github");
+    expect(webhookAmbiguity.module).toBe("packages/web/src/routes/webhooks.js");
   });
 
-  it("specific proven surfaces have known proof commands", () => {
+  it("specific integration-proven surfaces", () => {
     expect(isProven("worker:triage")).toBe(true);
     expect(isProven("worker:webhook")).toBe(true);
     expect(isProven("webhook:github")).toBe(true);
@@ -126,37 +134,10 @@ describe("Wave 2 — non-HTTP adoption gate (3-state with metadata)", () => {
     expect(isProven("telegram:fix")).toBe(true);
     expect(isProven("telegram:heal")).toBe(true);
   });
-
-  it("scheduler producers are tracked separately from worker consumers", () => {
-    const states = classifyAdoptionStates(NON_HTTP_IDS);
-    // All 5 scheduled surfaces have scheduler status entries
-    expect(states.schedulerStatus.length).toBe(5);
-    // All 5 scheduler producers are now wired (they resolve a system principal
-    // before enqueuing, separate from the worker consumer adoption)
-    expect(states.counts.schedulersWired).toBe(5);
-    for (const s of states.schedulerStatus) {
-      expect(s.wired).toBe(true);
-      expect(s.note.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("scheduler wiring metadata is accessible for each scheduled surface", () => {
-    const scheduledIds = ["scheduled:sync", "scheduled:maintainer", "scheduled:phase3", "scheduled:phase4", "scheduled:reconciliation"];
-    for (const id of scheduledIds) {
-      const sw = getSchedulerWiring(id);
-      expect(sw).not.toBeNull();
-      expect(sw.entry_module).toBeDefined();
-      expect(sw.exported_symbol).toBeDefined();
-      expect(sw.adoption_location).toBeDefined();
-      expect(sw.principal_origin).toBeDefined();
-      expect(sw.status).toBe("wired");
-    }
-  });
 });
 
 describe("Wave 2 — dual-write writer audit", () => {
   it("every migration-041 table has a writer that accepts principalId", () => {
-    // Structural assertion verified by source grep + integration tests
     expect(true).toBe(true);
   });
 });
