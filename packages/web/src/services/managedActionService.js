@@ -54,11 +54,14 @@ export async function recordAction({
 
   // Wave 2: centralized attribution guard — records a gap event if
   // principalId is null, before the INSERT reaches managed_actions.
-  const attribution = await validateAttribution({
+  // No executor is passed — we're not in a transaction, so the gap recorder
+  // uses its own db connection (with no savepoint).
+  await validateAttribution({
     principalId,
     surfaceId: "managedActionService.recordAction",
-    writer: "managed_actions",
-    db,
+    writer: "managedActionService.recordAction",
+    tableName: "managed_actions",
+    operation: "insert",
   });
 
   const contextHash = context ? hashContext(context) : null;
@@ -82,7 +85,7 @@ export async function recordAction({
       prNumber ?? null, issueNumber ?? null,
       actionType, actionKey, actionValue ?? null,
       githubId ?? null, contextHash,
-      attribution.principalId,
+      principalId,
     ]
   );
 

@@ -63,6 +63,8 @@ console.log("PG: " + pgName + ", Redis: " + redisName);
 let setupPool = null;
 try {
   await waitForReady(dbUrl, 60_000); await waitForRedis(redisName, 30_000);
+  // Extra settle time to prevent intermittent readiness race under Docker load
+  await new Promise(r => setTimeout(r, 1000));
   setupPool = new pg.Pool({ connectionString: dbUrl }); await applyMigrations(setupPool);
   check("migrations applied", (await setupPool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n === 42);
 
