@@ -27,20 +27,8 @@ const ROUTE_SURFACES = [
   { id: "route:DELETE:/api/maintainer/collaborators/:owner/:repo/:login", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:PUT:/api/maintainer/branch-rules/:owner/:repo/:pattern", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
-  // MISSING HANDLER — declared but no Express route exists:
-  //   POST /api/maintainer/:owner/:repo/collaborators (add collaborator)
-  //   POST /api/maintainer/:owner/:repo/comment (post comment)
-  // Proven stale: no handler, no dashboard caller, no test, no doc.
-  // NOT removed — retained as explicit blocker. handlerMissing: true
-  // marks this for gate mode. Implementation is outside Wave 2 scope.
-  { id: "route:POST:/api/maintainer/:owner/:repo/collaborators", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record", handlerMissing: true },
-  { id: "route:POST:/api/maintainer/:owner/:repo/comment", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record", handlerMissing: true },
-
   // config.js — privileged config changes
-  // POST override: OBSOLETE — no handler. The override write is covered by
-  // PUT /api/config/:owner/:repo. Retained with handlerMissing: true.
   { id: "route:PUT:/api/config/:owner/:repo", kind: "route", permission: "repository:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/config/:owner/:repo/override", kind: "route", permission: "repository:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record", handlerMissing: true },
   { id: "route:POST:/api/config/:owner/:repo/restore/:historyId", kind: "route", permission: "repository:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
   // rollouts.js — governed policy mutations
@@ -68,11 +56,7 @@ const ROUTE_SURFACES = [
   { id: "route:POST:/api/phase3/reconciler/run", kind: "route", permission: "installation:read", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:POST:/api/review/trigger/:owner/:repo/:pr", kind: "route", permission: "ai_review:create", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
-  // MISSING HANDLER — POST /api/repos/reconcile declared but no bare POST handler.
-  // GET /api/repos/reconcile exists (transfers.js:15). POST /merge and /discard
-  // exist. Bare POST does not. Retained as explicit blocker.
-  { id: "route:POST:/api/repos/reconcile", kind: "route", permission: "repository:update", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record", handlerMissing: true },
-  // Actual existing sync route (was not in original declarations — added):
+  // repos.js — sync enqueue
   { id: "route:POST:/api/repos/:owner/:repo/sync", kind: "route", permission: "repository:update", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 
   // gates.js — posts check runs

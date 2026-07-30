@@ -139,6 +139,17 @@ async function reconcilePR({ payload }) {
   const { repository, pull_request, installation } = payload;
   if (!pull_request || !installation) return;
 
+  // Wave 2: resolve trusted principal before any domain write.
+  const adoption = await adoptWorker({
+    workerId: "worker:ciHeal",
+    permission: "repository:github:act",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { payload },
+    legacyActor: pull_request.user?.login,
+  });
+  const principalId = workerPrincipalId(adoption.context);
+
   const octokit = wrapOctokit(await getInstallationClient(installation.id));
   const owner = repository.owner.login;
   const repo = repository.name;
@@ -399,7 +410,7 @@ async function healWorkflowRun({ payload }) {
       return;
     }
 
-    await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation);
+    await attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation, principalId);
     // Reset circuit breaker on successful heal (per-branch)
     await updateCircuitBreaker(repository.full_name, branch, true);
   } else {
@@ -416,7 +427,7 @@ async function healWorkflowRun({ payload }) {
 
 // ── Attempt automated heal via patch PR ───────────────────────────────────────
 
-async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation) {
+async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation, principalId) {
   // Flaky test: just re-run
   if (diagnosis.failure_type === "test_flaky" && diagnosis.confidence !== "low") {
     await healByRerun(octokit, owner, repo, run, diagnosis, repoConfig);
@@ -445,7 +456,7 @@ async function attemptHeal(octokit, owner, repo, run, diagnosis, logs, repositor
       });
       return;
     }
-    await healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation);
+    await healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation, principalId);
   } else {
     // No file identified — fall back to comment-only
     await postDiagnosisComment(octokit, owner, repo, run, diagnosis, true);
@@ -497,7 +508,7 @@ async function healByRerun(octokit, owner, repo, run, diagnosis, repoConfig) {
 
 // ── Heal strategy: create a patch PR with the fix ─────────────────────────────
 
-async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation) {
+async function healByPatchPR(octokit, owner, repo, run, diagnosis, logs, repository, repoConfig, installation, principalId) {
   const repoFullName = repository.full_name;
 
   // ── Duplicate patch-PR guard (loop prevention) ─────────────────────────
@@ -1109,6 +1120,17 @@ export function scoreFixQuality(originalContent, fixedContent, diagnosis) {
 // Feature 3: If a heal PR has been open > STALE_PR_DAYS with no activity, auto-close it.
 async function checkHealPRStatus({ repository, installation }) {
   if (!repository || !installation) return;
+
+  // Wave 2: resolve trusted principal before any domain write.
+  const adoption = await adoptWorker({
+    workerId: "worker:ciHeal",
+    permission: "repository:github:act",
+    resourceType: "repository",
+    installationId: installation.id,
+    jobData: { repository, installation },
+  });
+  const principalId = workerPrincipalId(adoption.context);
+
   const octokit = wrapOctokit(await getInstallationClient(installation.id));
   const owner = repository.owner.login;
   const repo = repository.name;

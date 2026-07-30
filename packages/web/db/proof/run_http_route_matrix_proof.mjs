@@ -297,7 +297,7 @@ try {
   const { listProtectedSurfaces } = await import(pathToFileURL(join(WEB_ROOT, "src", "services", "auth", "protectedSurfaces.js")).href);
   const declaredRoutes = listProtectedSurfaces().filter((s) => s.kind === "route");
 
-  check("declared route count is 26", declaredRoutes.length === 26, "n=" + declaredRoutes.length);
+  check("declared route count is 22", declaredRoutes.length === 22, "n=" + declaredRoutes.length);
 
   // ── create a DENIED principal (no role grants) for the observe-only probe ──
   // Wave 2 is observe-only: a principal with the required permission absent must
