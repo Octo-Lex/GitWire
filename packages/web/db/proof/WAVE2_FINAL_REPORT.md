@@ -16,7 +16,7 @@ Independent review of PR #95 identified four correctness defects. They were fixe
 72d0c158145809423a2de5245926ed319e0331f3
 ```
 
-A documentation-only reconciliation commit follows that delta. The authoritative PR head is recorded in the PR description and GitHub metadata rather than hard-coded here, avoiding a self-referential stale SHA.
+Documentation-only reconciliation commits follow that delta. The authoritative PR head is recorded in the PR description and GitHub metadata rather than hard-coded here, avoiding a self-referential stale SHA.
 
 The corrective delta adds targeted unit coverage and passes repository CI, DCO, and CodeQL. The complete 19-harness disposable proof package must be rerun locally at the current PR head before merge authorization; results below distinguish original complete-proof evidence from current-head CI evidence.
 
