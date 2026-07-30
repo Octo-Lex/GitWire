@@ -6,9 +6,7 @@
 // method + path pattern. For matched surfaces that are NOT already explicitly
 // adopted (req._wave2Observed), it:
 //   1. resolves the declared permission from the registry (NOT a generic token);
-//   2. resolves the declared resource from trusted server-side DB lookup
-//      (installation_id + repository_id from the repositories table by name,
-//      NOT from request body/path);
+//   2. resolves the declared resource from trusted server-side DB lookup;
 //   3. calls authorize() exactly once with the declared permission + resource;
 //   4. records one observe-only evidence row.
 //
@@ -36,15 +34,11 @@ async function ensureRouteMap() {
   const { listProtectedSurfaces } = await import("../services/auth/protectedSurfaces.js");
 
   // Build a lookup of route surfaces by (method, path-pattern).
-  // Path patterns like 'route:POST:/api/maintainer/:owner/:repo/collaborators'
-  // are parsed into a matcher.
   const surfaces = listProtectedSurfaces().filter((s) => s.kind === "route");
   _routeMap = surfaces.map((s) => {
-    // Parse the surface id: 'route:METHOD:/api/path/:param'
     const parts = s.id.split(":");
     const method = parts[1];
     const pathPattern = parts.slice(2).join(":");
-    // Convert Express-style :param to a regex + param-name list
     const paramNames = [];
     const regexStr = pathPattern.replace(/:([^/]+)/g, (_, name) => {
       paramNames.push(name);
@@ -62,28 +56,71 @@ async function ensureRouteMap() {
   return _routeMap;
 }
 
+async function lookupRepositoryByName(owner, repo) {
+  const { rows } = await db.query(
+    "SELECT github_id, installation_id, owner, name FROM repositories WHERE full_name = $1",
+    [`${owner}/${repo}`]
+  );
+  return rows[0] ?? null;
+}
+
+async function lookupRepositoryByRunId(runId) {
+  const { rows } = await db.query(
+    `SELECT r.github_id, r.installation_id, r.owner, r.name
+       FROM ci_runs cr
+       JOIN repositories r ON r.github_id = cr.repo_id
+      WHERE cr.id = $1`,
+    [runId]
+  );
+  return rows[0] ?? null;
+}
+
 /**
  * Resolve the trusted resource for a matched route surface.
- * Uses server-side DB lookup by owner/repo name — NEVER trusts request body
- * for installation_id/repository_id.
+ * Request body/query identity fields are never accepted as authority.
  */
-async function resolveResource(resourceType, params) {
-  if (resourceType === "repository" && params.owner && params.repo) {
-    const { rows } = await db.query(
-      "SELECT github_id, installation_id FROM repositories WHERE full_name = $1",
-      [`${params.owner}/${params.repo}`]
-    );
-    if (rows.length === 0) return { type: "repository", organization: params.owner, repository: params.repo };
+export async function resolveResource(resourceType, params) {
+  if (resourceType === "repository") {
+    let row = null;
+    if (params.owner && params.repo) {
+      row = await lookupRepositoryByName(params.owner, params.repo);
+    } else if (params.runId) {
+      row = await lookupRepositoryByRunId(params.runId);
+    }
+
+    if (!row) {
+      return {
+        type: "repository",
+        organization: params.owner ?? null,
+        repository: params.repo ?? null,
+      };
+    }
     return {
       type: "repository",
-      installationId: rows[0].installation_id,
-      repositoryId: rows[0].github_id,
-      organization: params.owner,
-      repository: params.repo,
+      installationId: row.installation_id,
+      repositoryId: row.github_id,
+      organization: row.owner,
+      repository: row.name,
     };
   }
+
   if (resourceType === "installation") {
+    if (params.owner && params.repo) {
+      const row = await lookupRepositoryByName(params.owner, params.repo);
+      if (row) {
+        return {
+          type: "installation",
+          installationId: row.installation_id,
+          organization: row.owner,
+          repository: row.name,
+        };
+      }
+    }
     return { type: "installation" };
+  }
+
+  if (resourceType === "fleet") {
+    return { type: "fleet" };
   }
   if (resourceType === "policy_rollout_plan" && params.id) {
     return { type: "policy_rollout_plan", resourceId: params.id };
@@ -97,8 +134,7 @@ async function resolveResource(resourceType, params) {
 /**
  * Declaration-driven observe-only route authorization observer.
  * Runs BEFORE the route handler. Calls authorize() once if the route matches
- * a declaration and hasn't been explicitly observed. Does NOT block (observe-
- * only).
+ * a declaration and hasn't been explicitly observed. Does NOT block.
  */
 export async function routeAuthObserver(req, res, next) {
   // Skip anonymous paths.
@@ -111,7 +147,6 @@ export async function routeAuthObserver(req, res, next) {
     return next();
   }
 
-  // Ensure the route map is built.
   let routeMap;
   try {
     routeMap = await ensureRouteMap();
@@ -120,13 +155,11 @@ export async function routeAuthObserver(req, res, next) {
     return next();
   }
 
-  // Match the request against declared route surfaces.
   const match = routeMap.find(
     (r) => r.method === req.method && r.regex.test(req.path)
   );
 
   if (match) {
-    // Extract path params from the regex match.
     const m = req.path.match(match.regex);
     const params = {};
     if (m) {
@@ -135,12 +168,9 @@ export async function routeAuthObserver(req, res, next) {
       });
     }
 
-    // If already explicitly observed, skip (no double-record).
     if (!req._wave2Observed) {
       try {
         const resource = await resolveResource(match.resourceType, params);
-        // Call authorize() once with the DECLARED permission (not generic).
-        // Observe-only: record the decision, do not block.
         await authorize({
           principal: req.auth || null,
           permission: match.permission,
