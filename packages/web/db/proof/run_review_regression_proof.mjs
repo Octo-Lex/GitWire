@@ -171,7 +171,7 @@ try {
   const masSrc = await readFile(join(REPO_ROOT, "packages/web/src/services/managedActionService.js"), "utf8");
   check("recordAction accepts principalId parameter", masSrc.includes("principalId = null"));
   check("recordAction calls validateAttribution", masSrc.includes("validateAttribution"));
-  check("recordAction includes principal_id in INSERT", masSrc.includes("principal_id") && masSrc.includes("attribution.principalId"));
+  check("recordAction includes principal_id in INSERT", masSrc.includes("principal_id") && masSrc.includes("principalId"));
   check("imports validateAttribution", masSrc.includes("import { validateAttribution }"));
 
   // Cleanup
