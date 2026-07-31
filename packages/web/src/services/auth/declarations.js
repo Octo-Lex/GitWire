@@ -61,6 +61,15 @@ const ROUTE_SURFACES = [
   { id: "route:GET:/api/pull-requests/:owner/:repo", kind: "route", permission: "pull_request:list", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:GET:/api/decisions", kind: "route", permission: "decision_log:list", resourceType: "fleet", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:GET:/api/repairs", kind: "route", permission: "repair_proposal:list", resourceType: "fleet", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+
+  // Governed Policy Authority (GP-02)
+  { id: "route:POST:/api/policy/change-requests", kind: "route", permission: "policy_change_request:create", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:GET:/api/policy/change-requests", kind: "route", permission: "policy_change_request:read", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:GET:/api/policy/change-requests/:id", kind: "route", permission: "policy_change_request:read", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:POST:/api/policy/change-requests/:id/versions", kind: "route", permission: "policy_change_request:create", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:POST:/api/policy/change-requests/:id/select-version", kind: "route", permission: "policy_change_request:update", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:POST:/api/policy/change-requests/:id/submit", kind: "route", permission: "policy_change_request:update", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:POST:/api/policy/change-requests/:id/transition", kind: "route", permission: "policy_change_request:update", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 ];
 
 // ── Workers (from the worker inventory) ─────────────────────────────────────
