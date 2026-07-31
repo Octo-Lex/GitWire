@@ -13,7 +13,6 @@ import {
   createVersion,
   selectVersion,
   submitChangeRequest,
-  transitionChangeRequest,
   getChangeRequest,
   listChangeRequests,
   getVersions,
@@ -163,34 +162,5 @@ governedPolicyRouter.post("/change-requests/:id/submit", async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: "Failed to submit" });
-  }
-});
-
-/**
- * POST /api/policy/change-requests/:id/transition
- * Generic state transition with CAS.
- */
-governedPolicyRouter.post("/change-requests/:id/transition", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { toState, detail } = req.body;
-    if (!toState) {
-      return res.status(400).json({ error: "toState is required" });
-    }
-
-    const principalId = authoritativePrincipalId(req);
-    await observeAuthorize(req, {
-      permission: "policy_change_request:update",
-      resource: { type: "policy_definition", resourceId: id },
-    });
-
-    const cr = await transitionChangeRequest({ changeRequestId: id, toState, principalId, detail });
-    res.json(cr);
-  } catch (err) {
-    logger.error({ err: err.message }, "Failed to transition change request");
-    if (err.message.includes("not found") || err.message.includes("Invalid transition") || err.message.includes("terminal") || err.message.includes("CAS") || err.message.includes("required")) {
-      return res.status(400).json({ error: err.message });
-    }
-    res.status(500).json({ error: "Failed to transition" });
   }
 });

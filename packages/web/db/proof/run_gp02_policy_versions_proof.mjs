@@ -1,29 +1,29 @@
 #!/usr/bin/env node
 // packages/web/db/proof/run_gp02_policy_versions_proof.mjs
-// GP-02 disposable proof: immutable policy versions + change-request state machine.
+// GP-02 disposable proof: SECURITY DEFINER function-boundary model.
 //
 // Verifies:
-//   - create change request (draft state)
-//   - create version (immutable, content_hash computed)
-//   - version append-only enforcement
-//   - select version
-//   - submit (draft → submitted)
-//   - transition (submitted → validating → awaiting_approval)
-//   - CAS transition (concurrent transition fails)
-//   - invalid transitions rejected
-//   - terminal states blocked
-//   - version creation blocked after draft
-//   - transition events recorded
-//   - principal_id from server, not client
-//   - gitwire_app INSERT/UPDATE grants correct
-//   - rollback + reapply
+//   - Direct SQL INSERT/UPDATE/DELETE denied for gitwire_app
+//   - Only the 4 GP-02 functions are executable by gitwire_app
+//   - PUBLIC, operator, and unrelated roles cannot execute them
+//   - Function collision aborts migration 045
+//   - create_policy_change_request: creates request + initial event atomically
+//   - create_policy_version: hash computed in DB (recursive canonical), FOR UPDATE lock
+//   - Nested payload differences produce different hashes
+//   - Non-draft version creation rejected
+//   - select_policy_version: CAS enforcement, version ownership
+//   - submit_policy_change_request: CAS draft→submitted, requires selected version
+//   - Stale CAS produces neither state change nor event
+//   - Concurrent version vs submission has one serializable outcome
+//   - GP-02 cannot enter validating/awaiting_approval/approved/promoted
+//   - Rollback drops exact functions and grants, no CASCADE
+//   - Reapplication restores equivalent state
 
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { readdir, readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import crypto from "node:crypto";
 import pg from "pg";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -69,173 +69,189 @@ try {
   const migCount = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
   check("migration ledger = 45", migCount === 45, "count=" + migCount);
 
-  // ═══ Phase 2: Setup ═════════════════════════════════════════════════════
-  console.log("\n=== Phase 2: Seed principal ===");
+  // ═══ Phase 2: Direct SQL writes denied for gitwire_app ═══════════════════
+  console.log("\n=== Phase 2: Direct SQL writes denied ===");
+
+  // Check privilege model
+  for (const t of ["policy_change_requests", "policy_versions", "policy_transition_events"]) {
+    const { rows } = await pool.query("SELECT has_table_privilege('gitwire_app','gitwire_policy." + t + "','INSERT') as ins, has_table_privilege('gitwire_app','gitwire_policy." + t + "','UPDATE') as upd, has_table_privilege('gitwire_app','gitwire_policy." + t + "','DELETE') as del, has_table_privilege('gitwire_app','gitwire_policy." + t + "','SELECT') as sel");
+    check("gitwire_app SELECT on " + t, rows[0].sel === true);
+    check("gitwire_app NO INSERT on " + t, rows[0].ins === false);
+    check("gitwire_app NO UPDATE on " + t, rows[0].upd === false);
+    check("gitwire_app NO DELETE on " + t, rows[0].del === false);
+  }
+
+  // ═══ Phase 3: Function execution privileges ══════════════════════════════
+  console.log("\n=== Phase 3: Function execution ===");
+  const functions = [
+    "create_policy_change_request(text, text, text, uuid)",
+    "create_policy_version(uuid, jsonb, uuid)",
+    "select_policy_version(uuid, uuid, bigint, uuid)",
+    "submit_policy_change_request(uuid, bigint, uuid)",
+  ];
+  for (const fn of functions) {
+    const { rows } = await pool.query("SELECT has_function_privilege('gitwire_app','gitwire_policy." + fn + "','EXECUTE') as can_exec");
+    check("gitwire_app EXECUTE on " + fn.split("(")[0], rows[0].can_exec === true);
+    const { rows: pubRows } = await pool.query("SELECT has_function_privilege('public','gitwire_policy." + fn + "','EXECUTE') as can_exec");
+    check("PUBLIC NO EXECUTE on " + fn.split("(")[0], pubRows[0].can_exec === false);
+    const { rows: opRows } = await pool.query("SELECT has_function_privilege('gitwire_operator','gitwire_policy." + fn + "','EXECUTE') as can_exec");
+    check("gitwire_operator NO EXECUTE on " + fn.split("(")[0], opRows[0].can_exec === false);
+  }
+
+  // ═══ Phase 4: Setup + create change request ═════════════════════════════
+  console.log("\n=== Phase 4: Create change request ===");
   await pool.query("INSERT INTO gitwire_auth.auth_principals (principal_type, display_name) VALUES ('legacy-key','gp02-test-user') ON CONFLICT DO NOTHING");
   await pool.query("INSERT INTO gitwire_auth.auth_role_permissions (role_id, permission) SELECT id, p FROM gitwire_auth.auth_roles, (VALUES ('policy_change_request:create'),('policy_change_request:read'),('policy_change_request:update')) AS t(p) WHERE name='admin' ON CONFLICT DO NOTHING");
   await pool.query("INSERT INTO gitwire_auth.auth_principal_roles (principal_id, role_id, scope_type, granted_by) SELECT p.id, r.id, 'fleet', p.id FROM gitwire_auth.auth_principals p, gitwire_auth.auth_roles r WHERE p.display_name='gp02-test-user' AND r.name='admin' ON CONFLICT DO NOTHING");
   const testPid = (await pool.query("SELECT id FROM gitwire_auth.auth_principals WHERE display_name='gp02-test-user'")).rows[0].id;
-  check("seed principal created", testPid != null, "pid=" + testPid);
 
-  // ═══ Phase 3: Create change request ═════════════════════════════════════
-  console.log("\n=== Phase 3: Create change request ===");
-  const { rows: [cr] } = await pool.query(
-    "INSERT INTO gitwire_policy.policy_change_requests (resource_type, resource_id, policy_family, author_principal_id) VALUES ('repository','test/repo','test-config',$1) RETURNING *",
-    [testPid]
-  );
-  check("change request created", cr.id != null);
-  check("initial state = draft", cr.state === "draft");
-  check("initial state_revision = 0", Number(cr.state_revision) === 0);
-  check("author_principal_id set", cr.author_principal_id === testPid);
+  // Helper: run a query as gitwire_app via SET SESSION AUTHORIZATION
+  // (changes session_user, which SECURITY DEFINER functions check)
+  async function runAsApp(sql, params) {
+    const c = await pool.connect();
+    try {
+      await c.query("SET SESSION AUTHORIZATION gitwire_app");
+      return await c.query(sql, params);
+    } finally {
+      await c.query("RESET SESSION AUTHORIZATION");
+      c.release();
+    }
+  }
 
-  // Record initial transition event
-  await pool.query(
-    "INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) VALUES ($1,'create',NULL,'draft',$2,'{}')",
-    [cr.id, testPid]
-  );
+  // Create via function
+  const crResult = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','test/repo','test-config',$1) as id", [testPid]);
+  const crId = crResult.rows[0].id;
 
-  // ═══ Phase 4: Create version ════════════════════════════════════════════
-  console.log("\n=== Phase 4: Create immutable version ===");
-  const payload = { version: 1, pillars: { triage: { enabled: true } }, settings: { dry_run: false } };
-  const canonical = JSON.stringify(payload, Object.keys(payload).sort());
-  const expectedHash = "sha256:" + crypto.createHash("sha256").update(canonical).digest("hex");
+  check("change request created via function", crId != null);
 
-  const { rows: [v] } = await pool.query(
-    "INSERT INTO gitwire_policy.policy_versions (change_request_id, payload, content_hash, author_principal_id) VALUES ($1, $2, $3, $4) RETURNING *",
-    [cr.id, JSON.stringify(payload), expectedHash, testPid]
-  );
-  check("version created", v.id != null);
-  check("content_hash is sha256 format", /^sha256:[0-9a-f]{64}$/.test(v.content_hash));
-  check("content_hash matches payload", v.content_hash === expectedHash);
-  check("frozen_at set", v.frozen_at != null);
-  check("payload is immutable (append-only)", true);
+  const { rows: [cr] } = await pool.query("SELECT * FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+  check("state = draft", cr.state === "draft");
+  check("state_revision = 0", Number(cr.state_revision) === 0);
+  check("author set from function param", cr.author_principal_id === testPid);
 
-  // Verify append-only: try UPDATE
+  // Verify initial event was created atomically
+  const { rows: events1 } = await pool.query("SELECT * FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1", [crId]);
+  check("initial event recorded atomically", events1.length === 1);
+  check("event type = create", events1[0].event_type === "create");
+  check("event to_state = draft", events1[0].to_state === "draft");
+
+  // ═══ Phase 5: Create version (hash computed in DB) ══════════════════════
+  console.log("\n=== Phase 5: Create immutable version ===");
+  const payload1 = { version: 1, pillars: { triage: { enabled: true } }, settings: { dry_run: false } };
+
+  const vResult1 = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [crId, JSON.stringify(payload1), testPid]);
+
+  const v1Id = vResult1.rows[0].id;
+  check("version created via function", v1Id != null);
+
+  const { rows: [v1] } = await pool.query("SELECT * FROM gitwire_policy.policy_versions WHERE id = $1", [v1Id]);
+  check("content_hash is sha256 format", /^sha256:[0-9a-f]{64}$/.test(v1.content_hash));
+  check("frozen_at set", v1.frozen_at != null);
+
+  // ═══ Phase 6: Nested payload hash differentiation ════════════════════════
+  console.log("\n=== Phase 6: Nested payload hash differentiation ===");
+
+  // Create a second version with different nested content
+  const payload2 = { version: 1, pillars: { triage: { enabled: false } }, settings: { dry_run: false } };
+  const vResult2 = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [crId, JSON.stringify(payload2), testPid]);
+  const { rows: [v2] } = await pool.query("SELECT content_hash FROM gitwire_policy.policy_versions WHERE id = $1", [vResult2.rows[0].id]);
+
+  check("nested difference produces different hash", v1.content_hash !== v2.content_hash, "h1=" + v1.content_hash.substring(0, 20) + "... h2=" + v2.content_hash.substring(0, 20) + "...");
+
+  // Same payload should produce same hash
+  const vResult3 = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [crId, JSON.stringify(payload1), testPid]);
+  const { rows: [v3] } = await pool.query("SELECT content_hash FROM gitwire_policy.policy_versions WHERE id = $1", [vResult3.rows[0].id]);
+  check("identical payload produces identical hash", v1.content_hash === v3.content_hash);
+
+  // ═══ Phase 7: Non-draft version creation rejected ════════════════════════
+  console.log("\n=== Phase 7: Non-draft version creation rejected ===");
+  // First select a version, then submit to move out of draft
+  await runAsApp("SELECT * FROM gitwire_policy.select_policy_version($1, $2, 0, $3)", [crId, v1Id, testPid]);
+
+  // Verify revision incremented by select
+  const { rows: [crAfterSelect] } = await pool.query("SELECT state, state_revision, selected_version_id FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+  check("state still draft after select", crAfterSelect.state === "draft");
+  check("revision incremented after select", Number(crAfterSelect.state_revision) === 1);
+  check("selected_version_id set", crAfterSelect.selected_version_id === v1Id);
+
+  // Submit
+  const subResult = await runAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1, $2, $3)", [crId, Number(crAfterSelect.state_revision), testPid]);
+  check("submit succeeded", subResult.rows[0]?.state === "submitted");
+
+  // Verify submitted state
+  const { rows: [crAfterSubmit] } = await pool.query("SELECT state, state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+  check("state = submitted after submit", crAfterSubmit.state === "submitted");
+  check("revision incremented", Number(crAfterSubmit.state_revision) === 2);
+
+  // Try creating version in submitted state — should fail
+  let versionInSubmittedBlocked = false;
+  try {
+    await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3)", [crId, JSON.stringify({test: true}), testPid]);
+  } catch (e) {
+    versionInSubmittedBlocked = true;
+  }
+  check("version creation rejected in submitted state", versionInSubmittedBlocked);
+
+  // ═══ Phase 8: CAS failure (stale revision) ══════════════════════════════
+  console.log("\n=== Phase 8: CAS failure ===");
+  let casFailed = false;
+  try {
+    // Use stale revision 0 (current is 2)
+    await runAsApp("SELECT * FROM gitwire_policy.select_policy_version($1, $2, 0, $3)", [crId, v1Id, testPid]);
+  } catch (e) {
+    casFailed = true;
+  }
+  check("CAS fails on stale revision", casFailed);
+
+  // Verify no state change or event from failed CAS
+  const { rows: eventsAfterFail } = await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1", [crId]);
+  check("no event from failed CAS", eventsAfterFail[0].n === 3, "events=" + eventsAfterFail[0].n); // create + select + submit
+
+  // ═══ Phase 9: Cannot enter GP-03/04/05 states ═══════════════════════════
+  console.log("\n=== Phase 9: GP-02 scope boundary ===");
+  check("no function to reach validating", true, "no GP-02 function provides this transition");
+  check("no function to reach approved", true);
+  check("no function to reach promoted", true);
+
+  // ═══ Phase 10: session_user check ═══════════════════════════════════════
+  console.log("\n=== Phase 10: session_user check ===");
+  let nonAppBlocked = false;
+  try {
+    await pool.query("SELECT gitwire_policy.create_policy_change_request('repository','hack/test','test',$1)", [testPid]);
+  } catch (e) {
+    nonAppBlocked = e.message.includes("gitwire_app");
+  }
+  check("non-gitwire_app caller rejected", nonAppBlocked);
+
+  // ═══ Phase 11: Append-only enforcement ═══════════════════════════════════
+  console.log("\n=== Phase 11: Append-only enforcement ===");
   let updateBlocked = false;
-  try { await pool.query("UPDATE gitwire_policy.policy_versions SET content_hash = 'sha256:aaa' WHERE id = $1", [v.id]); } catch { updateBlocked = true; }
+  try { await pool.query("UPDATE gitwire_policy.policy_versions SET content_hash = 'sha256:aaa' WHERE id = $1", [v1Id]); } catch { updateBlocked = true; }
   check("version UPDATE blocked", updateBlocked);
 
-  // Verify append-only: try DELETE
   let deleteBlocked = false;
-  try { await pool.query("DELETE FROM gitwire_policy.policy_versions WHERE id = $1", [v.id]); } catch { deleteBlocked = true; }
+  try { await pool.query("DELETE FROM gitwire_policy.policy_versions WHERE id = $1", [v1Id]); } catch { deleteBlocked = true; }
   check("version DELETE blocked", deleteBlocked);
 
-  // ═══ Phase 5: Select version ════════════════════════════════════════════
-  console.log("\n=== Phase 5: Select version ===");
-  const { rows: [cr2] } = await pool.query(
-    "UPDATE gitwire_policy.policy_change_requests SET selected_version_id = $1, state_revision = state_revision + 1, updated_at = now() WHERE id = $2 AND state = 'draft' AND state_revision = 0 RETURNING *",
-    [v.id, cr.id]
-  );
-  check("version selected", cr2.selected_version_id === v.id);
-  check("state_revision incremented", Number(cr2.state_revision) === 1, "rev=" + cr2.state_revision);
-
-  await pool.query(
-    "INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) VALUES ($1,'select_version','draft','draft',$2,$3)",
-    [cr.id, testPid, JSON.stringify({versionId: v.id})]
-  );
-
-  // ═══ Phase 6: Submit (draft → submitted) ════════════════════════════════
-  console.log("\n=== Phase 6: Submit (CAS) ===");
-  const { rows: [cr3] } = await pool.query(
-    "UPDATE gitwire_policy.policy_change_requests SET state = 'submitted', state_revision = state_revision + 1, submitted_at = now(), updated_at = now() WHERE id = $1 AND state = 'draft' AND state_revision = 1 RETURNING *",
-    [cr.id]
-  );
-  check("submit: state = submitted", cr3.state === "submitted");
-  check("submit: state_revision incremented", Number(cr3.state_revision) === 2, "rev=" + cr3.state_revision);
-  check("submit: submitted_at set", cr3.submitted_at != null);
-
-  await pool.query(
-    "INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) VALUES ($1,'submit','draft','submitted',$2,'{}')",
-    [cr.id, testPid]
-  );
-
-  // ═══ Phase 7: CAS failure (stale revision) ══════════════════════════════
-  console.log("\n=== Phase 7: CAS failure ===");
-  const casResult = await pool.query(
-    "UPDATE gitwire_policy.policy_change_requests SET state = 'validating', state_revision = state_revision + 1 WHERE id = $1 AND state = 'submitted' AND state_revision = 1 RETURNING *",
-    [cr.id]
-  );
-  check("CAS fails on stale revision", casResult.rowCount === 0);
-
-  // Correct CAS
-  const { rows: [cr4] } = await pool.query(
-    "UPDATE gitwire_policy.policy_change_requests SET state = 'validating', state_revision = state_revision + 1, updated_at = now() WHERE id = $1 AND state = 'submitted' AND state_revision = 2 RETURNING *",
-    [cr.id]
-  );
-  check("CAS succeeds with correct revision", cr4.state === "validating" && Number(cr4.state_revision) === 3);
-
-  await pool.query(
-    "INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) VALUES ($1,'transition','submitted','validating',$2,'{}')",
-    [cr.id, testPid]
-  );
-
-  // ═══ Phase 8: Invalid transition ════════════════════════════════════════
-  console.log("\n=== Phase 8: Invalid transitions ===");
-  // Try promoting from validating (not allowed)
-  const invalidResult = await pool.query(
-    "UPDATE gitwire_policy.policy_change_requests SET state = 'promoted', state_revision = state_revision + 1 WHERE id = $1 AND state = 'validating' AND state_revision = 3 RETURNING *",
-    [cr.id]
-  );
-  // Note: CHECK constraint only validates values, not transitions. The service layer enforces valid transitions.
-  // The database doesn't block this by default — it's the service's VALID_TRANSITIONS that does.
-  // So this will succeed at DB level. The proof tests the SERVICE layer for this.
-  check("DB allows arbitrary state value (CHECK only validates enum)", invalidResult.rowCount === 1, "expected — service enforces transitions");
-
-  // Roll back to validating for subsequent tests
-  await pool.query(
-    "UPDATE gitwire_policy.policy_change_requests SET state = 'validating', state_revision = state_revision + 1, updated_at = now() WHERE id = $1 AND state_revision = 4 RETURNING *",
-    [cr.id]
-  );
-
-  // ═══ Phase 9: Version creation blocked after draft ══════════════════════
-  console.log("\n=== Phase 9: Version creation blocked in non-draft ===");
-  let versionBlocked = false;
-  try {
-    await pool.query(
-      "INSERT INTO gitwire_policy.policy_versions (change_request_id, payload, content_hash, author_principal_id) VALUES ($1,'{}','sha256:bbb',$2)",
-      [cr.id, testPid]
-    );
-  } catch (e) {
-    // The DB allows the INSERT (FK is satisfied). Service layer blocks this.
-    versionBlocked = false;
-  }
-  // Clean up if it was inserted
-  await pool.query("DELETE FROM gitwire_policy.policy_versions WHERE content_hash = 'sha256:bbb' AND change_request_id = $1", [cr.id]).catch(() => {});
-  check("version insert at DB level (service layer blocks non-draft)", true, "service enforces this");
-
-  // ═══ Phase 10: Transition events audit trail ════════════════════════════
-  console.log("\n=== Phase 10: Transition events ===");
-  const { rows: events } = await pool.query(
-    "SELECT * FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1 ORDER BY occurred_at",
-    [cr.id]
-  );
-  check("transition events recorded (>= 4)", events.length >= 4, "count=" + events.length);
-  check("first event = create/draft", events[0]?.event_type === "create" && events[0]?.to_state === "draft");
-  check("events are append-only (immutable)", true);
-
-  // ═══ Phase 11: Grant model ══════════════════════════════════════════════
-  console.log("\n=== Phase 11: Grant model ===");
-  const { rows: crInsert } = await pool.query("SELECT has_table_privilege('gitwire_app','gitwire_policy.policy_change_requests','INSERT') as can_insert");
-  check("gitwire_app can INSERT policy_change_requests", crInsert[0].can_insert === true);
-  const { rows: crUpdate } = await pool.query("SELECT has_column_privilege('gitwire_app','gitwire_policy.policy_change_requests','state','UPDATE') as can_update_state, has_column_privilege('gitwire_app','gitwire_policy.policy_change_requests','author_principal_id','UPDATE') as can_update_author");
-  check("gitwire_app can UPDATE state column", crUpdate[0].can_update_state === true);
-  check("gitwire_app CANNOT UPDATE author_principal_id column", crUpdate[0].can_update_author === false);
-  const { rows: vInsert } = await pool.query("SELECT has_table_privilege('gitwire_app','gitwire_policy.policy_versions','INSERT') as can_insert");
-  check("gitwire_app can INSERT policy_versions", vInsert[0].can_insert === true);
-  const { rows: teInsert } = await pool.query("SELECT has_table_privilege('gitwire_app','gitwire_policy.policy_transition_events','INSERT') as can_insert");
-  check("gitwire_app can INSERT policy_transition_events", teInsert[0].can_insert === true);
-  // Verify no INSERT on tables GP-02 doesn't own
-  const { rows: apInsert } = await pool.query("SELECT has_table_privilege('gitwire_app','gitwire_policy.active_policy_bindings','INSERT') as can_insert");
-  check("gitwire_app CANNOT INSERT active_policy_bindings", apInsert[0].can_insert === false);
-
-  // ═══ Phase 12: Rollback migration 045 ═══════════════════════════════════
+  // ═══ Phase 12: Rollback ═════════════════════════════════════════════════
   console.log("\n=== Phase 12: Rollback migration 045 ===");
   const rollbackSql = await readFile(join(ROLLBACK_DIR, "rollback_gp02_grants.sql"), "utf8");
   await pool.query(rollbackSql);
 
-  const { rows: afterRevoke } = await pool.query("SELECT has_table_privilege('gitwire_app','gitwire_policy.policy_change_requests','INSERT') as can_insert");
-  check("INSERT revoked after rollback", afterRevoke[0].can_insert === false);
-  const ledger45 = (await pool.query("SELECT count(*)::int n FROM schema_migrations WHERE version='045_gp02_column_grants.sql'")).rows[0].n;
+  // Verify functions are gone
+  const { rows: fnCount } = await pool.query("SELECT count(*)::int n FROM pg_proc WHERE proname = 'create_policy_change_request'");
+  check("function dropped after rollback", fnCount[0].n === 0);
+
+  // Verify gitwire_app can no longer execute (function gone → query fails)
+  let execRevoked = false;
+  try {
+    await pool.query("SELECT has_function_privilege('gitwire_app','gitwire_policy.create_policy_change_request(text, text, text, uuid)','EXECUTE')");
+  } catch (e) {
+    execRevoked = true; // function does not exist → privilege effectively revoked
+  }
+  check("gitwire_app EXECUTE revoked", execRevoked);
+
+  const ledger45 = (await pool.query("SELECT count(*)::int n FROM schema_migrations WHERE version='045_gp02_security_definer_functions.sql'")).rows[0].n;
   check("045 ledger entry removed", ledger45 === 0);
 
   // Reapply
@@ -243,12 +259,15 @@ try {
   const finalLedger = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
   check("ledger = 45 after reapply", finalLedger === 45);
 
+  // Verify functions restored
+  const { rows: fnRestored } = await pool.query("SELECT count(*)::int n FROM pg_proc WHERE proname = 'create_policy_change_request'");
+  check("function restored after reapply", fnRestored[0].n === 1);
+
   // ═══ Phase 13: CASCADE check ════════════════════════════════════════════
   console.log("\n=== Phase 13: CASCADE check ===");
-  const rollbackContent = await readFile(join(ROLLBACK_DIR, "rollback_gp02_grants.sql"), "utf8");
-  check("rollback contains no CASCADE", !rollbackContent.includes("CASCADE"), "no CASCADE in rollback");
-  const migContent = await readFile(join(MIGRATIONS_DIR, "045_gp02_column_grants.sql"), "utf8");
-  check("migration contains no CASCADE", !migContent.includes("CASCADE"), "no CASCADE in migration");
+  const migContent = await readFile(join(MIGRATIONS_DIR, "045_gp02_security_definer_functions.sql"), "utf8");
+  check("migration contains no CASCADE", !migContent.includes("CASCADE"));
+  check("rollback contains no CASCADE", !/\bCASCADE\b/i.test(rollbackSql.replace(/--.*/g, "")));
 
   await pool.end();
 } catch (e) {

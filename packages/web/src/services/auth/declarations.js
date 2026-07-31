@@ -69,7 +69,6 @@ const ROUTE_SURFACES = [
   { id: "route:POST:/api/policy/change-requests/:id/versions", kind: "route", permission: "policy_change_request:create", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:POST:/api/policy/change-requests/:id/select-version", kind: "route", permission: "policy_change_request:update", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:POST:/api/policy/change-requests/:id/submit", kind: "route", permission: "policy_change_request:update", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/policy/change-requests/:id/transition", kind: "route", permission: "policy_change_request:update", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 ];
 
 // ── Workers (from the worker inventory) ─────────────────────────────────────
