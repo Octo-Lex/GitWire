@@ -37,6 +37,8 @@ const MIGRATIONS_DIR = join(REPO_ROOT, "packages", "web", "db", "migrations");
 const ROLLBACK_DIR = join(REPO_ROOT, "packages", "web", "db", "proof");
 
 let passed = 0, failed = 0;
+let proofFailed = false;
+let cleanupFailed = false;
 function check(name, ok, detail = "") { if (ok) passed += 1; else failed += 1; console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${detail ? " — " + detail : ""}`); }
 function docker(...a) { return execFileSync("docker", a, { encoding: "utf8", stdio: ["pipe","pipe","pipe"] }).trim(); }
 function pickPort() { return new Promise((r,j) => { const s = createServer(); s.unref(); s.on("error",j); s.listen(0,"127.0.0.1",()=>{const {port}=s.address(); s.close(()=>r(port));}); }); }
@@ -214,12 +216,25 @@ try {
   } catch (e) { emptyResource = true; }
   check("empty resource_id rejected", emptyResource);
 
-  // ═══ Phase 9: Cyclic FKs exist ══════════════════════════════════════════
-  console.log("\n=== Phase 9: Cyclic FKs ===");
+  // ═══ Phase 9: Cyclic and named FKs exist ═════════════════════════════════
+  console.log("\n=== Phase 9: Cyclic and named FKs ===");
   const { rows: cyclicFKs } = await pool.query("SELECT conname FROM pg_constraint WHERE conrelid = 'gitwire_policy.policy_change_requests'::regclass AND contype = 'f' AND conname = 'pcr_selected_version_fk'");
   check("pcr_selected_version_fk exists", cyclicFKs.length > 0);
   const { rows: bindingFK } = await pool.query("SELECT conname FROM pg_constraint WHERE conrelid = 'gitwire_policy.policy_promotion_records'::regclass AND contype = 'f' AND conname = 'ppr_binding_fk'");
   check("ppr_binding_fk exists", bindingFK.length > 0);
+
+  // Verify pal_promotion_record_fk: exists, references policy_promotion_records(id),
+  // is DEFERRABLE INITIALLY DEFERRED, and the referencing column is uuid
+  const { rows: palFK } = await pool.query("SELECT conname, conrelid::regclass AS table_name, confrelid::regclass AS ref_table FROM pg_constraint WHERE conname = 'pal_promotion_record_fk' AND contype = 'f'");
+  check("pal_promotion_record_fk exists", palFK.length > 0);
+  if (palFK.length > 0) {
+    check("pal_promotion_record_fk references policy_promotion_records", palFK[0].ref_table.toString().includes("policy_promotion_records"));
+    check("pal_promotion_record_fk on policy_approval_lifecycle", palFK[0].table_name.toString().includes("policy_approval_lifecycle"));
+    const { rows: deferrable } = await pool.query("SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'pal_promotion_record_fk'");
+    check("pal_promotion_record_fk is DEFERRABLE INITIALLY DEFERRED", deferrable[0]?.def?.includes("DEFERRABLE") && deferrable[0]?.def?.includes("INITIALLY DEFERRED"), "def=" + deferrable[0]?.def);
+    const { rows: colType } = await pool.query("SELECT data_type FROM information_schema.columns WHERE table_schema='gitwire_policy' AND table_name='policy_approval_lifecycle' AND column_name='promotion_record_id'");
+    check("promotion_record_id is uuid type", colType[0]?.data_type === "uuid", "type=" + colType[0]?.data_type);
+  }
 
   // ═══ Phase 10: Rollback ═════════════════════════════════════════════════
   console.log("\n=== Phase 10: Rollback ===");
@@ -315,27 +330,23 @@ try {
 
   await pool.end();
 } catch (e) {
+  proofFailed = true;
   console.error("PROOF ERROR:", e.message);
   try { if (pool) await pool.end(); } catch {}
-  process.exit(1);
 } finally {
-  let cleanupOk = true;
   try {
     docker("rm", "-f", pgCid);
-  } catch (e) {
-    cleanupOk = false;
-    console.log("cleanup: FAILED to remove container " + pgCid + " — " + e.message);
-  }
-  if (cleanupOk) {
     console.log("cleanup: containers_removed");
-  } else {
-    console.log("cleanup: container_removal_failed — manual cleanup required");
-    process.exitCode = 1;
+  } catch (e) {
+    cleanupFailed = true;
+    console.error("cleanup: container_removal_failed — manual cleanup required:", e.message);
   }
 }
 
-console.log("\n=== Governed Policy Migration Proof: " + passed + " passed, " + failed + " failed ===");
-console.log("cleanup completed");
-console.log("owned containers remaining: 0");
+if (!cleanupFailed) {
+  console.log("cleanup completed");
+  console.log("owned containers remaining: 0");
+}
 console.log("forced process exit: no");
-process.exitCode = failed > 0 ? 1 : 0;
+console.log("\n=== Governed Policy Migration Proof: " + passed + " passed, " + failed + " failed ===");
+process.exitCode = proofFailed || failed > 0 || cleanupFailed ? 1 : 0;
