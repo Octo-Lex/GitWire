@@ -186,8 +186,8 @@ try {
 
     await txClient.query("ROLLBACK");
   } catch (e) {
-    await txClient.query("ROLLBACK");
-    console.log("  Phase 6 error: " + e.message);
+    try { await txClient.query("ROLLBACK"); } catch {}
+    check("Phase 6 fixture setup succeeded", false, e.message);
   } finally {
     txClient.release();
   }
@@ -316,11 +316,22 @@ try {
   await pool.end();
 } catch (e) {
   console.error("PROOF ERROR:", e.message);
-  if (pool) await pool.end();
+  try { if (pool) await pool.end(); } catch {}
   process.exit(1);
 } finally {
-  try { docker("rm", "-f", pgCid); } catch {}
-  console.log("cleanup: containers_removed");
+  let cleanupOk = true;
+  try {
+    docker("rm", "-f", pgCid);
+  } catch (e) {
+    cleanupOk = false;
+    console.log("cleanup: FAILED to remove container " + pgCid + " — " + e.message);
+  }
+  if (cleanupOk) {
+    console.log("cleanup: containers_removed");
+  } else {
+    console.log("cleanup: container_removal_failed — manual cleanup required");
+    process.exitCode = 1;
+  }
 }
 
 console.log("\n=== Governed Policy Migration Proof: " + passed + " passed, " + failed + " failed ===");

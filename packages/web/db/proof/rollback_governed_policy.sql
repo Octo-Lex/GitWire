@@ -24,6 +24,9 @@ ALTER TABLE policy_change_requests
 ALTER TABLE policy_promotion_records
   DROP CONSTRAINT IF EXISTS ppr_binding_fk;
 
+ALTER TABLE policy_approval_lifecycle
+  DROP CONSTRAINT IF EXISTS pal_promotion_record_fk;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- 2. Revoke table grants
 -- ════════════════════════════════════════════════════════════════════════════

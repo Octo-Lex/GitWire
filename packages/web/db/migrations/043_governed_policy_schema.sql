@@ -234,7 +234,7 @@ CREATE TABLE policy_approval_lifecycle (
   to_status             text        NOT NULL,
   actor_principal_id    uuid        NOT NULL REFERENCES gitwire_auth.auth_principals(id),
   reason_code           text        NOT NULL,
-  promotion_record_id   bigint,
+  promotion_record_id   uuid,
   occurred_at           timestamptz NOT NULL DEFAULT now(),
   created_at            timestamptz NOT NULL DEFAULT now(),
 
@@ -437,6 +437,13 @@ ALTER TABLE policy_promotion_records
   ADD CONSTRAINT ppr_binding_fk
   FOREIGN KEY (binding_id)
   REFERENCES active_policy_bindings(id)
+  DEFERRABLE INITIALLY DEFERRED;
+
+-- Approval lifecycle promotion record reference (nullable except for consumed)
+ALTER TABLE policy_approval_lifecycle
+  ADD CONSTRAINT pal_promotion_record_fk
+  FOREIGN KEY (promotion_record_id)
+  REFERENCES policy_promotion_records(id)
   DEFERRABLE INITIALLY DEFERRED;
 
 -- ════════════════════════════════════════════════════════════════════════════
