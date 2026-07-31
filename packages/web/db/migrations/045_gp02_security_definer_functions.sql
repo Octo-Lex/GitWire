@@ -65,7 +65,7 @@ BEGIN
     SELECT string_agg(
       to_jsonb(k)::text || ':' || canonical_jsonb(v),
       ','
-      ORDER BY k
+      ORDER BY k COLLATE "C"
     ) INTO result
     FROM jsonb_each(val) AS e(k, v);
 
