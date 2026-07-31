@@ -133,6 +133,9 @@ governedPolicyRouter.post("/change-requests/:id/select-version", async (req, res
     res.json(cr);
   } catch (err) {
     logger.error({ err: err.message }, "Failed to select version");
+    if (err.message.includes("CAS failed") || err.message.includes("revision mismatch")) {
+      return res.status(409).json({ error: "Conflict: change request was modified concurrently" });
+    }
     if (err.message.includes("not found") || err.message.includes("draft") || err.message.includes("belong") || err.message.includes("required")) {
       return res.status(400).json({ error: err.message });
     }
@@ -158,6 +161,9 @@ governedPolicyRouter.post("/change-requests/:id/submit", async (req, res) => {
     res.json(cr);
   } catch (err) {
     logger.error({ err: err.message }, "Failed to submit change request");
+    if (err.message.includes("CAS failed") || err.message.includes("revision mismatch")) {
+      return res.status(409).json({ error: "Conflict: change request was modified concurrently" });
+    }
     if (err.message.includes("not found") || err.message.includes("no version") || err.message.includes("Invalid transition") || err.message.includes("terminal")) {
       return res.status(400).json({ error: err.message });
     }

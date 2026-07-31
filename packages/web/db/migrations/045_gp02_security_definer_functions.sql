@@ -49,13 +49,13 @@ REVOKE INSERT, UPDATE, DELETE ON policy_transition_events FROM gitwire_app;
 -- ════════════════════════════════════════════════════════════════════════════
 -- Recursive canonical JSON helper for deterministic hashing
 -- Produces a canonical text representation with sorted keys at all levels.
+-- Uses proper JSON escaping via to_jsonb() to prevent collision attacks.
 -- ════════════════════════════════════════════════════════════════════════════
 
-CREATE OR REPLACE FUNCTION canonical_jsonb(val jsonb) RETURNS text
+CREATE FUNCTION canonical_jsonb(val jsonb) RETURNS text
 LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
   result text;
-  obj_record record;
   arr_item jsonb;
   arr_parts text[];
 BEGIN
@@ -63,7 +63,7 @@ BEGIN
     RETURN 'null';
   ELSIF jsonb_typeof(val) = 'object' THEN
     SELECT string_agg(
-      '"' || k || '":' || canonical_jsonb(v),
+      to_jsonb(k)::text || ':' || canonical_jsonb(v),
       ','
       ORDER BY k
     ) INTO result
@@ -83,7 +83,8 @@ BEGIN
     END IF;
     RETURN '[' || array_to_string(arr_parts, ',') || ']';
   ELSIF jsonb_typeof(val) = 'string' THEN
-    RETURN '"' || (val #>> '{}') || '"';
+    -- Use to_jsonb for proper escaping of quotes, backslashes, Unicode
+    RETURN val::text;
   ELSIF jsonb_typeof(val) = 'number' THEN
     RETURN (val #>> '{}');
   ELSIF jsonb_typeof(val) = 'boolean' THEN
@@ -91,7 +92,7 @@ BEGIN
   ELSIF jsonb_typeof(val) = 'null' THEN
     RETURN 'null';
   ELSE
-    RETURN val #>> '{}';
+    RETURN val::text;
   END IF;
 END;
 $$;
@@ -205,7 +206,7 @@ BEGIN
 
   -- Compute canonical hash inside the DB (recursive)
   v_canonical := canonical_jsonb(p_payload);
-  v_content_hash := 'sha256:' || pg_catalog.encode(public.digest(v_canonical::bytea, 'sha256'), 'hex');
+  v_content_hash := 'sha256:' || pg_catalog.encode(public.digest(convert_to(v_canonical, 'UTF8'), 'sha256'), 'hex');
 
   INSERT INTO policy_versions
     (change_request_id, payload, content_hash, author_principal_id)
