@@ -289,25 +289,31 @@ try {
 
   // 1. Exactly 4 SECURITY DEFINER functions owned by gitwire_policy_fn_owner
   const { rows: secDefFns } = await pool.query(
-    "SELECT p.proname FROM pg_proc p JOIN pg_roles r ON p.proowner = r.oid JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND r.rolname = 'gitwire_policy_fn_owner' AND p.prosecdef = true"
+    "SELECT p.oid::regprocedure::text as sig FROM pg_proc p JOIN pg_roles r ON p.proowner = r.oid JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND r.rolname = 'gitwire_policy_fn_owner' AND p.prosecdef = true ORDER BY 1"
   );
-  const secDefNames = secDefFns.map(f => f.proname).sort();
-  check("exactly 4 SECURITY DEFINER fn_owner functions", secDefNames.length === 4, "found=" + JSON.stringify(secDefNames));
-  check("SECURITY DEFINER set matches expected", JSON.stringify(secDefNames) === JSON.stringify(expectedWriteFns.slice().sort()));
+  const secDefSigs = secDefFns.map(f => f.sig);
+  check("exactly 4 SECURITY DEFINER fn_owner functions", secDefSigs.length === 4, "found=" + JSON.stringify(secDefSigs));
 
-  // 2. Exactly 4 functions executable by gitwire_app
-  const { rows: execFns } = await pool.query(
-    "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl WHERE acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'gitwire_app') AND acl.privilege_type = 'EXECUTE')"
+  // 2. Exactly 4 functions effectively executable by gitwire_app (via has_function_privilege with OID)
+  const { rows: allGpFns } = await pool.query(
+    "SELECT p.oid, p.oid::regprocedure::text as sig FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' ORDER BY 2"
   );
-  const execNames = execFns.map(f => f.proname).sort();
-  check("exactly 4 functions executable by gitwire_app", execNames.length === 4, "found=" + JSON.stringify(execNames));
-  check("executable set matches expected", JSON.stringify(execNames) === JSON.stringify(expectedWriteFns.slice().sort()));
+  const execSigs = [];
+  for (const fn of allGpFns) {
+    const { rows: [priv] } = await pool.query("SELECT has_function_privilege('gitwire_app', $1, 'EXECUTE') as can", [fn.oid]);
+    if (priv.can) execSigs.push(fn.sig);
+  }
+  check("exactly 4 functions executable by gitwire_app (effective)", execSigs.length === 4, "found=" + JSON.stringify(execSigs));
+
+  // Compare by regprocedure signature (includes args, unambiguous)
+  const expectedSigs = expectedWriteFns.map(f => "gitwire_policy." + f);
+  for (const sig of execSigs) {
+    check("executable signature " + sig + " is expected", expectedSigs.some(e => sig.startsWith(e)), sig);
+  }
 
   // 3. No unexpected SECURITY DEFINER or executable functions
-  const unexpectedSecDef = secDefNames.filter(n => !expectedWriteFns.includes(n));
-  const unexpectedExec = execNames.filter(n => !expectedWriteFns.includes(n));
+  const unexpectedSecDef = secDefSigs.filter(s => !expectedSigs.some(e => s.startsWith(e)));
   check("no unexpected SECURITY DEFINER functions", unexpectedSecDef.length === 0, JSON.stringify(unexpectedSecDef));
-  check("no unexpected executable functions", unexpectedExec.length === 0, JSON.stringify(unexpectedExec));
 
   // 4. None accept arbitrary state params
   for (const fn of expectedWriteFns) {
@@ -388,6 +394,48 @@ try {
     [fnNames]
   );
 
+  // Snapshot full ACL matrix before rollback
+  const aclTables = ["policy_change_requests", "policy_versions", "policy_transition_events"];
+  const aclRoles = ["gitwire_app", "gitwire_operator", "gitwire_policy_fn_owner"];
+  const aclPrivs = ["SELECT", "INSERT", "UPDATE", "DELETE"];
+
+  function snapshotTableACLs() {
+    return pool.query(
+      "SELECT r.rolname, t.relname, " +
+      aclPrivs.map(p => "has_table_privilege(r.rolname, 'gitwire_policy.' || t.relname, '" + p + "') as " + p.toLowerCase()).join(", ") + " " +
+      "FROM pg_roles r CROSS JOIN (VALUES ('policy_change_requests'), ('policy_versions'), ('policy_transition_events')) AS t(relname) " +
+      "WHERE r.rolname = ANY($1) " +
+      "ORDER BY r.rolname, t.relname",
+      [aclRoles]
+    );
+  }
+
+  function snapshotColumnACLs(table, columns) {
+    return pool.query(
+      "SELECT r.rolname, c.attname, " +
+      "has_column_privilege(r.rolname, 'gitwire_policy." + table + "', c.attname, 'UPDATE') as can_update " +
+      "FROM pg_roles r CROSS JOIN pg_attribute c " +
+      "WHERE r.rolname = ANY($1) AND c.attrelid = 'gitwire_policy." + table + "'::regclass AND c.attname = ANY($2) AND NOT c.attisdropped " +
+      "ORDER BY r.rolname, c.attname",
+      [["gitwire_app", "gitwire_policy_fn_owner"], columns]
+    );
+  }
+
+  function snapshotFunctionACLs() {
+    return pool.query(
+      "SELECT p.oid::regprocedure::text as sig, " +
+      "has_function_privilege('gitwire_app', p.oid, 'EXECUTE') as app_exec, " +
+      "has_function_privilege('public', p.oid, 'EXECUTE') as public_exec, " +
+      "has_function_privilege('gitwire_operator', p.oid, 'EXECUTE') as operator_exec " +
+      "FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid " +
+      "WHERE n.nspname = 'gitwire_policy' ORDER BY 1"
+    );
+  }
+
+  const tableACLsBefore = (await snapshotTableACLs()).rows;
+  const colACLsBefore = (await snapshotColumnACLs("policy_change_requests", ["state", "state_revision", "selected_version_id", "submitted_at", "updated_at", "resource_type", "resource_id", "policy_family", "author_principal_id"])).rows;
+  const fnACLsBefore = (await snapshotFunctionACLs()).rows;
+
   await pool.query(rollbackSql);
   const { rows: fnGone } = await pool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = 'create_policy_change_request'");
   check("functions dropped after rollback", fnGone[0].n === 0);
@@ -395,9 +443,18 @@ try {
   const ledger45 = (await pool.query("SELECT count(*)::int n FROM schema_migrations WHERE version = '045_gp02_security_definer_functions.sql'")).rows[0].n;
   check("045 ledger removed", ledger45 === 0);
 
-  // Verify fn_owner table privileges revoked after rollback
-  const { rows: fnOwnerPrivsAfter } = await pool.query("SELECT has_table_privilege('gitwire_policy_fn_owner','gitwire_policy.policy_change_requests','INSERT') as ins");
-  check("fn_owner INSERT on change_requests revoked after rollback", fnOwnerPrivsAfter[0].ins === false);
+  // After rollback: ALL fn_owner table privileges must be absent
+  const tableACLsAfterRB = (await snapshotTableACLs()).rows;
+  for (const row of tableACLsAfterRB.filter(r => r.rolname === "gitwire_policy_fn_owner")) {
+    for (const priv of aclPrivs) {
+      check("after RB: fn_owner NO " + priv + " on " + row.relname, row[priv.toLowerCase()] === false);
+    }
+  }
+  // After rollback: gitwire_app still has SELECT (from migration 044), no write
+  for (const row of tableACLsAfterRB.filter(r => r.rolname === "gitwire_app")) {
+    check("after RB: gitwire_app SELECT on " + row.relname, row.select === true);
+    check("after RB: gitwire_app NO INSERT on " + row.relname, row.insert === false);
+  }
 
   await applyMigrations(pool);
   const finalLedger = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
@@ -429,12 +486,17 @@ try {
     check(fn.proname + ": owner = gitwire_policy_fn_owner", fn.owner === "gitwire_policy_fn_owner");
   }
 
-  // Verify fixed search_path via proconfig
+  // Verify exact fixed search_path via proconfig
+  const expectedSearchPath = "search_path=gitwire_policy, pg_catalog";
   for (const fn of expectedWriteFns) {
     const { rows: [fnConfig] } = await pool.query("SELECT p.proconfig FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = $1", [fn]);
-    const configStr = fnConfig.proconfig ? fnConfig.proconfig.join(",") : "";
-    check(fn + ": search_path includes gitwire_policy", configStr.includes("gitwire_policy"), "config=" + configStr);
+    const configArr = fnConfig.proconfig || [];
+    check(fn + ": exactly " + expectedSearchPath, configArr.length === 1 && configArr[0] === expectedSearchPath, "config=" + JSON.stringify(configArr));
   }
+
+  // canonical_jsonb also has no search_path (not SECURITY DEFINER)
+  const { rows: [cjConfig] } = await pool.query("SELECT p.proconfig FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = 'canonical_jsonb'");
+  check("canonical_jsonb: no proconfig (not SECURITY DEFINER)", cjConfig.proconfig === null);
 
   // Verify execution ACLs for the 4 write functions
   const execFnsCheck = ['create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request'];
@@ -445,46 +507,38 @@ try {
     check(fn + ": PUBLIC NO EXECUTE restored", aclRow.public_exec === false);
   }
 
-  // Verify canonical_jsonb ACL: PUBLIC NO EXECUTE
-  const { rows: [cjAcl] } = await pool.query("SELECT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') as public_exec FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = 'canonical_jsonb'");
-  check("canonical_jsonb: PUBLIC NO EXECUTE", cjAcl.public_exec === false);
+  // Post-reapply: snapshot and compare against pre-rollback snapshots
+  const tableACLsAfter = (await snapshotTableACLs()).rows;
+  const colACLsAfter = (await snapshotColumnACLs("policy_change_requests", ["state", "state_revision", "selected_version_id", "submitted_at", "updated_at", "resource_type", "resource_id", "policy_family", "author_principal_id"])).rows;
+  const fnACLsAfter = (await snapshotFunctionACLs()).rows;
 
-  // Full fn_owner privilege matrix
-  const ownerTables = [
-    { table: "policy_change_requests", privs: { SELECT: true, INSERT: true } },
-    { table: "policy_versions", privs: { SELECT: true, INSERT: true } },
-    { table: "policy_transition_events", privs: { INSERT: true } },
-  ];
-  for (const t of ownerTables) {
-    for (const [priv, expected] of Object.entries(t.privs)) {
-      const { rows: [r] } = await pool.query("SELECT has_table_privilege('gitwire_policy_fn_owner', $1, $2) as has", ["gitwire_policy." + t.table, priv]);
-      check("fn_owner " + priv + " on " + t.table + " restored", r.has === expected);
-    }
+  // Table ACLs: exact match before vs after
+  for (let i = 0; i < tableACLsBefore.length; i++) {
+    const before = tableACLsBefore[i];
+    const after = tableACLsAfter[i];
+    check("table ACL: " + before.rolname + "/" + before.relname + " restored", JSON.stringify(before) === JSON.stringify(after));
   }
 
-  // Column-level UPDATE on policy_change_requests
-  for (const col of ["state", "state_revision", "selected_version_id", "submitted_at", "updated_at"]) {
-    const { rows: [r] } = await pool.query("SELECT has_column_privilege('gitwire_policy_fn_owner', 'gitwire_policy.policy_change_requests', $1, 'UPDATE') as has", [col]);
-    check("fn_owner column UPDATE on " + col, r.has === true);
-  }
-  // Immutable columns NOT updatable
-  for (const col of ["resource_type", "resource_id", "policy_family", "author_principal_id"]) {
-    const { rows: [r] } = await pool.query("SELECT has_column_privilege('gitwire_policy_fn_owner', 'gitwire_policy.policy_change_requests', $1, 'UPDATE') as has", [col]);
-    check("fn_owner NO column UPDATE on " + col, r.has === false);
+  // Column ACLs: exact match
+  for (let i = 0; i < colACLsBefore.length; i++) {
+    const before = colACLsBefore[i];
+    const after = colACLsAfter[i];
+    check("column ACL: " + before.rolname + "/" + before.attname + " restored", before.can_update === after.can_update);
   }
 
-  // No table-wide UPDATE or DELETE for fn_owner
-  const { rows: [updOwner] } = await pool.query("SELECT has_table_privilege('gitwire_policy_fn_owner','gitwire_policy.policy_change_requests','UPDATE') as has");
-  check("fn_owner NO table-wide UPDATE on policy_change_requests", updOwner.has === false);
-  const { rows: [delOwner] } = await pool.query("SELECT has_table_privilege('gitwire_policy_fn_owner','gitwire_policy.policy_versions','DELETE') as has");
-  check("fn_owner NO DELETE on policy_versions", delOwner.has === false);
+  // Function ACLs: exact match (app_exec, public_exec, operator_exec)
+  check("function ACL count matches", fnACLsBefore.length === fnACLsAfter.length);
+  for (let i = 0; i < fnACLsBefore.length; i++) {
+    const before = fnACLsBefore[i];
+    const after = fnACLsAfter[i];
+    check("fn ACL: " + before.sig + " app_exec restored", before.app_exec === after.app_exec);
+    check("fn ACL: " + before.sig + " public_exec restored", before.public_exec === after.public_exec);
+    check("fn ACL: " + before.sig + " operator_exec restored", before.operator_exec === after.operator_exec);
+  }
 
-  // Verify gitwire_app still has NO direct write
-  for (const table of ["policy_change_requests", "policy_versions", "policy_transition_events"]) {
-    const { rows: [r] } = await pool.query("SELECT has_table_privilege('gitwire_app', $1, 'INSERT') as ins, has_table_privilege('gitwire_app', $1, 'UPDATE') as upd, has_table_privilege('gitwire_app', $1, 'DELETE') as del", ["gitwire_policy." + table]);
-    check("gitwire_app NO INSERT on " + table, r.ins === false);
-    check("gitwire_app NO UPDATE on " + table, r.upd === false);
-    check("gitwire_app NO DELETE on " + table, r.del === false);
+  // Verify gitwire_operator has NO execute on any GP function
+  for (const fn of fnACLsAfter) {
+    check(fn.sig + ": operator NO EXECUTE", fn.operator_exec === false);
   }
 
   // ═══ Phase 16: CASCADE check ════════════════════════════════════════════
