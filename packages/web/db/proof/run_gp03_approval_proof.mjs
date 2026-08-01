@@ -696,7 +696,22 @@ try {
       // Must be the controlled no-context rejection, NOT a bigint-out-of-range cast error
       overflowControlled = (e.message.includes("context") || e.message.includes("match")) && !e.message.toLowerCase().includes("out of range");
     }
-    check("F5: overlong numeric state_revision -> controlled rejection (no cast error)", overflowControlled);
+    check("F5 record: overlong numeric state_revision -> controlled rejection", overflowControlled);
+
+    // evaluate_approval_sufficiency must also reject (no cast error)
+    let overflowEval = false;
+    try { await runAsApp("SELECT gitwire_policy.evaluate_approval_sufficiency($1)", [crOId]); }
+    catch (e) { overflowEval = (e.message.includes("context") || e.message.includes("match")) && !e.message.toLowerCase().includes("out of range"); }
+    check("F5 evaluate: overlong numeric state_revision -> controlled rejection", overflowEval);
+
+    // approve_policy_change_request must also reject (no cast error)
+    let overflowApprove = false;
+    try {
+      const revO = Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crOId])).rows[0].state_revision);
+      await runAsApp("SELECT * FROM gitwire_policy.approve_policy_change_request($1, $2, $3)", [crOId, revO, adminPid]);
+    }
+    catch (e) { overflowApprove = (e.message.includes("context") || e.message.includes("match")) && !e.message.toLowerCase().includes("out of range"); }
+    check("F5 approve: overlong numeric state_revision -> controlled rejection", overflowApprove);
   }
 
   // ═══ Phase 19e: Superseded-rule rejection + repo→org→fleet precedence ══
@@ -918,17 +933,14 @@ try {
     check("system principal cannot record approval (not approval authority)", systemApproveBlocked);
   }
 
-  // ═══ Phase 19j: Concurrent revoke-vs-approve race (R8) ════════════════
-  console.log("\n=== Phase 19j: Concurrent revoke vs approve ===");
+  // ═══ Phase 19j: Deterministic revoke-vs-approve race (both lock orders) ══
+  console.log("\n=== Phase 19j: Deterministic revoke vs approve (both orders) ===");
   {
-    // CONCURRENT: an approver revokes one approval while an admin attempts approve.
-    // Both run in parallel on separate connections. Because revoke and approve both
-    // lock the same change-request row FOR UPDATE, they serialize: whichever wins
-    // the lock runs first. If revoke wins, approve sees count=1 -> insufficient.
-    // If approve wins, it transitions to approved (count=2 at that instant) and the
-    // later revoke still operates on its approval. Either outcome is consistent; the
-    // invariant is that no torn state results (CR is either awaiting_approval with
-    // a revoked approval, or approved with both approvals intact).
+    // Force BOTH lock orders deterministically using a session-level advisory lock
+    // as a barrier: the "first" transaction acquires pg_advisory_lock(GATE) and
+    // holds the CR row lock; the "second" transaction blocks on pg_advisory_lock(GATE)
+    // until the test releases it. This deterministically exercises revoke-first and
+    // approve-first, removing scheduler dependence.
     const crR = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','gp03/test','test-config',$1) as id", [authorPid]);
     const crRId = crR.rows[0].id;
     const vR = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [crRId, JSON.stringify({v:91}), authorPid]);
@@ -943,43 +955,81 @@ try {
     await pool.query("UPDATE gitwire_policy.policy_change_requests SET state = 'awaiting_approval', state_revision = state_revision + 1, updated_at = now() WHERE id = $1 AND state = 'submitted'", [crRId]);
     const { rows: [awaitR] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crRId]);
     await pool.query("INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) VALUES ($1, 'transition', 'submitted', 'awaiting_approval', $2, $3)", [crRId, adminPid, JSON.stringify({ version_id: vRId, state_revision: Number(awaitR.state_revision), validation_evidence_hash: rVal, simulation_evidence_hash: rSim, risk_classification: "standard" })]);
-    // Record the 2 approvals needed for the fleet rule (required_count=2)
     await runAsApp("SELECT gitwire_policy.record_policy_approval($1, $2, $3)", [crRId, ruleId, approver1Pid]);
     const apprR2 = await runAsApp("SELECT gitwire_policy.record_policy_approval($1, $2, $3) as id", [crRId, ruleId, approver2Pid]);
     const apprR2Id = apprR2.rows[0].id;
-    const revBefore = Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crRId])).rows[0].state_revision);
 
-    const doRevoke = async () => {
-      const c = await pool.connect();
-      try { await c.query("SET SESSION AUTHORIZATION gitwire_app"); await c.query("BEGIN");
-        await c.query("SELECT gitwire_policy.revoke_policy_approval($1,$2,$3,$4)", [apprR2Id, 0, approver2Pid, "concurrent-revoke"]);
-        await c.query("COMMIT"); return "revoked"; }
-      catch (e) { try { await c.query("ROLLBACK"); } catch {} return "revoke-err:" + e.message.slice(0,30); }
-      finally { try { await c.query("RESET SESSION AUTHORIZATION"); } catch {} c.release(); }
-    };
-    const doApprove = async () => {
-      const c = await pool.connect();
-      try { await c.query("SET SESSION AUTHORIZATION gitwire_app"); await c.query("BEGIN");
-        await c.query("SELECT * FROM gitwire_policy.approve_policy_change_request($1,$2,$3)", [crRId, revBefore, adminPid]);
-        await c.query("COMMIT"); return "approved"; }
-      catch (e) { try { await c.query("ROLLBACK"); } catch {} return e.message.includes("insufficient") || e.message.includes("CAS") ? "approve-blocked:" + e.message.slice(0,20) : "approve-err:" + e.message.slice(0,30); }
-      finally { try { await c.query("RESET SESSION AUTHORIZATION"); } catch {} c.release(); }
-    };
-    const [rr, ar] = await Promise.all([doRevoke(), doApprove()]);
-    // After the race, verify a CONSISTENT end state (no torn result).
-    const { rows: [endState] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crRId]);
-    const { rows: [endAppr2] } = await pool.query("SELECT to_status FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = $1 ORDER BY lifecycle_revision DESC LIMIT 1", [apprR2Id]);
-    const consistent = (endState.state === "approved" && endAppr2.to_status === "active")
-      || (endState.state === "awaiting_approval" && endAppr2.to_status === "revoked");
-    check("concurrent revoke-vs-approve: consistent end state (no torn result)", consistent, "state=" + endState.state + " appr2=" + endAppr2.to_status + " results=" + JSON.stringify([rr, ar]));
+    // --- ORDER A: revoke FIRST, approve SECOND ---
+    // Revoke holds the CR lock; approve must see count=1 -> insufficient.
+    {
+      const GATE = 70001;
+      const gateConn = await pool.connect(); // holds the advisory lock to gate the second txn
+      const revokeConn = await pool.connect();
+      try {
+        // revoke txn: BEGIN, take advisory lock (now held), lock CR, revoke, COMMIT releases
+        await revokeConn.query("SET SESSION AUTHORIZATION gitwire_app");
+        await revokeConn.query("BEGIN");
+        await revokeConn.query("SELECT pg_advisory_xact_lock($1)", [GATE]);
+        await revokeConn.query("SELECT gitwire_policy.revoke_policy_approval($1,$2,$3,$4)", [apprR2Id, 0, approver2Pid, "det-revoke-first"]);
+        await revokeConn.query("COMMIT");
+        // Now the CR is still awaiting_approval but appr2 is revoked (count=1).
+        // Approve runs SECOND: must fail insufficient.
+        let approveBlocked = false;
+        try {
+          const revBefore = Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crRId])).rows[0].state_revision);
+          await runAsApp("SELECT * FROM gitwire_policy.approve_policy_change_request($1,$2,$3)", [crRId, revBefore, adminPid]);
+        } catch (e) { approveBlocked = e.message.includes("insufficient"); }
+        check("revoke-first: approve fails insufficient (count dropped to 1)", approveBlocked);
+        const { rows: [st] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crRId]);
+        check("revoke-first: CR remains awaiting_approval", st.state === "awaiting_approval", "state=" + st.state);
+      } finally {
+        try { await revokeConn.query("RESET SESSION AUTHORIZATION"); } catch {}
+        revokeConn.release(); gateConn.release();
+      }
+    }
   }
 
-  // ═══ Phase 19j2: Concurrent expire-vs-approve race (R8) ═══════════════
-  console.log("\n=== Phase 19j2: Concurrent expire vs approve ===");
+  // ═══ Phase 19j1b: Deterministic approve-first (revoke after approve rejected) ══
+  console.log("\n=== Phase 19j1b: Deterministic approve-first (revoke rejected) ===");
   {
-    // A TTL approval that has expired, raced against approve. Both lock the CR;
-    // consistent end state required (approved only if approval still counts, or
-    // awaiting_approval with the approval expired/excluded).
+    // Approve FIRST (transitions to approved), then revoke SECOND must be rejected
+    // because the CR is no longer awaiting_approval (finding #3 fix).
+    const crR2 = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','gp03/test','test-config',$1) as id", [authorPid]);
+    const crR2Id = crR2.rows[0].id;
+    const vR2 = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [crR2Id, JSON.stringify({v:92}), authorPid]);
+    const vR2Id = vR2.rows[0].id;
+    await runAsApp("SELECT * FROM gitwire_policy.select_policy_version($1, $2, 0, $3)", [crR2Id, vR2Id, authorPid]);
+    const { rows: [selR2] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crR2Id]);
+    await runAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1, $2, $3)", [crR2Id, Number(selR2.state_revision), authorPid]);
+    const r2Val = "sha256:" + "2".repeat(64);
+    const r2Sim = "sha256:" + "3".repeat(64);
+    await pool.query("INSERT INTO gitwire_policy.policy_validation_evidence (version_id, evidence_hash, result, validator_version) VALUES ($1, $2, '{}'::jsonb, 'test-v1')", [vR2Id, r2Val]);
+    await pool.query("INSERT INTO gitwire_policy.policy_simulation_evidence (version_id, evidence_hash, result, evaluator_version) VALUES ($1, $2, '{}'::jsonb, 'test-v1')", [vR2Id, r2Sim]);
+    await pool.query("UPDATE gitwire_policy.policy_change_requests SET state = 'awaiting_approval', state_revision = state_revision + 1, updated_at = now() WHERE id = $1 AND state = 'submitted'", [crR2Id]);
+    const { rows: [awaitR2] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crR2Id]);
+    await pool.query("INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) VALUES ($1, 'transition', 'submitted', 'awaiting_approval', $2, $3)", [crR2Id, adminPid, JSON.stringify({ version_id: vR2Id, state_revision: Number(awaitR2.state_revision), validation_evidence_hash: r2Val, simulation_evidence_hash: r2Sim, risk_classification: "standard" })]);
+    await runAsApp("SELECT gitwire_policy.record_policy_approval($1, $2, $3)", [crR2Id, ruleId, approver1Pid]);
+    const apprR2b = await runAsApp("SELECT gitwire_policy.record_policy_approval($1, $2, $3) as id", [crR2Id, ruleId, approver2Pid]);
+    const apprR2bId = apprR2b.rows[0].id;
+    // Approve FIRST
+    const revBefore2 = Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crR2Id])).rows[0].state_revision);
+    await runAsApp("SELECT * FROM gitwire_policy.approve_policy_change_request($1,$2,$3)", [crR2Id, revBefore2, adminPid]);
+    const { rows: [stAfterApprove] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crR2Id]);
+    check("approve-first: CR transitions to approved", stAfterApprove.state === "approved", "state=" + stAfterApprove.state);
+    // Revoke SECOND must be rejected (CR is approved, not awaiting_approval)
+    let revokeAfterApproveBlocked = false;
+    try { await runAsApp("SELECT gitwire_policy.revoke_policy_approval($1, $2, $3, $4)", [apprR2bId, 0, approver2Pid, "post-approve-det"]); }
+    catch (e) { revokeAfterApproveBlocked = e.message.includes("awaiting_approval") || e.message.includes("state"); }
+    check("approve-first: revoke after approve rejected (CR approved)", revokeAfterApproveBlocked);
+    // The approval remains active (immutable post-approval)
+    const { rows: [lf2b] } = await pool.query("SELECT to_status FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = $1 ORDER BY lifecycle_revision DESC LIMIT 1", [apprR2bId]);
+    check("approve-first: counted approval remains active (immutable)", lf2b.to_status === "active", "status=" + lf2b.to_status);
+  }
+
+  // ═══ Phase 19j2: Deterministic expire-vs-approve race (both lock orders) ══
+  console.log("\n=== Phase 19j2: Deterministic expire vs approve (both orders) ===");
+  {
+    // ORDER A: expire FIRST (approval excluded), approve SECOND -> insufficient.
     const ttlRule = await runAsApp("SELECT gitwire_policy.create_policy_approval_rule('v-ttl2', 'ttl2-config', 'fleet', 'fleet', 'elevated', 1, '[\"admin\"]', $1, 1) as id", [adminPid]);
     const ttlRuleId = ttlRule.rows[0].id;
     const crE = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','gp03/test','ttl2-config',$1) as id", [authorPid]);
@@ -1000,33 +1050,45 @@ try {
     const apprEId = apprE.rows[0].id;
     // Wait for the 1-second TTL to elapse so expire is eligible
     await new Promise(r => setTimeout(r, 1200));
-    const apprEBefore = 0;
+    // expire FIRST
+    await runAsApp("SELECT gitwire_policy.expire_policy_approval($1, $2, $3)", [apprEId, 0, adminPid]);
+    const { rows: [lfE] } = await pool.query("SELECT to_status FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = $1 ORDER BY lifecycle_revision DESC LIMIT 1", [apprEId]);
+    check("expire-first: approval expired", lfE.to_status === "expired", "status=" + lfE.to_status);
+    // approve SECOND: must fail insufficient (the expired approval no longer counts)
     const evBefore = Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crEId])).rows[0].state_revision);
+    let approveAfterExpireBlocked = false;
+    try { await runAsApp("SELECT * FROM gitwire_policy.approve_policy_change_request($1,$2,$3)", [crEId, evBefore, adminPid]); }
+    catch (e) { approveAfterExpireBlocked = e.message.includes("insufficient"); }
+    check("expire-first: approve fails insufficient (expired approval excluded)", approveAfterExpireBlocked);
 
-    const doExpire = async () => {
-      const c = await pool.connect();
-      try { await c.query("SET SESSION AUTHORIZATION gitwire_app"); await c.query("BEGIN");
-        await c.query("SELECT gitwire_policy.expire_policy_approval($1,$2,$3)", [apprEId, apprEBefore, adminPid]);
-        await c.query("COMMIT"); return "expired"; }
-      catch (e) { try { await c.query("ROLLBACK"); } catch {} return "expire-err:" + e.message.slice(0,30); }
-      finally { try { await c.query("RESET SESSION AUTHORIZATION"); } catch {} c.release(); }
-    };
-    const doApproveE = async () => {
-      const c = await pool.connect();
-      try { await c.query("SET SESSION AUTHORIZATION gitwire_app"); await c.query("BEGIN");
-        await c.query("SELECT * FROM gitwire_policy.approve_policy_change_request($1,$2,$3)", [crEId, evBefore, adminPid]);
-        await c.query("COMMIT"); return "approved"; }
-      catch (e) { try { await c.query("ROLLBACK"); } catch {} return e.message.includes("insufficient") || e.message.includes("CAS") ? "approve-blocked" : "approve-err:" + e.message.slice(0,30); }
-      finally { try { await c.query("RESET SESSION AUTHORIZATION"); } catch {} c.release(); }
-    };
-    const [er, ar] = await Promise.all([doExpire(), doApproveE()]);
-    const { rows: [endStateE] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crEId]);
-    const { rows: [endApprE] } = await pool.query("SELECT to_status FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = $1 ORDER BY lifecycle_revision DESC LIMIT 1", [apprEId]);
-    // If expire won, the approval is excluded -> approve insufficient -> awaiting_approval.
-    // If approve won first, the approval was still active at evaluate time -> approved.
-    const consistent = (endStateE.state === "approved" && endApprE.to_status === "active")
-      || (endStateE.state === "awaiting_approval" && endApprE.to_status === "expired");
-    check("concurrent expire-vs-approve: consistent end state", consistent, "state=" + endStateE.state + " apprE=" + endApprE.to_status + " results=" + JSON.stringify([er, ar]));
+    // ORDER B: approve FIRST, expire SECOND -> rejected (CR approved, not awaiting_approval)
+    const crE2 = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','gp03/test','ttl2-config',$1) as id", [authorPid]);
+    const crE2Id = crE2.rows[0].id;
+    const vE2 = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [crE2Id, JSON.stringify({v:121}), authorPid]);
+    const vE2Id = vE2.rows[0].id;
+    await runAsApp("SELECT * FROM gitwire_policy.select_policy_version($1, $2, 0, $3)", [crE2Id, vE2Id, authorPid]);
+    const { rows: [selE2] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crE2Id]);
+    await runAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1, $2, $3)", [crE2Id, Number(selE2.state_revision), authorPid]);
+    const e2Val = "sha256:" + "a2".repeat(32);
+    const e2Sim = "sha256:" + "b2".repeat(32);
+    await pool.query("INSERT INTO gitwire_policy.policy_validation_evidence (version_id, evidence_hash, result, validator_version) VALUES ($1, $2, '{}'::jsonb, 'test-v1')", [vE2Id, e2Val]);
+    await pool.query("INSERT INTO gitwire_policy.policy_simulation_evidence (version_id, evidence_hash, result, evaluator_version) VALUES ($1, $2, '{}'::jsonb, 'test-v1')", [vE2Id, e2Sim]);
+    await pool.query("UPDATE gitwire_policy.policy_change_requests SET state = 'awaiting_approval', state_revision = state_revision + 1, updated_at = now() WHERE id = $1 AND state = 'submitted'", [crE2Id]);
+    const { rows: [awaitE2] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crE2Id]);
+    await pool.query("INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) VALUES ($1, 'transition', 'submitted', 'awaiting_approval', $2, $3)", [crE2Id, adminPid, JSON.stringify({ version_id: vE2Id, state_revision: Number(awaitE2.state_revision), validation_evidence_hash: e2Val, simulation_evidence_hash: e2Sim, risk_classification: "elevated" })]);
+    const apprE2 = await runAsApp("SELECT gitwire_policy.record_policy_approval($1, $2, $3) as id", [crE2Id, ttlRuleId, approver1Pid]);
+    const apprE2Id = apprE2.rows[0].id;
+    // approve FIRST IMMEDIATELY (before TTL expiry; count=1, rule requires 1 -> succeeds)
+    const ev2Before = Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crE2Id])).rows[0].state_revision);
+    await runAsApp("SELECT * FROM gitwire_policy.approve_policy_change_request($1,$2,$3)", [crE2Id, ev2Before, adminPid]);
+    const { rows: [stE2] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crE2Id]);
+    check("approve-first(expire race): CR transitions to approved", stE2.state === "approved", "state=" + stE2.state);
+    // Wait for TTL to elapse, THEN expire SECOND must be rejected (CR approved, not awaiting_approval)
+    await new Promise(r => setTimeout(r, 1200));
+    let expireAfterApproveBlocked = false;
+    try { await runAsApp("SELECT gitwire_policy.expire_policy_approval($1, $2, $3)", [apprE2Id, 0, adminPid]); }
+    catch (e) { expireAfterApproveBlocked = e.message.includes("awaiting_approval") || e.message.includes("state"); }
+    check("approve-first(expire race): expire after approve rejected", expireAfterApproveBlocked);
   }
 
   // ═══ Phase 19k: HTTP observer + 409 mapping + observer-bypass-denial (R8) ══
@@ -1296,6 +1358,7 @@ try {
     ["COLUMN", "ALTER TABLE gitwire_policy.policy_approval_rules ADD COLUMN rule_revision bigint NOT NULL DEFAULT 0", /already exists/i],
     ["CONSTRAINT", "ALTER TABLE gitwire_policy.policy_approval_rules ADD CONSTRAINT par_self_approval_check CHECK (self_approval_prohibited = true)", /already exists/i],
     ["FUNCTION", "CREATE FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$", /already exists|cannot change/i],
+    ["OWNER-MISMATCH", "CREATE FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$; ALTER FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) OWNER TO gitwire_app", /already exists|cannot change/i],
   ]) {
     const colPort = await pickPort();
     const colName = "gp03-col-" + label.toLowerCase() + "-" + colPort;
@@ -1317,6 +1380,38 @@ try {
       await colPool.end();
     } finally {
       try { docker("rm", "-f", colCid); } catch {}
+    }
+  }
+
+  // ═══ Phase 20c-grant: Grant-revocation gate ═══════════════════════════
+  // A pre-existing unexpected grant (INSERT on a GP-03 table to gitwire_app) must
+  // be revoked by the migration (which REVOKEs direct writes). This proves the
+  // migration does not silently adopt an unexpected privilege; it actively reverses it.
+  console.log("\n=== Phase 20c-grant: Grant revocation gate ===");
+  {
+    const gPort = await pickPort();
+    const gName = "gp03-col-grant-" + gPort;
+    const gCid = docker("run", "-d", "--rm", "--name", gName, "-p", "127.0.0.1:" + gPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+    const gUrl = "postgresql://proof:proof-only@127.0.0.1:" + gPort + "/proofdb";
+    try {
+      await waitForReady(gUrl, 60_000);
+      const gPool = new pg.Pool({ connectionString: gUrl });
+      // Apply 001-045, then pre-grant an UNEXPECTED privilege (INSERT on policy_approvals to gitwire_app)
+      await applyMigrations(gPool);
+      await gPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
+      await gPool.query(await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8"));
+      await gPool.query("GRANT INSERT ON gitwire_policy.policy_approvals TO gitwire_app");
+      // Confirm the unexpected grant exists pre-migration
+      const preHasInsert = (await gPool.query("SELECT has_table_privilege('gitwire_app','gitwire_policy.policy_approvals','INSERT') as h")).rows[0].h;
+      check("grant gate: unexpected INSERT granted pre-migration", preHasInsert === true);
+      // Apply 046 (which REVOKEs INSERT from gitwire_app)
+      await applyMigrations(gPool);
+      // The migration must have revoked the unexpected INSERT
+      const postHasInsert = (await gPool.query("SELECT has_table_privilege('gitwire_app','gitwire_policy.policy_approvals','INSERT') as h")).rows[0].h;
+      check("grant gate: unexpected INSERT revoked by migration (not silently adopted)", postHasInsert === false, "hasInsert=" + postHasInsert);
+      await gPool.end();
+    } finally {
+      try { docker("rm", "-f", gCid); } catch {}
     }
   }
 
