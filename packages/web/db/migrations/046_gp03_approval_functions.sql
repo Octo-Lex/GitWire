@@ -107,10 +107,30 @@ GRANT SELECT ON policy_simulation_evidence TO gitwire_policy_fn_owner;
 -- exact final ACL matches a fresh apply. This is the chosen contract for the
 -- grant-revocation gate (ACL normalization, not abort-on-unexpected-ACL).
 
--- Revoke direct writes from gitwire_app on GP-03 tables (normalization)
+-- Revoke direct writes from gitwire_app on GP-03 tables (normalization).
+-- Table-level REVOKE does NOT remove pre-existing COLUMN-level grants, so revoke
+-- column-level INSERT/UPDATE explicitly via a DO block that enumerates every
+-- column of each GP-03 table. This ensures the complete write matrix is removed.
 REVOKE INSERT, UPDATE, DELETE ON policy_approval_rules FROM gitwire_app;
 REVOKE INSERT, UPDATE, DELETE ON policy_approvals FROM gitwire_app;
 REVOKE INSERT, UPDATE, DELETE ON policy_approval_lifecycle FROM gitwire_app;
+
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT n.nspname, c.relname, a.attname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = c.oid
+    WHERE n.nspname = 'gitwire_policy'
+      AND c.relname IN ('policy_approval_rules','policy_approvals','policy_approval_lifecycle')
+      AND a.attnum > 0 AND NOT a.attisdropped
+  LOOP
+    EXECUTE format('REVOKE INSERT (%I), UPDATE (%I) ON %I.%I FROM gitwire_app', r.attname, r.attname, r.nspname, r.relname);
+  END LOOP;
+END $$;
 
 RESET search_path;
 
@@ -371,8 +391,8 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
-    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND jsonb_typeof(detail->'state_revision') = 'number'
+    AND (detail->>'state_revision') = v_cr.state_revision::text
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   IF v_context_count = 0 THEN
@@ -396,8 +416,8 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
-    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND jsonb_typeof(detail->'state_revision') = 'number'
+    AND (detail->>'state_revision') = v_cr.state_revision::text
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   -- Validate the fetched evidence/risk values (type-check before use).
@@ -580,8 +600,12 @@ SET search_path = gitwire_policy, pg_catalog
 LANGUAGE plpgsql AS $$
 DECLARE
   v_approval RECORD;
+  v_rule RECORD;
   v_cr_id uuid;
   v_cr_state text;
+  v_cr_resource_type text;
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
   v_current_status text;
   v_current_revision bigint;
   v_latest_count int;
@@ -614,7 +638,7 @@ BEGIN
   -- R6 step 2: Lock the change request FOR UPDATE (sole serialization domain)
   -- and require it to still be awaiting_approval. Once a request is approved,
   -- its approvals are consumed and must be immutable.
-  SELECT cr.state INTO v_cr_state
+  SELECT cr.state, cr.resource_type INTO v_cr_state, v_cr_resource_type
   FROM policy_change_requests cr WHERE cr.id = v_cr_id FOR UPDATE;
   IF v_cr_state IS NULL THEN
     RAISE EXCEPTION 'revoke_policy_approval: associated change request not found';
@@ -625,6 +649,12 @@ BEGIN
 
   -- R6 step 3: Sample clock_timestamp() AFTER acquiring the lock
   v_now := clock_timestamp();
+
+  -- Load the approval rule (needed for required_roles in the self-revoke check)
+  SELECT * INTO v_rule FROM policy_approval_rules WHERE id = v_approval.approval_rule_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'revoke_policy_approval: approval rule % not found', v_approval.approval_rule_id;
+  END IF;
 
   -- R6 step 4: Read the latest lifecycle event with a plain SELECT (no FOR UPDATE)
   SELECT pal.to_status, pal.lifecycle_revision
@@ -655,9 +685,17 @@ BEGIN
   -- former approver must not be able to self-revoke.
   v_is_approver := (v_approval.approver_principal_id = p_actor_principal_id);
   IF v_is_approver THEN
-    -- Confirm the original approver is still an active principal retaining a
-    -- CURRENT assignment to an ACTIVE role (binding current-authority rule:
-    -- active principal + active role + non-revoked + unexpired assignment).
+    -- Confirm the original approver STILL holds a CURRENT assignment to an ACTIVE
+    -- role that is one of the rule's required_roles AND scope-applicable to the
+    -- request (fleet, exact installation_id, or exact repo github_id; system scope
+    -- is excluded — it is not approval authority). This matches the frozen
+    -- current-authority rule for privileged checks.
+    v_repo_installation_id := NULL;
+    v_repo_github_id := NULL;
+    IF v_cr_resource_type = 'repository' THEN
+      SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+      FROM public.repositories repo WHERE repo.full_name = v_approval.resource_scope_id;
+    END IF;
     SELECT EXISTS(
       SELECT 1 FROM gitwire_auth.auth_principals p
       JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = p.id
@@ -666,6 +704,14 @@ BEGIN
         AND pr.revoked_at IS NULL
         AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
         AND r.status = 'active'
+        AND r.name = ANY(SELECT jsonb_array_elements_text(v_rule.required_roles))
+        AND pr.scope_type != 'system'
+        AND (
+          pr.scope_type = 'fleet'
+          OR (v_cr_resource_type = 'repository'
+              AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+                OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+        )
     ) INTO v_is_approver;
   END IF;
   SELECT EXISTS(
@@ -900,8 +946,8 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
-    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND jsonb_typeof(detail->'state_revision') = 'number'
+    AND (detail->>'state_revision') = v_cr.state_revision::text
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   IF v_context_count = 0 THEN
@@ -923,8 +969,8 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
-    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND jsonb_typeof(detail->'state_revision') = 'number'
+    AND (detail->>'state_revision') = v_cr.state_revision::text
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   IF v_detail_val_hash IS NULL OR btrim(v_detail_val_hash) = ''
@@ -1180,8 +1226,8 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
-    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND jsonb_typeof(detail->'state_revision') = 'number'
+    AND (detail->>'state_revision') = v_cr.state_revision::text
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   IF v_context_count = 0 THEN
@@ -1203,8 +1249,8 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
-    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND jsonb_typeof(detail->'state_revision') = 'number'
+    AND (detail->>'state_revision') = v_cr.state_revision::text
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   IF v_detail_val_hash IS NULL OR btrim(v_detail_val_hash) = ''
