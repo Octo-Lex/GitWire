@@ -36,6 +36,7 @@ import { rolloutRouter }        from "./routes/rollouts.js";
 import setupRouter               from "./routes/setup.js";
 import repairsRouter              from "./routes/repairs.js";
 import bootstrapRouter            from "./routes/bootstrap.js";
+import { governedPolicyRouter }   from "./routes/governedPolicy.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { authContext }          from "./middleware/authContext.js";
 import { routeAuthObserver }    from "./middleware/routeAuthObserver.js";
@@ -172,6 +173,9 @@ export function createApp() {
   app.use("/api/rollouts",           rolloutRouter);
   app.use("/api/setup",              setupRouter);
   app.use("/api/repairs",             repairsRouter);
+
+  // Governed Policy Authority (GP-02)
+  app.use("/api/policy",              governedPolicyRouter);
 
   // ── Global error handler ──────────────────────────────────────────────────
   app.use((err, req, res, _next) => {
