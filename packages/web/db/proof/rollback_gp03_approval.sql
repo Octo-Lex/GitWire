@@ -36,8 +36,9 @@ REVOKE SELECT ON gitwire_auth.auth_roles FROM gitwire_policy_fn_owner;
 REVOKE SELECT ON gitwire_auth.auth_principals FROM gitwire_policy_fn_owner;
 REVOKE USAGE ON SCHEMA gitwire_auth FROM gitwire_policy_fn_owner;
 
--- Revoke public.repositories column grant
+-- Revoke public.repositories + public.installations column grants (046 added both)
 REVOKE SELECT (github_id, installation_id, full_name, owner, name) ON public.repositories FROM gitwire_policy_fn_owner;
+REVOKE SELECT (github_id, account_login) ON public.installations FROM gitwire_policy_fn_owner;
 
 -- Drop constraints added by 046
 ALTER TABLE policy_approvals DROP CONSTRAINT IF EXISTS pa_expires_check;

@@ -9,14 +9,44 @@
 -- session_user check, OWNER TO gitwire_policy_fn_owner, REVOKE FROM PUBLIC,
 -- GRANT EXECUTE TO gitwire_app.
 --
+-- CORRECTION (review 4834855247 / decision 5152100228): the original 046 had
+-- seven blocking findings. This migration is rewritten in place (046 is
+-- unmerged/undeployed) to fix all of them:
+--   1. Approval context bound to current state_revision + selected version_id;
+--      exactly-one matching event required (fail-closed on ambiguity). The
+--      awaiting_approval event detail is JSON-validated in the functions
+--      because policy_transition_events has no schema-level state_revision
+--      column or uniqueness constraint.
+--   2. Scoped authorization: a principal's role applies to a request only via
+--      fleet, exact installation id, or exact repository github id (resolved
+--      through public.repositories + public.installations). Organization/fleet
+--      requests accept fleet assignments only. System scope is allowed ONLY
+--      for the expiry automation path with an active system principal +
+--      system-scoped admin.
+--   3. Lifecycle CAS compares expected==current_max under the change-request
+--      lock BEFORE inserting; the existing UNIQUE(approval_id,
+--      lifecycle_revision) constraint is the race backstop. clock_timestamp()
+--      sampled after lock. No FOR UPDATE on lifecycle rows (fn_owner has only
+--      SELECT, INSERT on that table).
+--   4. record_policy_approval recomputes the effective rule and rejects stale /
+--      superseded / wrong-scope / wrong-family / wrong-risk rule ids.
+--   5. Count, role coverage, approval ids, principals, represented roles,
+--      assignment ids, and earliest expiry derive from ONE canonical
+--      eligible-approval predicate (single CTE -> single aggregate).
+--
+-- Forward migration is FAIL-CLOSED: plain ADD COLUMN / ADD CONSTRAINT /
+-- CREATE FUNCTION (no IF NOT EXISTS, no OR REPLACE). An unexpected existing
+-- object aborts the migration. Rollback is via rollback_gp03_approval.sql.
+--
 -- Schema additions: rule_revision (bigint ordering), approval_ttl_seconds,
 -- expires_at, schema-level CHECK constraints (fail-closed).
--- Cross-schema grants: USAGE on gitwire_auth + SELECT on identity tables.
+-- Cross-schema grants: USAGE on gitwire_auth + SELECT on identity tables +
+-- SELECT on public.repositories + public.installations.
 
 SET search_path = gitwire_policy, pg_catalog;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- Schema additions (additive ALTER)
+-- Schema additions (additive ALTER — fail-closed, no IF NOT EXISTS)
 -- ════════════════════════════════════════════════════════════════════════════
 
 ALTER TABLE policy_approval_rules ADD COLUMN rule_revision bigint NOT NULL DEFAULT 0;
@@ -47,8 +77,12 @@ GRANT SELECT ON gitwire_auth.auth_principals TO gitwire_policy_fn_owner;
 GRANT SELECT ON gitwire_auth.auth_roles TO gitwire_policy_fn_owner;
 GRANT SELECT ON gitwire_auth.auth_principal_roles TO gitwire_policy_fn_owner;
 
--- SELECT on public.repositories for server-owned repository/organization resolution
+-- SELECT on public.repositories + public.installations for server-owned
+-- repository / organization / installation resolution (scope-applicability).
+-- repositories: github_id, installation_id, full_name, owner, name.
+-- installations: github_id (= installation_id FK target), account_login.
 GRANT SELECT (github_id, installation_id, full_name, owner, name) ON public.repositories TO gitwire_policy_fn_owner;
+GRANT SELECT (github_id, account_login) ON public.installations TO gitwire_policy_fn_owner;
 
 -- SELECT on policy_transition_events (045 grants only INSERT to fn_owner)
 GRANT SELECT ON policy_transition_events TO gitwire_policy_fn_owner;
@@ -68,14 +102,18 @@ REVOKE INSERT, UPDATE, DELETE ON policy_approval_rules FROM gitwire_app;
 REVOKE INSERT, UPDATE, DELETE ON policy_approvals FROM gitwire_app;
 REVOKE INSERT, UPDATE, DELETE ON policy_approval_lifecycle FROM gitwire_app;
 
+RESET search_path;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- Function 1: create_policy_approval_rule
 -- Creates an immutable approval rule. Self-approval, step-up, and assurance
 -- are schema-enforced as fail-closed (true/false/level1 respectively).
--- Actor must be active fleet-scoped admin.
--- Rule hash covers ALL fields via canonical_jsonb.
+-- Actor must be active principal with active, non-revoked, non-expired
+-- fleet-scoped admin role. Rule hash covers ALL fields via canonical_jsonb.
 -- rule_revision serialized per scope/family/risk via advisory lock.
 -- ════════════════════════════════════════════════════════════════════════════
+
+SET search_path = gitwire_policy, pg_catalog;
 
 CREATE FUNCTION create_policy_approval_rule(
   p_rule_version text,
@@ -102,10 +140,13 @@ DECLARE
   v_actor_admin boolean;
   v_next_revision bigint;
   v_lock_key text;
+  v_now timestamptz;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'create_policy_approval_rule: caller must be gitwire_app, got %', session_user;
   END IF;
+
+  v_now := clock_timestamp();
 
   -- Validate required params
   IF p_rule_version IS NULL OR p_policy_family IS NULL OR p_resource_scope_type IS NULL
@@ -136,12 +177,17 @@ BEGIN
     RAISE EXCEPTION 'create_policy_approval_rule: required_count must be >= 1';
   END IF;
 
+  -- Validate TTL
+  IF p_approval_ttl_seconds IS NOT NULL AND p_approval_ttl_seconds <= 0 THEN
+    RAISE EXCEPTION 'create_policy_approval_rule: approval_ttl_seconds must be positive when provided';
+  END IF;
+
   -- Validate roles: must be nonempty array
   IF jsonb_typeof(p_required_roles) != 'array' OR jsonb_array_length(p_required_roles) = 0 THEN
     RAISE EXCEPTION 'create_policy_approval_rule: required_roles must be a nonempty array';
   END IF;
 
-  -- Normalize: deduplicate, sort with COLLATE "C", validate each role exists
+  -- Normalize: deduplicate, sort with COLLATE "C", validate each role exists & active
   SELECT array_agg(r ORDER BY r COLLATE "C") INTO v_normalized_roles
   FROM (SELECT DISTINCT r FROM jsonb_array_elements_text(p_required_roles) AS e(r)) t;
 
@@ -155,19 +201,24 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Actor eligibility: active principal with active fleet-scoped admin
+  -- Actor eligibility (current): active principal
   SELECT p.status = 'active' INTO v_actor_active
   FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id;
   IF NOT v_actor_active THEN
     RAISE EXCEPTION 'create_policy_approval_rule: actor principal is not active';
   END IF;
 
+  -- Actor eligibility (current): active, non-revoked, non-expired fleet-scoped admin
   SELECT EXISTS(
     SELECT 1 FROM gitwire_auth.auth_principal_roles pr
     JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+    JOIN gitwire_auth.auth_principals p ON p.id = pr.principal_id
     WHERE pr.principal_id = p_actor_principal_id
-      AND r.name = 'admin' AND pr.scope_type = 'fleet'
+      AND r.name = 'admin' AND r.status = 'active'
+      AND pr.scope_type = 'fleet'
       AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND p.status = 'active'
   ) INTO v_actor_admin;
   IF NOT v_actor_admin THEN
     RAISE EXCEPTION 'create_policy_approval_rule: actor must have active fleet-scoped admin role';
@@ -222,16 +273,28 @@ ALTER FUNCTION create_policy_approval_rule(text, text, text, text, text, integer
 REVOKE ALL ON FUNCTION create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer) TO gitwire_app;
 
+RESET search_path;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- Function 2: record_policy_approval
 -- Records an approval with server-derived authority tuple.
--- Locks the change request FOR UPDATE (single lock domain).
--- Derives version_id, content_hash, evidence hashes, risk from the
--- awaiting_approval transition event context.
--- Self-approval prohibition is absolute.
--- Duplicate same-principal check for active approvals.
--- Actor eligibility: approver must have required role applicable to scope.
+-- Locks the change request FOR UPDATE (single lock domain; no FOR UPDATE on
+-- lifecycle rows since fn_owner has only SELECT, INSERT there).
+--
+-- R3: Derives approval context from the awaiting_approval transition event,
+--   validated against current state_revision + selected version_id; exactly
+--   one matching event required (fail-closed on ambiguity). JSON detail is
+--   type-checked before casting.
+-- R4: Recomputes the effective rule and requires p_approval_rule_id == effective.
+--   Rejects stale/superseded/wrong-scope/wrong-family/wrong-risk rule ids.
+-- R1/R2: Scoped authorization — approver's role must be current (active
+--   principal, active role, non-revoked, non-expired) AND scope-applicable:
+--   repository request -> fleet | exact installation_id | exact repo github_id;
+--   organization/fleet request -> fleet only.
+-- Self-approval prohibition is absolute. Duplicate active approval rejected.
 -- ════════════════════════════════════════════════════════════════════════════
+
+SET search_path = gitwire_policy, pg_catalog;
 
 CREATE FUNCTION record_policy_approval(
   p_change_request_id uuid,
@@ -245,14 +308,24 @@ DECLARE
   v_cr RECORD;
   v_rule RECORD;
   v_version RECORD;
-  v_context RECORD;
+  v_effective_rule_id uuid;
   v_approval_id uuid;
-  v_author uuid;
   v_approver_active boolean;
   v_has_role boolean;
   v_existing_count int;
   v_expires_at timestamptz;
   v_now timestamptz;
+  v_context_count int;
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
+  v_detail_state_revision text;
+  v_detail_version_id text;
+  v_detail_val_hash text;
+  v_detail_sim_hash text;
+  v_detail_risk text;
+  v_detail_state_rev_ok boolean;
+  v_detail_version_ok boolean;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'record_policy_approval: caller must be gitwire_app, got %', session_user;
@@ -260,7 +333,7 @@ BEGIN
 
   v_now := clock_timestamp();
 
-  -- Lock the change request
+  -- Lock the change request (single serialization domain)
   SELECT * INTO v_cr FROM policy_change_requests WHERE id = p_change_request_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'record_policy_approval: change request % not found', p_change_request_id;
@@ -269,66 +342,152 @@ BEGIN
     RAISE EXCEPTION 'record_policy_approval: change request is in state %, only awaiting_approval accepts approvals', v_cr.state;
   END IF;
 
-  -- Get the selected version
+  -- Get the selected version (must exist)
   SELECT id, content_hash INTO v_version FROM policy_versions WHERE id = v_cr.selected_version_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'record_policy_approval: no selected version';
   END IF;
 
-  -- Derive approval context from the transition event that moved to awaiting_approval
-  -- Must match the current state_revision exactly
-  SELECT
-    (detail->>'validation_evidence_hash')::text AS validation_evidence_hash,
-    (detail->>'simulation_evidence_hash')::text AS simulation_evidence_hash,
-    (detail->>'risk_classification')::text AS risk_classification
-  INTO v_context
+  -- R3: Derive approval context. Require EXACTLY ONE awaiting_approval event
+  -- whose detail carries the current state_revision, the selected version_id,
+  -- and typed evidence/risk fields. policy_transition_events has no schema
+  -- state_revision column, so we JSON-validate here. Type-check before cast.
+  -- NOTE: SELECT INTO + GET DIAGNOSTICS ROW_COUNT reports only 0/1, so count
+  -- explicitly to detect ambiguity (>1 matching event = fail-closed).
+  SELECT count(*) INTO v_context_count
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
     AND to_state = 'awaiting_approval'
-    AND (detail ? 'validation_evidence_hash')
-  ORDER BY occurred_at DESC LIMIT 1;
+    AND detail ? 'validation_evidence_hash'
+    AND detail ? 'simulation_evidence_hash'
+    AND detail ? 'risk_classification'
+    AND detail ? 'state_revision'
+    AND detail ? 'version_id';
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'record_policy_approval: no awaiting_approval context event with evidence hashes found';
+  IF v_context_count = 0 THEN
+    RAISE EXCEPTION 'record_policy_approval: no awaiting_approval context event with complete typed detail found';
+  END IF;
+  IF v_context_count > 1 THEN
+    RAISE EXCEPTION 'record_policy_approval: ambiguous awaiting_approval context (% events)', v_context_count;
   END IF;
 
-  -- Get the rule and verify it exists
+  SELECT
+    detail->>'state_revision',
+    detail->>'version_id',
+    detail->>'validation_evidence_hash',
+    detail->>'simulation_evidence_hash',
+    detail->>'risk_classification'
+  INTO v_detail_state_revision, v_detail_version_id, v_detail_val_hash,
+       v_detail_sim_hash, v_detail_risk
+  FROM policy_transition_events
+  WHERE change_request_id = p_change_request_id
+    AND to_state = 'awaiting_approval'
+    AND detail ? 'validation_evidence_hash'
+    AND detail ? 'simulation_evidence_hash'
+    AND detail ? 'risk_classification'
+    AND detail ? 'state_revision'
+    AND detail ? 'version_id';
+
+  -- Type-check + value-check the JSON fields against current trusted state
+  v_detail_state_rev_ok := (v_detail_state_revision IS NOT NULL
+    AND v_detail_state_revision ~ '^[0-9]+$'
+    AND v_detail_state_revision::bigint = v_cr.state_revision);
+  v_detail_version_ok := (v_detail_version_id IS NOT NULL
+    AND v_detail_version_id = v_cr.selected_version_id::text);
+  IF NOT (v_detail_state_rev_ok AND v_detail_version_ok) THEN
+    RAISE EXCEPTION 'record_policy_approval: context event does not match current state_revision/version_id';
+  END IF;
+  IF v_detail_val_hash IS NULL OR btrim(v_detail_val_hash) = ''
+     OR v_detail_sim_hash IS NULL OR btrim(v_detail_sim_hash) = ''
+     OR v_detail_risk IS NULL OR v_detail_risk NOT IN ('standard','elevated','critical') THEN
+    RAISE EXCEPTION 'record_policy_approval: context event has malformed evidence or risk';
+  END IF;
+
+  -- R4: Recompute the effective rule (repo -> org -> fleet, highest rule_revision).
+  -- The supplied p_approval_rule_id MUST equal the effective rule id.
+  SELECT e.id INTO v_effective_rule_id
+  FROM (
+    SELECT r.id,
+           ROW_NUMBER() OVER (
+             ORDER BY
+               CASE r.resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
+               r.rule_revision DESC
+           ) AS rn
+    FROM policy_approval_rules r
+    WHERE r.policy_family = v_cr.policy_family
+      AND r.risk_classification = v_detail_risk
+      AND (
+        (v_cr.resource_type = 'repository'
+           AND ((r.resource_scope_type = 'repository' AND r.resource_scope_id = v_cr.resource_id)
+             OR (r.resource_scope_type = 'organization' AND r.resource_scope_id = (
+                  SELECT i.account_login FROM public.repositories repo
+                  JOIN public.installations i ON i.github_id = repo.installation_id
+                  WHERE repo.full_name = v_cr.resource_id))
+             OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+        OR (v_cr.resource_type = 'organization'
+           AND ((r.resource_scope_type = 'organization' AND r.resource_scope_id = v_cr.resource_id)
+             OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+        OR (v_cr.resource_type = 'fleet'
+           AND r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')
+      )
+  ) e
+  WHERE e.rn = 1;
+
+  IF v_effective_rule_id IS NULL THEN
+    RAISE EXCEPTION 'record_policy_approval: no applicable approval rule found';
+  END IF;
+  IF v_effective_rule_id != p_approval_rule_id THEN
+    RAISE EXCEPTION 'record_policy_approval: supplied rule is not the effective rule (stale/superseded/wrong-scope/family/risk)';
+  END IF;
+
   SELECT * INTO v_rule FROM policy_approval_rules WHERE id = p_approval_rule_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'record_policy_approval: approval rule % not found', p_approval_rule_id;
-  END IF;
-
-  -- Verify the rule matches the request's scope, family, and risk
-  -- (the effective rule check is done here, not by the caller)
-  IF v_rule.risk_classification != v_context.risk_classification THEN
-    RAISE EXCEPTION 'record_policy_approval: rule risk_classification % does not match context %', v_rule.risk_classification, v_context.risk_classification;
-  END IF;
 
   -- Self-approval prohibition (absolute)
   IF v_cr.author_principal_id = p_approver_principal_id THEN
     RAISE EXCEPTION 'record_policy_approval: self-approval prohibited (author == approver)';
   END IF;
 
-  -- Check approver is active
-  SELECT status = 'active' INTO v_approver_active FROM gitwire_auth.auth_principals WHERE id = p_approver_principal_id;
+  -- Approver eligibility (current): active principal
+  SELECT p.status = 'active' INTO v_approver_active
+  FROM gitwire_auth.auth_principals p WHERE p.id = p_approver_principal_id;
   IF NOT v_approver_active THEN
     RAISE EXCEPTION 'record_policy_approval: approver principal is not active';
   END IF;
 
-  -- Check approver has at least one required role applicable to request scope
-  -- Repository/installation scope: check fleet, installation, or repository assignments
-  -- Organization/fleet scope: check fleet assignments only
+  -- R1/R2: Scope-applicable role. Resolve the target repository's numeric IDs
+  -- (fail-closed on zero/multiple rows). Organization/fleet requests accept
+  -- fleet-only. Repository requests accept fleet | exact installation_id |
+  -- exact repo github_id. System scope is NOT general approval authority.
+  v_repo_installation_id := NULL;
+  v_repo_github_id := NULL;
+  IF v_cr.resource_type = 'repository' THEN
+    SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_cr.resource_id;
+    IF v_repo_row_count != 1 THEN
+      RAISE EXCEPTION 'record_policy_approval: repository % resolves to % rows (expected 1)', v_cr.resource_id, v_repo_row_count;
+    END IF;
+    SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+    FROM public.repositories repo WHERE repo.full_name = v_cr.resource_id;
+  END IF;
+
   SELECT EXISTS(
     SELECT 1 FROM gitwire_auth.auth_principal_roles pr
     JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+    JOIN gitwire_auth.auth_principals p ON p.id = pr.principal_id
     WHERE pr.principal_id = p_approver_principal_id
       AND r.name = ANY(SELECT jsonb_array_elements_text(v_rule.required_roles))
+      AND r.status = 'active'
       AND pr.revoked_at IS NULL
-      AND (pr.scope_type = 'fleet'
-           OR (v_cr.resource_type = 'repository' AND pr.scope_type IN ('installation','repository')))
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND p.status = 'active'
+      AND (
+        pr.scope_type = 'fleet'
+        OR (v_cr.resource_type = 'repository'
+            AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+              OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+      )
   ) INTO v_has_role;
   IF NOT v_has_role THEN
-    RAISE EXCEPTION 'record_policy_approval: approver does not have any required role';
+    RAISE EXCEPTION 'record_policy_approval: approver does not have a current scope-applicable required role';
   END IF;
 
   -- Check for duplicate active approval by same principal
@@ -356,7 +515,7 @@ BEGIN
     v_expires_at := NULL;
   END IF;
 
-  -- Insert approval (immutable core)
+  -- Insert approval (immutable core) bound to the exact evidence tuple
   INSERT INTO policy_approvals (
     version_id, content_hash,
     validation_evidence_hash, simulation_evidence_hash,
@@ -366,9 +525,9 @@ BEGIN
     expires_at
   ) VALUES (
     v_version.id, v_version.content_hash,
-    v_context.validation_evidence_hash, v_context.simulation_evidence_hash,
+    v_detail_val_hash, v_detail_sim_hash,
     p_approval_rule_id, v_rule.rule_hash,
-    v_context.risk_classification, p_approver_principal_id,
+    v_detail_risk, p_approver_principal_id,
     v_cr.resource_type, v_cr.resource_id,
     v_expires_at
   ) RETURNING id INTO v_approval_id;
@@ -391,12 +550,20 @@ ALTER FUNCTION record_policy_approval(uuid, uuid, uuid)
 REVOKE ALL ON FUNCTION record_policy_approval(uuid, uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION record_policy_approval(uuid, uuid, uuid) TO gitwire_app;
 
+RESET search_path;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- Function 3: revoke_policy_approval
 -- CAS lifecycle transition active -> revoked.
--- Locks the associated change request FOR UPDATE.
--- Actor: original approver or fleet admin.
+-- R6: Genuine compare-before-insert lifecycle CAS.
+--   The change-request row FOR UPDATE is the sole serialization domain
+--   (fn_owner has only SELECT, INSERT on policy_approval_lifecycle, so no
+--   FOR UPDATE on lifecycle rows). clock_timestamp() sampled after lock.
+--   Existing UNIQUE(approval_id, lifecycle_revision) is the race backstop.
+-- Actor: original approver or fleet admin (current authority).
 -- ════════════════════════════════════════════════════════════════════════════
+
+SET search_path = gitwire_policy, pg_catalog;
 
 CREATE FUNCTION revoke_policy_approval(
   p_approval_id uuid,
@@ -411,13 +578,16 @@ DECLARE
   v_approval RECORD;
   v_cr_id uuid;
   v_current_status text;
+  v_current_revision bigint;
+  v_latest_count int;
   v_is_approver boolean;
   v_is_admin boolean;
+  v_now timestamptz;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'revoke_policy_approval: caller must be gitwire_app, got %', session_user;
   END IF;
-  IF btrim(p_reason_code) = '' THEN
+  IF p_reason_code IS NULL OR btrim(p_reason_code) = '' THEN
     RAISE EXCEPTION 'revoke_policy_approval: reason_code must not be empty';
   END IF;
 
@@ -427,46 +597,65 @@ BEGIN
     RAISE EXCEPTION 'revoke_policy_approval: approval % not found', p_approval_id;
   END IF;
 
-  -- Find the associated change request and lock it
+  -- R6 step 1: Resolve the associated change request
   SELECT cr.id INTO v_cr_id
   FROM policy_change_requests cr
   JOIN policy_versions v ON v.change_request_id = cr.id
   WHERE v.id = v_approval.version_id;
-  IF v_cr_id IS NOT NULL THEN
-    PERFORM 1 FROM policy_change_requests WHERE id = v_cr_id FOR UPDATE;
+  IF v_cr_id IS NULL THEN
+    RAISE EXCEPTION 'revoke_policy_approval: no associated change request for approval %', p_approval_id;
   END IF;
 
-  -- Get current lifecycle status
-  SELECT pal.to_status INTO v_current_status
+  -- R6 step 2: Lock the change request FOR UPDATE (sole serialization domain)
+  PERFORM 1 FROM policy_change_requests WHERE id = v_cr_id FOR UPDATE;
+
+  -- R6 step 3: Sample clock_timestamp() AFTER acquiring the lock
+  v_now := clock_timestamp();
+
+  -- R6 step 4: Read the latest lifecycle event with a plain SELECT (no FOR UPDATE)
+  SELECT pal.to_status, pal.lifecycle_revision
+  INTO v_current_status, v_current_revision
   FROM policy_approval_lifecycle pal
   WHERE pal.approval_id = p_approval_id
     AND pal.lifecycle_revision = (
       SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = p_approval_id
     );
-  IF v_current_status IS NULL THEN
-    RAISE EXCEPTION 'revoke_policy_approval: no lifecycle events found';
+
+  GET DIAGNOSTICS v_latest_count = ROW_COUNT;
+  -- R6 step 5: Require exactly one latest row, expected==current, status active
+  IF v_latest_count != 1 THEN
+    RAISE EXCEPTION 'revoke_policy_approval: expected exactly one latest lifecycle event, found %', v_latest_count;
   END IF;
-  IF v_current_status != 'active' THEN
+  IF v_current_revision IS NULL OR p_expected_lifecycle_revision IS NULL
+     OR p_expected_lifecycle_revision != v_current_revision THEN
+    RAISE EXCEPTION 'revoke_policy_approval: CAS failed — lifecycle revision mismatch (expected %, current %)',
+      p_expected_lifecycle_revision, v_current_revision;
+  END IF;
+  IF v_current_status IS NULL OR v_current_status != 'active' THEN
     RAISE EXCEPTION 'revoke_policy_approval: approval is in status %, only active can be revoked', v_current_status;
   END IF;
 
-  -- Actor eligibility: original approver or fleet admin
+  -- Actor eligibility (current): original approver OR active fleet admin
   v_is_approver := (v_approval.approver_principal_id = p_actor_principal_id);
   SELECT EXISTS(
     SELECT 1 FROM gitwire_auth.auth_principal_roles pr
     JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
-    WHERE pr.principal_id = p_actor_principal_id AND r.name = 'admin' AND pr.scope_type = 'fleet' AND pr.revoked_at IS NULL
+    JOIN gitwire_auth.auth_principals p ON p.id = pr.principal_id
+    WHERE pr.principal_id = p_actor_principal_id AND r.name = 'admin' AND r.status = 'active'
+      AND pr.scope_type = 'fleet' AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND p.status = 'active'
   ) INTO v_is_admin;
   IF NOT v_is_approver AND NOT v_is_admin THEN
-    RAISE EXCEPTION 'revoke_policy_approval: actor must be the original approver or a fleet admin';
+    RAISE EXCEPTION 'revoke_policy_approval: actor must be the original approver or a current fleet admin';
   END IF;
 
-  -- Insert lifecycle event (CAS on revision)
+  -- R6 step 6: Insert current_revision + 1. UNIQUE constraint is the backstop.
   INSERT INTO policy_approval_lifecycle (
     approval_id, lifecycle_revision, from_status, to_status,
     actor_principal_id, reason_code
   ) VALUES (
-    p_approval_id, p_expected_lifecycle_revision + 1, 'active', 'revoked',
+    p_approval_id, v_current_revision + 1, 'active', 'revoked',
     p_actor_principal_id, p_reason_code
   );
 END;
@@ -477,13 +666,19 @@ ALTER FUNCTION revoke_policy_approval(uuid, bigint, uuid, text)
 REVOKE ALL ON FUNCTION revoke_policy_approval(uuid, bigint, uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION revoke_policy_approval(uuid, bigint, uuid, text) TO gitwire_app;
 
+RESET search_path;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- Function 4: expire_policy_approval
 -- CAS lifecycle transition active -> expired.
--- Locks the associated change request FOR UPDATE.
--- Uses clock_timestamp() for expiry comparison.
--- Actor: active fleet admin or authorized system principal.
+-- R6: Genuine compare-before-insert lifecycle CAS (same pattern as revoke).
+-- R1: System scope is allowed ONLY here, for the expiry automation path,
+--   requiring an active system-type principal with an active, non-revoked,
+--   non-expired system-scoped admin assignment. Fleet admin also allowed.
+-- Uses clock_timestamp() for expiry comparison, sampled after lock.
 -- ════════════════════════════════════════════════════════════════════════════
+
+SET search_path = gitwire_policy, pg_catalog;
 
 CREATE FUNCTION expire_policy_approval(
   p_approval_id uuid,
@@ -497,37 +692,56 @@ DECLARE
   v_approval RECORD;
   v_cr_id uuid;
   v_current_status text;
+  v_current_revision bigint;
+  v_latest_count int;
   v_now timestamptz;
   v_is_admin boolean;
+  v_actor record;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'expire_policy_approval: caller must be gitwire_app, got %', session_user;
   END IF;
-
-  v_now := clock_timestamp();
 
   SELECT * INTO v_approval FROM policy_approvals WHERE id = p_approval_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'expire_policy_approval: approval % not found', p_approval_id;
   END IF;
 
-  -- Lock the associated change request
+  -- R6 step 1: Resolve the associated change request
   SELECT cr.id INTO v_cr_id
   FROM policy_change_requests cr
   JOIN policy_versions v ON v.change_request_id = cr.id
   WHERE v.id = v_approval.version_id;
-  IF v_cr_id IS NOT NULL THEN
-    PERFORM 1 FROM policy_change_requests WHERE id = v_cr_id FOR UPDATE;
+  IF v_cr_id IS NULL THEN
+    RAISE EXCEPTION 'expire_policy_approval: no associated change request for approval %', p_approval_id;
   END IF;
 
-  -- Verify current status
-  SELECT pal.to_status INTO v_current_status
+  -- R6 step 2: Lock the change request FOR UPDATE (sole serialization domain)
+  PERFORM 1 FROM policy_change_requests WHERE id = v_cr_id FOR UPDATE;
+
+  -- R6 step 3: Sample clock_timestamp() AFTER acquiring the lock
+  v_now := clock_timestamp();
+
+  -- R6 step 4: Read the latest lifecycle event with a plain SELECT
+  SELECT pal.to_status, pal.lifecycle_revision
+  INTO v_current_status, v_current_revision
   FROM policy_approval_lifecycle pal
   WHERE pal.approval_id = p_approval_id
     AND pal.lifecycle_revision = (
       SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = p_approval_id
     );
-  IF v_current_status != 'active' THEN
+
+  GET DIAGNOSTICS v_latest_count = ROW_COUNT;
+  -- R6 step 5: Require exactly one latest row, expected==current, status active
+  IF v_latest_count != 1 THEN
+    RAISE EXCEPTION 'expire_policy_approval: expected exactly one latest lifecycle event, found %', v_latest_count;
+  END IF;
+  IF v_current_revision IS NULL OR p_expected_lifecycle_revision IS NULL
+     OR p_expected_lifecycle_revision != v_current_revision THEN
+    RAISE EXCEPTION 'expire_policy_approval: CAS failed — lifecycle revision mismatch (expected %, current %)',
+      p_expected_lifecycle_revision, v_current_revision;
+  END IF;
+  IF v_current_status IS NULL OR v_current_status != 'active' THEN
     RAISE EXCEPTION 'expire_policy_approval: approval is in status %, only active can be expired', v_current_status;
   END IF;
 
@@ -539,22 +753,36 @@ BEGIN
     RAISE EXCEPTION 'expire_policy_approval: approval has not expired yet (expires_at > now)';
   END IF;
 
-  -- Actor eligibility: active fleet admin or system principal
+  -- Actor eligibility (current): active fleet admin, OR (R1) an active
+  -- system-type principal with an active, non-revoked, non-expired
+  -- system-scoped admin assignment (the expiry automation path).
+  SELECT p.status, p.principal_type INTO v_actor
+  FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id;
+  IF v_actor IS NULL OR v_actor.status != 'active' THEN
+    RAISE EXCEPTION 'expire_policy_approval: actor principal is not active';
+  END IF;
+
   SELECT EXISTS(
     SELECT 1 FROM gitwire_auth.auth_principal_roles pr
     JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
-    WHERE pr.principal_id = p_actor_principal_id AND r.name = 'admin' AND pr.scope_type = 'fleet' AND pr.revoked_at IS NULL
+    WHERE pr.principal_id = p_actor_principal_id AND r.name = 'admin' AND r.status = 'active'
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND (
+        (pr.scope_type = 'fleet')
+        OR (pr.scope_type = 'system' AND v_actor.principal_type = 'system')
+      )
   ) INTO v_is_admin;
   IF NOT v_is_admin THEN
-    RAISE EXCEPTION 'expire_policy_approval: actor must be an active fleet admin or authorized system principal';
+    RAISE EXCEPTION 'expire_policy_approval: actor must be an active fleet admin or an authorized system principal';
   END IF;
 
-  -- Insert lifecycle event
+  -- R6 step 6: Insert current_revision + 1. UNIQUE constraint is the backstop.
   INSERT INTO policy_approval_lifecycle (
     approval_id, lifecycle_revision, from_status, to_status,
     actor_principal_id, reason_code
   ) VALUES (
-    p_approval_id, p_expected_lifecycle_revision + 1, 'active', 'expired',
+    p_approval_id, v_current_revision + 1, 'active', 'expired',
     p_actor_principal_id, 'ttl_expired'
   );
 END;
@@ -565,11 +793,20 @@ ALTER FUNCTION expire_policy_approval(uuid, bigint, uuid)
 REVOKE ALL ON FUNCTION expire_policy_approval(uuid, bigint, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION expire_policy_approval(uuid, bigint, uuid) TO gitwire_app;
 
+RESET search_path;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- Function 5: evaluate_approval_sufficiency
 -- Read-only advisory evaluation. Does not lock or mutate.
--- Returns effective rule, active distinct approver count, missing roles.
+-- R5: ONE canonical eligible-approval predicate (single CTE feeding a single
+--   aggregate) yields count, approval ids, approver ids, represented roles,
+--   assignment ids, missing roles, earliest expiry — all from the identical
+--   exact-evidence + current-authority predicate.
+-- R3: Context binding (exactly-one typed event matching current revision).
+-- R4: Effective rule via repo -> org -> fleet precedence.
 -- ════════════════════════════════════════════════════════════════════════════
+
+SET search_path = gitwire_policy, pg_catalog;
 
 CREATE FUNCTION evaluate_approval_sufficiency(
   p_change_request_id uuid
@@ -580,13 +817,22 @@ LANGUAGE plpgsql AS $$
 DECLARE
   v_cr RECORD;
   v_version RECORD;
-  v_context RECORD;
+  v_detail_state_revision text;
+  v_detail_version_id text;
+  v_detail_val_hash text;
+  v_detail_sim_hash text;
+  v_detail_risk text;
+  v_context_count int;
+  v_detail_state_rev_ok boolean;
+  v_detail_version_ok boolean;
+  v_val_hash text;
+  v_sim_hash text;
+  v_risk text;
   v_rule RECORD;
-  v_distinct_approvers int;
-  v_missing_roles text[];
-  v_required_role text;
-  v_role_covered boolean;
-  v_earliest_expiry timestamptz;
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
+  v_result jsonb;
   v_now timestamptz;
 BEGIN
   IF session_user != 'gitwire_app' THEN
@@ -605,113 +851,192 @@ BEGIN
     RAISE EXCEPTION 'evaluate_approval_sufficiency: no selected version';
   END IF;
 
-  -- Derive context
-  SELECT
-    (detail->>'validation_evidence_hash')::text AS validation_evidence_hash,
-    (detail->>'simulation_evidence_hash')::text AS simulation_evidence_hash,
-    (detail->>'risk_classification')::text AS risk_classification
-  INTO v_context
+  -- R3: Derive context (exactly-one typed event matching current revision/version)
+  -- Count explicitly because SELECT INTO + GET DIAGNOSTICS reports only 0/1.
+  SELECT count(*) INTO v_context_count
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
     AND to_state = 'awaiting_approval'
-    AND (detail ? 'validation_evidence_hash')
-  ORDER BY occurred_at DESC LIMIT 1;
+    AND detail ? 'validation_evidence_hash'
+    AND detail ? 'simulation_evidence_hash'
+    AND detail ? 'risk_classification'
+    AND detail ? 'state_revision'
+    AND detail ? 'version_id';
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'evaluate_approval_sufficiency: no awaiting_approval context event found';
+  IF v_context_count = 0 THEN
+    RAISE EXCEPTION 'evaluate_approval_sufficiency: no awaiting_approval context event with complete typed detail found';
+  END IF;
+  IF v_context_count > 1 THEN
+    RAISE EXCEPTION 'evaluate_approval_sufficiency: ambiguous awaiting_approval context (% events)', v_context_count;
   END IF;
 
-  -- Select effective rule: highest specificity match, highest rule_revision
-  -- Repository: repo rule → org fallback → fleet fallback
-  -- Organization: org rule → fleet fallback
-  -- Fleet: fleet rule only
-  SELECT * INTO v_rule
-  FROM policy_approval_rules
-  WHERE policy_family = v_cr.policy_family
-    AND risk_classification = v_context.risk_classification
-    AND (
-      (v_cr.resource_type = 'repository' AND resource_scope_type = 'repository' AND resource_scope_id = v_cr.resource_id)
-      OR (v_cr.resource_type = 'repository' AND resource_scope_type = 'organization' AND resource_scope_id = (
-        SELECT owner FROM public.repositories WHERE full_name = v_cr.resource_id
-      ))
-      OR (resource_scope_type = 'fleet' AND resource_scope_id = 'fleet')
-    )
-  ORDER BY
-    CASE resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
-    rule_revision DESC
-  LIMIT 1;
+  SELECT
+    detail->>'state_revision', detail->>'version_id',
+    detail->>'validation_evidence_hash', detail->>'simulation_evidence_hash',
+    detail->>'risk_classification'
+  INTO v_detail_state_revision, v_detail_version_id, v_detail_val_hash,
+       v_detail_sim_hash, v_detail_risk
+  FROM policy_transition_events
+  WHERE change_request_id = p_change_request_id
+    AND to_state = 'awaiting_approval'
+    AND detail ? 'validation_evidence_hash'
+    AND detail ? 'simulation_evidence_hash'
+    AND detail ? 'risk_classification'
+    AND detail ? 'state_revision'
+    AND detail ? 'version_id';
 
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('sufficient', false, 'error', 'no applicable rule found');
+  v_detail_state_rev_ok := (v_detail_state_revision IS NOT NULL
+    AND v_detail_state_revision ~ '^[0-9]+$'
+    AND v_detail_state_revision::bigint = v_cr.state_revision);
+  v_detail_version_ok := (v_detail_version_id IS NOT NULL
+    AND v_detail_version_id = v_cr.selected_version_id::text);
+  IF NOT (v_detail_state_rev_ok AND v_detail_version_ok) THEN
+    RAISE EXCEPTION 'evaluate_approval_sufficiency: context event does not match current state_revision/version_id';
   END IF;
+  IF v_detail_val_hash IS NULL OR btrim(v_detail_val_hash) = ''
+     OR v_detail_sim_hash IS NULL OR btrim(v_detail_sim_hash) = ''
+     OR v_detail_risk IS NULL OR v_detail_risk NOT IN ('standard','elevated','critical') THEN
+    RAISE EXCEPTION 'evaluate_approval_sufficiency: context event has malformed evidence or risk';
+  END IF;
+  v_val_hash := v_detail_val_hash;
+  v_sim_hash := v_detail_sim_hash;
+  v_risk := v_detail_risk;
 
-  -- Count distinct active approvers bound to exact version + evidence + rule
-  SELECT count(DISTINCT pa.approver_principal_id) INTO v_distinct_approvers
-  FROM policy_approvals pa
-  WHERE pa.version_id = v_version.id
-    AND pa.content_hash = v_version.content_hash
-    AND pa.validation_evidence_hash = v_context.validation_evidence_hash
-    AND pa.simulation_evidence_hash = v_context.simulation_evidence_hash
-    AND pa.approval_rule_id = v_rule.id
-    AND pa.approval_rule_hash = v_rule.rule_hash
-    AND (pa.expires_at IS NULL OR pa.expires_at > v_now)
-    AND EXISTS(
-      SELECT 1 FROM policy_approval_lifecycle pal
-      WHERE pal.approval_id = pa.id
-        AND pal.to_status = 'active'
-        AND pal.lifecycle_revision = (
-          SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id
-        )
-    );
-
-  -- Check missing roles
-  v_missing_roles := ARRAY[]::text[];
-  FOR v_required_role IN SELECT jsonb_array_elements_text(v_rule.required_roles) LOOP
-    -- An approval counts for a role if its approver has that role
-    SELECT EXISTS(
-      SELECT 1 FROM policy_approvals pa
-      WHERE pa.version_id = v_version.id
-        AND pa.approval_rule_id = v_rule.id
-        AND (pa.expires_at IS NULL OR pa.expires_at > v_now)
-        AND EXISTS(
-          SELECT 1 FROM policy_approval_lifecycle pal
-          WHERE pal.approval_id = pa.id AND pal.to_status = 'active'
-            AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id)
-        )
-        AND EXISTS(
-          SELECT 1 FROM gitwire_auth.auth_principal_roles pr
-          JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
-          WHERE pr.principal_id = pa.approver_principal_id AND r.name = v_required_role AND pr.revoked_at IS NULL
-        )
-    ) INTO v_role_covered;
-    IF NOT v_role_covered THEN
-      v_missing_roles := array_append(v_missing_roles, v_required_role);
+  -- Resolve repository numeric IDs for scope-applicability (fail-closed)
+  v_repo_installation_id := NULL;
+  v_repo_github_id := NULL;
+  IF v_cr.resource_type = 'repository' THEN
+    SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_cr.resource_id;
+    IF v_repo_row_count != 1 THEN
+      RAISE EXCEPTION 'evaluate_approval_sufficiency: repository % resolves to % rows (expected 1)', v_cr.resource_id, v_repo_row_count;
     END IF;
-  END LOOP;
+    SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+    FROM public.repositories repo WHERE repo.full_name = v_cr.resource_id;
+  END IF;
 
-  -- Get earliest expiry
-  SELECT min(pa.expires_at) INTO v_earliest_expiry
-  FROM policy_approvals pa
-  WHERE pa.version_id = v_version.id
-    AND pa.approval_rule_id = v_rule.id
-    AND pa.expires_at IS NOT NULL
-    AND EXISTS(
-      SELECT 1 FROM policy_approval_lifecycle pal
-      WHERE pal.approval_id = pa.id AND pal.to_status = 'active'
-        AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id)
-    );
+  -- R4: Effective rule (repo -> org -> fleet, highest rule_revision)
+  SELECT * INTO v_rule
+  FROM (
+    SELECT r.*,
+           ROW_NUMBER() OVER (
+             ORDER BY
+               CASE r.resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
+               r.rule_revision DESC
+           ) AS rn
+    FROM policy_approval_rules r
+    WHERE r.policy_family = v_cr.policy_family
+      AND r.risk_classification = v_risk
+      AND (
+        (v_cr.resource_type = 'repository'
+           AND ((r.resource_scope_type = 'repository' AND r.resource_scope_id = v_cr.resource_id)
+             OR (r.resource_scope_type = 'organization' AND r.resource_scope_id = (
+                  SELECT i.account_login FROM public.repositories repo
+                  JOIN public.installations i ON i.github_id = repo.installation_id
+                  WHERE repo.full_name = v_cr.resource_id))
+             OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+        OR (v_cr.resource_type = 'organization'
+           AND ((r.resource_scope_type = 'organization' AND r.resource_scope_id = v_cr.resource_id)
+             OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+        OR (v_cr.resource_type = 'fleet'
+           AND r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')
+      )
+  ) e
+  WHERE e.rn = 1;
 
-  RETURN jsonb_build_object(
-    'sufficient', v_distinct_approvers >= v_rule.required_count AND array_length(v_missing_roles, 1) IS NULL,
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('sufficient', false, 'error', 'no applicable rule found',
+      'active_distinct_approver_count', 0, 'required_count', null,
+      'missing_roles', '[]'::jsonb, 'earliest_approval_expiry', null);
+  END IF;
+
+  -- R5: ONE canonical eligible-approval CTE -> single aggregate.
+  -- The predicate is the identical exact-evidence + current-authority set.
+  WITH eligible AS (
+    SELECT pa.id AS approval_id, pa.approver_principal_id, pa.expires_at,
+           pr.id AS assignment_id, r.name AS role_name
+    FROM policy_approvals pa
+    JOIN policy_approval_lifecycle pal ON pal.approval_id = pa.id
+    LEFT JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = pa.approver_principal_id
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND (
+        pr.scope_type = 'fleet'
+        OR (v_cr.resource_type = 'repository'
+            AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+              OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+      )
+    LEFT JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
+    LEFT JOIN gitwire_auth.auth_principals p ON p.id = pa.approver_principal_id AND p.status = 'active'
+    WHERE pa.version_id = v_version.id
+      AND pa.content_hash = v_version.content_hash
+      AND pa.validation_evidence_hash = v_val_hash
+      AND pa.simulation_evidence_hash = v_sim_hash
+      AND pa.approval_rule_id = v_rule.id
+      AND pa.approval_rule_hash = v_rule.rule_hash
+      AND (pa.expires_at IS NULL OR pa.expires_at > v_now)
+      AND pal.to_status = 'active'
+      AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id)
+  ),
+  agg AS (
+    SELECT
+      count(DISTINCT pa.approver_principal_id) AS distinct_count,
+      COALESCE(array_agg(DISTINCT pa.approval_id ORDER BY pa.approval_id), ARRAY[]::uuid[]) AS approval_ids,
+      COALESCE(array_agg(DISTINCT pa.approver_principal_id ORDER BY pa.approver_principal_id), ARRAY[]::uuid[]) AS approver_ids,
+      COALESCE(array_remove(array_agg(DISTINCT pa.role_name ORDER BY pa.role_name), NULL), ARRAY[]::text[]) AS represented_roles,
+      COALESCE(array_remove(array_agg(DISTINCT pa.assignment_id ORDER BY pa.assignment_id), NULL), ARRAY[]::uuid[]) AS assignment_ids,
+      min(pa.expires_at) AS earliest_expiry
+    FROM eligible pa
+  )
+  SELECT jsonb_build_object(
+    'sufficient', (SELECT count(*) FROM (SELECT DISTINCT approver_principal_id FROM eligible) x) >= v_rule.required_count
+                   AND NOT EXISTS (
+                     SELECT 1 FROM jsonb_array_elements_text(v_rule.required_roles) AS req(role)
+                     WHERE NOT EXISTS (
+                       SELECT 1 FROM eligible e
+                       JOIN gitwire_auth.auth_principal_roles pr2 ON pr2.principal_id = e.approver_principal_id
+                         AND pr2.revoked_at IS NULL
+                         AND (pr2.expires_at IS NULL OR pr2.expires_at > v_now)
+                       JOIN gitwire_auth.auth_roles r2 ON r2.id = pr2.role_id AND r2.status = 'active'
+                       WHERE r2.name = req.role
+                         AND (
+                           pr2.scope_type = 'fleet'
+                           OR (v_cr.resource_type = 'repository'
+                               AND ((pr2.scope_type = 'installation' AND pr2.scope_id = v_repo_installation_id)
+                                 OR (pr2.scope_type = 'repository' AND pr2.scope_id = v_repo_github_id)))
+                         )
+                     )
+                   ),
     'effective_rule_id', v_rule.id,
     'effective_rule_hash', v_rule.rule_hash,
-    'active_distinct_approver_count', v_distinct_approvers,
+    'active_distinct_approver_count', (SELECT distinct_count FROM agg),
     'required_count', v_rule.required_count,
-    'missing_roles', to_jsonb(v_missing_roles),
-    'assurance_satisfied', true,
-    'step_up_satisfied', true,
-    'earliest_approval_expiry', v_earliest_expiry
-  );
+    'counted_approval_ids', to_jsonb((SELECT approval_ids FROM agg)),
+    'counted_approver_principals', to_jsonb((SELECT approver_ids FROM agg)),
+    'represented_roles', to_jsonb((SELECT represented_roles FROM agg)),
+    'matched_assignment_ids', to_jsonb((SELECT assignment_ids FROM agg)),
+    'missing_roles', to_jsonb(COALESCE((
+      SELECT array_agg(role ORDER BY role COLLATE "C") FROM (
+        SELECT req.role FROM jsonb_array_elements_text(v_rule.required_roles) AS req(role)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM eligible e
+          JOIN gitwire_auth.auth_principal_roles pr2 ON pr2.principal_id = e.approver_principal_id
+            AND pr2.revoked_at IS NULL
+            AND (pr2.expires_at IS NULL OR pr2.expires_at > v_now)
+          JOIN gitwire_auth.auth_roles r2 ON r2.id = pr2.role_id AND r2.status = 'active'
+          WHERE r2.name = req.role
+            AND (
+              pr2.scope_type = 'fleet'
+              OR (v_cr.resource_type = 'repository'
+                  AND ((pr2.scope_type = 'installation' AND pr2.scope_id = v_repo_installation_id)
+                    OR (pr2.scope_type = 'repository' AND pr2.scope_id = v_repo_github_id)))
+            )
+        )
+      ) z
+    ), ARRAY[]::text[])),
+    'earliest_approval_expiry', (SELECT earliest_expiry FROM agg)
+  ) INTO v_result;
+
+  RETURN v_result;
 END;
 $$;
 
@@ -720,12 +1045,19 @@ ALTER FUNCTION evaluate_approval_sufficiency(uuid)
 REVOKE ALL ON FUNCTION evaluate_approval_sufficiency(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION evaluate_approval_sufficiency(uuid) TO gitwire_app;
 
+RESET search_path;
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- Function 6: approve_policy_change_request
 -- Atomic sufficiency evaluation + CAS transition awaiting_approval -> approved.
--- Locks change request FOR UPDATE. Re-evaluates under lock.
--- Approved event snapshots effective rule, evidence, counted approvals.
+-- Locks change request FOR UPDATE. Re-evaluates under lock using the canonical
+-- eligible-approval predicate (R5). Emits an approved event with a full
+-- snapshot whose state_revision is the POST-CAS approved revision and whose
+-- arrays are deterministic, sorted, duplicate-free, empty-not-null.
+-- Actor must be a current fleet admin.
 -- ════════════════════════════════════════════════════════════════════════════
+
+SET search_path = gitwire_policy, pg_catalog;
 
 CREATE FUNCTION approve_policy_change_request(
   p_change_request_id uuid,
@@ -739,19 +1071,31 @@ DECLARE
   v_result policy_change_requests;
   v_cr RECORD;
   v_version RECORD;
-  v_context RECORD;
+  v_detail_state_revision text;
+  v_detail_version_id text;
+  v_detail_val_hash text;
+  v_detail_sim_hash text;
+  v_detail_risk text;
+  v_context_count int;
+  v_detail_state_rev_ok boolean;
+  v_detail_version_ok boolean;
+  v_val_hash text;
+  v_sim_hash text;
+  v_risk text;
   v_rule RECORD;
-  v_distinct_approvers int;
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
+  v_distinct_count int;
   v_missing_roles text[];
-  v_required_role text;
-  v_role_covered boolean;
-  v_earliest_expiry timestamptz;
-  v_now timestamptz;
-  v_is_admin boolean;
   v_approval_ids uuid[];
-  v_approval_principals uuid[];
+  v_approver_ids uuid[];
   v_represented_roles text[];
   v_assignment_ids uuid[];
+  v_earliest_expiry timestamptz;
+  v_now timestamptz;
+  v_eval_now timestamptz;
+  v_is_admin boolean;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'approve_policy_change_request: caller must be gitwire_app, got %', session_user;
@@ -768,105 +1112,197 @@ BEGIN
     RAISE EXCEPTION 'approve_policy_change_request: change request is in state %, only awaiting_approval can be approved', v_cr.state;
   END IF;
 
-  -- Actor eligibility: active fleet admin
+  -- Actor eligibility (current): active fleet admin
   SELECT EXISTS(
     SELECT 1 FROM gitwire_auth.auth_principal_roles pr
     JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
-    WHERE pr.principal_id = p_actor_principal_id AND r.name = 'admin' AND pr.scope_type = 'fleet' AND pr.revoked_at IS NULL
+    JOIN gitwire_auth.auth_principals p ON p.id = pr.principal_id
+    WHERE pr.principal_id = p_actor_principal_id AND r.name = 'admin' AND r.status = 'active'
+      AND pr.scope_type = 'fleet' AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND p.status = 'active'
   ) INTO v_is_admin;
   IF NOT v_is_admin THEN
-    RAISE EXCEPTION 'approve_policy_change_request: actor must be an active fleet admin';
+    RAISE EXCEPTION 'approve_policy_change_request: actor must be a current fleet admin';
   END IF;
 
-  -- Get version and context
+  -- Get version
   SELECT id, content_hash INTO v_version FROM policy_versions WHERE id = v_cr.selected_version_id;
-  SELECT
-    (detail->>'validation_evidence_hash')::text AS validation_evidence_hash,
-    (detail->>'simulation_evidence_hash')::text AS simulation_evidence_hash,
-    (detail->>'risk_classification')::text AS risk_classification
-  INTO v_context
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'approve_policy_change_request: no selected version';
+  END IF;
+
+  -- R3: Derive context (exactly-one typed event matching current revision/version)
+  -- Count explicitly because SELECT INTO + GET DIAGNOSTICS reports only 0/1.
+  SELECT count(*) INTO v_context_count
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
     AND to_state = 'awaiting_approval'
-    AND (detail ? 'validation_evidence_hash')
-  ORDER BY occurred_at DESC LIMIT 1;
+    AND detail ? 'validation_evidence_hash'
+    AND detail ? 'simulation_evidence_hash'
+    AND detail ? 'risk_classification'
+    AND detail ? 'state_revision'
+    AND detail ? 'version_id';
 
-  -- Select effective rule
+  IF v_context_count = 0 THEN
+    RAISE EXCEPTION 'approve_policy_change_request: no awaiting_approval context event with complete typed detail found';
+  END IF;
+  IF v_context_count > 1 THEN
+    RAISE EXCEPTION 'approve_policy_change_request: ambiguous awaiting_approval context (% events)', v_context_count;
+  END IF;
+
+  SELECT
+    detail->>'state_revision', detail->>'version_id',
+    detail->>'validation_evidence_hash', detail->>'simulation_evidence_hash',
+    detail->>'risk_classification'
+  INTO v_detail_state_revision, v_detail_version_id, v_detail_val_hash,
+       v_detail_sim_hash, v_detail_risk
+  FROM policy_transition_events
+  WHERE change_request_id = p_change_request_id
+    AND to_state = 'awaiting_approval'
+    AND detail ? 'validation_evidence_hash'
+    AND detail ? 'simulation_evidence_hash'
+    AND detail ? 'risk_classification'
+    AND detail ? 'state_revision'
+    AND detail ? 'version_id';
+
+  v_detail_state_rev_ok := (v_detail_state_revision IS NOT NULL
+    AND v_detail_state_revision ~ '^[0-9]+$'
+    AND v_detail_state_revision::bigint = v_cr.state_revision);
+  v_detail_version_ok := (v_detail_version_id IS NOT NULL
+    AND v_detail_version_id = v_cr.selected_version_id::text);
+  IF NOT (v_detail_state_rev_ok AND v_detail_version_ok) THEN
+    RAISE EXCEPTION 'approve_policy_change_request: context event does not match current state_revision/version_id';
+  END IF;
+  IF v_detail_val_hash IS NULL OR btrim(v_detail_val_hash) = ''
+     OR v_detail_sim_hash IS NULL OR btrim(v_detail_sim_hash) = ''
+     OR v_detail_risk IS NULL OR v_detail_risk NOT IN ('standard','elevated','critical') THEN
+    RAISE EXCEPTION 'approve_policy_change_request: context event has malformed evidence or risk';
+  END IF;
+  v_val_hash := v_detail_val_hash;
+  v_sim_hash := v_detail_sim_hash;
+  v_risk := v_detail_risk;
+
+  -- Resolve repository numeric IDs for scope-applicability (fail-closed)
+  v_repo_installation_id := NULL;
+  v_repo_github_id := NULL;
+  IF v_cr.resource_type = 'repository' THEN
+    SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_cr.resource_id;
+    IF v_repo_row_count != 1 THEN
+      RAISE EXCEPTION 'approve_policy_change_request: repository % resolves to % rows (expected 1)', v_cr.resource_id, v_repo_row_count;
+    END IF;
+    SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+    FROM public.repositories repo WHERE repo.full_name = v_cr.resource_id;
+  END IF;
+
+  -- R4: Effective rule
   SELECT * INTO v_rule
-  FROM policy_approval_rules
-  WHERE policy_family = v_cr.policy_family
-    AND risk_classification = v_context.risk_classification
-    AND (
-      (v_cr.resource_type = 'repository' AND resource_scope_type = 'repository' AND resource_scope_id = v_cr.resource_id)
-      OR (v_cr.resource_type = 'repository' AND resource_scope_type = 'organization' AND resource_scope_id = (
-        SELECT owner FROM public.repositories WHERE full_name = v_cr.resource_id
-      ))
-      OR (resource_scope_type = 'fleet' AND resource_scope_id = 'fleet')
-    )
-  ORDER BY
-    CASE resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
-    rule_revision DESC
-  LIMIT 1;
+  FROM (
+    SELECT r.*,
+           ROW_NUMBER() OVER (
+             ORDER BY
+               CASE r.resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
+               r.rule_revision DESC
+           ) AS rn
+    FROM policy_approval_rules r
+    WHERE r.policy_family = v_cr.policy_family
+      AND r.risk_classification = v_risk
+      AND (
+        (v_cr.resource_type = 'repository'
+           AND ((r.resource_scope_type = 'repository' AND r.resource_scope_id = v_cr.resource_id)
+             OR (r.resource_scope_type = 'organization' AND r.resource_scope_id = (
+                  SELECT i.account_login FROM public.repositories repo
+                  JOIN public.installations i ON i.github_id = repo.installation_id
+                  WHERE repo.full_name = v_cr.resource_id))
+             OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+        OR (v_cr.resource_type = 'organization'
+           AND ((r.resource_scope_type = 'organization' AND r.resource_scope_id = v_cr.resource_id)
+             OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+        OR (v_cr.resource_type = 'fleet'
+           AND r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')
+      )
+  ) e
+  WHERE e.rn = 1;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'approve_policy_change_request: no applicable approval rule found';
   END IF;
 
-  -- Count distinct active approvers
-  SELECT count(DISTINCT pa.approver_principal_id) INTO v_distinct_approvers
-  FROM policy_approvals pa
-  WHERE pa.version_id = v_version.id
-    AND pa.content_hash = v_version.content_hash
-    AND pa.validation_evidence_hash = v_context.validation_evidence_hash
-    AND pa.simulation_evidence_hash = v_context.simulation_evidence_hash
-    AND pa.approval_rule_id = v_rule.id
-    AND pa.approval_rule_hash = v_rule.rule_hash
-    AND (pa.expires_at IS NULL OR pa.expires_at > v_now)
-    AND EXISTS(
-      SELECT 1 FROM policy_approval_lifecycle pal
-      WHERE pal.approval_id = pa.id AND pal.to_status = 'active'
-        AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id)
-    );
+  v_eval_now := clock_timestamp();
 
-  -- Check missing roles
-  v_missing_roles := ARRAY[]::text[];
-  FOR v_required_role IN SELECT jsonb_array_elements_text(v_rule.required_roles) LOOP
-    SELECT EXISTS(
-      SELECT 1 FROM policy_approvals pa
-      WHERE pa.version_id = v_version.id AND pa.approval_rule_id = v_rule.id
-        AND (pa.expires_at IS NULL OR pa.expires_at > v_now)
-        AND EXISTS(SELECT 1 FROM policy_approval_lifecycle pal WHERE pal.approval_id = pa.id AND pal.to_status = 'active'
-          AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id))
-        AND EXISTS(SELECT 1 FROM gitwire_auth.auth_principal_roles pr JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
-          WHERE pr.principal_id = pa.approver_principal_id AND r.name = v_required_role AND pr.revoked_at IS NULL)
-    ) INTO v_role_covered;
-    IF NOT v_role_covered THEN
-      v_missing_roles := array_append(v_missing_roles, v_required_role);
-    END IF;
-  END LOOP;
+  -- R5: ONE canonical eligible-approval CTE -> single aggregate under the lock.
+  WITH eligible AS (
+    SELECT pa.id AS approval_id, pa.approver_principal_id, pa.expires_at,
+           pr.id AS assignment_id, r.name AS role_name
+    FROM policy_approvals pa
+    JOIN policy_approval_lifecycle pal ON pal.approval_id = pa.id
+    LEFT JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = pa.approver_principal_id
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_eval_now)
+      AND (
+        pr.scope_type = 'fleet'
+        OR (v_cr.resource_type = 'repository'
+            AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+              OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+      )
+    LEFT JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
+    LEFT JOIN gitwire_auth.auth_principals p ON p.id = pa.approver_principal_id AND p.status = 'active'
+    WHERE pa.version_id = v_version.id
+      AND pa.content_hash = v_version.content_hash
+      AND pa.validation_evidence_hash = v_val_hash
+      AND pa.simulation_evidence_hash = v_sim_hash
+      AND pa.approval_rule_id = v_rule.id
+      AND pa.approval_rule_hash = v_rule.rule_hash
+      AND (pa.expires_at IS NULL OR pa.expires_at > v_eval_now)
+      AND pal.to_status = 'active'
+      AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id)
+  )
+  SELECT
+    agg.distinct_count,
+    agg.approval_ids,
+    agg.approver_ids,
+    agg.represented_roles,
+    agg.assignment_ids,
+    agg.earliest_expiry,
+    agg.missing_roles
+  INTO v_distinct_count, v_approval_ids, v_approver_ids, v_represented_roles,
+       v_assignment_ids, v_earliest_expiry, v_missing_roles
+  FROM (
+    SELECT
+      count(DISTINCT e.approver_principal_id) AS distinct_count,
+      COALESCE(array_agg(DISTINCT e.approval_id ORDER BY e.approval_id), ARRAY[]::uuid[]) AS approval_ids,
+      COALESCE(array_agg(DISTINCT e.approver_principal_id ORDER BY e.approver_principal_id), ARRAY[]::uuid[]) AS approver_ids,
+      COALESCE(array_remove(array_agg(DISTINCT e.role_name ORDER BY e.role_name), NULL), ARRAY[]::text[]) AS represented_roles,
+      COALESCE(array_remove(array_agg(DISTINCT e.assignment_id ORDER BY e.assignment_id), NULL), ARRAY[]::uuid[]) AS assignment_ids,
+      min(e.expires_at) AS earliest_expiry,
+      COALESCE((
+        SELECT array_agg(role ORDER BY role COLLATE "C") FROM (
+          SELECT req.role
+          FROM jsonb_array_elements_text(v_rule.required_roles) AS req(role)
+          WHERE NOT EXISTS (
+            SELECT 1 FROM eligible el
+            JOIN gitwire_auth.auth_principal_roles pr2 ON pr2.principal_id = el.approver_principal_id
+              AND pr2.revoked_at IS NULL
+              AND (pr2.expires_at IS NULL OR pr2.expires_at > v_eval_now)
+            JOIN gitwire_auth.auth_roles r2 ON r2.id = pr2.role_id AND r2.status = 'active'
+            WHERE r2.name = req.role
+              AND (
+                pr2.scope_type = 'fleet'
+                OR (v_cr.resource_type = 'repository'
+                    AND ((pr2.scope_type = 'installation' AND pr2.scope_id = v_repo_installation_id)
+                      OR (pr2.scope_type = 'repository' AND pr2.scope_id = v_repo_github_id)))
+              )
+          )
+        ) z
+      ), ARRAY[]::text[]) AS missing_roles
+    FROM eligible e
+  ) agg;
 
-  -- Evaluate sufficiency
-  IF v_distinct_approvers < v_rule.required_count OR array_length(v_missing_roles, 1) IS NOT NULL THEN
+  -- Evaluate sufficiency (under lock)
+  IF v_distinct_count < v_rule.required_count OR array_length(v_missing_roles, 1) IS NOT NULL THEN
     RAISE EXCEPTION 'approve_policy_change_request: insufficient approvals (count=%, required=%, missing_roles=%)',
-      v_distinct_approvers, v_rule.required_count, v_missing_roles;
+      v_distinct_count, v_rule.required_count, v_missing_roles;
   END IF;
-
-  -- Collect approval IDs and principals for snapshot
-  SELECT array_agg(pa.id ORDER BY pa.id), array_agg(DISTINCT pa.approver_principal_id ORDER BY pa.approver_principal_id)
-  INTO v_approval_ids, v_approval_principals
-  FROM policy_approvals pa
-  WHERE pa.version_id = v_version.id AND pa.approval_rule_id = v_rule.id
-    AND (pa.expires_at IS NULL OR pa.expires_at > v_now)
-    AND EXISTS(SELECT 1 FROM policy_approval_lifecycle pal WHERE pal.approval_id = pa.id AND pal.to_status = 'active'
-      AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id));
-
-  -- Get earliest expiry
-  SELECT min(pa.expires_at) INTO v_earliest_expiry
-  FROM policy_approvals pa
-  WHERE pa.version_id = v_version.id AND pa.approval_rule_id = v_rule.id
-    AND pa.expires_at IS NOT NULL
-    AND EXISTS(SELECT 1 FROM policy_approval_lifecycle pal WHERE pal.approval_id = pa.id AND pal.to_status = 'active'
-      AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = pa.id));
 
   -- CAS transition
   UPDATE policy_change_requests
@@ -880,23 +1316,31 @@ BEGIN
     RAISE EXCEPTION 'approve_policy_change_request: CAS failed — state or revision mismatch';
   END IF;
 
-  -- Transition event with full snapshot
+  -- Approved-event snapshot. state_revision is the POST-CAS approved revision
+  -- (from the updated row). Arrays are deterministic/sorted/duplicate-free/
+  -- empty-not-null.
   INSERT INTO policy_transition_events (
     change_request_id, event_type, from_state, to_state, actor_principal_id, detail
   ) VALUES (
     p_change_request_id, 'approve', 'awaiting_approval', 'approved', p_actor_principal_id,
     jsonb_build_object(
+      'state_revision', v_result.state_revision,
+      'version_id', v_version.id,
+      'content_hash', v_version.content_hash,
+      'validation_evidence_hash', v_val_hash,
+      'simulation_evidence_hash', v_sim_hash,
+      'risk_classification', v_risk,
       'effective_rule_id', v_rule.id,
       'effective_rule_hash', v_rule.rule_hash,
-      'validation_evidence_hash', v_context.validation_evidence_hash,
-      'simulation_evidence_hash', v_context.simulation_evidence_hash,
       'counted_approval_ids', to_jsonb(v_approval_ids),
-      'counted_approver_principals', to_jsonb(v_approval_principals),
-      'active_distinct_approver_count', v_distinct_approvers,
+      'counted_approver_principals', to_jsonb(v_approver_ids),
+      'represented_roles', to_jsonb(v_represented_roles),
+      'matched_assignment_ids', to_jsonb(v_assignment_ids),
+      'active_distinct_approver_count', v_distinct_count,
       'required_count', v_rule.required_count,
       'missing_roles', to_jsonb(v_missing_roles),
-      'evaluation_timestamp', v_now,
-      'earliest_approval_expiry', v_earliest_expiry
+      'earliest_approval_expiry', v_earliest_expiry,
+      'evaluation_timestamp', v_eval_now
     )
   );
 

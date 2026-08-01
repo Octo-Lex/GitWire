@@ -216,6 +216,10 @@ governedPolicyRouter.post("/approval-rules", async (req, res) => {
 governedPolicyRouter.get("/approval-rules", async (req, res) => {
   try {
     const { resourceScopeType, resourceScopeId, policyFamily } = req.query;
+    await observeAuthorize(req, {
+      permission: "policy_approval_rule:read",
+      resource: { type: "policy_definition" },
+    });
     const rules = await getApprovalRules({ resourceScopeType, resourceScopeId, policyFamily });
     res.json({ data: rules });
   } catch (err) {
@@ -258,6 +262,10 @@ governedPolicyRouter.post("/change-requests/:id/approvals", async (req, res) => 
 governedPolicyRouter.get("/change-requests/:id/approvals", async (req, res) => {
   try {
     const { id } = req.params;
+    await observeAuthorize(req, {
+      permission: "policy_approval:read",
+      resource: { type: "policy_definition", resourceId: id },
+    });
     const approvals = await getApprovals({ changeRequestId: id });
     res.json({ data: approvals });
   } catch (err) {
@@ -273,6 +281,10 @@ governedPolicyRouter.get("/change-requests/:id/approvals", async (req, res) => {
 governedPolicyRouter.get("/change-requests/:id/approvals/evaluate", async (req, res) => {
   try {
     const { id } = req.params;
+    await observeAuthorize(req, {
+      permission: "policy_approval:evaluate",
+      resource: { type: "policy_definition", resourceId: id },
+    });
     const result = await evaluateApprovals({ changeRequestId: id });
     res.json(result);
   } catch (err) {
