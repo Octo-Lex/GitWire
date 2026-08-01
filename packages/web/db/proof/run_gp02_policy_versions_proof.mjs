@@ -203,8 +203,8 @@ try {
   const { rows: evFail } = await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1", [cr2Id]);
   check("no event from failed CAS", evFail[0].n === 2, "events=" + evFail[0].n); // create + select_version
 
-  // ═══ Phase 9: Concurrent version-vs-submission ══════════════════════════
-  console.log("\n=== Phase 9: Concurrent version vs submission ===");
+  // ═══ Phase 9: Concurrent version-vs-submission with lock proof ═════════
+  console.log("\n=== Phase 9: FOR UPDATE lock contention ===");
   const cr3Result = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','race/test','cfg',$1) as id", [testPid]);
   const cr3Id = cr3Result.rows[0].id;
   const vr3 = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [cr3Id, JSON.stringify({v:1}), testPid]);
@@ -212,41 +212,53 @@ try {
   await runAsApp("SELECT * FROM gitwire_policy.select_policy_version($1, $2, 0, $3)", [cr3Id, v3Id, testPid]);
   const { rows: [cr3Before] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [cr3Id]);
 
-  // Fire both concurrently: another version create and a submit
-  const promises = [
-    runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [cr3Id, JSON.stringify({v:2}), testPid]).catch(e => ({ error: e.message })),
-    runAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1, $2, $3)", [cr3Id, Number(cr3Before.state_revision), testPid]).catch(e => ({ error: e.message })),
-  ];
-  const results = await Promise.all(promises);
+  // Prove FOR UPDATE blocks: hold a lock in one transaction, try to create version in another
+  const lockClient = await pool.connect();
+  const blockClient = await pool.connect();
+  try {
+    // Lock the change request row in lockClient (run as superuser to get FOR UPDATE)
+    await lockClient.query("BEGIN");
+    await lockClient.query("SELECT 1 FROM gitwire_policy.policy_change_requests WHERE id = $1 FOR UPDATE", [cr3Id]);
 
-  const { rows: [cr3After] } = await pool.query("SELECT state, state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [cr3Id]);
-  // Inspect results: exactly one must succeed and the other may succeed or fail
-  // The FOR UPDATE lock serializes version creation against submission
-  const versionResult = results[0];
-  const submitResult = results[1];
+    // Now try create_policy_version in blockClient — it should block (timeout proves lock)
+    await blockClient.query("SET SESSION AUTHORIZATION gitwire_app");
+    await blockClient.query("SET lock_timeout = '2s'"); // fail after 2s instead of hanging
+    let lockTimeout = false;
+    try {
+      await blockClient.query("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [cr3Id, JSON.stringify({v:2}), testPid]);
+    } catch (e) {
+      lockTimeout = e.message.includes("canceling statement due to lock timeout") || e.code === "55P03";
+    }
+    check("create_policy_version blocks on FOR UPDATE lock", lockTimeout, "expected lock timeout");
 
-  // If submission succeeded, state should be 'submitted'
-  // If version creation ran first, submission may still succeed or fail
-  // The key invariant: no invalid state (not submitted + not draft, or promoted)
-  const validStates = ["draft", "submitted"];
-  check("concurrent: final state is valid", validStates.includes(cr3After.state), "state=" + cr3After.state);
+    // Release the lock
+    await lockClient.query("ROLLBACK");
 
-  // Verify the version either succeeded or got a state-lock error
-  if (!versionResult.error) {
-    // Version was created — check it exists
-    const { rows: [vCheck] } = await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_versions WHERE change_request_id = $1 AND payload->>'v' = '2'", [cr3Id]);
-    check("concurrent: version v2 exists if creation succeeded", vCheck.n === 1);
-  } else {
-    // Version creation failed — must be due to non-draft state
-    check("concurrent: version failure is state-related", versionResult.error.includes("draft") || versionResult.error.includes("state"), versionResult.error);
-  }
+    // Now try create_policy_version in blockClient — should succeed (lock released)
+    await blockClient.query("RESET SESSION AUTHORIZATION");
+    await blockClient.query("SET lock_timeout = DEFAULT");
 
-  // Submit result must be deterministic
-  if (!submitResult.error) {
-    check("concurrent: submit succeeded → state = submitted", cr3After.state === "submitted");
-  } else {
-    // Submit failed — must be CAS or state related (not a crash)
-    check("concurrent: submit failure is CAS/state related", submitResult.error.includes("CAS") || submitResult.error.includes("draft") || submitResult.error.includes("revision"), submitResult.error);
+    // Now version creation should succeed (lock released)
+    const vrRace = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [cr3Id, JSON.stringify({v:3}), testPid]);
+    check("version creation succeeds after lock release", vrRace.rows[0]?.id != null);
+
+    // Submit should also work now (still in draft with correct revision)
+    const { rows: [cr3Now] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [cr3Id]);
+    const submitRace = await runAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1, $2, $3)", [cr3Id, Number(cr3Now.state_revision), testPid]);
+    check("submit succeeds after version creation completes", submitRace.rows[0]?.state === "submitted");
+
+    // Version creation after submit must fail (not draft)
+    let postSubmitVersionBlocked = false;
+    try {
+      await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3)", [cr3Id, JSON.stringify({v:4}), testPid]);
+    } catch (e) { postSubmitVersionBlocked = e.message.includes("draft") || e.message.includes("state"); }
+    check("version creation blocked after submit (serialized)", postSubmitVersionBlocked);
+  } finally {
+    try { await lockClient.query("ROLLBACK"); } catch {}
+    try { await blockClient.query("RESET SESSION AUTHORIZATION"); } catch {}
+    try { await blockClient.query("SET lock_timeout = DEFAULT"); } catch {}
+    lockClient.release();
+    blockClient.release();
   }
 
   // ═══ Phase 10: Forced event-failure rollback ════════════════════════════
@@ -271,24 +283,43 @@ try {
   // Restore the grant
   await pool.query("GRANT INSERT ON gitwire_policy.policy_transition_events TO gitwire_policy_fn_owner");
 
-  // ═══ Phase 11: Scope boundary — exactly 4 write functions ═══════════════
+  // ═══ Phase 11: Scope boundary — exact function sets ═══════════════════
   console.log("\n=== Phase 11: Scope boundary ===");
-  const { rows: writeFns } = await pool.query(
-    "SELECT count(*)::int n FROM pg_proc WHERE pronamespace = 'gitwire_policy'::regnamespace AND prokind = 'f' AND proname IN ('create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request')"
-  );
-  check("exactly 4 GP-02 write functions", writeFns[0].n === 4, "count=" + writeFns[0].n);
+  const expectedWriteFns = ['create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request'];
 
-  // Verify none of the functions accept an arbitrary destination state parameter
-  const { rows: paramCheck } = await pool.query(
-    "SELECT p.proname, pg_get_function_arguments(p.oid) as args FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname IN ('create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request') AND (pg_get_function_arguments(p.oid) LIKE '%to_state%' OR pg_get_function_arguments(p.oid) LIKE '%new_state%' OR pg_get_function_arguments(p.oid) LIKE '%destination%')"
+  // 1. Exactly 4 SECURITY DEFINER functions owned by gitwire_policy_fn_owner
+  const { rows: secDefFns } = await pool.query(
+    "SELECT p.proname FROM pg_proc p JOIN pg_roles r ON p.proowner = r.oid JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND r.rolname = 'gitwire_policy_fn_owner' AND p.prosecdef = true"
   );
-  check("no function accepts arbitrary state param", paramCheck.length === 0);
+  const secDefNames = secDefFns.map(f => f.proname).sort();
+  check("exactly 4 SECURITY DEFINER fn_owner functions", secDefNames.length === 4, "found=" + JSON.stringify(secDefNames));
+  check("SECURITY DEFINER set matches expected", JSON.stringify(secDefNames) === JSON.stringify(expectedWriteFns.slice().sort()));
 
-  // Verify none can reach validating/awaiting_approval/approved/promoted
-  // by checking the function bodies don't contain those target states
+  // 2. Exactly 4 functions executable by gitwire_app
+  const { rows: execFns } = await pool.query(
+    "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl WHERE acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'gitwire_app') AND acl.privilege_type = 'EXECUTE')"
+  );
+  const execNames = execFns.map(f => f.proname).sort();
+  check("exactly 4 functions executable by gitwire_app", execNames.length === 4, "found=" + JSON.stringify(execNames));
+  check("executable set matches expected", JSON.stringify(execNames) === JSON.stringify(expectedWriteFns.slice().sort()));
+
+  // 3. No unexpected SECURITY DEFINER or executable functions
+  const unexpectedSecDef = secDefNames.filter(n => !expectedWriteFns.includes(n));
+  const unexpectedExec = execNames.filter(n => !expectedWriteFns.includes(n));
+  check("no unexpected SECURITY DEFINER functions", unexpectedSecDef.length === 0, JSON.stringify(unexpectedSecDef));
+  check("no unexpected executable functions", unexpectedExec.length === 0, JSON.stringify(unexpectedExec));
+
+  // 4. None accept arbitrary state params
+  for (const fn of expectedWriteFns) {
+    const { rows: [fnArgs] } = await pool.query("SELECT pg_get_function_arguments(p.oid) as args FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = $1", [fn]);
+    check(fn + ": no arbitrary state param", !(fnArgs.args.includes("to_state") || fnArgs.args.includes("new_state") || fnArgs.args.includes("destination")));
+  }
+
+  // 5. None can reach GP-03/04/05 states
   for (const targetState of ["validating", "awaiting_approval", "approved", "promoted"]) {
     const { rows: bodyCheck } = await pool.query(
-      "SELECT count(*)::int n FROM pg_proc WHERE pronamespace = 'gitwire_policy'::regnamespace AND proname IN ('create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request') AND prosrc LIKE '%" + targetState + "%'"
+      "SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = ANY($1) AND prosrc LIKE $2",
+      [expectedWriteFns, "%" + targetState + "%"]
     );
     check("no GP-02 function body references '" + targetState + "'", bodyCheck[0].n === 0);
   }
@@ -398,20 +429,63 @@ try {
     check(fn.proname + ": owner = gitwire_policy_fn_owner", fn.owner === "gitwire_policy_fn_owner");
   }
 
-  // Verify execution ACLs for the 4 write functions using OID-based check
-  const execFns = ['create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request'];
-  for (const fn of execFns) {
+  // Verify fixed search_path via proconfig
+  for (const fn of expectedWriteFns) {
+    const { rows: [fnConfig] } = await pool.query("SELECT p.proconfig FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = $1", [fn]);
+    const configStr = fnConfig.proconfig ? fnConfig.proconfig.join(",") : "";
+    check(fn + ": search_path includes gitwire_policy", configStr.includes("gitwire_policy"), "config=" + configStr);
+  }
+
+  // Verify execution ACLs for the 4 write functions
+  const execFnsCheck = ['create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request'];
+  for (const fn of execFnsCheck) {
     const { rows: [fnRow] } = await pool.query("SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = $1", [fn]);
-    // Check via pg_proc.jacl or by attempting SET SESSION AUTHORIZATION and calling
-    // Simpler: check aclexplode on proacl
     const { rows: [aclRow] } = await pool.query("SELECT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl WHERE acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'gitwire_app') AND acl.privilege_type = 'EXECUTE') as app_exec, EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') as public_exec FROM pg_proc p WHERE p.oid = $1", [fnRow.oid]);
     check(fn + ": gitwire_app EXECUTE restored", aclRow.app_exec === true);
     check(fn + ": PUBLIC NO EXECUTE restored", aclRow.public_exec === false);
   }
 
-  // Verify fn_owner table privileges restored
-  const { rows: fnOwnerPrivsRestored } = await pool.query("SELECT has_table_privilege('gitwire_policy_fn_owner','gitwire_policy.policy_change_requests','INSERT') as ins");
-  check("fn_owner INSERT on change_requests restored", fnOwnerPrivsRestored[0].ins === true);
+  // Verify canonical_jsonb ACL: PUBLIC NO EXECUTE
+  const { rows: [cjAcl] } = await pool.query("SELECT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') as public_exec FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname = 'canonical_jsonb'");
+  check("canonical_jsonb: PUBLIC NO EXECUTE", cjAcl.public_exec === false);
+
+  // Full fn_owner privilege matrix
+  const ownerTables = [
+    { table: "policy_change_requests", privs: { SELECT: true, INSERT: true } },
+    { table: "policy_versions", privs: { SELECT: true, INSERT: true } },
+    { table: "policy_transition_events", privs: { INSERT: true } },
+  ];
+  for (const t of ownerTables) {
+    for (const [priv, expected] of Object.entries(t.privs)) {
+      const { rows: [r] } = await pool.query("SELECT has_table_privilege('gitwire_policy_fn_owner', $1, $2) as has", ["gitwire_policy." + t.table, priv]);
+      check("fn_owner " + priv + " on " + t.table + " restored", r.has === expected);
+    }
+  }
+
+  // Column-level UPDATE on policy_change_requests
+  for (const col of ["state", "state_revision", "selected_version_id", "submitted_at", "updated_at"]) {
+    const { rows: [r] } = await pool.query("SELECT has_column_privilege('gitwire_policy_fn_owner', 'gitwire_policy.policy_change_requests', $1, 'UPDATE') as has", [col]);
+    check("fn_owner column UPDATE on " + col, r.has === true);
+  }
+  // Immutable columns NOT updatable
+  for (const col of ["resource_type", "resource_id", "policy_family", "author_principal_id"]) {
+    const { rows: [r] } = await pool.query("SELECT has_column_privilege('gitwire_policy_fn_owner', 'gitwire_policy.policy_change_requests', $1, 'UPDATE') as has", [col]);
+    check("fn_owner NO column UPDATE on " + col, r.has === false);
+  }
+
+  // No table-wide UPDATE or DELETE for fn_owner
+  const { rows: [updOwner] } = await pool.query("SELECT has_table_privilege('gitwire_policy_fn_owner','gitwire_policy.policy_change_requests','UPDATE') as has");
+  check("fn_owner NO table-wide UPDATE on policy_change_requests", updOwner.has === false);
+  const { rows: [delOwner] } = await pool.query("SELECT has_table_privilege('gitwire_policy_fn_owner','gitwire_policy.policy_versions','DELETE') as has");
+  check("fn_owner NO DELETE on policy_versions", delOwner.has === false);
+
+  // Verify gitwire_app still has NO direct write
+  for (const table of ["policy_change_requests", "policy_versions", "policy_transition_events"]) {
+    const { rows: [r] } = await pool.query("SELECT has_table_privilege('gitwire_app', $1, 'INSERT') as ins, has_table_privilege('gitwire_app', $1, 'UPDATE') as upd, has_table_privilege('gitwire_app', $1, 'DELETE') as del", ["gitwire_policy." + table]);
+    check("gitwire_app NO INSERT on " + table, r.ins === false);
+    check("gitwire_app NO UPDATE on " + table, r.upd === false);
+    check("gitwire_app NO DELETE on " + table, r.del === false);
+  }
 
   // ═══ Phase 16: CASCADE check ════════════════════════════════════════════
   console.log("\n=== Phase 16: CASCADE check ===");
