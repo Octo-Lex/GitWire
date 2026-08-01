@@ -142,8 +142,8 @@ BEGIN
   END IF;
 
   -- Normalize: deduplicate, sort with COLLATE "C", validate each role exists
-  SELECT array_agg(DISTINCT r ORDER BY r COLLATE "C") INTO v_normalized_roles
-  FROM jsonb_array_elements_text(p_required_roles) AS e(r);
+  SELECT array_agg(r ORDER BY r COLLATE "C") INTO v_normalized_roles
+  FROM (SELECT DISTINCT r FROM jsonb_array_elements_text(p_required_roles) AS e(r)) t;
 
   FOREACH v_role IN ARRAY v_normalized_roles LOOP
     IF btrim(v_role) = '' THEN
@@ -278,9 +278,9 @@ BEGIN
   -- Derive approval context from the transition event that moved to awaiting_approval
   -- Must match the current state_revision exactly
   SELECT
-    (detail->>'validation_evidence_hash')::text,
-    (detail->>'simulation_evidence_hash')::text,
-    (detail->>'risk_classification')::text
+    (detail->>'validation_evidence_hash')::text AS validation_evidence_hash,
+    (detail->>'simulation_evidence_hash')::text AS simulation_evidence_hash,
+    (detail->>'risk_classification')::text AS risk_classification
   INTO v_context
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
@@ -607,9 +607,9 @@ BEGIN
 
   -- Derive context
   SELECT
-    (detail->>'validation_evidence_hash')::text,
-    (detail->>'simulation_evidence_hash')::text,
-    (detail->>'risk_classification')::text
+    (detail->>'validation_evidence_hash')::text AS validation_evidence_hash,
+    (detail->>'simulation_evidence_hash')::text AS simulation_evidence_hash,
+    (detail->>'risk_classification')::text AS risk_classification
   INTO v_context
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
@@ -666,7 +666,7 @@ BEGIN
 
   -- Check missing roles
   v_missing_roles := ARRAY[]::text[];
-  FOREACH v_required_role IN ARRAY(SELECT jsonb_array_elements_text(v_rule.required_roles)) LOOP
+  FOR v_required_role IN SELECT jsonb_array_elements_text(v_rule.required_roles) LOOP
     -- An approval counts for a role if its approver has that role
     SELECT EXISTS(
       SELECT 1 FROM policy_approvals pa
@@ -781,9 +781,9 @@ BEGIN
   -- Get version and context
   SELECT id, content_hash INTO v_version FROM policy_versions WHERE id = v_cr.selected_version_id;
   SELECT
-    (detail->>'validation_evidence_hash')::text,
-    (detail->>'simulation_evidence_hash')::text,
-    (detail->>'risk_classification')::text
+    (detail->>'validation_evidence_hash')::text AS validation_evidence_hash,
+    (detail->>'simulation_evidence_hash')::text AS simulation_evidence_hash,
+    (detail->>'risk_classification')::text AS risk_classification
   INTO v_context
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
@@ -830,7 +830,7 @@ BEGIN
 
   -- Check missing roles
   v_missing_roles := ARRAY[]::text[];
-  FOREACH v_required_role IN ARRAY(SELECT jsonb_array_elements_text(v_rule.required_roles)) LOOP
+  FOR v_required_role IN SELECT jsonb_array_elements_text(v_rule.required_roles) LOOP
     SELECT EXISTS(
       SELECT 1 FROM policy_approvals pa
       WHERE pa.version_id = v_version.id AND pa.approval_rule_id = v_rule.id
