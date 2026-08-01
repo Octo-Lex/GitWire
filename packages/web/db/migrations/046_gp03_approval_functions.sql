@@ -361,7 +361,7 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
     AND (detail->>'state_revision')::bigint = v_cr.state_revision
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
@@ -386,7 +386,7 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
     AND (detail->>'state_revision')::bigint = v_cr.state_revision
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
@@ -571,6 +571,7 @@ LANGUAGE plpgsql AS $$
 DECLARE
   v_approval RECORD;
   v_cr_id uuid;
+  v_cr_state text;
   v_current_status text;
   v_current_revision bigint;
   v_latest_count int;
@@ -601,7 +602,16 @@ BEGIN
   END IF;
 
   -- R6 step 2: Lock the change request FOR UPDATE (sole serialization domain)
-  PERFORM 1 FROM policy_change_requests WHERE id = v_cr_id FOR UPDATE;
+  -- and require it to still be awaiting_approval. Once a request is approved,
+  -- its approvals are consumed and must be immutable.
+  SELECT cr.state INTO v_cr_state
+  FROM policy_change_requests cr WHERE cr.id = v_cr_id FOR UPDATE;
+  IF v_cr_state IS NULL THEN
+    RAISE EXCEPTION 'revoke_policy_approval: associated change request not found';
+  END IF;
+  IF v_cr_state != 'awaiting_approval' THEN
+    RAISE EXCEPTION 'revoke_policy_approval: change request is in state %, only awaiting_approval allows revocation', v_cr_state;
+  END IF;
 
   -- R6 step 3: Sample clock_timestamp() AFTER acquiring the lock
   v_now := clock_timestamp();
@@ -635,13 +645,17 @@ BEGIN
   -- former approver must not be able to self-revoke.
   v_is_approver := (v_approval.approver_principal_id = p_actor_principal_id);
   IF v_is_approver THEN
-    -- Confirm the original approver is still active with a current assignment.
+    -- Confirm the original approver is still an active principal retaining a
+    -- CURRENT assignment to an ACTIVE role (binding current-authority rule:
+    -- active principal + active role + non-revoked + unexpired assignment).
     SELECT EXISTS(
       SELECT 1 FROM gitwire_auth.auth_principals p
       JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = p.id
+      JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id
       WHERE p.id = p_actor_principal_id AND p.status = 'active'
         AND pr.revoked_at IS NULL
         AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+        AND r.status = 'active'
     ) INTO v_is_approver;
   END IF;
   SELECT EXISTS(
@@ -698,6 +712,7 @@ LANGUAGE plpgsql AS $$
 DECLARE
   v_approval RECORD;
   v_cr_id uuid;
+  v_cr_state text;
   v_current_status text;
   v_current_revision bigint;
   v_latest_count int;
@@ -724,7 +739,16 @@ BEGIN
   END IF;
 
   -- R6 step 2: Lock the change request FOR UPDATE (sole serialization domain)
-  PERFORM 1 FROM policy_change_requests WHERE id = v_cr_id FOR UPDATE;
+  -- and require it to still be awaiting_approval. Once a request is approved,
+  -- its approvals are consumed and must be immutable.
+  SELECT cr.state INTO v_cr_state
+  FROM policy_change_requests cr WHERE cr.id = v_cr_id FOR UPDATE;
+  IF v_cr_state IS NULL THEN
+    RAISE EXCEPTION 'expire_policy_approval: associated change request not found';
+  END IF;
+  IF v_cr_state != 'awaiting_approval' THEN
+    RAISE EXCEPTION 'expire_policy_approval: change request is in state %, only awaiting_approval allows expiry', v_cr_state;
+  END IF;
 
   -- R6 step 3: Sample clock_timestamp() AFTER acquiring the lock
   v_now := clock_timestamp();
@@ -866,7 +890,7 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
     AND (detail->>'state_revision')::bigint = v_cr.state_revision
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
@@ -889,7 +913,7 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
     AND (detail->>'state_revision')::bigint = v_cr.state_revision
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
@@ -952,8 +976,9 @@ BEGIN
   -- R5: ONE canonical eligible-approval CTE -> single aggregate.
   -- The predicate is the identical exact-evidence + current-authority set.
   -- INNER JOINs (not LEFT): an approval only counts when the approver CURRENTLY
-  -- has an active, non-expired, scope-applicable role. A disabled principal, an
-  -- approver with no current assignment, or an unrelated role does NOT count.
+  -- has an active, non-expired, scope-applicable role that is one of the rule's
+  -- REQUIRED roles. A disabled principal, an approver with no current assignment,
+  -- or a principal holding only an UNRELATED role does NOT count.
   WITH eligible AS (
     SELECT pa.id AS approval_id, pa.approver_principal_id, pa.expires_at,
            pr.id AS assignment_id, r.name AS role_name
@@ -970,6 +995,7 @@ BEGIN
               OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
       )
     JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
+      AND r.name = ANY(SELECT jsonb_array_elements_text(v_rule.required_roles))
     WHERE pa.version_id = v_version.id
       AND pa.content_hash = v_version.content_hash
       AND pa.validation_evidence_hash = v_val_hash
@@ -1144,7 +1170,7 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
     AND (detail->>'state_revision')::bigint = v_cr.state_revision
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
@@ -1167,7 +1193,7 @@ BEGIN
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
     AND detail ? 'version_id'
-    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision') ~ '^[0-9]{1,19}$'
     AND (detail->>'state_revision')::bigint = v_cr.state_revision
     AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
@@ -1229,7 +1255,7 @@ BEGIN
 
   -- R5: ONE canonical eligible-approval CTE -> single aggregate under the lock.
   -- INNER JOINs (not LEFT): an approval only counts when the approver CURRENTLY
-  -- has an active, non-expired, scope-applicable role.
+  -- has an active, non-expired, scope-applicable REQUIRED role.
   WITH eligible AS (
     SELECT pa.id AS approval_id, pa.approver_principal_id, pa.expires_at,
            pr.id AS assignment_id, r.name AS role_name
@@ -1246,6 +1272,7 @@ BEGIN
               OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
       )
     JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
+      AND r.name = ANY(SELECT jsonb_array_elements_text(v_rule.required_roles))
     WHERE pa.version_id = v_version.id
       AND pa.content_hash = v_version.content_hash
       AND pa.validation_evidence_hash = v_val_hash
