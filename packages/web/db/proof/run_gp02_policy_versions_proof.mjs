@@ -459,6 +459,8 @@ try {
   for (const row of tableACLsAfterRB.filter(r => r.rolname === "gitwire_operator")) {
     check("after RB: operator SELECT on " + row.relname, row.select === true);
     check("after RB: operator NO INSERT on " + row.relname, row.insert === false);
+    check("after RB: operator NO UPDATE on " + row.relname, row.update === false);
+    check("after RB: operator NO DELETE on " + row.relname, row.delete === false);
   }
 
   // After rollback: verify NO column-level UPDATE remains for fn_owner on ALL 11 columns
@@ -471,6 +473,20 @@ try {
   for (const col of allPcrColumns) {
     const { rows: [r] } = await pool.query("SELECT has_column_privilege('gitwire_app', 'gitwire_policy.policy_change_requests', $1, 'UPDATE') as has", [col]);
     check("after RB: gitwire_app NO column UPDATE on " + col, r.has === false);
+  }
+  // After rollback: operator NO column-level UPDATE on all 11 columns
+  for (const col of allPcrColumns) {
+    const { rows: [r] } = await pool.query("SELECT has_column_privilege('gitwire_operator', 'gitwire_policy.policy_change_requests', $1, 'UPDATE') as has", [col]);
+    check("after RB: operator NO column UPDATE on " + col, r.has === false);
+  }
+
+  // After rollback: PUBLIC and operator have NO EXECUTE on any gitwire_policy function
+  const { rows: allFnsAfterRB } = await pool.query("SELECT p.oid, p.oid::regprocedure::text as sig FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy'");
+  for (const fn of allFnsAfterRB) {
+    const { rows: [pubPriv] } = await pool.query("SELECT has_function_privilege('public', $1, 'EXECUTE') as can", [fn.oid]);
+    check("after RB: PUBLIC NO EXECUTE on " + fn.sig, pubPriv.can === false);
+    const { rows: [opPriv] } = await pool.query("SELECT has_function_privilege('gitwire_operator', $1, 'EXECUTE') as can", [fn.oid]);
+    check("after RB: operator NO EXECUTE on " + fn.sig, opPriv.can === false);
   }
 
   await applyMigrations(pool);
@@ -554,9 +570,10 @@ try {
     check("fn ACL: " + before.sig + " operator_exec restored", before.operator_exec === after.operator_exec);
   }
 
-  // Verify gitwire_operator has NO execute on any GP function
+  // Absolute assertions: operator and PUBLIC have NO EXECUTE on any GP function
   for (const fn of fnACLsAfter) {
     check(fn.sig + ": operator NO EXECUTE", fn.operator_exec === false);
+    check(fn.sig + ": PUBLIC NO EXECUTE", fn.public_exec === false);
   }
 
   // ═══ Phase 16: CASCADE check ════════════════════════════════════════════
