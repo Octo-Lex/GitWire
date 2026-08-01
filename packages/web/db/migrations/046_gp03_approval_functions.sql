@@ -319,21 +319,17 @@ DECLARE
   v_repo_github_id bigint;
   v_repo_installation_id bigint;
   v_repo_row_count int;
-  v_detail_state_revision text;
-  v_detail_version_id text;
   v_detail_val_hash text;
   v_detail_sim_hash text;
   v_detail_risk text;
-  v_detail_state_rev_ok boolean;
-  v_detail_version_ok boolean;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'record_policy_approval: caller must be gitwire_app, got %', session_user;
   END IF;
 
-  v_now := clock_timestamp();
-
-  -- Lock the change request (single serialization domain)
+  -- Lock the change request (single serialization domain) BEFORE sampling the
+  -- authority timestamp, so an assignment cannot expire during the lock wait
+  -- and still be treated as current.
   SELECT * INTO v_cr FROM policy_change_requests WHERE id = p_change_request_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'record_policy_approval: change request % not found', p_change_request_id;
@@ -341,6 +337,8 @@ BEGIN
   IF v_cr.state != 'awaiting_approval' THEN
     RAISE EXCEPTION 'record_policy_approval: change request is in state %, only awaiting_approval accepts approvals', v_cr.state;
   END IF;
+
+  v_now := clock_timestamp();
 
   -- Get the selected version (must exist)
   SELECT id, content_hash INTO v_version FROM policy_versions WHERE id = v_cr.selected_version_id;
@@ -351,9 +349,9 @@ BEGIN
   -- R3: Derive approval context. Require EXACTLY ONE awaiting_approval event
   -- whose detail carries the current state_revision, the selected version_id,
   -- and typed evidence/risk fields. policy_transition_events has no schema
-  -- state_revision column, so we JSON-validate here. Type-check before cast.
-  -- NOTE: SELECT INTO + GET DIAGNOSTICS ROW_COUNT reports only 0/1, so count
-  -- explicitly to detect ambiguity (>1 matching event = fail-closed).
+  -- state_revision column, so we JSON-validate here. The count MUST include the
+  -- value-match on state_revision + version_id so a stale historical event does
+  -- not turn a single valid current event into a false ambiguity.
   SELECT count(*) INTO v_context_count
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
@@ -362,23 +360,24 @@ BEGIN
     AND detail ? 'simulation_evidence_hash'
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
-    AND detail ? 'version_id';
+    AND detail ? 'version_id'
+    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   IF v_context_count = 0 THEN
-    RAISE EXCEPTION 'record_policy_approval: no awaiting_approval context event with complete typed detail found';
+    RAISE EXCEPTION 'record_policy_approval: no awaiting_approval context event matching current state_revision/version_id';
   END IF;
   IF v_context_count > 1 THEN
-    RAISE EXCEPTION 'record_policy_approval: ambiguous awaiting_approval context (% events)', v_context_count;
+    RAISE EXCEPTION 'record_policy_approval: ambiguous awaiting_approval context (% events match current state)', v_context_count;
   END IF;
 
+  -- Exactly one event matches current state; fetch its typed values.
   SELECT
-    detail->>'state_revision',
-    detail->>'version_id',
     detail->>'validation_evidence_hash',
     detail->>'simulation_evidence_hash',
     detail->>'risk_classification'
-  INTO v_detail_state_revision, v_detail_version_id, v_detail_val_hash,
-       v_detail_sim_hash, v_detail_risk
+  INTO v_detail_val_hash, v_detail_sim_hash, v_detail_risk
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
     AND to_state = 'awaiting_approval'
@@ -386,17 +385,12 @@ BEGIN
     AND detail ? 'simulation_evidence_hash'
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
-    AND detail ? 'version_id';
+    AND detail ? 'version_id'
+    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
-  -- Type-check + value-check the JSON fields against current trusted state
-  v_detail_state_rev_ok := (v_detail_state_revision IS NOT NULL
-    AND v_detail_state_revision ~ '^[0-9]+$'
-    AND v_detail_state_revision::bigint = v_cr.state_revision);
-  v_detail_version_ok := (v_detail_version_id IS NOT NULL
-    AND v_detail_version_id = v_cr.selected_version_id::text);
-  IF NOT (v_detail_state_rev_ok AND v_detail_version_ok) THEN
-    RAISE EXCEPTION 'record_policy_approval: context event does not match current state_revision/version_id';
-  END IF;
+  -- Validate the fetched evidence/risk values (type-check before use).
   IF v_detail_val_hash IS NULL OR btrim(v_detail_val_hash) = ''
      OR v_detail_sim_hash IS NULL OR btrim(v_detail_sim_hash) = ''
      OR v_detail_risk IS NULL OR v_detail_risk NOT IN ('standard','elevated','critical') THEN
@@ -635,8 +629,21 @@ BEGIN
     RAISE EXCEPTION 'revoke_policy_approval: approval is in status %, only active can be revoked', v_current_status;
   END IF;
 
-  -- Actor eligibility (current): original approver OR active fleet admin
+  -- Actor eligibility (current): original approver (who must STILL be an active
+  -- principal retaining a current role assignment) OR an active fleet admin.
+  -- Equality with the original approver alone is not sufficient — a disabled
+  -- former approver must not be able to self-revoke.
   v_is_approver := (v_approval.approver_principal_id = p_actor_principal_id);
+  IF v_is_approver THEN
+    -- Confirm the original approver is still active with a current assignment.
+    SELECT EXISTS(
+      SELECT 1 FROM gitwire_auth.auth_principals p
+      JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = p.id
+      WHERE p.id = p_actor_principal_id AND p.status = 'active'
+        AND pr.revoked_at IS NULL
+        AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+    ) INTO v_is_approver;
+  END IF;
   SELECT EXISTS(
     SELECT 1 FROM gitwire_auth.auth_principal_roles pr
     JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
@@ -647,7 +654,7 @@ BEGIN
       AND p.status = 'active'
   ) INTO v_is_admin;
   IF NOT v_is_approver AND NOT v_is_admin THEN
-    RAISE EXCEPTION 'revoke_policy_approval: actor must be the original approver or a current fleet admin';
+    RAISE EXCEPTION 'revoke_policy_approval: actor must be the original approver (still active with a current role) or a current fleet admin';
   END IF;
 
   -- R6 step 6: Insert current_revision + 1. UNIQUE constraint is the backstop.
@@ -817,14 +824,10 @@ LANGUAGE plpgsql AS $$
 DECLARE
   v_cr RECORD;
   v_version RECORD;
-  v_detail_state_revision text;
-  v_detail_version_id text;
   v_detail_val_hash text;
   v_detail_sim_hash text;
   v_detail_risk text;
   v_context_count int;
-  v_detail_state_rev_ok boolean;
-  v_detail_version_ok boolean;
   v_val_hash text;
   v_sim_hash text;
   v_risk text;
@@ -851,8 +854,9 @@ BEGIN
     RAISE EXCEPTION 'evaluate_approval_sufficiency: no selected version';
   END IF;
 
-  -- R3: Derive context (exactly-one typed event matching current revision/version)
-  -- Count explicitly because SELECT INTO + GET DIAGNOSTICS reports only 0/1.
+  -- R3: Derive context (exactly-one typed event matching current revision/version).
+  -- Count MUST include the value-match so a stale historical event does not
+  -- create a false ambiguity.
   SELECT count(*) INTO v_context_count
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
@@ -861,21 +865,22 @@ BEGIN
     AND detail ? 'simulation_evidence_hash'
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
-    AND detail ? 'version_id';
+    AND detail ? 'version_id'
+    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   IF v_context_count = 0 THEN
-    RAISE EXCEPTION 'evaluate_approval_sufficiency: no awaiting_approval context event with complete typed detail found';
+    RAISE EXCEPTION 'evaluate_approval_sufficiency: no awaiting_approval context event matching current state_revision/version_id';
   END IF;
   IF v_context_count > 1 THEN
-    RAISE EXCEPTION 'evaluate_approval_sufficiency: ambiguous awaiting_approval context (% events)', v_context_count;
+    RAISE EXCEPTION 'evaluate_approval_sufficiency: ambiguous awaiting_approval context (% events match current state)', v_context_count;
   END IF;
 
   SELECT
-    detail->>'state_revision', detail->>'version_id',
     detail->>'validation_evidence_hash', detail->>'simulation_evidence_hash',
     detail->>'risk_classification'
-  INTO v_detail_state_revision, v_detail_version_id, v_detail_val_hash,
-       v_detail_sim_hash, v_detail_risk
+  INTO v_detail_val_hash, v_detail_sim_hash, v_detail_risk
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
     AND to_state = 'awaiting_approval'
@@ -883,16 +888,11 @@ BEGIN
     AND detail ? 'simulation_evidence_hash'
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
-    AND detail ? 'version_id';
+    AND detail ? 'version_id'
+    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
-  v_detail_state_rev_ok := (v_detail_state_revision IS NOT NULL
-    AND v_detail_state_revision ~ '^[0-9]+$'
-    AND v_detail_state_revision::bigint = v_cr.state_revision);
-  v_detail_version_ok := (v_detail_version_id IS NOT NULL
-    AND v_detail_version_id = v_cr.selected_version_id::text);
-  IF NOT (v_detail_state_rev_ok AND v_detail_version_ok) THEN
-    RAISE EXCEPTION 'evaluate_approval_sufficiency: context event does not match current state_revision/version_id';
-  END IF;
   IF v_detail_val_hash IS NULL OR btrim(v_detail_val_hash) = ''
      OR v_detail_sim_hash IS NULL OR btrim(v_detail_sim_hash) = ''
      OR v_detail_risk IS NULL OR v_detail_risk NOT IN ('standard','elevated','critical') THEN
@@ -951,12 +951,16 @@ BEGIN
 
   -- R5: ONE canonical eligible-approval CTE -> single aggregate.
   -- The predicate is the identical exact-evidence + current-authority set.
+  -- INNER JOINs (not LEFT): an approval only counts when the approver CURRENTLY
+  -- has an active, non-expired, scope-applicable role. A disabled principal, an
+  -- approver with no current assignment, or an unrelated role does NOT count.
   WITH eligible AS (
     SELECT pa.id AS approval_id, pa.approver_principal_id, pa.expires_at,
            pr.id AS assignment_id, r.name AS role_name
     FROM policy_approvals pa
     JOIN policy_approval_lifecycle pal ON pal.approval_id = pa.id
-    LEFT JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = pa.approver_principal_id
+    JOIN gitwire_auth.auth_principals p ON p.id = pa.approver_principal_id AND p.status = 'active'
+    JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = pa.approver_principal_id
       AND pr.revoked_at IS NULL
       AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
       AND (
@@ -965,8 +969,7 @@ BEGIN
             AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
               OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
       )
-    LEFT JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
-    LEFT JOIN gitwire_auth.auth_principals p ON p.id = pa.approver_principal_id AND p.status = 'active'
+    JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
     WHERE pa.version_id = v_version.id
       AND pa.content_hash = v_version.content_hash
       AND pa.validation_evidence_hash = v_val_hash
@@ -1071,14 +1074,10 @@ DECLARE
   v_result policy_change_requests;
   v_cr RECORD;
   v_version RECORD;
-  v_detail_state_revision text;
-  v_detail_version_id text;
   v_detail_val_hash text;
   v_detail_sim_hash text;
   v_detail_risk text;
   v_context_count int;
-  v_detail_state_rev_ok boolean;
-  v_detail_version_ok boolean;
   v_val_hash text;
   v_sim_hash text;
   v_risk text;
@@ -1101,9 +1100,7 @@ BEGIN
     RAISE EXCEPTION 'approve_policy_change_request: caller must be gitwire_app, got %', session_user;
   END IF;
 
-  v_now := clock_timestamp();
-
-  -- Lock and load the change request
+  -- Lock and load the change request BEFORE sampling the authority timestamp.
   SELECT * INTO v_cr FROM policy_change_requests WHERE id = p_change_request_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'approve_policy_change_request: change request % not found', p_change_request_id;
@@ -1111,6 +1108,9 @@ BEGIN
   IF v_cr.state != 'awaiting_approval' THEN
     RAISE EXCEPTION 'approve_policy_change_request: change request is in state %, only awaiting_approval can be approved', v_cr.state;
   END IF;
+
+  -- Sample the authority timestamp AFTER acquiring the lock.
+  v_now := clock_timestamp();
 
   -- Actor eligibility (current): active fleet admin
   SELECT EXISTS(
@@ -1132,8 +1132,9 @@ BEGIN
     RAISE EXCEPTION 'approve_policy_change_request: no selected version';
   END IF;
 
-  -- R3: Derive context (exactly-one typed event matching current revision/version)
-  -- Count explicitly because SELECT INTO + GET DIAGNOSTICS reports only 0/1.
+  -- R3: Derive context (exactly-one typed event matching current revision/version).
+  -- Count MUST include the value-match so a stale historical event does not
+  -- create a false ambiguity.
   SELECT count(*) INTO v_context_count
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
@@ -1142,21 +1143,22 @@ BEGIN
     AND detail ? 'simulation_evidence_hash'
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
-    AND detail ? 'version_id';
+    AND detail ? 'version_id'
+    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
   IF v_context_count = 0 THEN
-    RAISE EXCEPTION 'approve_policy_change_request: no awaiting_approval context event with complete typed detail found';
+    RAISE EXCEPTION 'approve_policy_change_request: no awaiting_approval context event matching current state_revision/version_id';
   END IF;
   IF v_context_count > 1 THEN
-    RAISE EXCEPTION 'approve_policy_change_request: ambiguous awaiting_approval context (% events)', v_context_count;
+    RAISE EXCEPTION 'approve_policy_change_request: ambiguous awaiting_approval context (% events match current state)', v_context_count;
   END IF;
 
   SELECT
-    detail->>'state_revision', detail->>'version_id',
     detail->>'validation_evidence_hash', detail->>'simulation_evidence_hash',
     detail->>'risk_classification'
-  INTO v_detail_state_revision, v_detail_version_id, v_detail_val_hash,
-       v_detail_sim_hash, v_detail_risk
+  INTO v_detail_val_hash, v_detail_sim_hash, v_detail_risk
   FROM policy_transition_events
   WHERE change_request_id = p_change_request_id
     AND to_state = 'awaiting_approval'
@@ -1164,16 +1166,11 @@ BEGIN
     AND detail ? 'simulation_evidence_hash'
     AND detail ? 'risk_classification'
     AND detail ? 'state_revision'
-    AND detail ? 'version_id';
+    AND detail ? 'version_id'
+    AND (detail->>'state_revision') ~ '^[0-9]+$'
+    AND (detail->>'state_revision')::bigint = v_cr.state_revision
+    AND (detail->>'version_id') = v_cr.selected_version_id::text;
 
-  v_detail_state_rev_ok := (v_detail_state_revision IS NOT NULL
-    AND v_detail_state_revision ~ '^[0-9]+$'
-    AND v_detail_state_revision::bigint = v_cr.state_revision);
-  v_detail_version_ok := (v_detail_version_id IS NOT NULL
-    AND v_detail_version_id = v_cr.selected_version_id::text);
-  IF NOT (v_detail_state_rev_ok AND v_detail_version_ok) THEN
-    RAISE EXCEPTION 'approve_policy_change_request: context event does not match current state_revision/version_id';
-  END IF;
   IF v_detail_val_hash IS NULL OR btrim(v_detail_val_hash) = ''
      OR v_detail_sim_hash IS NULL OR btrim(v_detail_sim_hash) = ''
      OR v_detail_risk IS NULL OR v_detail_risk NOT IN ('standard','elevated','critical') THEN
@@ -1231,12 +1228,15 @@ BEGIN
   v_eval_now := clock_timestamp();
 
   -- R5: ONE canonical eligible-approval CTE -> single aggregate under the lock.
+  -- INNER JOINs (not LEFT): an approval only counts when the approver CURRENTLY
+  -- has an active, non-expired, scope-applicable role.
   WITH eligible AS (
     SELECT pa.id AS approval_id, pa.approver_principal_id, pa.expires_at,
            pr.id AS assignment_id, r.name AS role_name
     FROM policy_approvals pa
     JOIN policy_approval_lifecycle pal ON pal.approval_id = pa.id
-    LEFT JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = pa.approver_principal_id
+    JOIN gitwire_auth.auth_principals p ON p.id = pa.approver_principal_id AND p.status = 'active'
+    JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = pa.approver_principal_id
       AND pr.revoked_at IS NULL
       AND (pr.expires_at IS NULL OR pr.expires_at > v_eval_now)
       AND (
@@ -1245,8 +1245,7 @@ BEGIN
             AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
               OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
       )
-    LEFT JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
-    LEFT JOIN gitwire_auth.auth_principals p ON p.id = pa.approver_principal_id AND p.status = 'active'
+    JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
     WHERE pa.version_id = v_version.id
       AND pa.content_hash = v_version.content_hash
       AND pa.validation_evidence_hash = v_val_hash
