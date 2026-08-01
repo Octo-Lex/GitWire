@@ -97,7 +97,17 @@ GRANT SELECT, INSERT ON policy_approval_lifecycle TO gitwire_policy_fn_owner;
 GRANT SELECT ON policy_validation_evidence TO gitwire_policy_fn_owner;
 GRANT SELECT ON policy_simulation_evidence TO gitwire_policy_fn_owner;
 
--- Revoke direct writes from gitwire_app on GP-03 tables
+-- Normalization contract: 046 INTENTIONALLY normalizes the application-role
+-- ACL to the fail-closed baseline. The REVOKE statements below are not advisory
+-- — they are the authoritative removal of any prohibited direct-write privilege
+-- gitwire_app may hold on the GP-03 append-only tables (a pre-existing INSERT/
+-- UPDATE/DELETE grant from any source is removed). The REVOKE ALL ... FROM PUBLIC
+-- on each function likewise removes any PUBLIC EXECUTE. The proof verifies the
+-- complete prohibited-privilege matrix is absent post-migration and that the
+-- exact final ACL matches a fresh apply. This is the chosen contract for the
+-- grant-revocation gate (ACL normalization, not abort-on-unexpected-ACL).
+
+-- Revoke direct writes from gitwire_app on GP-03 tables (normalization)
 REVOKE INSERT, UPDATE, DELETE ON policy_approval_rules FROM gitwire_app;
 REVOKE INSERT, UPDATE, DELETE ON policy_approvals FROM gitwire_app;
 REVOKE INSERT, UPDATE, DELETE ON policy_approval_lifecycle FROM gitwire_app;
