@@ -111,10 +111,17 @@ BEGIN
            fp.prosecdef,
            fp.proconfig,
            fp.acl_canonical
-      INTO STRICT v_prov
+      INTO v_prov
     FROM gitwire_policy.gp03_function_provenance fp
     WHERE fp.proname = v_fn.proname
       AND fp.identity_args = v_fn.identity_args;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION
+        'rollback_gp03_approval: function % (%) provenance mismatch — no matching composite provenance row',
+        v_fn.proname,
+        v_fn.identity_args;
+    END IF;
 
     v_prosrc_hash := encode(public.digest(v_fn.prosrc, 'sha256'), 'hex');
 
