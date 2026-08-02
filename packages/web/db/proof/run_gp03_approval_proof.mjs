@@ -98,13 +98,14 @@ try {
       const bPid = b.processID;
       const bPromise = (async () => {
         try { await b.query(waiterSql, waiterParams); await b.query("COMMIT"); return "ok"; }
-        catch (e) { try { await b.query("ROLLBACK"); } catch {} return "b-err:" + e.message.slice(0, 60); }
+        catch (e) { try { await b.query("ROLLBACK"); } catch {} return "b-err:" + e.message; }
       })();
-      // Give B a moment to reach the blocking point, then PROVE it's blocked.
+      // Give B a moment to reach the blocking point, then PROVE B is blocked
+      // SPECIFICALLY by A (aPid must appear in B's blocker list).
       await new Promise(r => setTimeout(r, 600));
       for (let i = 0; i < 20; i++) {
         const { rows } = await pool.query("SELECT pg_blocking_pids($1) as blockers", [bPid]);
-        if (rows[0].blockers && rows[0].blockers.length > 0) { wasBlocked = true; break; }
+        if (rows[0].blockers && rows[0].blockers.includes(aPid)) { wasBlocked = true; break; }
         await new Promise(r => setTimeout(r, 200));
       }
       // Release A: COMMIT releases the CR row lock, letting B proceed.
@@ -741,9 +742,18 @@ try {
     await pool.query("UPDATE gitwire_policy.policy_change_requests SET state = 'awaiting_approval', state_revision = state_revision + 1, updated_at = now() WHERE id = $1 AND state = 'submitted'", [crOId]);
     const { rows: [awaitO] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crOId]);
     // Insert an event with a 19-digit state_revision (9999999999999999999) as a JSON
-    // NUMBER that overflows bigint. The text-comparison fix avoids casting, so this
-    // must yield a controlled no-context rejection, not a bigint-out-of-range error.
-    await pool.query("INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) VALUES ($1, 'transition', 'submitted', 'awaiting_approval', $2, $3)", [crOId, adminPid, JSON.stringify({ version_id: vOId, state_revision: 9999999999999999999, validation_evidence_hash: oVal, simulation_evidence_hash: oSim, risk_classification: "standard" })]);
+    // NUMBER that overflows bigint. Construct the JSON IN POSTGRESQL (not JS) to avoid
+    // JS Number rounding. The text-comparison fix avoids casting, so this must yield a
+    // controlled no-context rejection, not a bigint-out-of-range error.
+    await pool.query(
+      "INSERT INTO gitwire_policy.policy_transition_events (change_request_id, event_type, from_state, to_state, actor_principal_id, detail) " +
+      "VALUES ($1, 'transition', 'submitted', 'awaiting_approval', $2, " +
+      "jsonb_build_object('version_id', $3::text, 'state_revision', 9999999999999999999, 'validation_evidence_hash', $4::text, 'simulation_evidence_hash', $5::text, 'risk_classification', 'standard'))",
+      [crOId, adminPid, vOId, oVal, oSim]
+    );
+    // Assert the stored value is a JSON number with exactly 19 digits (not rounded)
+    const { rows: [storedO] } = await pool.query("SELECT (detail->'state_revision')::text AS val, jsonb_typeof(detail->'state_revision') AS typ FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1 AND to_state = 'awaiting_approval' ORDER BY occurred_at DESC LIMIT 1", [crOId]);
+    check("F5: 19-digit overflow value stored as JSON number (not rounded by JS)", storedO.typ === "number" && storedO.val === "9999999999999999999", "val=" + storedO.val + " typ=" + storedO.typ);
     let overflowControlled = false;
     try { await runAsApp("SELECT gitwire_policy.record_policy_approval($1, $2, $3)", [crOId, ruleId, approver1Pid]); }
     catch (e) {
@@ -1045,9 +1055,13 @@ try {
     );
     check("revoke-vs-approve: approve waiter was genuinely blocked on revoke holder's lock", resA.wasBlocked, "waiterResult=" + resA.waiterResult);
     // Revoke committed first (count dropped to 1); approve then proceeds -> insufficient
-    check("revoke-vs-approve: approve failed insufficient (revoke won, count dropped)", resA.waiterResult && resA.waiterResult.includes("b-err"), "waiterResult=" + resA.waiterResult);
+    const approveInsufficient = resA.waiterResult && resA.waiterResult.includes("insufficient");
+    check("revoke-vs-approve: approve failed with exact 'insufficient' error", approveInsufficient, "waiterResult=" + resA.waiterResult);
     const { rows: [stA] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crRId]);
     check("revoke-vs-approve: CR remains awaiting_approval", stA.state === "awaiting_approval", "state=" + stA.state);
+    // Verify the revoked approval's lifecycle is 'revoked'
+    const { rows: [lfA] } = await pool.query("SELECT to_status FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = $1 ORDER BY lifecycle_revision DESC LIMIT 1", [apprR2Id]);
+    check("revoke-vs-approve: revoked approval lifecycle = revoked", lfA.to_status === "revoked", "status=" + lfA.to_status);
   }
 
   // ═══ Phase 19j1b: GENUINELY CONCURRENT approve-vs-revoke (barrier-proven) ══
@@ -1090,7 +1104,11 @@ try {
     check("approve-vs-revoke: revoke waiter was genuinely blocked on approve holder's lock", resB.wasBlocked, "waiterResult=" + resB.waiterResult);
     const { rows: [stB] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crR2Id]);
     check("approve-vs-revoke: CR transitions to approved (approve won)", stB.state === "approved", "state=" + stB.state);
-    check("approve-vs-revoke: revoke rejected after approve (CR approved)", resB.waiterResult && resB.waiterResult.includes("b-err"), "waiterResult=" + resB.waiterResult);
+    const revokeRejected = resB.waiterResult && resB.waiterResult.includes("awaiting_approval");
+    check("approve-vs-revoke: revoke rejected with exact state error", revokeRejected, "waiterResult=" + resB.waiterResult);
+    // The approval remains active (immutable post-approval)
+    const { rows: [lfB] } = await pool.query("SELECT to_status FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = $1 ORDER BY lifecycle_revision DESC LIMIT 1", [apprR2bId]);
+    check("approve-vs-revoke: approval remains active (immutable)", lfB.to_status === "active", "status=" + lfB.to_status);
   }
 
   // ═══ Phase 19j2: GENUINELY CONCURRENT expire-vs-approve (barrier-proven) ══
@@ -1131,7 +1149,10 @@ try {
       [crEId, evBefore, adminPid]
     );
     check("expire-vs-approve: approve waiter was genuinely blocked on expire holder's lock", resE.wasBlocked, "waiterResult=" + resE.waiterResult);
-    check("expire-vs-approve: approve failed insufficient (expired approval excluded)", resE.waiterResult && resE.waiterResult.includes("b-err"), "waiterResult=" + resE.waiterResult);
+    const approveInsufficientE = resE.waiterResult && resE.waiterResult.includes("insufficient");
+    check("expire-vs-approve: approve failed with exact 'insufficient' error", approveInsufficientE, "waiterResult=" + resE.waiterResult);
+    const { rows: [lfE] } = await pool.query("SELECT to_status FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = $1 ORDER BY lifecycle_revision DESC LIMIT 1", [apprEId]);
+    check("expire-vs-approve: expired approval lifecycle = expired", lfE.to_status === "expired", "status=" + lfE.to_status);
   }
 
   // ═══ Phase 19j2b: GENUINELY CONCURRENT approve-vs-expire (barrier-proven) ══
@@ -1173,7 +1194,10 @@ try {
     check("approve-vs-expire: expire waiter was genuinely blocked on approve holder's lock", resE2.wasBlocked, "waiterResult=" + resE2.waiterResult);
     const { rows: [stE2] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crE2Id]);
     check("approve-vs-expire: CR transitions to approved (approve won)", stE2.state === "approved", "state=" + stE2.state);
-    check("approve-vs-expire: expire rejected after approve (CR approved)", resE2.waiterResult && resE2.waiterResult.includes("b-err"), "waiterResult=" + resE2.waiterResult);
+    const expireRejected = resE2.waiterResult && resE2.waiterResult.includes("awaiting_approval");
+    check("approve-vs-expire: expire rejected with exact state error", expireRejected, "waiterResult=" + resE2.waiterResult);
+    const { rows: [lfE2] } = await pool.query("SELECT to_status FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = $1 ORDER BY lifecycle_revision DESC LIMIT 1", [apprE2Id]);
+    check("approve-vs-expire: approval remains active (immutable)", lfE2.to_status === "active", "status=" + lfE2.to_status);
   }
 
   // ═══ Phase 19k: HTTP observer + 409 mapping + observer-bypass-denial (R8) ══
@@ -1471,19 +1495,28 @@ try {
         const { rows: [ownerRow] } = await colPool.query("SELECT pg_get_userbyid(proowner) as owner FROM pg_proc p JOIN pg_namespace ns ON p.pronamespace=ns.oid WHERE ns.nspname='gitwire_policy' AND p.proname='record_policy_approval'");
         check("owner-mismatch: pre-existing function owner NOT silently changed (still gitwire_app, not fn_owner)", ownerRow.owner === "gitwire_app", "owner=" + ownerRow.owner);
       }
-      // No partial 046 state: after the failed migration, NONE of the 6 GP-03
-      // No partial 046 state for ALL collision cases. For FUNCTION/OWNER-MISMATCH
-      // the fixture creates record_policy_approval, so exactly 1 function exists
-      // (the fixture) — no ADDITIONAL 046 functions should be created. For other
-      // collisions, 0 functions should exist.
+      // No partial 046 state for ALL collision cases. Verify: (a) ledger does NOT
+      // record 046 (migration runner records only on full success), (b) function
+      // count matches expectation, (c) no GP-03 function EXECUTE grants to gitwire_app
+      // leaked (functions either don't exist or are the un-owned fixture).
       const { rows: [fnCount] } = await colPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace ns ON p.pronamespace=ns.oid WHERE ns.nspname='gitwire_policy' AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval','expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')");
       const expectedFns = (label === "FUNCTION" || label === "OWNER-MISMATCH") ? 1 : 0;
-      check("collision gate (" + label + "): no partial 046 functions created (expected " + expectedFns + ")", fnCount.n === expectedFns, "fnCount=" + fnCount.n);
-      // Also verify no partial 046 schema additions (rule_revision column) leaked
-      // for cases where the collision happens BEFORE schema ALTERs. For FUNCTION/
-      // OWNER-MISMATCH the column WAS added (collision is at function creation,
-      // after schema ALTERs), so it should be present; for COLUMN/CONSTRAINT the
-      // collision is at schema time so the column may or may not be present.
+      check("collision gate (" + label + "): GP-03 function count matches (expected " + expectedFns + ")", fnCount.n === expectedFns, "fnCount=" + fnCount.n);
+      // Ledger: 046 must NOT be recorded (migration failed)
+      const ledger046 = (await colPool.query("SELECT count(*)::int n FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'")).rows[0].n;
+      check("collision gate (" + label + "): 046 NOT recorded in ledger (migration failed)", ledger046 === 0, "ledger=" + ledger046);
+      // No GP-03 function EXECUTE grants to gitwire_app leaked. The fixture function
+      // (FUNCTION/OWNER-MISMATCH) has default PUBLIC EXECUTE but is owned by the
+      // superuser, not fn_owner. Verify no fn_owner-owned GP-03 function has an
+      // explicit EXECUTE grant to gitwire_app (that only happens when 046 succeeds).
+      const appExecGrants = (await colPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace ns ON p.pronamespace=ns.oid JOIN pg_roles r ON r.oid = p.proowner WHERE ns.nspname='gitwire_policy' AND r.rolname='gitwire_policy_fn_owner' AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval','expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request') AND has_function_privilege('gitwire_app', p.oid, 'EXECUTE')")).rows[0].n;
+      check("collision gate (" + label + "): no fn_owner-owned GP-03 function EXECUTE to gitwire_app leaked", appExecGrants === 0, "grants=" + appExecGrants);
+      // For FUNCTION/OWNER-MISMATCH: the fixture function must NOT be owned by fn_owner
+      // (the migration didn't reach the ALTER FUNCTION OWNER TO step)
+      if (label === "FUNCTION" || label === "OWNER-MISMATCH") {
+        const { rows: [fnOwner] } = await colPool.query("SELECT pg_get_userbyid(proowner) as owner FROM pg_proc p JOIN pg_namespace ns ON p.pronamespace=ns.oid WHERE ns.nspname='gitwire_policy' AND p.proname='record_policy_approval'");
+        check("collision gate (" + label + "): fixture function NOT owned by fn_owner (migration didn't reach OWNER step)", fnOwner.owner !== "gitwire_policy_fn_owner", "owner=" + fnOwner.owner);
+      }
       await colPool.end();
     } finally {
       try { docker("rm", "-f", colCid); } catch {}
@@ -1511,6 +1544,15 @@ try {
       for (const t of gp03Tables) {
         await gPool.query("GRANT INSERT, UPDATE, DELETE ON gitwire_policy." + t + " TO gitwire_app");
       }
+      // ALSO pre-grant DIRECT column-level INSERT/UPDATE on representative columns
+      // (table-level grants imply column privileges, but direct column grants survive
+      // table-level REVOKE — this tests the migration's column-level DO block).
+      await gPool.query("GRANT INSERT (rule_version), UPDATE (rule_version) ON gitwire_policy.policy_approval_rules TO gitwire_app");
+      await gPool.query("GRANT INSERT (risk_classification), UPDATE (risk_classification) ON gitwire_policy.policy_approvals TO gitwire_app");
+      await gPool.query("GRANT INSERT (reason_code), UPDATE (reason_code) ON gitwire_policy.policy_approval_lifecycle TO gitwire_app");
+      // Confirm the direct column grants exist pre-migration
+      const preColGrants = (await gPool.query("SELECT count(*)::int n FROM information_schema.role_column_grants WHERE grantee='gitwire_app' AND table_schema='gitwire_policy' AND table_name IN ('policy_approval_rules','policy_approvals','policy_approval_lifecycle') AND privilege_type IN ('INSERT','UPDATE')")).rows[0].n;
+      check("grant normalization: direct column-level grants created pre-migration", preColGrants > 0, "count=" + preColGrants);
       // Confirm the prohibited privileges exist pre-migration
       let allPreGranted = true;
       for (const t of gp03Tables) {
@@ -1532,16 +1574,11 @@ try {
         }
       }
       check("grant normalization: all 9 prohibited DML privileges removed post-migration", allPostRemoved, "stillGranted=" + JSON.stringify(failedRemovals));
-      // Column-level grants survive table-level REVOKE — verify the migration's
-      // column-level REVOKEs removed them. Check a representative column on each table.
-      let colGrantsRemoved = true;
-      const colFailed = [];
-      for (const [t, col] of [["policy_approval_rules", "rule_version"], ["policy_approvals", "risk_classification"], ["policy_approval_lifecycle", "reason_code"]]) {
-        const insHas = (await gPool.query("SELECT has_column_privilege('gitwire_app','gitwire_policy." + t + "','" + col + "','INSERT') as h")).rows[0].h;
-        const updHas = (await gPool.query("SELECT has_column_privilege('gitwire_app','gitwire_policy." + t + "','" + col + "','UPDATE') as h")).rows[0].h;
-        if (insHas || updHas) { colGrantsRemoved = false; colFailed.push(t + "." + col + " ins=" + insHas + " upd=" + updHas); }
-      }
-      check("grant normalization: column-level INSERT/UPDATE removed (not just table-level)", colGrantsRemoved, "stillGranted=" + JSON.stringify(colFailed));
+      // Verify the COMPLETE column-grant set is empty post-migration (the DO block
+      // revoked every column). Compare the full role_column_grants set, not just
+      // representative columns.
+      const postColGrants = (await gPool.query("SELECT count(*)::int n FROM information_schema.role_column_grants WHERE grantee='gitwire_app' AND table_schema='gitwire_policy' AND table_name IN ('policy_approval_rules','policy_approvals','policy_approval_lifecycle') AND privilege_type IN ('INSERT','UPDATE')")).rows[0].n;
+      check("grant normalization: complete column-grant set removed (0 remaining)", postColGrants === 0, "remaining=" + postColGrants);
       // Verify PUBLIC has NO EXECUTE on any of the 6 GP-03 functions
       const gp03Fns = ["create_policy_approval_rule", "record_policy_approval", "revoke_policy_approval", "expire_policy_approval", "evaluate_approval_sufficiency", "approve_policy_change_request"];
       const { rows: publicExec } = await gPool.query("SELECT p.proname, has_function_privilege('public', p.oid, 'EXECUTE') as pub_exec FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname = ANY($1)", [gp03Fns]);

@@ -604,8 +604,10 @@ DECLARE
   v_cr_id uuid;
   v_cr_state text;
   v_cr_resource_type text;
+  v_cr_resource_id text;
   v_repo_github_id bigint;
   v_repo_installation_id bigint;
+  v_repo_row_count int;
   v_current_status text;
   v_current_revision bigint;
   v_latest_count int;
@@ -638,7 +640,7 @@ BEGIN
   -- R6 step 2: Lock the change request FOR UPDATE (sole serialization domain)
   -- and require it to still be awaiting_approval. Once a request is approved,
   -- its approvals are consumed and must be immutable.
-  SELECT cr.state, cr.resource_type INTO v_cr_state, v_cr_resource_type
+  SELECT cr.state, cr.resource_type, cr.resource_id INTO v_cr_state, v_cr_resource_type, v_cr_resource_id
   FROM policy_change_requests cr WHERE cr.id = v_cr_id FOR UPDATE;
   IF v_cr_state IS NULL THEN
     RAISE EXCEPTION 'revoke_policy_approval: associated change request not found';
@@ -693,8 +695,16 @@ BEGIN
     v_repo_installation_id := NULL;
     v_repo_github_id := NULL;
     IF v_cr_resource_type = 'repository' THEN
+      -- Resolve from the LOCKED request's resource_id (not the approval record),
+      -- requiring exactly one match (fail-closed on zero/ambiguous like the other
+      -- functions). This prevents a fleet-scoped self-revoker from bypassing when
+      -- repo resolution yields zero rows (NULL IDs).
+      SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_cr_resource_id;
+      IF v_repo_row_count != 1 THEN
+        RAISE EXCEPTION 'revoke_policy_approval: repository % resolves to % rows (expected 1)', v_cr_resource_id, v_repo_row_count;
+      END IF;
       SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
-      FROM public.repositories repo WHERE repo.full_name = v_approval.resource_scope_id;
+      FROM public.repositories repo WHERE repo.full_name = v_cr_resource_id;
     END IF;
     SELECT EXISTS(
       SELECT 1 FROM gitwire_auth.auth_principals p
