@@ -136,9 +136,15 @@ async function applyMigrations(pool, { stopBefore = null } = {}) {
 }
 
 function stripLeadingComments(statement) {
-  return statement
-    .replace(/^\s*(?:(?:--[^\n]*(?:\n|$))|(?:\/\*[\s\S]*?\*\/))\s*/g, "")
-    .trim();
+  let stripped = statement;
+  while (true) {
+    const next = stripped.replace(
+      /^\s*(?:(?:--[^\n]*(?:\n|$))|(?:\/\*[\s\S]*?\*\/))\s*/,
+      "",
+    );
+    if (next === stripped) return stripped.trim();
+    stripped = next;
+  }
 }
 
 function splitSqlStatements(sql) {
@@ -254,7 +260,7 @@ async function snapshotCollisionState(pool) {
       WHERE n.nspname IN ('gitwire_policy','gitwire_auth','public')
         AND c.relkind IN ('r','p','S','v','m')
     ), items AS (
-      SELECT 'REL|' || nspname || '|' || relname || '|' || relkind || '|' || owner_name || '|' || relacl AS item
+      SELECT 'REL|' || nspname || '|' || relname || '|' || relkind::text || '|' || owner_name || '|' || relacl AS item
       FROM relations
       UNION ALL
       SELECT 'COL|' || n.nspname || '|' || c.relname || '|' || a.attnum || '|' || a.attname || '|'
@@ -268,7 +274,7 @@ async function snapshotCollisionState(pool) {
         AND a.attnum > 0 AND NOT a.attisdropped
       UNION ALL
       SELECT 'CON|' || n.nspname || '|' || c.relname || '|' || con.conname || '|'
-             || con.contype || '|' || pg_get_constraintdef(con.oid, true)
+             || con.contype::text || '|' || pg_get_constraintdef(con.oid, true)
       FROM pg_constraint con
       JOIN pg_class c ON c.oid = con.conrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -339,7 +345,7 @@ async function snapshotState(pool) {
          OR (n.nspname = 'public' AND c.relname IN (
                'repositories','installations','schema_migrations'))
     ), items AS (
-      SELECT 'REL|' || nspname || '|' || relname || '|' || relkind || '|' || owner_name || '|' || relacl AS item
+      SELECT 'REL|' || nspname || '|' || relname || '|' || relkind::text || '|' || owner_name || '|' || relacl AS item
       FROM relevant_relations
       UNION ALL
       SELECT 'COL|' || n.nspname || '|' || c.relname || '|' || a.attnum || '|' || a.attname || '|'
@@ -353,7 +359,7 @@ async function snapshotState(pool) {
         AND a.attnum > 0 AND NOT a.attisdropped
       UNION ALL
       SELECT 'CON|' || n.nspname || '|' || c.relname || '|' || con.conname || '|'
-             || con.contype || '|' || pg_get_constraintdef(con.oid, true)
+             || con.contype::text || '|' || pg_get_constraintdef(con.oid, true)
       FROM pg_constraint con
       JOIN pg_class c ON c.oid = con.conrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
