@@ -139,12 +139,24 @@ END $$;
 -- drift across PG versions or line-ending normalizations).
 -- ════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS gp03_function_provenance (
-  proname       text        NOT NULL,
-  body_hash     text        NOT NULL,
-  acl_text      text        NOT NULL,
-  recorded_at   timestamptz NOT NULL DEFAULT now(),
+  proname           text        NOT NULL,
+  prosrc_hash       text        NOT NULL,
+  identity_args     text        NOT NULL,
+  ret_type          text        NOT NULL,
+  lang_name         text        NOT NULL,
+  owner_name        text        NOT NULL,
+  prosecdef         boolean     NOT NULL,
+  proconfig         text        NOT NULL,
+  acl_canonical     text        NOT NULL,
+  recorded_at       timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (proname)
 );
+
+-- Restrict: only the migration user (superuser) can write to this table.
+-- PUBLIC, gitwire_app, and gitwire_policy_fn_owner have NO privileges.
+REVOKE ALL ON gp03_function_provenance FROM PUBLIC;
+REVOKE ALL ON gp03_function_provenance FROM gitwire_app;
+REVOKE ALL ON gp03_function_provenance FROM gitwire_policy_fn_owner;
 
 RESET search_path;
 
@@ -1460,7 +1472,10 @@ REVOKE ALL ON FUNCTION approve_policy_change_request(uuid, bigint, uuid) FROM PU
 GRANT EXECUTE ON FUNCTION approve_policy_change_request(uuid, bigint, uuid) TO gitwire_app;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- Record function provenance (body hash + ACL) for rollback verification
+-- Record function provenance for rollback verification.
+-- Hashes the stable PL/pgSQL source (pg_proc.prosrc), NOT pg_get_functiondef
+-- (whose formatting can vary across PG versions). Stores identity args, return
+-- type, language, owner, SECURITY DEFINER, proconfig, and canonical ACL.
 -- ════════════════════════════════════════════════════════════════════════════
 SET search_path = gitwire_policy, pg_catalog;
 
@@ -1468,25 +1483,47 @@ DO $$
 DECLARE
   v_fn record;
   v_acl text;
+  v_ret text;
 BEGIN
   FOR v_fn IN
-    SELECT p.proname, p.oid
+    SELECT p.proname, p.oid, p.prosrc, p.proacl,
+           pg_get_function_identity_arguments(p.oid) AS identity_args,
+           pg_get_function_result(p.oid) AS ret_type,
+           l.lanname, pg_get_userbyid(p.proowner) AS owner_name,
+           p.prosecdef, COALESCE(array_to_string(p.proconfig,','),'') AS config
     FROM pg_proc p
     JOIN pg_namespace n ON p.pronamespace = n.oid
+    JOIN pg_language l ON p.prolang = l.oid
     WHERE n.nspname = 'gitwire_policy'
       AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval',
                         'expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')
   LOOP
-    SELECT COALESCE(string_agg(g1.rolname || '=' || a.privilege_type || '/' || g2.rolname, ',' ORDER BY g1.rolname), 'NULL')
+    -- Canonical ACL: sorted set of grantee=privilege_type/grantor(is_grantable)
+    SELECT COALESCE(string_agg(
+             g1.rolname || '=' || a.privilege_type || '/' || g2.rolname || '(' ||
+             CASE WHEN a.is_grantable THEN 't' ELSE 'f' END || ')',
+             ',' ORDER BY g1.rolname, a.privilege_type, g2.rolname), 'NULL')
       INTO v_acl
-      FROM aclexplode(coalesce((SELECT proacl FROM pg_proc WHERE oid = v_fn.oid), '{}'::aclitem[])) a
+      FROM aclexplode(coalesce(v_fn.proacl, '{}'::aclitem[])) AS a
       JOIN pg_roles g1 ON g1.oid = a.grantee
       JOIN pg_roles g2 ON g2.oid = a.grantor;
-    INSERT INTO gp03_function_provenance (proname, body_hash, acl_text)
+
+    INSERT INTO gp03_function_provenance
+      (proname, prosrc_hash, identity_args, ret_type, lang_name, owner_name, prosecdef, proconfig, acl_canonical)
     VALUES (v_fn.proname,
-            encode(public.digest(pg_get_functiondef(v_fn.oid), 'sha256'), 'hex'),
-            v_acl)
-    ON CONFLICT (proname) DO UPDATE SET body_hash = EXCLUDED.body_hash, acl_text = EXCLUDED.acl_text, recorded_at = now();
+            encode(public.digest(v_fn.prosrc, 'sha256'), 'hex'),
+            v_fn.identity_args, v_fn.ret_type, v_fn.lanname,
+            v_fn.owner_name, v_fn.prosecdef, v_fn.config, v_acl)
+    ON CONFLICT (proname) DO UPDATE SET
+      prosrc_hash = EXCLUDED.prosrc_hash,
+      identity_args = EXCLUDED.identity_args,
+      ret_type = EXCLUDED.ret_type,
+      lang_name = EXCLUDED.lang_name,
+      owner_name = EXCLUDED.owner_name,
+      prosecdef = EXCLUDED.prosecdef,
+      proconfig = EXCLUDED.proconfig,
+      acl_canonical = EXCLUDED.acl_canonical,
+      recorded_at = now();
   END LOOP;
 END $$;
 

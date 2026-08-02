@@ -30,23 +30,37 @@ END $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- Provenance verification: each GP-03 function must have EXACT 046 provenance.
--- Checks: owner, SECURITY DEFINER, plpgsql, search_path, BODY HASH (from
--- gp03_function_provenance recorded at migration time), and exact ACL.
--- Abort if any function has non-046 provenance (foreign function, modified body,
--- or altered privileges).
+-- Reads gp03_function_provenance (recorded at migration time) and compares:
+--   - prosrc hash (stable PL/pgSQL source, not pg_get_functiondef formatting)
+--   - identity arguments, return type, language, owner, SECURITY DEFINER, proconfig
+--   - canonical ACL (sorted grantor/grantee/privilege/grantability set)
+-- Also requires exactly 6 unique provenance rows with no missing/extra signatures.
+-- Aborts without modification on any mismatch.
 -- ════════════════════════════════════════════════════════════════════════════
 DO $$
 DECLARE
+  v_prov_count int;
   v_fn record;
-  v_body_hash text;
-  v_acl_text text;
-  v_expected_hash text;
-  v_expected_acl text;
+  v_prosrc_hash text;
+  v_acl text;
+  v_prov record;
   v_provenance_ok boolean;
+  v_expected_names text[] := ARRAY['approve_policy_change_request','create_policy_approval_rule','evaluate_approval_sufficiency','expire_policy_approval','record_policy_approval','revoke_policy_approval'];
 BEGIN
+  -- Require exactly 6 provenance rows
+  SELECT count(*) INTO v_prov_count FROM gitwire_policy.gp03_function_provenance;
+  IF v_prov_count != 6 THEN
+    RAISE EXCEPTION 'rollback_gp03_approval: expected 6 provenance rows, found %', v_prov_count;
+  END IF;
+  -- Require no extra/missing signatures
+  IF EXISTS (SELECT 1 FROM gitwire_policy.gp03_function_provenance WHERE NOT (proname = ANY(v_expected_names))) THEN
+    RAISE EXCEPTION 'rollback_gp03_approval: unexpected provenance row detected';
+  END IF;
+
   FOR v_fn IN
     SELECT p.proname, p.oid, pg_get_function_identity_arguments(p.oid) AS args,
-           pg_get_userbyid(p.proowner) AS owner, p.prosecdef, l.lanname,
+           pg_get_function_result(p.oid) AS ret_type, p.proacl,
+           pg_get_userbyid(p.proowner) AS owner_name, p.prosecdef, l.lanname,
            COALESCE(array_to_string(p.proconfig,','),'') AS config
     FROM pg_proc p
     JOIN pg_namespace n ON p.pronamespace = n.oid
@@ -55,36 +69,42 @@ BEGIN
       AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval',
                         'expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')
   LOOP
-    -- Read the expected hash+ACL from the provenance table (recorded at migration time)
-    SELECT fp.body_hash, fp.acl_text INTO v_expected_hash, v_expected_acl
-    FROM gitwire_policy.gp03_function_provenance fp WHERE fp.proname = v_fn.proname;
+    -- Read expected provenance
+    SELECT prosrc_hash, identity_args, ret_type, lang_name, owner_name, prosecdef, proconfig, acl_canonical
+      INTO v_prov FROM gitwire_policy.gp03_function_provenance WHERE proname = v_fn.proname;
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'rollback_gp03_approval: no provenance record for function % — migration may be corrupt. Aborting.', v_fn.proname;
+      RAISE EXCEPTION 'rollback_gp03_approval: no provenance record for %', v_fn.proname;
     END IF;
 
-    -- Compute current body hash and ACL
-    v_body_hash := encode(public.digest(pg_get_functiondef(v_fn.oid), 'sha256'), 'hex');
+    -- Compute current values
+    v_prosrc_hash := encode(public.digest((SELECT prosrc FROM pg_proc WHERE oid = v_fn.oid), 'sha256'), 'hex');
+    -- For ACL: use a separate SELECT ... INTO approach that avoids subquery-in-FROM issues
     BEGIN
-      v_acl_text := COALESCE((SELECT string_agg(g1.rolname || '=' || a.privilege_type || '/' || g2.rolname, ',' ORDER BY g1.rolname)
-                              FROM aclexplode(coalesce((SELECT proacl FROM pg_proc WHERE oid = v_fn.oid), '{}'::aclitem[])) a
-                              JOIN pg_roles g1 ON g1.oid = a.grantee
-                              JOIN pg_roles g2 ON g2.oid = a.grantor),
-                             'NULL');
+      SELECT COALESCE(string_agg(
+                 g1.rolname || '=' || a.privilege_type || '/' || g2.rolname || '(' ||
+                 CASE WHEN a.is_grantable THEN 't' ELSE 'f' END || ')',
+                 ',' ORDER BY g1.rolname, a.privilege_type, g2.rolname), 'NULL')
+        INTO v_acl
+        FROM aclexplode(v_fn.proacl) AS a
+        JOIN pg_roles g1 ON g1.oid = a.grantee
+        JOIN pg_roles g2 ON g2.oid = a.grantor;
     EXCEPTION WHEN OTHERS THEN
-      v_acl_text := 'ERROR';
+      v_acl := 'NULL';
     END;
 
-    -- Full provenance check: structural + body hash + ACL
-    v_provenance_ok := (v_fn.owner = 'gitwire_policy_fn_owner'
-                        AND v_fn.prosecdef = true
-                        AND v_fn.lanname = 'plpgsql'
-                        AND v_fn.config = 'search_path=gitwire_policy, pg_catalog'
-                        AND v_body_hash = v_expected_hash
-                        AND v_acl_text = v_expected_acl);
+    -- Full provenance comparison: prosrc hash + all attributes + canonical ACL
+    v_provenance_ok := (v_prosrc_hash = v_prov.prosrc_hash
+                        AND v_fn.args = v_prov.identity_args
+                        AND v_fn.ret_type = v_prov.ret_type
+                        AND v_fn.lanname = v_prov.lang_name
+                        AND v_fn.owner_name = v_prov.owner_name
+                        AND v_fn.prosecdef = v_prov.prosecdef
+                        AND v_fn.config = v_prov.proconfig
+                        AND v_acl = v_prov.acl_canonical);
 
     IF NOT v_provenance_ok THEN
-      RAISE EXCEPTION 'rollback_gp03_approval: function % (%) has non-046 provenance (owner=%, prosecdef=%, lang=%, config=%, body_hash=%, acl=%). Aborting to preserve function.',
-        v_fn.proname, v_fn.args, v_fn.owner, v_fn.prosecdef, v_fn.lanname, v_fn.config, v_body_hash, v_acl_text;
+      RAISE EXCEPTION 'rollback_gp03_approval: function % (%) provenance mismatch (prosrc_hash=% vs %, acl=% vs %). Aborting.',
+        v_fn.proname, v_fn.args, v_prosrc_hash, v_prov.prosrc_hash, v_acl, v_prov.acl_canonical;
     END IF;
   END LOOP;
 END $$;

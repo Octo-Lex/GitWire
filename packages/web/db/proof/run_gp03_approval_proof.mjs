@@ -1731,7 +1731,7 @@ try {
       let rollbackRejected = false;
       let rollbackErr = "";
       try { await fPool.query(rollback046); }
-      catch (e) { rollbackRejected = e.message.includes("foreign function") || e.message.includes("non-046 provenance"); rollbackErr = e.message.slice(0, 100); }
+      catch (e) { rollbackRejected = e.message.includes("provenance mismatch") || e.message.includes("foreign"); rollbackErr = e.message.slice(0, 100); }
       check("provenance rollback: foreign fixture → rollback rejects", rollbackRejected, "err=" + rollbackErr);
       // The foreign function must be PRESERVED exactly
       const { rows: [fnSurvived] } = await fPool.query("SELECT pg_get_userbyid(proowner) as owner, prosecdef FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='record_policy_approval'");
@@ -1855,7 +1855,7 @@ try {
         // The rollback must ABORT because the body hash doesn't match
         let bodyRollbackRejected = false;
         try { await bPool.query(rollback046); }
-        catch (e) { bodyRollbackRejected = e.message.includes("non-046 provenance") || e.message.includes("body_hash"); }
+        catch (e) { bodyRollbackRejected = e.message.includes("provenance mismatch") || e.message.includes("prosrc_hash"); }
         check("provenance rollback: modified body (" + fnName + ") → rollback rejects", bodyRollbackRejected);
         // The modified function must survive
         const { rows: [fnSurvived] } = await bPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='" + fnName + "'");
@@ -1879,13 +1879,31 @@ try {
         // The rollback must ABORT because the ACL doesn't match
         let aclRollbackRejected = false;
         try { await aPool.query(rollback046); }
-        catch (e) { aclRollbackRejected = e.message.includes("non-046 provenance") || e.message.includes("acl="); }
+        catch (e) { aclRollbackRejected = e.message.includes("provenance mismatch") || e.message.includes("acl"); }
         check("provenance rollback: modified ACL (" + fnName + ") → rollback rejects", aclRollbackRejected);
         // The function must survive with the extra grant
         const hasExtraGrant = (await aPool.query("SELECT has_function_privilege('proof', 'gitwire_policy." + fnName + fnArgs + "', 'EXECUTE') as h")).rows[0].h;
         check("provenance rollback: modified ACL (" + fnName + ") → extra grant preserved", hasExtraGrant === true);
         await aPool.end();
       } finally { try { docker("rm", "-f", aCid); } catch {} }
+    }
+
+    // --- Scenario 6: provenance table access control ---
+    // Verify PUBLIC, gitwire_app, and gitwire_policy_fn_owner cannot modify
+    // gp03_function_provenance (INSERT/UPDATE/DELETE denied).
+    console.log("  --- provenance table access control ---");
+    for (const role of ["gitwire_app", "gitwire_policy_fn_owner"]) {
+      let insBlocked = false, updBlocked = false, delBlocked = false;
+      const rc = await pool.connect();
+      try {
+        await rc.query("SET ROLE " + role);
+        try { await rc.query("INSERT INTO gitwire_policy.gp03_function_provenance (proname, prosrc_hash, identity_args, ret_type, lang_name, owner_name, prosecdef, proconfig, acl_canonical) VALUES ('test','x','x','x','x','x',false,'x','x')"); } catch { insBlocked = true; }
+        try { await rc.query("UPDATE gitwire_policy.gp03_function_provenance SET prosrc_hash='tampered'"); } catch { updBlocked = true; }
+        try { await rc.query("DELETE FROM gitwire_policy.gp03_function_provenance"); } catch { delBlocked = true; }
+      } finally { try { await rc.query("RESET ROLE"); } catch {} rc.release(); }
+      check("provenance table: " + role + " cannot INSERT", insBlocked);
+      check("provenance table: " + role + " cannot UPDATE", updBlocked);
+      check("provenance table: " + role + " cannot DELETE", delBlocked);
     }
   }
 
