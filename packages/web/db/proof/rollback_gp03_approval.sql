@@ -2,16 +2,17 @@
 -- Drops only what 046 created. Preserves all GP-01/GP-02 grants and functions.
 -- No CASCADE.
 --
--- PROVENANCE-AWARE AND FAIL-CLOSED: this rollback verifies that each GP-03
--- function it is about to drop has the exact provenance of a function created
--- by migration 046 (owner = gitwire_policy_fn_owner, SECURITY DEFINER, plpgsql,
--- search_path = 'gitwire_policy, pg_catalog'). If a same-signature function
--- exists but was NOT created by 046 (foreign provenance), the rollback ABORTS
--- without modification — it never drops a function it did not create.
+-- PROVENANCE-AWARE AND FAIL-CLOSED: this rollback verifies the exact six
+-- GP-03 function identities created by migration 046. For each identity it
+-- compares stable PL/pgSQL source hash, return type, language, owner,
+-- SECURITY DEFINER, proconfig, and canonical ACL (including PUBLIC/OID 0).
+-- Same-name overloads are outside the target set and are preserved.
 --
 -- PRECONDITION: requires a successfully recorded 046 ledger entry. If 046 was
--- never applied (or applied only partially via a non-transactional path), the
--- rollback aborts immediately.
+-- never applied, only partially applied, or its provenance is uncertain, the
+-- rollback aborts without committing any mutation.
+
+BEGIN;
 
 SET search_path = gitwire_policy, pg_catalog;
 
@@ -22,95 +23,147 @@ DO $$
 DECLARE
   v_ledger_count int;
 BEGIN
-  SELECT count(*) INTO v_ledger_count FROM public.schema_migrations WHERE version = '046_gp03_approval_functions.sql';
-  IF v_ledger_count = 0 THEN
-    RAISE EXCEPTION 'rollback_gp03_approval: precondition failed — 046 is not recorded in the migration ledger (never applied or partial)';
+  SELECT count(*) INTO v_ledger_count
+  FROM public.schema_migrations
+  WHERE version = '046_gp03_approval_functions.sql';
+
+  IF v_ledger_count != 1 THEN
+    RAISE EXCEPTION
+      'rollback_gp03_approval: precondition failed — expected one 046 ledger row, found %',
+      v_ledger_count;
   END IF;
 END $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- Provenance verification: each GP-03 function must have EXACT 046 provenance.
--- Reads gp03_function_provenance (recorded at migration time) and compares:
---   - prosrc hash (stable PL/pgSQL source, not pg_get_functiondef formatting)
---   - identity arguments, return type, language, owner, SECURITY DEFINER, proconfig
---   - canonical ACL (sorted grantor/grantee/privilege/grantability set)
--- Also requires exactly 6 unique provenance rows with no missing/extra signatures.
--- Aborts without modification on any mismatch.
+-- Provenance verification for the exact six function identities.
 -- ════════════════════════════════════════════════════════════════════════════
 DO $$
 DECLARE
+  v_expected_oids oid[] := ARRAY[
+    to_regprocedure('gitwire_policy.approve_policy_change_request(uuid,bigint,uuid)')::oid,
+    to_regprocedure('gitwire_policy.create_policy_approval_rule(text,text,text,text,text,integer,jsonb,uuid,integer)')::oid,
+    to_regprocedure('gitwire_policy.evaluate_approval_sufficiency(uuid)')::oid,
+    to_regprocedure('gitwire_policy.expire_policy_approval(uuid,bigint,uuid)')::oid,
+    to_regprocedure('gitwire_policy.record_policy_approval(uuid,uuid,uuid)')::oid,
+    to_regprocedure('gitwire_policy.revoke_policy_approval(uuid,bigint,uuid,text)')::oid
+  ];
   v_prov_count int;
   v_fn record;
+  v_prov record;
   v_prosrc_hash text;
   v_acl text;
-  v_prov record;
   v_provenance_ok boolean;
-  v_expected_names text[] := ARRAY['approve_policy_change_request','create_policy_approval_rule','evaluate_approval_sufficiency','expire_policy_approval','record_policy_approval','revoke_policy_approval'];
 BEGIN
-  -- Require exactly 6 provenance rows
-  SELECT count(*) INTO v_prov_count FROM gitwire_policy.gp03_function_provenance;
-  IF v_prov_count != 6 THEN
-    RAISE EXCEPTION 'rollback_gp03_approval: expected 6 provenance rows, found %', v_prov_count;
+  IF array_position(v_expected_oids, NULL) IS NOT NULL THEN
+    RAISE EXCEPTION
+      'rollback_gp03_approval: one or more exact GP-03 function signatures are missing';
   END IF;
-  -- Require no extra/missing signatures
-  IF EXISTS (SELECT 1 FROM gitwire_policy.gp03_function_provenance WHERE NOT (proname = ANY(v_expected_names))) THEN
-    RAISE EXCEPTION 'rollback_gp03_approval: unexpected provenance row detected';
+
+  SELECT count(*) INTO v_prov_count
+  FROM gitwire_policy.gp03_function_provenance;
+  IF v_prov_count != 6 THEN
+    RAISE EXCEPTION
+      'rollback_gp03_approval: expected 6 provenance rows, found %',
+      v_prov_count;
+  END IF;
+
+  -- The provenance relation must be exactly the six expected composite keys.
+  IF EXISTS (
+    WITH expected AS (
+      SELECT p.proname,
+             pg_get_function_identity_arguments(p.oid) AS identity_args
+      FROM unnest(v_expected_oids) AS expected_oid(oid)
+      JOIN pg_proc p ON p.oid = expected_oid.oid
+    )
+    SELECT 1
+    FROM gitwire_policy.gp03_function_provenance fp
+    FULL JOIN expected e
+      ON e.proname = fp.proname
+     AND e.identity_args = fp.identity_args
+    WHERE fp.proname IS NULL OR e.proname IS NULL
+  ) THEN
+    RAISE EXCEPTION
+      'rollback_gp03_approval: provenance rows do not match the exact six GP-03 signatures';
   END IF;
 
   FOR v_fn IN
-    SELECT p.proname, p.oid, pg_get_function_identity_arguments(p.oid) AS args,
-           pg_get_function_result(p.oid) AS ret_type, p.proacl,
-           pg_get_userbyid(p.proowner) AS owner_name, p.prosecdef, l.lanname,
-           COALESCE(array_to_string(p.proconfig,','),'') AS config
-    FROM pg_proc p
-    JOIN pg_namespace n ON p.pronamespace = n.oid
-    JOIN pg_language l ON p.prolang = l.oid
-    WHERE n.nspname = 'gitwire_policy'
-      AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval',
-                        'expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')
+    SELECT p.proname,
+           p.oid,
+           p.prosrc,
+           p.proacl,
+           p.proowner,
+           pg_get_function_identity_arguments(p.oid) AS identity_args,
+           pg_get_function_result(p.oid) AS ret_type,
+           l.lanname AS lang_name,
+           pg_get_userbyid(p.proowner) AS owner_name,
+           p.prosecdef,
+           COALESCE(array_to_string(p.proconfig, ','), '') AS proconfig
+    FROM unnest(v_expected_oids) AS expected_oid(oid)
+    JOIN pg_proc p ON p.oid = expected_oid.oid
+    JOIN pg_language l ON l.oid = p.prolang
+    ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)
   LOOP
-    -- Read expected provenance
-    SELECT prosrc_hash, identity_args, ret_type, lang_name, owner_name, prosecdef, proconfig, acl_canonical
-      INTO v_prov FROM gitwire_policy.gp03_function_provenance WHERE proname = v_fn.proname;
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'rollback_gp03_approval: no provenance record for %', v_fn.proname;
-    END IF;
+    SELECT fp.prosrc_hash,
+           fp.identity_args,
+           fp.ret_type,
+           fp.lang_name,
+           fp.owner_name,
+           fp.prosecdef,
+           fp.proconfig,
+           fp.acl_canonical
+      INTO STRICT v_prov
+    FROM gitwire_policy.gp03_function_provenance fp
+    WHERE fp.proname = v_fn.proname
+      AND fp.identity_args = v_fn.identity_args;
 
-    -- Compute current values
-    v_prosrc_hash := encode(public.digest((SELECT prosrc FROM pg_proc WHERE oid = v_fn.oid), 'sha256'), 'hex');
-    -- For ACL: use a separate SELECT ... INTO approach that avoids subquery-in-FROM issues
-    BEGIN
-      SELECT COALESCE(string_agg(
-                 g1.rolname || '=' || a.privilege_type || '/' || g2.rolname || '(' ||
-                 CASE WHEN a.is_grantable THEN 't' ELSE 'f' END || ')',
-                 ',' ORDER BY g1.rolname, a.privilege_type, g2.rolname), 'NULL')
-        INTO v_acl
-        FROM aclexplode(v_fn.proacl) AS a
-        JOIN pg_roles g1 ON g1.oid = a.grantee
-        JOIN pg_roles g2 ON g2.oid = a.grantor;
-    EXCEPTION WHEN OTHERS THEN
-      v_acl := 'NULL';
-    END;
+    v_prosrc_hash := encode(public.digest(v_fn.prosrc, 'sha256'), 'hex');
 
-    -- Full provenance comparison: prosrc hash + all attributes + canonical ACL
-    v_provenance_ok := (v_prosrc_hash = v_prov.prosrc_hash
-                        AND v_fn.args = v_prov.identity_args
-                        AND v_fn.ret_type = v_prov.ret_type
-                        AND v_fn.lanname = v_prov.lang_name
-                        AND v_fn.owner_name = v_prov.owner_name
-                        AND v_fn.prosecdef = v_prov.prosecdef
-                        AND v_fn.config = v_prov.proconfig
-                        AND v_acl = v_prov.acl_canonical);
+    SELECT COALESCE(string_agg(
+             COALESCE(grantee_role.rolname,
+                      CASE WHEN acl.grantee = 0 THEN 'PUBLIC'
+                           ELSE '#' || acl.grantee::text END)
+               || '=' || acl.privilege_type || '/'
+               || COALESCE(grantor_role.rolname, '#' || acl.grantor::text)
+               || '(' || CASE WHEN acl.is_grantable THEN 't' ELSE 'f' END || ')',
+             ',' ORDER BY
+               COALESCE(grantee_role.rolname,
+                        CASE WHEN acl.grantee = 0 THEN 'PUBLIC'
+                             ELSE '#' || acl.grantee::text END),
+               acl.privilege_type,
+               COALESCE(grantor_role.rolname, '#' || acl.grantor::text),
+               acl.is_grantable),
+           'NULL')
+      INTO v_acl
+    FROM aclexplode(COALESCE(v_fn.proacl, acldefault('f', v_fn.proowner))) AS acl
+    LEFT JOIN pg_roles grantee_role ON grantee_role.oid = acl.grantee
+    LEFT JOIN pg_roles grantor_role ON grantor_role.oid = acl.grantor;
+
+    v_provenance_ok := (
+      v_prosrc_hash = v_prov.prosrc_hash
+      AND v_fn.identity_args = v_prov.identity_args
+      AND v_fn.ret_type = v_prov.ret_type
+      AND v_fn.lang_name = v_prov.lang_name
+      AND v_fn.owner_name = v_prov.owner_name
+      AND v_fn.prosecdef = v_prov.prosecdef
+      AND v_fn.proconfig = v_prov.proconfig
+      AND v_acl = v_prov.acl_canonical
+    );
 
     IF NOT v_provenance_ok THEN
-      RAISE EXCEPTION 'rollback_gp03_approval: function % (%) provenance mismatch (prosrc_hash=% vs %, acl=% vs %). Aborting.',
-        v_fn.proname, v_fn.args, v_prosrc_hash, v_prov.prosrc_hash, v_acl, v_prov.acl_canonical;
+      RAISE EXCEPTION
+        'rollback_gp03_approval: function % (%) provenance mismatch (prosrc_hash=% vs %, acl=% vs %)',
+        v_fn.proname,
+        v_fn.identity_args,
+        v_prosrc_hash,
+        v_prov.prosrc_hash,
+        v_acl,
+        v_prov.acl_canonical;
     END IF;
   END LOOP;
 END $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- Revoke EXECUTE from gitwire_app (all functions verified as 046-provenance above)
+-- Destructive rollback begins only after all provenance checks pass.
 -- ════════════════════════════════════════════════════════════════════════════
 REVOKE EXECUTE ON FUNCTION approve_policy_change_request(uuid, bigint, uuid) FROM gitwire_app;
 REVOKE EXECUTE ON FUNCTION evaluate_approval_sufficiency(uuid) FROM gitwire_app;
@@ -119,35 +172,29 @@ REVOKE EXECUTE ON FUNCTION revoke_policy_approval(uuid, bigint, uuid, text) FROM
 REVOKE EXECUTE ON FUNCTION record_policy_approval(uuid, uuid, uuid) FROM gitwire_app;
 REVOKE EXECUTE ON FUNCTION create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer) FROM gitwire_app;
 
--- Drop SECURITY DEFINER functions (all verified as 046-provenance above)
-DROP FUNCTION IF EXISTS approve_policy_change_request(uuid, bigint, uuid);
-DROP FUNCTION IF EXISTS evaluate_approval_sufficiency(uuid);
-DROP FUNCTION IF EXISTS expire_policy_approval(uuid, bigint, uuid);
-DROP FUNCTION IF EXISTS revoke_policy_approval(uuid, bigint, uuid, text);
-DROP FUNCTION IF EXISTS record_policy_approval(uuid, uuid, uuid);
-DROP FUNCTION IF EXISTS create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer);
+DROP FUNCTION approve_policy_change_request(uuid, bigint, uuid);
+DROP FUNCTION evaluate_approval_sufficiency(uuid);
+DROP FUNCTION expire_policy_approval(uuid, bigint, uuid);
+DROP FUNCTION revoke_policy_approval(uuid, bigint, uuid, text);
+DROP FUNCTION record_policy_approval(uuid, uuid, uuid);
+DROP FUNCTION create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer);
 
--- Revoke GP-03 table grants from fn_owner
 REVOKE SELECT, INSERT ON policy_approval_rules FROM gitwire_policy_fn_owner;
 REVOKE SELECT, INSERT ON policy_approvals FROM gitwire_policy_fn_owner;
 REVOKE SELECT, INSERT ON policy_approval_lifecycle FROM gitwire_policy_fn_owner;
 REVOKE SELECT ON policy_validation_evidence FROM gitwire_policy_fn_owner;
 REVOKE SELECT ON policy_simulation_evidence FROM gitwire_policy_fn_owner;
 
--- Revoke SELECT on transition_events added by 046 (INSERT was from 045, leave that)
 REVOKE SELECT ON policy_transition_events FROM gitwire_policy_fn_owner;
 
--- Revoke cross-schema grants
 REVOKE SELECT ON gitwire_auth.auth_principal_roles FROM gitwire_policy_fn_owner;
 REVOKE SELECT ON gitwire_auth.auth_roles FROM gitwire_policy_fn_owner;
 REVOKE SELECT ON gitwire_auth.auth_principals FROM gitwire_policy_fn_owner;
 REVOKE USAGE ON SCHEMA gitwire_auth FROM gitwire_policy_fn_owner;
 
--- Revoke public.repositories + public.installations column grants (046 added both)
 REVOKE SELECT (github_id, installation_id, full_name, owner, name) ON public.repositories FROM gitwire_policy_fn_owner;
 REVOKE SELECT (github_id, account_login) ON public.installations FROM gitwire_policy_fn_owner;
 
--- Drop constraints added by 046
 ALTER TABLE policy_approvals DROP CONSTRAINT IF EXISTS pa_expires_check;
 ALTER TABLE policy_approvals DROP CONSTRAINT IF EXISTS pa_risk_enum_check;
 ALTER TABLE policy_approval_rules DROP CONSTRAINT IF EXISTS par_scope_revision_unique;
@@ -159,14 +206,15 @@ ALTER TABLE policy_approval_rules DROP CONSTRAINT IF EXISTS par_assurance_check;
 ALTER TABLE policy_approval_rules DROP CONSTRAINT IF EXISTS par_step_up_check;
 ALTER TABLE policy_approval_rules DROP CONSTRAINT IF EXISTS par_self_approval_check;
 
--- Drop columns added by 046
 ALTER TABLE policy_approvals DROP COLUMN IF EXISTS expires_at;
 ALTER TABLE policy_approval_rules DROP COLUMN IF EXISTS approval_ttl_seconds;
 ALTER TABLE policy_approval_rules DROP COLUMN IF EXISTS rule_revision;
 
--- Drop provenance metadata table
-DROP TABLE IF EXISTS gp03_function_provenance;
+DROP TABLE gp03_function_provenance;
 
 RESET search_path;
 
-DELETE FROM public.schema_migrations WHERE version = '046_gp03_approval_functions.sql';
+DELETE FROM public.schema_migrations
+WHERE version = '046_gp03_approval_functions.sql';
+
+COMMIT;
