@@ -132,6 +132,20 @@ BEGIN
   END LOOP;
 END $$;
 
+-- ════════════════════════════════════════════════════════════════════════════
+-- Function provenance metadata: store the body hash + ACL of each GP-03 function
+-- at migration time. The rollback reads these to verify the function hasn't been
+-- modified since migration. This is more robust than hardcoded hashes (which can
+-- drift across PG versions or line-ending normalizations).
+-- ════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS gp03_function_provenance (
+  proname       text        NOT NULL,
+  body_hash     text        NOT NULL,
+  acl_text      text        NOT NULL,
+  recorded_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (proname)
+);
+
 RESET search_path;
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -1444,5 +1458,36 @@ ALTER FUNCTION approve_policy_change_request(uuid, bigint, uuid)
   OWNER TO gitwire_policy_fn_owner;
 REVOKE ALL ON FUNCTION approve_policy_change_request(uuid, bigint, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION approve_policy_change_request(uuid, bigint, uuid) TO gitwire_app;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Record function provenance (body hash + ACL) for rollback verification
+-- ════════════════════════════════════════════════════════════════════════════
+SET search_path = gitwire_policy, pg_catalog;
+
+DO $$
+DECLARE
+  v_fn record;
+  v_acl text;
+BEGIN
+  FOR v_fn IN
+    SELECT p.proname, p.oid
+    FROM pg_proc p
+    JOIN pg_namespace n ON p.pronamespace = n.oid
+    WHERE n.nspname = 'gitwire_policy'
+      AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval',
+                        'expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')
+  LOOP
+    SELECT COALESCE(string_agg(g1.rolname || '=' || a.privilege_type || '/' || g2.rolname, ',' ORDER BY g1.rolname), 'NULL')
+      INTO v_acl
+      FROM aclexplode(coalesce((SELECT proacl FROM pg_proc WHERE oid = v_fn.oid), '{}'::aclitem[])) a
+      JOIN pg_roles g1 ON g1.oid = a.grantee
+      JOIN pg_roles g2 ON g2.oid = a.grantor;
+    INSERT INTO gp03_function_provenance (proname, body_hash, acl_text)
+    VALUES (v_fn.proname,
+            encode(public.digest(pg_get_functiondef(v_fn.oid), 'sha256'), 'hex'),
+            v_acl)
+    ON CONFLICT (proname) DO UPDATE SET body_hash = EXCLUDED.body_hash, acl_text = EXCLUDED.acl_text, recorded_at = now();
+  END LOOP;
+END $$;
 
 RESET search_path;

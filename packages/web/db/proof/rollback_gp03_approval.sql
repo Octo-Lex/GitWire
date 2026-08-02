@@ -29,13 +29,19 @@ BEGIN
 END $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- Provenance verification: each GP-03 function must have 046 provenance
--- (owner = gitwire_policy_fn_owner, SECURITY DEFINER, plpgsql, correct search_path).
--- Abort if any same-signature function has FOREIGN provenance.
+-- Provenance verification: each GP-03 function must have EXACT 046 provenance.
+-- Checks: owner, SECURITY DEFINER, plpgsql, search_path, BODY HASH (from
+-- gp03_function_provenance recorded at migration time), and exact ACL.
+-- Abort if any function has non-046 provenance (foreign function, modified body,
+-- or altered privileges).
 -- ════════════════════════════════════════════════════════════════════════════
 DO $$
 DECLARE
   v_fn record;
+  v_body_hash text;
+  v_acl_text text;
+  v_expected_hash text;
+  v_expected_acl text;
   v_provenance_ok boolean;
 BEGIN
   FOR v_fn IN
@@ -49,14 +55,36 @@ BEGIN
       AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval',
                         'expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')
   LOOP
-    -- If the function exists, it must have 046 provenance
+    -- Read the expected hash+ACL from the provenance table (recorded at migration time)
+    SELECT fp.body_hash, fp.acl_text INTO v_expected_hash, v_expected_acl
+    FROM gitwire_policy.gp03_function_provenance fp WHERE fp.proname = v_fn.proname;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'rollback_gp03_approval: no provenance record for function % — migration may be corrupt. Aborting.', v_fn.proname;
+    END IF;
+
+    -- Compute current body hash and ACL
+    v_body_hash := encode(public.digest(pg_get_functiondef(v_fn.oid), 'sha256'), 'hex');
+    BEGIN
+      v_acl_text := COALESCE((SELECT string_agg(g1.rolname || '=' || a.privilege_type || '/' || g2.rolname, ',' ORDER BY g1.rolname)
+                              FROM aclexplode(coalesce((SELECT proacl FROM pg_proc WHERE oid = v_fn.oid), '{}'::aclitem[])) a
+                              JOIN pg_roles g1 ON g1.oid = a.grantee
+                              JOIN pg_roles g2 ON g2.oid = a.grantor),
+                             'NULL');
+    EXCEPTION WHEN OTHERS THEN
+      v_acl_text := 'ERROR';
+    END;
+
+    -- Full provenance check: structural + body hash + ACL
     v_provenance_ok := (v_fn.owner = 'gitwire_policy_fn_owner'
                         AND v_fn.prosecdef = true
                         AND v_fn.lanname = 'plpgsql'
-                        AND v_fn.config = 'search_path=gitwire_policy, pg_catalog');
+                        AND v_fn.config = 'search_path=gitwire_policy, pg_catalog'
+                        AND v_body_hash = v_expected_hash
+                        AND v_acl_text = v_expected_acl);
+
     IF NOT v_provenance_ok THEN
-      RAISE EXCEPTION 'rollback_gp03_approval: foreign function detected — % (%) has non-046 provenance (owner=%, prosecdef=%, lang=%, config=%). Aborting to preserve foreign function.',
-        v_fn.proname, v_fn.args, v_fn.owner, v_fn.prosecdef, v_fn.lanname, v_fn.config;
+      RAISE EXCEPTION 'rollback_gp03_approval: function % (%) has non-046 provenance (owner=%, prosecdef=%, lang=%, config=%, body_hash=%, acl=%). Aborting to preserve function.',
+        v_fn.proname, v_fn.args, v_fn.owner, v_fn.prosecdef, v_fn.lanname, v_fn.config, v_body_hash, v_acl_text;
     END IF;
   END LOOP;
 END $$;
@@ -115,6 +143,9 @@ ALTER TABLE policy_approval_rules DROP CONSTRAINT IF EXISTS par_self_approval_ch
 ALTER TABLE policy_approvals DROP COLUMN IF EXISTS expires_at;
 ALTER TABLE policy_approval_rules DROP COLUMN IF EXISTS approval_ttl_seconds;
 ALTER TABLE policy_approval_rules DROP COLUMN IF EXISTS rule_revision;
+
+-- Drop provenance metadata table
+DROP TABLE IF EXISTS gp03_function_provenance;
 
 RESET search_path;
 

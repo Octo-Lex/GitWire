@@ -1824,6 +1824,69 @@ try {
       check("provenance rollback: no 046 ledger → rollback rejects (precondition)", preconditionRejected);
       await nPool.end();
     } finally { try { docker("rm", "-f", nCid); } catch {} }
+
+    // --- Scenario 4: modified body (owner/settings preserved) → rollback rejects ---
+    // For each of the 6 functions: replace it with CREATE OR REPLACE keeping the
+    // same owner/settings but a different body. The rollback must abort (body hash
+    // mismatch) and preserve the function.
+    const gp03FnDefs = [
+      ["approve_policy_change_request", "(uuid, bigint, uuid)", "RETURNS gitwire_policy.policy_change_requests"],
+      ["evaluate_approval_sufficiency", "(uuid)", "RETURNS jsonb"],
+      ["expire_policy_approval", "(uuid, bigint, uuid)", "RETURNS void"],
+      ["revoke_policy_approval", "(uuid, bigint, uuid, text)", "RETURNS void"],
+      ["record_policy_approval", "(uuid, uuid, uuid)", "RETURNS uuid"],
+      ["create_policy_approval_rule", "(text, text, text, text, text, integer, jsonb, uuid, integer)", "RETURNS uuid"],
+    ];
+    for (const [fnName, fnArgs, fnReturn] of gp03FnDefs) {
+      const bPort = await pickPort();
+      const bName = "gp03-prov-body-" + fnName.slice(0, 8) + "-" + bPort;
+      const bCid = docker("run", "-d", "--rm", "--name", bName, "-p", "127.0.0.1:" + bPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+      const bUrl = "postgresql://proof:proof-only@127.0.0.1:" + bPort + "/proofdb";
+      try {
+        await waitForReady(bUrl, 60_000);
+        const bPool = new pg.Pool({ connectionString: bUrl });
+        await applyMigrations(bPool);
+        // Modify the body: DROP + RECREATE with same signature but different body.
+        // (CREATE OR REPLACE cannot change parameter names.)
+        await bPool.query("DROP FUNCTION gitwire_policy." + fnName + fnArgs);
+        await bPool.query("CREATE FUNCTION gitwire_policy." + fnName + fnArgs + " " + fnReturn + " LANGUAGE plpgsql SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog AS $$ BEGIN RAISE EXCEPTION 'modified body'; END; $$");
+        await bPool.query("ALTER FUNCTION gitwire_policy." + fnName + fnArgs + " OWNER TO gitwire_policy_fn_owner");
+        // Restore the owner to fn_owner (CREATE OR REPLACE preserves the existing owner)
+        // The rollback must ABORT because the body hash doesn't match
+        let bodyRollbackRejected = false;
+        try { await bPool.query(rollback046); }
+        catch (e) { bodyRollbackRejected = e.message.includes("non-046 provenance") || e.message.includes("body_hash"); }
+        check("provenance rollback: modified body (" + fnName + ") → rollback rejects", bodyRollbackRejected);
+        // The modified function must survive
+        const { rows: [fnSurvived] } = await bPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='" + fnName + "'");
+        check("provenance rollback: modified body (" + fnName + ") → function preserved", fnSurvived.n === 1, "count=" + fnSurvived.n);
+        await bPool.end();
+      } finally { try { docker("rm", "-f", bCid); } catch {} }
+    }
+
+    // --- Scenario 5: modified ACL (body/owner/settings preserved) → rollback rejects ---
+    for (const [fnName, fnArgs] of gp03FnDefs) {
+      const aPort = await pickPort();
+      const aName = "gp03-prov-acl-" + fnName.slice(0, 8) + "-" + aPort;
+      const aCid = docker("run", "-d", "--rm", "--name", aName, "-p", "127.0.0.1:" + aPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+      const aUrl = "postgresql://proof:proof-only@127.0.0.1:" + aPort + "/proofdb";
+      try {
+        await waitForReady(aUrl, 60_000);
+        const aPool = new pg.Pool({ connectionString: aUrl });
+        await applyMigrations(aPool);
+        // Add an extra ACL grant (e.g., EXECUTE to proof) without changing body/owner
+        await aPool.query("GRANT EXECUTE ON FUNCTION gitwire_policy." + fnName + fnArgs + " TO proof");
+        // The rollback must ABORT because the ACL doesn't match
+        let aclRollbackRejected = false;
+        try { await aPool.query(rollback046); }
+        catch (e) { aclRollbackRejected = e.message.includes("non-046 provenance") || e.message.includes("acl="); }
+        check("provenance rollback: modified ACL (" + fnName + ") → rollback rejects", aclRollbackRejected);
+        // The function must survive with the extra grant
+        const hasExtraGrant = (await aPool.query("SELECT has_function_privilege('proof', 'gitwire_policy." + fnName + fnArgs + "', 'EXECUTE') as h")).rows[0].h;
+        check("provenance rollback: modified ACL (" + fnName + ") → extra grant preserved", hasExtraGrant === true);
+        await aPool.end();
+      } finally { try { docker("rm", "-f", aCid); } catch {} }
+    }
   }
 
   // ═══ Phase 21: CASCADE check ════════════════════════════════════════
