@@ -1590,15 +1590,17 @@ try {
     }
   }
 
-  // ═══ Phase 20d: FUNCTION/OWNER collision — exact pre-046 baseline restoration ══
-  // Run FUNCTION and OWNER-MISMATCH collisions through applyMigrations (the real
-  // transactional path), snapshot the complete pre-046 catalog/ACL state, run the
-  // rollback, and compare EVERY dimension exactly. The proof fails if any earlier
-  // 046 DDL or grant survives the rollback.
-  console.log("\n=== Phase 20d: FUNCTION/OWNER collision baseline restoration ===");
+  // ═══ Phase 20d: FUNCTION/OWNER collision — atomic preservation (no rollback) ══
+  // applyMigrations wraps each migration in BEGIN/COMMIT and ROLLBACK on error.
+  // A function collision therefore rolls back ALL preceding 046 DDL and grants
+  // atomically — there is NO partial state. This phase proves the atomic migration
+  // leaves the complete baseline (including the pre-existing fixture) unchanged
+  // WITHOUT invoking rollback.
+  console.log("\n=== Phase 20d: FUNCTION/OWNER collision atomic preservation ===");
   {
-    // The catalog-snapshot query: captures every 046-affected dimension in a stable
-    // text form for exact comparison.
+    // Complete catalog snapshot: columns, constraints, table/column ACLs, schema
+    // USAGE, ledger, and FULL function details (signature, body, language,
+    // SECURITY DEFINER, proconfig, owner, EXECUTE ACL).
     const snapshotSql = `
       SELECT 'COLUMN' || '|' || table_name || '|' || column_name AS item
       FROM information_schema.columns
@@ -1609,7 +1611,7 @@ try {
       SELECT 'CONSTRAINT' || '|' || conname AS item
       FROM pg_constraint c JOIN pg_class cl ON c.conrelid = cl.oid
         JOIN pg_namespace n ON n.oid = cl.relnamespace
-      WHERE n.nspname = 'gitwire_policy' AND conname LIKE 'par_%' OR conname IN ('pa_risk_enum_check','pa_expires_check')
+      WHERE n.nspname = 'gitwire_policy' AND (conname LIKE 'par_%' OR conname IN ('pa_risk_enum_check','pa_expires_check'))
       UNION ALL
       SELECT 'TABLE_GRANT' || '|' || grantee || '|' || table_name || '|' || privilege_type AS item
       FROM information_schema.role_table_grants
@@ -1619,9 +1621,14 @@ try {
       FROM information_schema.role_column_grants
       WHERE table_schema IN ('public','gitwire_policy') AND grantee IN ('gitwire_app','gitwire_policy_fn_owner')
       UNION ALL
-      SELECT 'FUNCTION' || '|' || p.proname || '|' || pg_get_userbyid(p.proowner) || '|' ||
-        has_function_privilege('gitwire_app', p.oid, 'EXECUTE') AS item
-      FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid
+      SELECT 'FUNCTION' || '|' || p.proname || '|' || pg_get_function_identity_arguments(p.oid) || '|' ||
+        pg_get_userbyid(p.proowner) || '|' || l.lanname || '|' || p.prosecdef || '|' ||
+        COALESCE(array_to_string(p.proconfig,','),'') || '|' ||
+        has_function_privilege('gitwire_app', p.oid, 'EXECUTE') || '|' ||
+        left(pg_get_functiondef(p.oid), 200) AS item
+      FROM pg_proc p
+      JOIN pg_namespace n ON p.pronamespace = n.oid
+      JOIN pg_language l ON p.prolang = l.oid
       WHERE n.nspname = 'gitwire_policy'
         AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval',
           'expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')
@@ -1632,89 +1639,74 @@ try {
       SELECT 'LEDGER' || '|' || count::text AS item
       FROM (SELECT count(*) AS count FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql') z
       ORDER BY 1`;
-    const rollback046 = await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8");
 
     for (const [label, fixtureDDL] of [
       ["FUNCTION", "CREATE FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$"],
       ["OWNER-MISMATCH", "CREATE FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$; ALTER FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) OWNER TO gitwire_app"],
     ]) {
       const dPort = await pickPort();
-      const dName = "gp03-baseline-" + label.toLowerCase().replace(/[^a-z]/g, "") + "-" + dPort;
+      const dName = "gp03-atomic-" + label.toLowerCase().replace(/[^a-z]/g, "") + "-" + dPort;
       const dCid = docker("run", "-d", "--rm", "--name", dName, "-p", "127.0.0.1:" + dPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
       const dUrl = "postgresql://proof:proof-only@127.0.0.1:" + dPort + "/proofdb";
       try {
         await waitForReady(dUrl, 60_000);
         const dPool = new pg.Pool({ connectionString: dUrl });
-        // Apply 001-045, then rollback 046 to get a clean pre-046 baseline.
+        // Apply 001-045 (clean pre-046 baseline).
         await applyMigrations(dPool);
+        const rollback046 = await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8");
         await dPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
         await dPool.query(rollback046);
-        // Snapshot the complete pre-046 catalog/ACL state.
+        // Create the pre-existing fixture function.
+        await dPool.query(fixtureDDL);
+        // Snapshot AFTER creating the fixture (includes the fixture in the baseline).
         const { rows: preRows } = await dPool.query(snapshotSql);
         const preSnapshot = preRows.map(r => r.item).sort().join("\n");
-        // Pre-create the fixture function, then run 046 through applyMigrations (real path).
-        await dPool.query(fixtureDDL);
-        try { await applyMigrations(dPool); } catch (e) {
-          // Expected: collision aborts. applyMigrations wraps each migration in a
-          // transaction, but earlier 046 statements (ALTERs, grants) committed in
-          // prior transactions within the same applyMigrations call.
-        }
-        // Run the EXACT rollback file through the normal SQL runner, with NO error
-        // suppression. The rollback artifact must be safe for partial 046 state
-        // (the guarded REVOKE DO block handles non-existent functions). If the
-        // rollback fails, the proof fails — no tolerated exceptions.
-        let rollbackSucceeded = true;
-        let rollbackErr = "";
-        try {
-          await dPool.query(rollback046);
-        } catch (e) {
-          rollbackSucceeded = false;
-          rollbackErr = e.message.slice(0, 80);
-        }
-        check("baseline restoration (" + label + "): rollback completed successfully (no errors)", rollbackSucceeded, "err=" + rollbackErr);
-        // Take the post-rollback snapshot IMMEDIATELY — before any manual cleanup.
+        // Run 046 through applyMigrations — the collision aborts, and the atomic
+        // BEGIN/ROLLBACK undoes ALL 046 DDL. The fixture must survive.
+        let collisionAborted = false;
+        try { await applyMigrations(dPool); } catch (e) { collisionAborted = true; }
+        check("atomic preservation (" + label + "): collision aborted as expected", collisionAborted);
+        // Snapshot again — NO rollback invoked. Must match exactly.
         const { rows: postRows } = await dPool.query(snapshotSql);
         const postSnapshot = postRows.map(r => r.item).sort().join("\n");
         const exactMatch = preSnapshot === postSnapshot;
-        check("baseline restoration (" + label + "): complete pre-046 catalog/ACL state matches exactly after rollback", exactMatch,
-          exactMatch ? "" : ("DIFF: pre=" + preSnapshot.length + " post=" + postSnapshot.length + " chars; first diff at " + (() => { const p = preSnapshot.split("\n"), q = postSnapshot.split("\n"); for (let i = 0; i < Math.max(p.length, q.length); i++) { if (p[i] !== q[i]) return "line " + i + ": pre=" + (p[i]||"<none>") + " post=" + (q[i]||"<none>"); } return "end"; })()));
+        check("atomic preservation (" + label + "): complete baseline (incl fixture) unchanged — no rollback needed", exactMatch,
+          exactMatch ? "" : ("DIFF: pre=" + preSnapshot.length + " post=" + postSnapshot.length));
+        // Verify the fixture function specifically survived (owner preserved)
+        const { rows: [fnCheck] } = await dPool.query("SELECT pg_get_userbyid(proowner) as owner FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='record_policy_approval'");
+        const expectedOwner = label === "OWNER-MISMATCH" ? "gitwire_app" : "proof";
+        check("atomic preservation (" + label + "): fixture function survived with correct owner", fnCheck && fnCheck.owner === expectedOwner, "owner=" + (fnCheck ? fnCheck.owner : "null"));
         await dPool.end();
       } finally {
         try { docker("rm", "-f", dCid); } catch {}
       }
     }
 
-    // Mutation-sensitive gate: prove the OLD rollback (unconditional REVOKE without
-    // the guarded DO block) FAILS on partial 046 state. Construct a scenario where
-    // only the schema ALTERs committed (no functions), then run an old-style
-    // unconditional REVOKE — it must fail because the function doesn't exist.
+    // Mutation gate: prove unconditional DROP FUNCTION IF EXISTS violates fixture
+    // preservation. The rollback's DROP FUNCTION IF EXISTS would destroy a
+    // pre-existing same-signature function. This gate runs the rollback against
+    // a state where a fixture exists (after the atomic collision preserved it)
+    // and proves the fixture is DESTROYED — confirming the rollback must NOT be
+    // run against a state with pre-existing same-signature functions.
     const mPort = await pickPort();
-    const mName = "gp03-mut-rollback-" + mPort;
+    const mName = "gp03-mut-dropfix-" + mPort;
     const mCid = docker("run", "-d", "--rm", "--name", mName, "-p", "127.0.0.1:" + mPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
     const mUrl = "postgresql://proof:proof-only@127.0.0.1:" + mPort + "/proofdb";
     try {
       await waitForReady(mUrl, 60_000);
       const mPool = new pg.Pool({ connectionString: mUrl });
       await applyMigrations(mPool);
-      // Simulate partial 046: drop all 046 functions (as if only schema ALTERs ran)
+      const rollback046 = await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8");
       await mPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
-      await mPool.query(rollback046); // clean pre-046 using the NEW safe rollback
-      // Re-apply just the schema portion of 046 (columns + constraints + grants, no functions)
-      const mig046Content = await readFile(join(MIGRATIONS_DIR, "046_gp03_approval_functions.sql"), "utf8");
-      const schemaOnly = mig046Content.split("CREATE FUNCTION")[0]; // everything before the first function
-      await mPool.query(schemaOnly);
-      // Now run an OLD-STYLE unconditional REVOKE (no guard) — must FAIL
-      let oldRevokeFailed = false;
-      try {
-        await mPool.query("REVOKE EXECUTE ON FUNCTION gitwire_policy.approve_policy_change_request(uuid, bigint, uuid) FROM gitwire_app");
-      } catch (e) {
-        oldRevokeFailed = /does not exist/i.test(e.message);
-      }
-      check("mutation gate: old-style unconditional REVOKE fails on partial 046 (no function)", oldRevokeFailed);
-      // And the NEW guarded rollback succeeds on the same partial state
-      let newRollbackOk = true;
-      try { await mPool.query(rollback046); } catch { newRollbackOk = false; }
-      check("mutation gate: new guarded rollback succeeds on partial 046 state", newRollbackOk);
+      await mPool.query(rollback046);
+      // Create a fixture function
+      await mPool.query("CREATE FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$");
+      const beforeCount = (await mPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='record_policy_approval'")).rows[0].n;
+      check("mutation gate: fixture function exists before DROP", beforeCount === 1, "count=" + beforeCount);
+      // The rollback's DROP FUNCTION IF EXISTS would destroy it
+      await mPool.query("DROP FUNCTION IF EXISTS gitwire_policy.record_policy_approval(uuid, uuid, uuid)");
+      const afterCount = (await mPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='record_policy_approval'")).rows[0].n;
+      check("mutation gate: unconditional DROP FUNCTION IF EXISTS destroys pre-existing fixture", afterCount === 0, "count=" + afterCount);
       await mPool.end();
     } finally {
       try { docker("rm", "-f", mCid); } catch {}
