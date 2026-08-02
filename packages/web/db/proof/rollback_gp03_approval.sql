@@ -1,66 +1,77 @@
 -- Exact rollback for GP-03 migration 046.
--- Drops only what 046 added. Preserves all GP-01/GP-02 grants and functions.
+-- Drops only what 046 created. Preserves all GP-01/GP-02 grants and functions.
 -- No CASCADE.
 --
--- PARTIAL-STATE SAFE: if 046 applied only partially (e.g. a collision aborted
--- after the schema ALTERs but before all functions were created), the function
--- REVOKEs are guarded so they don't fail on non-existent functions. The DROP
--- FUNCTION IF EXISTS statements are inherently safe. This makes the rollback
--- usable both for full and partial 046 application.
+-- PROVENANCE-AWARE AND FAIL-CLOSED: this rollback verifies that each GP-03
+-- function it is about to drop has the exact provenance of a function created
+-- by migration 046 (owner = gitwire_policy_fn_owner, SECURITY DEFINER, plpgsql,
+-- search_path = 'gitwire_policy, pg_catalog'). If a same-signature function
+-- exists but was NOT created by 046 (foreign provenance), the rollback ABORTS
+-- without modification — it never drops a function it did not create.
+--
+-- PRECONDITION: requires a successfully recorded 046 ledger entry. If 046 was
+-- never applied (or applied only partially via a non-transactional path), the
+-- rollback aborts immediately.
 
 SET search_path = gitwire_policy, pg_catalog;
 
--- Revoke EXECUTE from gitwire_app, guarding against non-existent functions
--- (partial 046 application may have created only some functions).
+-- ════════════════════════════════════════════════════════════════════════════
+-- Precondition: 046 must be in the migration ledger
+-- ════════════════════════════════════════════════════════════════════════════
 DO $$
 DECLARE
-  fn_oid oid;
+  v_ledger_count int;
 BEGIN
-  -- approve_policy_change_request(uuid, bigint, uuid)
-  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
-    WHERE n.nspname='gitwire_policy' AND p.proname='approve_policy_change_request'
-    AND pg_get_function_identity_arguments(p.oid)='uuid, bigint, uuid';
-  IF fn_oid IS NOT NULL THEN
-    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.approve_policy_change_request(uuid, bigint, uuid) FROM gitwire_app';
-  END IF;
-  -- evaluate_approval_sufficiency(uuid)
-  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
-    WHERE n.nspname='gitwire_policy' AND p.proname='evaluate_approval_sufficiency'
-    AND pg_get_function_identity_arguments(p.oid)='uuid';
-  IF fn_oid IS NOT NULL THEN
-    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.evaluate_approval_sufficiency(uuid) FROM gitwire_app';
-  END IF;
-  -- expire_policy_approval(uuid, bigint, uuid)
-  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
-    WHERE n.nspname='gitwire_policy' AND p.proname='expire_policy_approval'
-    AND pg_get_function_identity_arguments(p.oid)='uuid, bigint, uuid';
-  IF fn_oid IS NOT NULL THEN
-    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.expire_policy_approval(uuid, bigint, uuid) FROM gitwire_app';
-  END IF;
-  -- revoke_policy_approval(uuid, bigint, uuid, text)
-  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
-    WHERE n.nspname='gitwire_policy' AND p.proname='revoke_policy_approval'
-    AND pg_get_function_identity_arguments(p.oid)='uuid, bigint, uuid, text';
-  IF fn_oid IS NOT NULL THEN
-    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.revoke_policy_approval(uuid, bigint, uuid, text) FROM gitwire_app';
-  END IF;
-  -- record_policy_approval(uuid, uuid, uuid)
-  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
-    WHERE n.nspname='gitwire_policy' AND p.proname='record_policy_approval'
-    AND pg_get_function_identity_arguments(p.oid)='uuid, uuid, uuid';
-  IF fn_oid IS NOT NULL THEN
-    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) FROM gitwire_app';
-  END IF;
-  -- create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer)
-  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
-    WHERE n.nspname='gitwire_policy' AND p.proname='create_policy_approval_rule'
-    AND pg_get_function_identity_arguments(p.oid)='text, text, text, text, text, integer, jsonb, uuid, integer';
-  IF fn_oid IS NOT NULL THEN
-    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer) FROM gitwire_app';
+  SELECT count(*) INTO v_ledger_count FROM public.schema_migrations WHERE version = '046_gp03_approval_functions.sql';
+  IF v_ledger_count = 0 THEN
+    RAISE EXCEPTION 'rollback_gp03_approval: precondition failed — 046 is not recorded in the migration ledger (never applied or partial)';
   END IF;
 END $$;
 
--- Drop SECURITY DEFINER functions
+-- ════════════════════════════════════════════════════════════════════════════
+-- Provenance verification: each GP-03 function must have 046 provenance
+-- (owner = gitwire_policy_fn_owner, SECURITY DEFINER, plpgsql, correct search_path).
+-- Abort if any same-signature function has FOREIGN provenance.
+-- ════════════════════════════════════════════════════════════════════════════
+DO $$
+DECLARE
+  v_fn record;
+  v_provenance_ok boolean;
+BEGIN
+  FOR v_fn IN
+    SELECT p.proname, p.oid, pg_get_function_identity_arguments(p.oid) AS args,
+           pg_get_userbyid(p.proowner) AS owner, p.prosecdef, l.lanname,
+           COALESCE(array_to_string(p.proconfig,','),'') AS config
+    FROM pg_proc p
+    JOIN pg_namespace n ON p.pronamespace = n.oid
+    JOIN pg_language l ON p.prolang = l.oid
+    WHERE n.nspname = 'gitwire_policy'
+      AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval',
+                        'expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')
+  LOOP
+    -- If the function exists, it must have 046 provenance
+    v_provenance_ok := (v_fn.owner = 'gitwire_policy_fn_owner'
+                        AND v_fn.prosecdef = true
+                        AND v_fn.lanname = 'plpgsql'
+                        AND v_fn.config = 'search_path=gitwire_policy, pg_catalog');
+    IF NOT v_provenance_ok THEN
+      RAISE EXCEPTION 'rollback_gp03_approval: foreign function detected — % (%) has non-046 provenance (owner=%, prosecdef=%, lang=%, config=%). Aborting to preserve foreign function.',
+        v_fn.proname, v_fn.args, v_fn.owner, v_fn.prosecdef, v_fn.lanname, v_fn.config;
+    END IF;
+  END LOOP;
+END $$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Revoke EXECUTE from gitwire_app (all functions verified as 046-provenance above)
+-- ════════════════════════════════════════════════════════════════════════════
+REVOKE EXECUTE ON FUNCTION approve_policy_change_request(uuid, bigint, uuid) FROM gitwire_app;
+REVOKE EXECUTE ON FUNCTION evaluate_approval_sufficiency(uuid) FROM gitwire_app;
+REVOKE EXECUTE ON FUNCTION expire_policy_approval(uuid, bigint, uuid) FROM gitwire_app;
+REVOKE EXECUTE ON FUNCTION revoke_policy_approval(uuid, bigint, uuid, text) FROM gitwire_app;
+REVOKE EXECUTE ON FUNCTION record_policy_approval(uuid, uuid, uuid) FROM gitwire_app;
+REVOKE EXECUTE ON FUNCTION create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer) FROM gitwire_app;
+
+-- Drop SECURITY DEFINER functions (all verified as 046-provenance above)
 DROP FUNCTION IF EXISTS approve_policy_change_request(uuid, bigint, uuid);
 DROP FUNCTION IF EXISTS evaluate_approval_sufficiency(uuid);
 DROP FUNCTION IF EXISTS expire_policy_approval(uuid, bigint, uuid);

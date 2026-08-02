@@ -1476,10 +1476,9 @@ try {
     try {
       await waitForReady(colUrl, 60_000);
       const colPool = new pg.Pool({ connectionString: colUrl });
-      // Apply migrations 001-045 only (stop before 046) by applying all then
-      // rolling back 046 to a clean pre-046 state.
+      // Apply migrations 001-046, then run rollback 046 (which checks provenance
+      // and removes the ledger as its last step) to get a clean pre-046 state.
       await applyMigrations(colPool);
-      await colPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
       await colPool.query(await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8"));
       // Pre-apply the colliding object, then run the full 046 migration -> must fail
       await colPool.query(preApplyDDL);
@@ -1537,7 +1536,7 @@ try {
       await waitForReady(gUrl, 60_000);
       const gPool = new pg.Pool({ connectionString: gUrl });
       await applyMigrations(gPool);
-      await gPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
+      // Run rollback 046 (checks provenance, removes ledger as its last step)
       await gPool.query(await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8"));
       // Pre-grant the COMPLETE prohibited-privilege matrix (all DML on all 3 GP-03 tables)
       const gp03Tables = ["policy_approval_rules", "policy_approvals", "policy_approval_lifecycle"];
@@ -1654,7 +1653,6 @@ try {
         // Apply 001-045 (clean pre-046 baseline).
         await applyMigrations(dPool);
         const rollback046 = await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8");
-        await dPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
         await dPool.query(rollback046);
         // Create the pre-existing fixture function.
         await dPool.query(fixtureDDL);
@@ -1697,7 +1695,6 @@ try {
       const mPool = new pg.Pool({ connectionString: mUrl });
       await applyMigrations(mPool);
       const rollback046 = await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8");
-      await mPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
       await mPool.query(rollback046);
       // Create a fixture function
       await mPool.query("CREATE FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$");
@@ -1711,6 +1708,122 @@ try {
     } finally {
       try { docker("rm", "-f", mCid); } catch {}
     }
+  }
+
+  // ═══ Phase 20e: Provenance-aware rollback — foreign fixture rejection + full restore ══
+  console.log("\n=== Phase 20e: Provenance-aware rollback ===");
+  {
+    const rollback046 = await readFile(join(ROLLBACK_DIR, "rollback_gp03_approval.sql"), "utf8");
+
+    // --- Scenario 1: foreign fixture → rollback REJECTS and preserves it ---
+    const fPort = await pickPort();
+    const fName = "gp03-prov-foreign-" + fPort;
+    const fCid = docker("run", "-d", "--rm", "--name", fName, "-p", "127.0.0.1:" + fPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+    const fUrl = "postgresql://proof:proof-only@127.0.0.1:" + fPort + "/proofdb";
+    try {
+      await waitForReady(fUrl, 60_000);
+      const fPool = new pg.Pool({ connectionString: fUrl });
+      await applyMigrations(fPool); // full 001-046 applied
+      // Replace record_policy_approval with a FOREIGN function (different owner, not SECURITY DEFINER)
+      await fPool.query("DROP FUNCTION IF EXISTS gitwire_policy.record_policy_approval(uuid, uuid, uuid)");
+      await fPool.query("CREATE FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$");
+      // The rollback must ABORT (foreign provenance detected) — NO error suppression
+      let rollbackRejected = false;
+      let rollbackErr = "";
+      try { await fPool.query(rollback046); }
+      catch (e) { rollbackRejected = e.message.includes("foreign function") || e.message.includes("non-046 provenance"); rollbackErr = e.message.slice(0, 100); }
+      check("provenance rollback: foreign fixture → rollback rejects", rollbackRejected, "err=" + rollbackErr);
+      // The foreign function must be PRESERVED exactly
+      const { rows: [fnSurvived] } = await fPool.query("SELECT pg_get_userbyid(proowner) as owner, prosecdef FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='record_policy_approval'");
+      check("provenance rollback: foreign fixture preserved (owner=proof, not SECURITY DEFINER)", fnSurvived && fnSurvived.owner === "proof" && fnSurvived.prosecdef === false, "owner=" + (fnSurvived ? fnSurvived.owner : "null") + " prosecdef=" + (fnSurvived ? fnSurvived.prosecdef : "null"));
+      // The ledger must still have 046 (rollback aborted before DELETE)
+      const ledgerAfter = (await fPool.query("SELECT count(*)::int n FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'")).rows[0].n;
+      check("provenance rollback: foreign fixture → ledger unchanged (046 still present)", ledgerAfter === 1, "ledger=" + ledgerAfter);
+      await fPool.end();
+    } finally { try { docker("rm", "-f", fCid); } catch {} }
+
+    // --- Scenario 2: full 046 → rollback SUCCEEDS and restores exact GP-02 baseline ---
+    const sPort = await pickPort();
+    const sName = "gp03-prov-full-" + sPort;
+    const sCid = docker("run", "-d", "--rm", "--name", sName, "-p", "127.0.0.1:" + sPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+    const sUrl = "postgresql://proof:proof-only@127.0.0.1:" + sPort + "/proofdb";
+    try {
+      await waitForReady(sUrl, 60_000);
+      const sPool = new pg.Pool({ connectionString: sUrl });
+      await applyMigrations(sPool); // full 001-046 applied
+      // Snapshot the pre-rollback (full 046) state for function provenance verification
+      const { rows: [fnBefore] } = await sPool.query("SELECT pg_get_userbyid(proowner) as owner, prosecdef FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='record_policy_approval'");
+      check("provenance rollback: full 046 function has correct provenance (owner=fn_owner, SECURITY DEFINER)", fnBefore && fnBefore.owner === "gitwire_policy_fn_owner" && fnBefore.prosecdef === true, "owner=" + (fnBefore ? fnBefore.owner : "null"));
+      // The rollback must SUCCEED — NO error suppression
+      let rollbackSucceeded = true;
+      let rollbackErr = "";
+      try { await sPool.query(rollback046); }
+      catch (e) { rollbackSucceeded = false; rollbackErr = e.message.slice(0, 100); }
+      check("provenance rollback: full 046 → rollback succeeds (no errors)", rollbackSucceeded, "err=" + rollbackErr);
+      // Verify the exact GP-02 baseline: 046 functions gone, ledger removed, columns dropped
+      const fnGone = (await sPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval','expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')")).rows[0].n;
+      check("provenance rollback: full 046 → all 6 GP-03 functions dropped", fnGone === 0, "count=" + fnGone);
+      const ledgerGone = (await sPool.query("SELECT count(*)::int n FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'")).rows[0].n;
+      check("provenance rollback: full 046 → ledger entry removed", ledgerGone === 0, "ledger=" + ledgerGone);
+      const colGone = (await sPool.query("SELECT count(*)::int n FROM information_schema.columns WHERE table_schema='gitwire_policy' AND table_name='policy_approval_rules' AND column_name='rule_revision'")).rows[0].n;
+      check("provenance rollback: full 046 → rule_revision column dropped", colGone === 0, "col=" + colGone);
+      // GP-02 functions preserved
+      const gp02Fns = (await sPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname IN ('create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request')")).rows[0].n;
+      check("provenance rollback: full 046 → GP-02 functions preserved", gp02Fns === 4, "count=" + gp02Fns);
+      await sPool.end();
+    } finally { try { docker("rm", "-f", sCid); } catch {} }
+
+    // --- Scenario 3: no 046 ledger → rollback rejects (precondition fail) ---
+    const nPort = await pickPort();
+    const nName = "gp03-prov-noledger-" + nPort;
+    const nCid = docker("run", "-d", "--rm", "--name", nName, "-p", "127.0.0.1:" + nPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+    const nUrl = "postgresql://proof:proof-only@127.0.0.1:" + nPort + "/proofdb";
+    try {
+      await waitForReady(nUrl, 60_000);
+      const nPool = new pg.Pool({ connectionString: nUrl });
+      await applyMigrations(nPool);
+      // Remove the 046 ledger entry (simulate never-applied)
+      await nPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
+      // Manually drop all 046 objects so the DB is in pre-046 state
+      // (but we can't use the rollback since it would reject... use direct drops)
+      await nPool.query("DROP FUNCTION IF EXISTS gitwire_policy.approve_policy_change_request(uuid, bigint, uuid)");
+      await nPool.query("DROP FUNCTION IF EXISTS gitwire_policy.evaluate_approval_sufficiency(uuid)");
+      await nPool.query("DROP FUNCTION IF EXISTS gitwire_policy.expire_policy_approval(uuid, bigint, uuid)");
+      await nPool.query("DROP FUNCTION IF EXISTS gitwire_policy.revoke_policy_approval(uuid, bigint, uuid, text)");
+      await nPool.query("DROP FUNCTION IF EXISTS gitwire_policy.record_policy_approval(uuid, uuid, uuid)");
+      await nPool.query("DROP FUNCTION IF EXISTS gitwire_policy.create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer)");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approvals DROP CONSTRAINT IF EXISTS pa_expires_check");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approvals DROP CONSTRAINT IF EXISTS pa_risk_enum_check");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP CONSTRAINT IF EXISTS par_scope_revision_unique");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP CONSTRAINT IF EXISTS par_ttl_positive");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP CONSTRAINT IF EXISTS par_rule_revision_check");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP CONSTRAINT IF EXISTS par_required_count_min");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP CONSTRAINT IF EXISTS par_risk_enum_check");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP CONSTRAINT IF EXISTS par_assurance_check");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP CONSTRAINT IF EXISTS par_step_up_check");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP CONSTRAINT IF EXISTS par_self_approval_check");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approvals DROP COLUMN IF EXISTS expires_at");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP COLUMN IF EXISTS approval_ttl_seconds");
+      await nPool.query("ALTER TABLE gitwire_policy.policy_approval_rules DROP COLUMN IF EXISTS rule_revision");
+      await nPool.query("REVOKE SELECT, INSERT ON gitwire_policy.policy_approval_rules FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT, INSERT ON gitwire_policy.policy_approvals FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT, INSERT ON gitwire_policy.policy_approval_lifecycle FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT ON gitwire_policy.policy_validation_evidence FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT ON gitwire_policy.policy_simulation_evidence FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT ON gitwire_policy.policy_transition_events FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT ON gitwire_auth.auth_principal_roles FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT ON gitwire_auth.auth_roles FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT ON gitwire_auth.auth_principals FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE USAGE ON SCHEMA gitwire_auth FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT (github_id, installation_id, full_name, owner, name) ON public.repositories FROM gitwire_policy_fn_owner");
+      await nPool.query("REVOKE SELECT (github_id, account_login) ON public.installations FROM gitwire_policy_fn_owner");
+      // Now the DB is in pre-046 state with no 046 ledger entry. The rollback must REJECT.
+      let preconditionRejected = false;
+      try { await nPool.query(rollback046); }
+      catch (e) { preconditionRejected = e.message.includes("precondition failed") || e.message.includes("not recorded"); }
+      check("provenance rollback: no 046 ledger → rollback rejects (precondition)", preconditionRejected);
+      await nPool.end();
+    } finally { try { docker("rm", "-f", nCid); } catch {} }
   }
 
   // ═══ Phase 21: CASCADE check ════════════════════════════════════════
