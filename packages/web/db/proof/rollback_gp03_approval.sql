@@ -1,16 +1,64 @@
 -- Exact rollback for GP-03 migration 046.
 -- Drops only what 046 added. Preserves all GP-01/GP-02 grants and functions.
 -- No CASCADE.
+--
+-- PARTIAL-STATE SAFE: if 046 applied only partially (e.g. a collision aborted
+-- after the schema ALTERs but before all functions were created), the function
+-- REVOKEs are guarded so they don't fail on non-existent functions. The DROP
+-- FUNCTION IF EXISTS statements are inherently safe. This makes the rollback
+-- usable both for full and partial 046 application.
 
 SET search_path = gitwire_policy, pg_catalog;
 
--- Revoke EXECUTE from gitwire_app
-REVOKE EXECUTE ON FUNCTION approve_policy_change_request(uuid, bigint, uuid) FROM gitwire_app;
-REVOKE EXECUTE ON FUNCTION evaluate_approval_sufficiency(uuid) FROM gitwire_app;
-REVOKE EXECUTE ON FUNCTION expire_policy_approval(uuid, bigint, uuid) FROM gitwire_app;
-REVOKE EXECUTE ON FUNCTION revoke_policy_approval(uuid, bigint, uuid, text) FROM gitwire_app;
-REVOKE EXECUTE ON FUNCTION record_policy_approval(uuid, uuid, uuid) FROM gitwire_app;
-REVOKE EXECUTE ON FUNCTION create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer) FROM gitwire_app;
+-- Revoke EXECUTE from gitwire_app, guarding against non-existent functions
+-- (partial 046 application may have created only some functions).
+DO $$
+DECLARE
+  fn_oid oid;
+BEGIN
+  -- approve_policy_change_request(uuid, bigint, uuid)
+  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+    WHERE n.nspname='gitwire_policy' AND p.proname='approve_policy_change_request'
+    AND pg_get_function_identity_arguments(p.oid)='uuid, bigint, uuid';
+  IF fn_oid IS NOT NULL THEN
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.approve_policy_change_request(uuid, bigint, uuid) FROM gitwire_app';
+  END IF;
+  -- evaluate_approval_sufficiency(uuid)
+  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+    WHERE n.nspname='gitwire_policy' AND p.proname='evaluate_approval_sufficiency'
+    AND pg_get_function_identity_arguments(p.oid)='uuid';
+  IF fn_oid IS NOT NULL THEN
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.evaluate_approval_sufficiency(uuid) FROM gitwire_app';
+  END IF;
+  -- expire_policy_approval(uuid, bigint, uuid)
+  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+    WHERE n.nspname='gitwire_policy' AND p.proname='expire_policy_approval'
+    AND pg_get_function_identity_arguments(p.oid)='uuid, bigint, uuid';
+  IF fn_oid IS NOT NULL THEN
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.expire_policy_approval(uuid, bigint, uuid) FROM gitwire_app';
+  END IF;
+  -- revoke_policy_approval(uuid, bigint, uuid, text)
+  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+    WHERE n.nspname='gitwire_policy' AND p.proname='revoke_policy_approval'
+    AND pg_get_function_identity_arguments(p.oid)='uuid, bigint, uuid, text';
+  IF fn_oid IS NOT NULL THEN
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.revoke_policy_approval(uuid, bigint, uuid, text) FROM gitwire_app';
+  END IF;
+  -- record_policy_approval(uuid, uuid, uuid)
+  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+    WHERE n.nspname='gitwire_policy' AND p.proname='record_policy_approval'
+    AND pg_get_function_identity_arguments(p.oid)='uuid, uuid, uuid';
+  IF fn_oid IS NOT NULL THEN
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.record_policy_approval(uuid, uuid, uuid) FROM gitwire_app';
+  END IF;
+  -- create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer)
+  SELECT p.oid INTO fn_oid FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+    WHERE n.nspname='gitwire_policy' AND p.proname='create_policy_approval_rule'
+    AND pg_get_function_identity_arguments(p.oid)='text, text, text, text, text, integer, jsonb, uuid, integer';
+  IF fn_oid IS NOT NULL THEN
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION gitwire_policy.create_policy_approval_rule(text, text, text, text, text, integer, jsonb, uuid, integer) FROM gitwire_app';
+  END IF;
+END $$;
 
 -- Drop SECURITY DEFINER functions
 DROP FUNCTION IF EXISTS approve_policy_change_request(uuid, bigint, uuid);

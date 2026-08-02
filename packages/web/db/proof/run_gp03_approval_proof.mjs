@@ -1659,20 +1659,20 @@ try {
           // transaction, but earlier 046 statements (ALTERs, grants) committed in
           // prior transactions within the same applyMigrations call.
         }
-        // Run the rollback to restore pre-046 baseline. The rollback script assumes
-        // full 046 state, but the collision left partial state (some functions don't
-        // exist). Execute each statement separately, tolerating errors from missing
-        // objects (the DROP IF EXISTS handles functions; REVOKE may fail on non-existent
-        // functions — those are already absent so the end state is correct).
-        const rollbackStmts = rollback046.split(";").map(s => s.trim()).filter(s => s && !s.startsWith("--"));
-        for (const stmt of rollbackStmts) {
-          try { await dPool.query(stmt); } catch { /* tolerate missing-object errors */ }
+        // Run the EXACT rollback file through the normal SQL runner, with NO error
+        // suppression. The rollback artifact must be safe for partial 046 state
+        // (the guarded REVOKE DO block handles non-existent functions). If the
+        // rollback fails, the proof fails — no tolerated exceptions.
+        let rollbackSucceeded = true;
+        let rollbackErr = "";
+        try {
+          await dPool.query(rollback046);
+        } catch (e) {
+          rollbackSucceeded = false;
+          rollbackErr = e.message.slice(0, 80);
         }
-        // Explicitly drop the fixture function if it survived the rollback (the
-        // rollback's DROP IF EXISTS targets the 046 signature; the fixture has the
-        // same signature but may survive if the tolerant splitting missed it).
-        try { await dPool.query("DROP FUNCTION IF EXISTS gitwire_policy.record_policy_approval(uuid, uuid, uuid)"); } catch {}
-        // Snapshot again and compare EXACTLY.
+        check("baseline restoration (" + label + "): rollback completed successfully (no errors)", rollbackSucceeded, "err=" + rollbackErr);
+        // Take the post-rollback snapshot IMMEDIATELY — before any manual cleanup.
         const { rows: postRows } = await dPool.query(snapshotSql);
         const postSnapshot = postRows.map(r => r.item).sort().join("\n");
         const exactMatch = preSnapshot === postSnapshot;
@@ -1682,6 +1682,42 @@ try {
       } finally {
         try { docker("rm", "-f", dCid); } catch {}
       }
+    }
+
+    // Mutation-sensitive gate: prove the OLD rollback (unconditional REVOKE without
+    // the guarded DO block) FAILS on partial 046 state. Construct a scenario where
+    // only the schema ALTERs committed (no functions), then run an old-style
+    // unconditional REVOKE — it must fail because the function doesn't exist.
+    const mPort = await pickPort();
+    const mName = "gp03-mut-rollback-" + mPort;
+    const mCid = docker("run", "-d", "--rm", "--name", mName, "-p", "127.0.0.1:" + mPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+    const mUrl = "postgresql://proof:proof-only@127.0.0.1:" + mPort + "/proofdb";
+    try {
+      await waitForReady(mUrl, 60_000);
+      const mPool = new pg.Pool({ connectionString: mUrl });
+      await applyMigrations(mPool);
+      // Simulate partial 046: drop all 046 functions (as if only schema ALTERs ran)
+      await mPool.query("DELETE FROM schema_migrations WHERE version = '046_gp03_approval_functions.sql'");
+      await mPool.query(rollback046); // clean pre-046 using the NEW safe rollback
+      // Re-apply just the schema portion of 046 (columns + constraints + grants, no functions)
+      const mig046Content = await readFile(join(MIGRATIONS_DIR, "046_gp03_approval_functions.sql"), "utf8");
+      const schemaOnly = mig046Content.split("CREATE FUNCTION")[0]; // everything before the first function
+      await mPool.query(schemaOnly);
+      // Now run an OLD-STYLE unconditional REVOKE (no guard) — must FAIL
+      let oldRevokeFailed = false;
+      try {
+        await mPool.query("REVOKE EXECUTE ON FUNCTION gitwire_policy.approve_policy_change_request(uuid, bigint, uuid) FROM gitwire_app");
+      } catch (e) {
+        oldRevokeFailed = /does not exist/i.test(e.message);
+      }
+      check("mutation gate: old-style unconditional REVOKE fails on partial 046 (no function)", oldRevokeFailed);
+      // And the NEW guarded rollback succeeds on the same partial state
+      let newRollbackOk = true;
+      try { await mPool.query(rollback046); } catch { newRollbackOk = false; }
+      check("mutation gate: new guarded rollback succeeds on partial 046 state", newRollbackOk);
+      await mPool.end();
+    } finally {
+      try { docker("rm", "-f", mCid); } catch {}
     }
   }
 
