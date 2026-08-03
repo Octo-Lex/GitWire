@@ -1837,7 +1837,7 @@ try {
       ["expire_policy_approval", "(uuid, bigint, uuid)", "(p_approval_id uuid, p_expected_lifecycle_revision bigint, p_actor_principal_id uuid)", "RETURNS void"],
       ["revoke_policy_approval", "(uuid, bigint, uuid, text)", "(p_approval_id uuid, p_expected_lifecycle_revision bigint, p_actor_principal_id uuid, p_reason_code text)", "RETURNS void"],
       ["record_policy_approval", "(uuid, uuid, uuid)", "(p_change_request_id uuid, p_approval_rule_id uuid, p_approver_principal_id uuid)", "RETURNS uuid"],
-      ["create_policy_approval_rule", "(text, text, text, text, text, integer, jsonb, uuid, integer)", "(p_rule_version text, p_policy_family text, p_resource_scope_type text, p_resource_scope_id text, p_risk_classification text, p_required_count integer, p_required_roles jsonb, p_actor_principal_id uuid, p_approval_ttl_seconds integer)", "RETURNS uuid"],
+      ["create_policy_approval_rule", "(text, text, text, text, text, integer, jsonb, uuid, integer)", "(p_rule_version text, p_policy_family text, p_resource_scope_type text, p_resource_scope_id text, p_risk_classification text, p_required_count integer, p_required_roles jsonb, p_actor_principal_id uuid, p_approval_ttl_seconds integer DEFAULT NULL)", "RETURNS uuid"],
     ];
     for (const [fnName, fnTypeArgs, fnNamedArgs, fnReturn] of gp03FnDefs) {
       const bPort = await pickPort();
@@ -1856,11 +1856,54 @@ try {
         await bPool.query("ALTER FUNCTION gitwire_policy." + fnName + fnTypeArgs + " OWNER TO gitwire_policy_fn_owner");
         await bPool.query("REVOKE ALL ON FUNCTION gitwire_policy." + fnName + fnTypeArgs + " FROM PUBLIC");
         await bPool.query("GRANT EXECUTE ON FUNCTION gitwire_policy." + fnName + fnTypeArgs + " TO gitwire_app");
-        // Verify identity args, ACL, owner, etc. match the recorded provenance
-        // (confirming only prosrc_hash differs)
-        const { rows: [curId] } = await bPool.query("SELECT pg_get_function_identity_arguments(p.oid) AS args FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='" + fnName + "'");
-        const { rows: [provId] } = await bPool.query("SELECT identity_args FROM gitwire_policy.gp03_function_provenance WHERE proname='" + fnName + "'");
-        check("modified body (" + fnName + "): identity args unchanged", curId.args === provId.identity_args, "cur=" + curId.args + " prov=" + provId.identity_args);
+        // Compute the SAME canonical provenance tuple used by the rollback, then
+        // assert EVERY field matches the stored provenance EXCEPT prosrc_hash.
+        // Run SET search_path separately to match the migration's recording context
+        // (so pg_get_function_result resolves return types identically).
+        await bPool.query("SET search_path = gitwire_policy, pg_catalog");
+        const { rows: [cur] } = await bPool.query(`
+          SELECT pg_get_function_identity_arguments(p.oid) AS identity_args,
+                 pg_get_function_result(p.oid) AS ret_type,
+                 l.lanname AS lang_name,
+                 pg_get_userbyid(p.proowner) AS owner_name,
+                 p.prosecdef,
+                 COALESCE(array_to_string(p.proconfig,','),'') AS proconfig,
+                 encode(public.digest(p.prosrc, 'sha256'), 'hex') AS prosrc_hash
+          FROM pg_proc p
+          JOIN pg_namespace n ON p.pronamespace = n.oid
+          JOIN pg_language l ON p.prolang = l.oid
+          WHERE n.nspname = 'gitwire_policy' AND p.proname = $1
+        `, [fnName]);
+        await bPool.query("RESET search_path");
+        const { rows: [prov] } = await bPool.query("SELECT * FROM gitwire_policy.gp03_function_provenance WHERE proname = $1", [fnName]);
+        // Assert all non-body fields match exactly
+        check("modified body (" + fnName + "): identity_args match", cur.identity_args === prov.identity_args, "cur=" + cur.identity_args);
+        check("modified body (" + fnName + "): ret_type match", cur.ret_type === prov.ret_type, "cur=" + cur.ret_type);
+        check("modified body (" + fnName + "): lang_name match", cur.lang_name === prov.lang_name);
+        check("modified body (" + fnName + "): owner_name match", cur.owner_name === prov.owner_name);
+        check("modified body (" + fnName + "): prosecdef match", cur.prosecdef === prov.prosecdef);
+        check("modified body (" + fnName + "): proconfig match", cur.proconfig === prov.proconfig);
+        // Compute canonical ACL the same way rollback does (with PUBLIC/OID-0 via LEFT JOIN)
+        const { rows: [aclRow] } = await bPool.query(`
+          SELECT COALESCE(string_agg(
+                   CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE g1.rolname END
+                   || '=' || a.privilege_type || '/' ||
+                   CASE WHEN a.grantor = 0 THEN 'PUBLIC' ELSE g2.rolname END
+                   || '(' || CASE WHEN a.is_grantable THEN 't' ELSE 'f' END || ')',
+                   ',' ORDER BY
+                   CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE g1.rolname END,
+                   a.privilege_type,
+                   CASE WHEN a.grantor = 0 THEN 'PUBLIC' ELSE g2.rolname END), 'NULL') AS acl_canonical
+          FROM pg_proc p
+          JOIN pg_namespace n ON p.pronamespace = n.oid
+          CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, '{}'::aclitem[])) AS a
+          LEFT JOIN pg_roles g1 ON g1.oid = a.grantee
+          LEFT JOIN pg_roles g2 ON g2.oid = a.grantor
+          WHERE n.nspname = 'gitwire_policy' AND p.proname = $1
+        `, [fnName]);
+        check("modified body (" + fnName + "): acl_canonical match", aclRow.acl_canonical === prov.acl_canonical, "cur=" + aclRow.acl_canonical + " prov=" + prov.acl_canonical);
+        // Assert prosrc_hash DIFFERS (this is the sole mismatch)
+        check("modified body (" + fnName + "): prosrc_hash differs (sole mismatch)", cur.prosrc_hash !== prov.prosrc_hash, "cur=" + cur.prosrc_hash.slice(0,16) + " prov=" + prov.prosrc_hash.slice(0,16));
         // The rollback must ABORT specifically because prosrc_hash differs
         let bodyRollbackRejected = false;
         let rollbackErr = "";
