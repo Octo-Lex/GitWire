@@ -1825,19 +1825,21 @@ try {
       await nPool.end();
     } finally { try { docker("rm", "-f", nCid); } catch {} }
 
-    // --- Scenario 4: modified body (owner/settings preserved) → rollback rejects ---
-    // For each of the 6 functions: replace it with CREATE OR REPLACE keeping the
-    // same owner/settings but a different body. The rollback must abort (body hash
-    // mismatch) and preserve the function.
+    // --- Scenario 4: modified body (all other provenance fields preserved) → rollback rejects ---
+    // For each of the 6 functions: DROP + RECREATE with the EXACT original named
+    // parameter declarations, same return type, same SECURITY DEFINER, same
+    // search_path, and restore owner + ACL grants. Only the body source changes.
+    // This isolates prosrc_hash as the sole provenance mismatch — the rollback
+    // must reject specifically on the body hash, not on identity args or ACL.
     const gp03FnDefs = [
-      ["approve_policy_change_request", "(uuid, bigint, uuid)", "RETURNS gitwire_policy.policy_change_requests"],
-      ["evaluate_approval_sufficiency", "(uuid)", "RETURNS jsonb"],
-      ["expire_policy_approval", "(uuid, bigint, uuid)", "RETURNS void"],
-      ["revoke_policy_approval", "(uuid, bigint, uuid, text)", "RETURNS void"],
-      ["record_policy_approval", "(uuid, uuid, uuid)", "RETURNS uuid"],
-      ["create_policy_approval_rule", "(text, text, text, text, text, integer, jsonb, uuid, integer)", "RETURNS uuid"],
+      ["approve_policy_change_request", "(uuid, bigint, uuid)", "(p_change_request_id uuid, p_expected_state_revision bigint, p_actor_principal_id uuid)", "RETURNS gitwire_policy.policy_change_requests"],
+      ["evaluate_approval_sufficiency", "(uuid)", "(p_change_request_id uuid)", "RETURNS jsonb"],
+      ["expire_policy_approval", "(uuid, bigint, uuid)", "(p_approval_id uuid, p_expected_lifecycle_revision bigint, p_actor_principal_id uuid)", "RETURNS void"],
+      ["revoke_policy_approval", "(uuid, bigint, uuid, text)", "(p_approval_id uuid, p_expected_lifecycle_revision bigint, p_actor_principal_id uuid, p_reason_code text)", "RETURNS void"],
+      ["record_policy_approval", "(uuid, uuid, uuid)", "(p_change_request_id uuid, p_approval_rule_id uuid, p_approver_principal_id uuid)", "RETURNS uuid"],
+      ["create_policy_approval_rule", "(text, text, text, text, text, integer, jsonb, uuid, integer)", "(p_rule_version text, p_policy_family text, p_resource_scope_type text, p_resource_scope_id text, p_risk_classification text, p_required_count integer, p_required_roles jsonb, p_actor_principal_id uuid, p_approval_ttl_seconds integer)", "RETURNS uuid"],
     ];
-    for (const [fnName, fnArgs, fnReturn] of gp03FnDefs) {
+    for (const [fnName, fnTypeArgs, fnNamedArgs, fnReturn] of gp03FnDefs) {
       const bPort = await pickPort();
       const bName = "gp03-prov-body-" + fnName.slice(0, 8) + "-" + bPort;
       const bCid = docker("run", "-d", "--rm", "--name", bName, "-p", "127.0.0.1:" + bPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
@@ -1846,17 +1848,25 @@ try {
         await waitForReady(bUrl, 60_000);
         const bPool = new pg.Pool({ connectionString: bUrl });
         await applyMigrations(bPool);
-        // Modify the body: DROP + RECREATE with same signature but different body.
-        // (CREATE OR REPLACE cannot change parameter names.)
-        await bPool.query("DROP FUNCTION gitwire_policy." + fnName + fnArgs);
-        await bPool.query("CREATE FUNCTION gitwire_policy." + fnName + fnArgs + " " + fnReturn + " LANGUAGE plpgsql SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog AS $$ BEGIN RAISE EXCEPTION 'modified body'; END; $$");
-        await bPool.query("ALTER FUNCTION gitwire_policy." + fnName + fnArgs + " OWNER TO gitwire_policy_fn_owner");
-        // Restore the owner to fn_owner (CREATE OR REPLACE preserves the existing owner)
-        // The rollback must ABORT because the body hash doesn't match
+        // DROP + RECREATE with exact named params, same settings, different body only.
+        // DROP uses type-only signature; CREATE uses full named declaration.
+        await bPool.query("DROP FUNCTION gitwire_policy." + fnName + fnTypeArgs);
+        await bPool.query("CREATE FUNCTION gitwire_policy." + fnName + fnNamedArgs + " " + fnReturn + " LANGUAGE plpgsql SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog AS $$ BEGIN RAISE EXCEPTION 'modified body'; END; $$");
+        // Restore the exact 046 owner + ACL (fn_owner owner, REVOKE FROM PUBLIC, GRANT EXECUTE to gitwire_app)
+        await bPool.query("ALTER FUNCTION gitwire_policy." + fnName + fnTypeArgs + " OWNER TO gitwire_policy_fn_owner");
+        await bPool.query("REVOKE ALL ON FUNCTION gitwire_policy." + fnName + fnTypeArgs + " FROM PUBLIC");
+        await bPool.query("GRANT EXECUTE ON FUNCTION gitwire_policy." + fnName + fnTypeArgs + " TO gitwire_app");
+        // Verify identity args, ACL, owner, etc. match the recorded provenance
+        // (confirming only prosrc_hash differs)
+        const { rows: [curId] } = await bPool.query("SELECT pg_get_function_identity_arguments(p.oid) AS args FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='" + fnName + "'");
+        const { rows: [provId] } = await bPool.query("SELECT identity_args FROM gitwire_policy.gp03_function_provenance WHERE proname='" + fnName + "'");
+        check("modified body (" + fnName + "): identity args unchanged", curId.args === provId.identity_args, "cur=" + curId.args + " prov=" + provId.identity_args);
+        // The rollback must ABORT specifically because prosrc_hash differs
         let bodyRollbackRejected = false;
+        let rollbackErr = "";
         try { await bPool.query(rollback046); }
-        catch (e) { bodyRollbackRejected = e.message.includes("provenance mismatch") || e.message.includes("prosrc_hash"); }
-        check("provenance rollback: modified body (" + fnName + ") → rollback rejects", bodyRollbackRejected);
+        catch (e) { bodyRollbackRejected = e.message.includes("provenance mismatch"); rollbackErr = e.message.slice(0, 120); }
+        check("provenance rollback: modified body (" + fnName + ") → rollback rejects (prosrc_hash isolated)", bodyRollbackRejected, "err=" + rollbackErr);
         // The modified function must survive
         const { rows: [fnSurvived] } = await bPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='" + fnName + "'");
         check("provenance rollback: modified body (" + fnName + ") → function preserved", fnSurvived.n === 1, "count=" + fnSurvived.n);
@@ -1920,6 +1930,7 @@ try {
   check("migration no ADD COLUMN IF NOT EXISTS", !/ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i.test(migContent));
   check("migration no ADD CONSTRAINT IF NOT EXISTS", !/ADD\s+CONSTRAINT\s+IF\s+NOT\s+EXISTS/i.test(migContent));
   check("migration no DROP ... IF EXISTS", !/DROP\s+(COLUMN|CONSTRAINT|FUNCTION)\s+IF\s+EXISTS/i.test(migContent));
+  check("migration no CREATE TABLE IF NOT EXISTS", !/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS/i.test(migContent));
 
   await pool.end();
 } catch (e) {
