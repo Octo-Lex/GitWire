@@ -1,8 +1,9 @@
 // src/services/governedPolicyService.js
-// Governed Policy Authority — immutable policy versions and change-request state machine.
-// GP-02 (issue #98).
+// Governed Policy Authority — immutable policy versions, change-request state machine,
+// and approval rules with separation of duties.
+// GP-02 (issue #98) + GP-03 (issue #99).
 //
-// All writes go through SECURITY DEFINER functions (migration 045).
+// All writes go through SECURITY DEFINER functions (migrations 045 + 046).
 // The service layer provides the JS API and parameter validation.
 // No direct INSERT/UPDATE is used — gitwire_app has EXECUTE on the functions only.
 
@@ -175,6 +176,164 @@ export async function getVersions({ changeRequestId }) {
 export async function getTransitionEvents({ changeRequestId }) {
   const { rows } = await db.query(
     "SELECT * FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1 ORDER BY occurred_at ASC",
+    [changeRequestId]
+  );
+  return rows;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// GP-03: Approval rules, approvals, expiry, and separation of duties
+// All writes via SECURITY DEFINER functions (migration 046).
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Create an immutable approval rule.
+ * Calls create_policy_approval_rule() SECURITY DEFINER function.
+ * Hash computed inside DB. rule_revision serialized via advisory lock.
+ */
+export async function createApprovalRule({ ruleVersion, policyFamily, resourceScopeType, resourceScopeId, riskClassification, requiredCount, requiredRoles, principalId, approvalTtlSeconds }) {
+  if (!ruleVersion || !policyFamily || !resourceScopeType || !resourceScopeId || !riskClassification || !requiredCount || !requiredRoles || !principalId) {
+    throw new Error("All required parameters must be provided");
+  }
+
+  const { rows: [row] } = await db.query(
+    "SELECT gitwire_policy.create_policy_approval_rule($1, $2, $3, $4, $5, $6, $7, $8, $9) as id",
+    [ruleVersion, policyFamily, resourceScopeType, resourceScopeId, riskClassification, requiredCount, JSON.stringify(requiredRoles), principalId, approvalTtlSeconds ?? null]
+  );
+
+  const { rows: [fullRow] } = await db.query(
+    "SELECT * FROM gitwire_policy.policy_approval_rules WHERE id = $1",
+    [row.id]
+  );
+
+  logger.info({ ruleId: fullRow.id, policyFamily, riskClassification, principalId }, "Approval rule created");
+  return fullRow;
+}
+
+/**
+ * Record an approval for a change request.
+ * Calls record_policy_approval() SECURITY DEFINER function.
+ * Server derives all authority fields from trusted state.
+ */
+export async function recordApproval({ changeRequestId, approvalRuleId, principalId }) {
+  if (!changeRequestId || !approvalRuleId || !principalId) {
+    throw new Error("changeRequestId, approvalRuleId, and principalId are required");
+  }
+
+  const { rows: [row] } = await db.query(
+    "SELECT gitwire_policy.record_policy_approval($1, $2, $3) as id",
+    [changeRequestId, approvalRuleId, principalId]
+  );
+
+  const { rows: [fullRow] } = await db.query(
+    "SELECT * FROM gitwire_policy.policy_approvals WHERE id = $1",
+    [row.id]
+  );
+
+  logger.info({ approvalId: fullRow.id, changeRequestId, approvalRuleId, principalId }, "Approval recorded");
+  return fullRow;
+}
+
+/**
+ * Revoke an approval. CAS on lifecycle revision.
+ * Caller supplies the revision they observed — stale values map to 409.
+ */
+export async function revokeApproval({ approvalId, expectedLifecycleRevision, principalId, reason }) {
+  if (!approvalId || expectedLifecycleRevision === undefined || !principalId || !reason) {
+    throw new Error("approvalId, expectedLifecycleRevision, principalId, and reason are required");
+  }
+
+  await db.query(
+    "SELECT gitwire_policy.revoke_policy_approval($1, $2, $3, $4)",
+    [approvalId, expectedLifecycleRevision, principalId, reason]
+  );
+
+  logger.info({ approvalId, principalId, reason }, "Approval revoked");
+  return { revoked: true, approvalId };
+}
+
+/**
+ * Expire an approval past its TTL. CAS on lifecycle revision.
+ * Caller supplies the revision they observed — stale values map to 409.
+ */
+export async function expireApproval({ approvalId, expectedLifecycleRevision, principalId }) {
+  if (!approvalId || expectedLifecycleRevision === undefined || !principalId) {
+    throw new Error("approvalId, expectedLifecycleRevision, and principalId are required");
+  }
+
+  await db.query(
+    "SELECT gitwire_policy.expire_policy_approval($1, $2, $3)",
+    [approvalId, expectedLifecycleRevision, principalId]
+  );
+
+  logger.info({ approvalId, principalId }, "Approval expired");
+  return { expired: true, approvalId };
+}
+
+/**
+ * Evaluate approval sufficiency for a change request.
+ * Advisory read-only evaluation via SECURITY DEFINER function.
+ */
+export async function evaluateApprovals({ changeRequestId }) {
+  if (!changeRequestId) throw new Error("changeRequestId is required");
+
+  const { rows: [row] } = await db.query(
+    "SELECT gitwire_policy.evaluate_approval_sufficiency($1) as result",
+    [changeRequestId]
+  );
+
+  return row.result;
+}
+
+/**
+ * Approve a change request (awaiting_approval → approved).
+ * Atomic sufficiency evaluation + CAS transition.
+ * Caller supplies expectedStateRevision — stale values map to 409.
+ */
+export async function approveChangeRequest({ changeRequestId, expectedStateRevision, principalId }) {
+  if (!changeRequestId || expectedStateRevision === undefined || !principalId) {
+    throw new Error("changeRequestId, expectedStateRevision, and principalId are required");
+  }
+
+  const { rows: [result] } = await db.query(
+    "SELECT * FROM gitwire_policy.approve_policy_change_request($1, $2, $3)",
+    [changeRequestId, expectedStateRevision, principalId]
+  );
+
+  logger.info({ changeRequestId, principalId, state: result.state }, "Change request approved");
+  return result;
+}
+
+// ── Read helpers for GP-03 ────────────────────────────────────────────────
+
+export async function getApprovalRules({ resourceScopeType, resourceScopeId, policyFamily } = {}) {
+  const conditions = [];
+  const params = [];
+  let idx = 1;
+  if (resourceScopeType) { params.push(resourceScopeType); conditions.push("resource_scope_type = $" + idx++); }
+  if (resourceScopeId) { params.push(resourceScopeId); conditions.push("resource_scope_id = $" + idx++); }
+  if (policyFamily) { params.push(policyFamily); conditions.push("policy_family = $" + idx++); }
+  const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+  const { rows } = await db.query(
+    "SELECT * FROM gitwire_policy.policy_approval_rules " + where + " ORDER BY rule_revision DESC",
+    params
+  );
+  return rows;
+}
+
+export async function getApprovals({ changeRequestId }) {
+  if (!changeRequestId) throw new Error("changeRequestId is required");
+  const { rows } = await db.query(
+    `SELECT pa.*,
+       (SELECT pal.to_status FROM gitwire_policy.policy_approval_lifecycle pal
+        WHERE pal.approval_id = pa.id
+          AND pal.lifecycle_revision = (SELECT max(lifecycle_revision) FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = pa.id)
+       ) as latest_status,
+       (SELECT max(lifecycle_revision) FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = pa.id) as latest_revision
+     FROM gitwire_policy.policy_approvals pa
+     JOIN gitwire_policy.policy_versions v ON pa.version_id = v.id
+     WHERE v.change_request_id = $1
+     ORDER BY pa.created_at ASC`,
     [changeRequestId]
   );
   return rows;

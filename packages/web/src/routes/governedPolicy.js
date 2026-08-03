@@ -17,6 +17,14 @@ import {
   listChangeRequests,
   getVersions,
   getTransitionEvents,
+  createApprovalRule,
+  recordApproval,
+  revokeApproval,
+  expireApproval,
+  evaluateApprovals,
+  approveChangeRequest,
+  getApprovalRules,
+  getApprovals,
 } from "../services/governedPolicyService.js";
 
 export const governedPolicyRouter = Router();
@@ -168,5 +176,212 @@ governedPolicyRouter.post("/change-requests/:id/submit", async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: "Failed to submit" });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// GP-03: Approval rules, approvals, expiry, separation of duties
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/policy/approval-rules
+ * Create an immutable approval rule.
+ */
+governedPolicyRouter.post("/approval-rules", async (req, res) => {
+  try {
+    const { ruleVersion, policyFamily, resourceScopeType, resourceScopeId, riskClassification, requiredCount, requiredRoles, approvalTtlSeconds } = req.body;
+    if (!ruleVersion || !policyFamily || !resourceScopeType || !resourceScopeId || !riskClassification || !requiredCount || !requiredRoles) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_approval_rule:create",
+      resource: { type: "policy_definition" },
+    });
+    const rule = await createApprovalRule({ ruleVersion, policyFamily, resourceScopeType, resourceScopeId, riskClassification, requiredCount, requiredRoles, principalId, approvalTtlSeconds });
+    res.status(201).json(rule);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to create approval rule");
+    if (err.message.includes("required") || err.message.includes("must") || err.message.includes("fleet") || err.message.includes("admin") || err.message.includes("role") || err.message.includes("active")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to create approval rule" });
+  }
+});
+
+/**
+ * GET /api/policy/approval-rules
+ * List approval rules with optional filters.
+ */
+governedPolicyRouter.get("/approval-rules", async (req, res) => {
+  try {
+    const { resourceScopeType, resourceScopeId, policyFamily } = req.query;
+    await observeAuthorize(req, {
+      permission: "policy_approval_rule:read",
+      resource: { type: "policy_definition" },
+    });
+    const rules = await getApprovalRules({ resourceScopeType, resourceScopeId, policyFamily });
+    res.json({ data: rules });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list approval rules");
+    res.status(500).json({ error: "Failed to list approval rules" });
+  }
+});
+
+/**
+ * POST /api/policy/change-requests/:id/approvals
+ * Record an approval. Server derives all authority fields.
+ */
+governedPolicyRouter.post("/change-requests/:id/approvals", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { approvalRuleId } = req.body;
+    if (!approvalRuleId) {
+      return res.status(400).json({ error: "approvalRuleId is required" });
+    }
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_approval:create",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const approval = await recordApproval({ changeRequestId: id, approvalRuleId, principalId });
+    res.status(201).json(approval);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to record approval");
+    if (err.message.includes("self-approval") || err.message.includes("not found") || err.message.includes("awaiting_approval") || err.message.includes("active") || err.message.includes("duplicate") || err.message.includes("role") || err.message.includes("required") || err.message.includes("rule") || err.message.includes("context")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to record approval" });
+  }
+});
+
+/**
+ * GET /api/policy/change-requests/:id/approvals
+ * List approvals for a change request with latest lifecycle status.
+ */
+governedPolicyRouter.get("/change-requests/:id/approvals", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await observeAuthorize(req, {
+      permission: "policy_approval:read",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const approvals = await getApprovals({ changeRequestId: id });
+    res.json({ data: approvals });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list approvals");
+    res.status(500).json({ error: "Failed to list approvals" });
+  }
+});
+
+/**
+ * GET /api/policy/change-requests/:id/approvals/evaluate
+ * Advisory sufficiency evaluation.
+ */
+governedPolicyRouter.get("/change-requests/:id/approvals/evaluate", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await observeAuthorize(req, {
+      permission: "policy_approval:evaluate",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const result = await evaluateApprovals({ changeRequestId: id });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to evaluate approvals");
+    if (err.message.includes("not found") || err.message.includes("no selected") || err.message.includes("context")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to evaluate approvals" });
+  }
+});
+
+/**
+ * POST /api/policy/change-requests/:id/approve
+ * Atomic sufficiency evaluation + CAS transition awaiting_approval → approved.
+ */
+governedPolicyRouter.post("/change-requests/:id/approve", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { expectedStateRevision } = req.body;
+    if (expectedStateRevision === undefined) {
+      return res.status(400).json({ error: "expectedStateRevision is required" });
+    }
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_change_request:approve",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const cr = await approveChangeRequest({ changeRequestId: id, expectedStateRevision: Number(expectedStateRevision), principalId });
+    res.json(cr);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to approve change request");
+    if (err.message.includes("CAS failed") || err.message.includes("revision mismatch")) {
+      return res.status(409).json({ error: "Conflict: change request was modified concurrently" });
+    }
+    if (err.message.includes("insufficient") || err.message.includes("not found") || err.message.includes("awaiting_approval") || err.message.includes("admin") || err.message.includes("rule")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to approve" });
+  }
+});
+
+/**
+ * POST /api/policy/approvals/:id/revoke
+ * Revoke an approval. CAS on lifecycle revision.
+ */
+governedPolicyRouter.post("/approvals/:id/revoke", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { expectedLifecycleRevision, reason } = req.body;
+    if (expectedLifecycleRevision === undefined || !reason) {
+      return res.status(400).json({ error: "expectedLifecycleRevision and reason are required" });
+    }
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_approval:revoke",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const result = await revokeApproval({ approvalId: id, expectedLifecycleRevision: Number(expectedLifecycleRevision), principalId, reason });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to revoke approval");
+    if (err.message.includes("CAS failed") || err.message.includes("revision mismatch")) {
+      return res.status(409).json({ error: "Conflict: approval was modified concurrently" });
+    }
+    if (err.message.includes("not found") || err.message.includes("active") || err.message.includes("approver") || err.message.includes("admin") || err.message.includes("required") || err.message.includes("empty")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to revoke" });
+  }
+});
+
+/**
+ * POST /api/policy/approvals/:id/expire
+ * Expire an approval past its TTL. CAS on lifecycle revision.
+ */
+governedPolicyRouter.post("/approvals/:id/expire", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { expectedLifecycleRevision } = req.body;
+    if (expectedLifecycleRevision === undefined) {
+      return res.status(400).json({ error: "expectedLifecycleRevision is required" });
+    }
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_approval:revoke",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const result = await expireApproval({ approvalId: id, expectedLifecycleRevision: Number(expectedLifecycleRevision), principalId });
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to expire approval");
+    if (err.message.includes("CAS failed") || err.message.includes("revision mismatch")) {
+      return res.status(409).json({ error: "Conflict: approval was modified concurrently" });
+    }
+    if (err.message.includes("not found") || err.message.includes("active") || err.message.includes("admin") || err.message.includes("expired") || err.message.includes("required")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to expire" });
   }
 });
