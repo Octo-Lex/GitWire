@@ -83,7 +83,7 @@ BEGIN
     WHERE fp.proname IS NULL OR e.proname IS NULL
   ) THEN
     RAISE EXCEPTION
-      'rollback_gp03_approval: provenance rows do not match the exact six GP-03 signatures';
+      'rollback_gp03_approval: provenance mismatch — rows do not match the exact six GP-03 signatures';
   END IF;
 
   FOR v_fn IN
