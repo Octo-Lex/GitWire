@@ -384,6 +384,207 @@ try {
     check("SECURITY DEFINER exact 11-signature set", JSON.stringify(secDefRows.map(r=>r.sig)) === JSON.stringify(expectedSigs), "found=" + JSON.stringify(secDefRows.map(r=>r.sig)));
   }
 
+  // Helper: recompute the evidence hash for a jsonb envelope through PostgreSQL's
+  // OWN canonical_jsonb + digest. NEVER a JS port — PG is the authoritative
+  // canonicalization contract. Returns 'sha256:<64 hex>'.
+  // canonical_jsonb lives in gitwire_policy; digest lives in public (pgcrypto).
+  // Use a dedicated client so the search_path setting is isolated per call and
+  // does not leak into other phases.
+  async function recomputeHash(envelopeJsonb) {
+    const c = await pool.connect();
+    try {
+      await c.query("SET search_path = gitwire_policy, public, pg_catalog");
+      const { rows: [{ recomputed }] } = await c.query({
+        text: `SELECT 'sha256:' || pg_catalog.encode(public.digest(pg_catalog.convert_to(canonical_jsonb($1::jsonb), 'UTF8'), 'sha256'), 'hex') AS recomputed`,
+        values: [JSON.stringify(envelopeJsonb)],
+      });
+      return recomputed;
+    } finally {
+      await c.query("RESET search_path");
+      c.release();
+    }
+  }
+
+  // ═══ Phase 20: Independent hash recomputation (PG-authoritative) ════════
+  // For both evidence tables: read the persisted envelope (result column) and
+  // stored evidence_hash, recompute the digest through canonical_jsonb+digest
+  // WITHOUT trusting the stored hash, assert exact equality, and assert the
+  // canonical sha256:<64 hex> format.
+  console.log("\n=== Phase 20: Independent hash recomputation (PG canonical_jsonb) ===");
+  {
+    const { crId, vId } = await createSubmittedCR(authorPid);
+    const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+    const result = await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), "gitwire-rules-v1", JSON.stringify(simResultOk), "gitwire-sim-v1", authorPid]);
+    const storedValHash = result.rows[0].out_validation_evidence_hash;
+    const storedSimHash = result.rows[0].out_simulation_evidence_hash;
+
+    // Validation evidence
+    const { rows: [storedVal] } = await pool.query("SELECT result, evidence_hash FROM gitwire_policy.policy_validation_evidence WHERE version_id = $1", [vId]);
+    const recomputedVal = await recomputeHash(storedVal.result);
+    check("validation: recomputed hash === stored hash", recomputedVal === storedVal.evidence_hash, "recomputed=" + recomputedVal + " stored=" + storedVal.evidence_hash);
+    check("validation: recomputed hash === finalize output", recomputedVal === storedValHash);
+    check("validation: hash format sha256:<64 hex>", /^sha256:[0-9a-f]{64}$/.test(recomputedVal));
+
+    // Simulation evidence
+    const { rows: [storedSim] } = await pool.query("SELECT result, evidence_hash FROM gitwire_policy.policy_simulation_evidence WHERE version_id = $1", [vId]);
+    const recomputedSim = await recomputeHash(storedSim.result);
+    check("simulation: recomputed hash === stored hash", recomputedSim === storedSim.evidence_hash, "recomputed=" + recomputedSim + " stored=" + storedSim.evidence_hash);
+    check("simulation: recomputed hash === finalize output", recomputedSim === storedSimHash);
+    check("simulation: hash format sha256:<64 hex>", /^sha256:[0-9a-f]{64}$/.test(recomputedSim));
+  }
+
+  // ═══ Phase 21: Per-field mutation sensitivity ═══════════════════════════
+  // Mutate one bound field at a time, recompute through the PG expression, and
+  // prove the hash differs from the original. JS only constructs the mutated
+  // JSON value; PG canonicalizes+hashes it. Each mutation produces a genuinely
+  // different canonical JSON value (no key-reorder-only mutations).
+  console.log("\n=== Phase 21: Per-field mutation sensitivity ===");
+  {
+    const { crId, vId } = await createSubmittedCR(authorPid);
+    const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+    await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), "gitwire-rules-v1", JSON.stringify(simResultOk), "gitwire-sim-v1", authorPid]);
+
+    // --- Validation envelope: 5 fields ---
+    const { rows: [storedVal] } = await pool.query("SELECT result FROM gitwire_policy.policy_validation_evidence WHERE version_id = $1", [vId]);
+    const valOriginalHash = await recomputeHash(storedVal.result);
+    const valMutations = [
+      { field: "schema_version", mutated: { ...storedVal.result, schema_version: "gp04.validation.v2" } },
+      { field: "version_id", mutated: { ...storedVal.result, version_id: "00000000-0000-0000-0000-000000000001" } },
+      { field: "content_hash", mutated: { ...storedVal.result, content_hash: "sha256:" + "f".repeat(64) } },
+      { field: "validator_version", mutated: { ...storedVal.result, validator_version: "gitwire-rules-v9" } },
+      { field: "result", mutated: { ...storedVal.result, result: { ...storedVal.result.result, valid: false, errors: ["mutated"] } } },
+    ];
+    for (const m of valMutations) {
+      const mutatedHash = await recomputeHash(m.mutated);
+      check("validation mutation [" + m.field + "] changes hash", mutatedHash !== valOriginalHash);
+    }
+
+    // --- Simulation envelope: 10 fields (nested paths for risk.*) ---
+    const { rows: [storedSim] } = await pool.query("SELECT result FROM gitwire_policy.policy_simulation_evidence WHERE version_id = $1", [vId]);
+    const simOriginalHash = await recomputeHash(storedSim.result);
+    const simMutations = [
+      { field: "schema_version", mutated: { ...storedSim.result, schema_version: "gp04.simulation.v2" } },
+      { field: "version_id", mutated: { ...storedSim.result, version_id: "00000000-0000-0000-0000-000000000002" } },
+      { field: "content_hash", mutated: { ...storedSim.result, content_hash: "sha256:" + "e".repeat(64) } },
+      { field: "evaluator_version", mutated: { ...storedSim.result, evaluator_version: "gitwire-sim-v9" } },
+      { field: "resource_scope", mutated: { ...storedSim.result, resource_scope: { type: "organization", id: "mutated" } } },
+      { field: "simulation_profile", mutated: { ...storedSim.result, simulation_profile: { version: "sim-profile-v9" } } },
+      { field: "dataset_snapshot", mutated: { ...storedSim.result, dataset_snapshot: { ...storedSim.result.dataset_snapshot, upper_watermark: storedSim.result.dataset_snapshot.upper_watermark + 999 } } },
+      { field: "risk.classification", mutated: { ...storedSim.result, risk: { ...storedSim.result.risk, classification: "critical" } } },
+      { field: "risk.classifier_version", mutated: { ...storedSim.result, risk: { ...storedSim.result.risk, classifier_version: "classifier-v9" } } },
+      { field: "result", mutated: { ...storedSim.result, result: { ...storedSim.result.result, passed: false } } },
+    ];
+    for (const m of simMutations) {
+      const mutatedHash = await recomputeHash(m.mutated);
+      check("simulation mutation [" + m.field + "] changes hash", mutatedHash !== simOriginalHash);
+    }
+  }
+
+  // ═══ Phase 22: Request-update fault injection (BEFORE UPDATE) ═══════════
+  // Target-specific trigger on policy_change_requests that raises only when
+  // the fixture CR transitions submitted → GP-04 terminal state. Proves the
+  // UPDATE failure rolls back everything (state, revision, evidence, events).
+  console.log("\n=== Phase 22: Request-update fault injection ===");
+  {
+    const { crId } = await createSubmittedCR(authorPid);
+    const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+
+    // Snapshot all five persistent invariants BEFORE the faulted call.
+    const before = {
+      state: (await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state,
+      revision: Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state_revision),
+      valCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence")).rows[0].n,
+      simCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence")).rows[0].n,
+      evtCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE event_type IN ('evaluation_complete','validation_rejected','simulation_rejected')")).rows[0].n,
+    };
+
+    // Install target-specific BEFORE UPDATE trigger: raises only for this CR
+    // when transitioning out of 'submitted' (covers both awaiting_approval and
+    // rejected terminal states). Created by the superuser pool.
+    // crId is a trusted internally-generated UUID, safe to interpolate into DDL.
+    await pool.query("CREATE OR REPLACE FUNCTION gp04_fault_req_update() RETURNS trigger AS $$ BEGIN IF NEW.id = '" + crId + "'::uuid AND OLD.state = 'submitted' AND NEW.state IN ('awaiting_approval','rejected') THEN RAISE EXCEPTION 'injected fault: request update'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql");
+    await pool.query("DROP TRIGGER IF EXISTS gp04_fault_req ON gitwire_policy.policy_change_requests");
+    await pool.query("CREATE TRIGGER gp04_fault_req BEFORE UPDATE ON gitwire_policy.policy_change_requests FOR EACH ROW EXECUTE FUNCTION gp04_fault_req_update()");
+
+    let faultBlocked = false;
+    try {
+      await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), "gitwire-rules-v1", JSON.stringify(simResultOk), "gitwire-sim-v1", authorPid]);
+    } catch (e) { faultBlocked = e.message.includes("injected fault: request update"); }
+    check("request-update fault: exception raised", faultBlocked);
+
+    // Always clean up trigger + function.
+    await pool.query("DROP TRIGGER IF EXISTS gp04_fault_req ON gitwire_policy.policy_change_requests");
+    await pool.query("DROP FUNCTION IF EXISTS gp04_fault_req_update()");
+
+    // Assert exact equality with the BEFORE snapshot (all five invariants).
+    const after = {
+      state: (await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state,
+      revision: Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state_revision),
+      valCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence")).rows[0].n,
+      simCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence")).rows[0].n,
+      evtCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE event_type IN ('evaluation_complete','validation_rejected','simulation_rejected')")).rows[0].n,
+    };
+    check("request-update fault: state unchanged", after.state === before.state, "state=" + after.state);
+    check("request-update fault: revision unchanged", after.revision === before.revision);
+    check("request-update fault: validation evidence unchanged", after.valCount === before.valCount);
+    check("request-update fault: simulation evidence unchanged", after.simCount === before.simCount);
+    check("request-update fault: GP-04 events unchanged", after.evtCount === before.evtCount);
+  }
+
+  // ═══ Phase 23: Transition-event fault injection (BEFORE INSERT) ═════════
+  // Target-specific trigger on policy_transition_events for the fixture CR and
+  // GP-04 event types. Exercises both the success path (evaluation_complete)
+  // and a rejection path. Proves event-INSERT failure rolls back both evidence
+  // inserts, the request-state update, and the revision increment.
+  console.log("\n=== Phase 23: Transition-event fault injection ===");
+  for (const [scenarioName, valRes, simRes] of [
+    ["success → evaluation_complete", valResultOk, simResultOk],
+    ["validation rejected → validation_rejected", valResultBad, null],
+  ]) {
+    const { crId } = await createSubmittedCR(authorPid);
+    const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+
+    const before = {
+      state: (await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state,
+      revision: Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state_revision),
+      valCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence")).rows[0].n,
+      simCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence")).rows[0].n,
+      evtCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE event_type IN ('evaluation_complete','validation_rejected','simulation_rejected')")).rows[0].n,
+    };
+
+    // Target-specific BEFORE INSERT trigger: raises only for this CR's GP-04 events.
+    // crId is a trusted internally-generated UUID, safe to interpolate into DDL.
+    await pool.query("CREATE OR REPLACE FUNCTION gp04_fault_evt_insert() RETURNS trigger AS $$ BEGIN IF NEW.change_request_id = '" + crId + "'::uuid AND NEW.event_type IN ('evaluation_complete','validation_rejected','simulation_rejected') THEN RAISE EXCEPTION 'injected fault: event insert'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql");
+    await pool.query("DROP TRIGGER IF EXISTS gp04_fault_evt ON gitwire_policy.policy_transition_events");
+    await pool.query("CREATE TRIGGER gp04_fault_evt BEFORE INSERT ON gitwire_policy.policy_transition_events FOR EACH ROW EXECUTE FUNCTION gp04_fault_evt_insert()");
+
+    let faultBlocked = false;
+    try {
+      if (simRes) {
+        await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)", [crId, Number(crBefore.state_revision), JSON.stringify(valRes), "gitwire-rules-v1", JSON.stringify(simRes), "gitwire-sim-v1", authorPid]);
+      } else {
+        await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, NULL, NULL, $5)", [crId, Number(crBefore.state_revision), JSON.stringify(valRes), "gitwire-rules-v1", authorPid]);
+      }
+    } catch (e) { faultBlocked = e.message.includes("injected fault: event insert"); }
+    check("event-insert fault [" + scenarioName + "]: exception raised", faultBlocked);
+
+    await pool.query("DROP TRIGGER IF EXISTS gp04_fault_evt ON gitwire_policy.policy_transition_events");
+    await pool.query("DROP FUNCTION IF EXISTS gp04_fault_evt_insert()");
+
+    const after = {
+      state: (await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state,
+      revision: Number((await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state_revision),
+      valCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence")).rows[0].n,
+      simCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence")).rows[0].n,
+      evtCount: (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE event_type IN ('evaluation_complete','validation_rejected','simulation_rejected')")).rows[0].n,
+    };
+    check("event-insert fault [" + scenarioName + "]: state unchanged", after.state === before.state, "state=" + after.state);
+    check("event-insert fault [" + scenarioName + "]: revision unchanged", after.revision === before.revision);
+    check("event-insert fault [" + scenarioName + "]: validation evidence rolled back", after.valCount === before.valCount);
+    check("event-insert fault [" + scenarioName + "]: simulation evidence rolled back", after.simCount === before.simCount);
+    check("event-insert fault [" + scenarioName + "]: GP-04 event rolled back", after.evtCount === before.evtCount);
+  }
+
   await pool.end();
 } catch (e) {
   proofFailed = true;
