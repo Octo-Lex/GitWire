@@ -379,6 +379,18 @@ REVOKE ALL ON FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jso
 GRANT EXECUTE ON FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jsonb, text, uuid) TO gitwire_app;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- Least-privilege SELECT grants for the GP-04 simulator service path.
+-- simulatePolicyObject() runs as the runtime role gitwire_app and reads exactly
+-- these columns from public.repositories and public.decision_log to build the
+-- deterministic dataset snapshot. Column-scoped (not table-level); no write
+-- privileges; no default privileges. Revoked by rollback_gp04_validation_simulation.sql.
+-- Column lists are derived from governedPolicyService.js simulatePolicyObject().
+-- ════════════════════════════════════════════════════════════════════════════
+GRANT SELECT (github_id, full_name, owner) ON public.repositories TO gitwire_app;
+GRANT SELECT (id, source, trigger_event, target_type, target_number, pillar, decision, reason, repo_id)
+  ON public.decision_log TO gitwire_app;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- Record function provenance for rollback verification
 -- ════════════════════════════════════════════════════════════════════════════
 DO $$

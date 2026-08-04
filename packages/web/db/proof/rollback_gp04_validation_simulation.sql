@@ -117,6 +117,12 @@ END $$;
 REVOKE EXECUTE ON FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jsonb, text, uuid) FROM gitwire_app;
 DROP FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jsonb, text, uuid);
 
+-- Revoke the least-privilege simulator SELECT grants added by migration 047.
+-- Column lists mirror the GRANT in 047 exactly (derived from simulatePolicyObject()).
+REVOKE SELECT (github_id, full_name, owner) ON public.repositories FROM gitwire_app;
+REVOKE SELECT (id, source, trigger_event, target_type, target_number, pillar, decision, reason, repo_id)
+  ON public.decision_log FROM gitwire_app;
+
 -- Revoke only GP-04's INSERT grants (preserve GP-03's SELECT grants)
 REVOKE INSERT ON policy_validation_evidence FROM gitwire_policy_fn_owner;
 REVOKE INSERT ON policy_simulation_evidence FROM gitwire_policy_fn_owner;
