@@ -45,6 +45,31 @@ async function applyMigrations(pool) {
   } finally { c.release(); }
 }
 
+// Apply migrations up to and including the given file. This proof is a GP-02
+// baseline proof: later units (GP-03 approval rules, GP-04 validation/simulation)
+// extend the schema and function set, so applying the full cumulative head would
+// make this harness duplicate the GP-04 regression checks rather than prove the
+// GP-02 boundary in isolation. Cap at 045 to keep the original assertions
+// (ledger exactly 45, GP-02's exact function set, GP-02-era privileges).
+async function applyMigrationsUpto(pool, lastFile) {
+  const c = await pool.connect();
+  try {
+    await c.query("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+    const { rows } = await c.query("SELECT version FROM schema_migrations");
+    const applied = new Set(rows.map(r => r.version));
+    const files = (await readdir(MIGRATIONS_DIR)).filter(f => f.endsWith(".sql")).sort();
+    for (const file of files) {
+      if (applied.has(file)) continue;
+      const sql = await readFile(join(MIGRATIONS_DIR, file), "utf8");
+      try { await c.query("BEGIN"); await c.query(sql); await c.query("INSERT INTO schema_migrations (version) VALUES ($1)", [file]); await c.query("COMMIT"); }
+      catch (err) { await c.query("ROLLBACK"); throw new Error(file + ": " + err.message); }
+      if (file === lastFile) break;
+    }
+  } finally { c.release(); }
+}
+
+const GP02_BASELINE_LAST = "045_gp02_security_definer_functions.sql";
+
 const pgPort = await pickPort();
 const pgName = "gp02-pg-" + pgPort;
 const pgCid = docker("run", "-d", "--rm", "--name", pgName, "-p", "127.0.0.1:" + pgPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
@@ -70,7 +95,7 @@ try {
 
   // ═══ Phase 1: Migrations ════════════════════════════════════════════════
   console.log("\n=== Phase 1: Apply migrations 001-045 ===");
-  await applyMigrations(pool);
+  await applyMigrationsUpto(pool, GP02_BASELINE_LAST);
   const migCount = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
   check("migration ledger = 45", migCount === 45, "count=" + migCount);
 
@@ -375,7 +400,7 @@ try {
   await pool.query("DELETE FROM schema_migrations WHERE version = '045_gp02_security_definer_functions.sql'");
 
   // Reapply cleanly
-  await applyMigrations(pool);
+  await applyMigrationsUpto(pool, GP02_BASELINE_LAST);
   const { rows: fnRestored } = await pool.query("SELECT count(*)::int n FROM pg_proc WHERE proname = 'create_policy_change_request' AND pronamespace = 'gitwire_policy'::regnamespace");
   check("function restored after clean reapply", fnRestored[0].n === 1);
 
@@ -489,7 +514,7 @@ try {
     check("after RB: operator NO EXECUTE on " + fn.sig, opPriv.can === false);
   }
 
-  await applyMigrations(pool);
+  await applyMigrationsUpto(pool, GP02_BASELINE_LAST);
   const finalLedger = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
   check("ledger = 45 after reapply", finalLedger === 45);
 
