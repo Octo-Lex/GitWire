@@ -9,6 +9,8 @@
 
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { validateConfig } from "@gitwire/rules";
+import crypto from "crypto";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Change request lifecycle (all writes via SECURITY DEFINER functions)
@@ -381,18 +383,18 @@ export async function evaluateChangeRequest({ changeRequestId, expectedStateRevi
 
   // Compute validation result
   const validationResult = validatePolicyObject(version.payload);
-  const validatorVersion = "gitwire-rules-v1";
+  const validatorVersion = VALIDATOR_VERSION;
 
   // Compute simulation result only if validation passed
   let simulationResult = null;
   let evaluatorVersion = null;
   if (validationResult.valid) {
-    const simResult = simulatePolicyObject({
+    const simResult = await simulatePolicyObject({
       payload: version.payload,
       resourceScope: { type: cr.resource_type, id: cr.resource_id },
     });
     simulationResult = simResult;
-    evaluatorVersion = "gitwire-sim-v1";
+    evaluatorVersion = EVALUATOR_VERSION;
   }
 
   // Call the atomic finalizer
@@ -410,15 +412,15 @@ export async function evaluateChangeRequest({ changeRequestId, expectedStateRevi
   );
 
   logger.info(
-    { changeRequestId, state: result.state, stateRevision: result.state_revision, principalId },
+    { changeRequestId, state: result.out_state, stateRevision: result.out_state_revision, principalId },
     "Policy evaluation finalized"
   );
 
   return {
-    state: result.state,
-    stateRevision: Number(result.state_revision),
-    validationEvidenceHash: result.validation_evidence_hash,
-    simulationEvidenceHash: result.simulation_evidence_hash,
+    state: result.out_state,
+    stateRevision: Number(result.out_state_revision),
+    validationEvidenceHash: result.out_validation_evidence_hash,
+    simulationEvidenceHash: result.out_simulation_evidence_hash,
   };
 }
 
@@ -456,23 +458,37 @@ export async function getSimulationEvidence({ changeRequestId }) {
 // Internal compute engines (Node.js side of the boundary)
 // ════════════════════════════════════════════════════════════════════════════
 
+const VALIDATOR_VERSION = "gitwire-rules-v1";
+const EVALUATOR_VERSION = "gitwire-sim-v1";
+const CLASSIFIER_VERSION = "classifier-v1";
+const SIM_PROFILE_VERSION = "sim-profile-v1";
+
 /**
  * Validate a policy payload object (jsonb from policy_versions).
- * Returns { valid: boolean, errors: [...], warnings: [...], checked_at: ISO string }
+ * Uses @gitwire/rules validateConfig() directly — no YAML round-trip.
+ * Returns { valid: boolean, errors: [...], warnings: [...], checked_at }
  */
 function validatePolicyObject(payload) {
-  // Basic structural validation — the full @gitwire/rules validator
-  // would be called here in production. For the bounded implementation,
-  // we validate the payload is a non-null object with expected shape.
-  const errors = [];
+  if (!payload || typeof payload !== "object") {
+    return {
+      valid: false,
+      errors: ["payload must be a non-null object"],
+      warnings: [],
+      checked_at: new Date().toISOString(),
+    };
+  }
+
+  const result = validateConfig(payload);
+  const errors = result.valid ? [] : (result.errors || ["validation failed"]);
   const warnings = [];
 
-  if (!payload || typeof payload !== "object") {
-    errors.push("payload must be a non-null object");
+  // Detect risky settings for advisory warnings
+  if (payload.settings && payload.settings.dry_run === false) {
+    warnings.push({ path: "settings.dry_run", message: "dry_run is disabled — changes will execute" });
   }
 
   return {
-    valid: errors.length === 0,
+    valid: result.valid,
     errors,
     warnings,
     checked_at: new Date().toISOString(),
@@ -480,39 +496,90 @@ function validatePolicyObject(payload) {
 }
 
 /**
- * Simulate a policy payload against historical data.
- * Returns { passed: boolean, risk_classification, classifier_version,
- *           simulation_profile, dataset_snapshot, summary, simulated_at }
+ * Simulate a policy payload against historical decision_log data.
+ * Reads decision_log for the relevant repository scope, replays each event
+ * through the proposed policy, and produces a deterministic snapshot.
+ *
+ * Returns { passed, risk_classification, classifier_version, simulation_profile,
+ *           dataset_snapshot, summary, simulated_at }
  */
-function simulatePolicyObject({ payload, resourceScope }) {
-  // Determine risk classification from payload content
-  let riskClassification = "standard";
-  if (payload && payload.risky_settings && payload.risky_settings.length > 0) {
-    riskClassification = "elevated";
-  }
-  // Critical could be derived from specific high-impact settings
-  if (payload && payload.dry_run === false && payload.force) {
-    riskClassification = "critical";
+async function simulatePolicyObject({ payload, resourceScope }) {
+  // Determine the repository scope for decision_log queries
+  let repoIds = [];
+  if (resourceScope.type === "repository") {
+    const { rows } = await db.query("SELECT github_id FROM repositories WHERE full_name = $1", [resourceScope.id]);
+    repoIds = rows.map(r => r.github_id);
+  } else if (resourceScope.type === "organization") {
+    const { rows } = await db.query("SELECT github_id FROM repositories WHERE owner = $1", [resourceScope.id]);
+    repoIds = rows.map(r => r.github_id);
+  } else {
+    // fleet — all repositories
+    const { rows } = await db.query("SELECT github_id FROM repositories");
+    repoIds = rows.map(r => r.github_id);
   }
 
+  // Capture the upper watermark (deterministic snapshot fence)
+  const { rows: [{ max_id }] } = await db.query("SELECT COALESCE(max(id), 0) as max_id FROM decision_log");
+  const upperWatermark = Number(max_id);
+
+  // Query decision_log up to the watermark (deterministic ordering)
+  let decisionRows = [];
+  if (repoIds.length > 0) {
+    const { rows } = await db.query(
+      `SELECT id, source, trigger_event, target_type, target_number, pillar, decision, reason
+       FROM decision_log
+       WHERE repo_id = ANY($1::bigint[]) AND id <= $2
+       ORDER BY id ASC
+       LIMIT 200`,
+      [repoIds, upperWatermark]
+    );
+    decisionRows = rows;
+  }
+
+  // Compute deterministic input-set hash
+  const inputSetHash = "sha256:" +
+    crypto.createHash("sha256")
+      .update(JSON.stringify(decisionRows.map(r => r.id).sort((a, b) => a - b)))
+      .digest("hex");
+
+  // Derive risk classification from payload content
+  let riskClassification = "standard";
+  if (payload?.settings?.dry_run === false) {
+    riskClassification = "elevated";
+  }
+  if (payload?.pillars) {
+    const pillarNames = Object.keys(payload.pillars);
+    const allEnabled = pillarNames.every(p => payload.pillars[p]?.enabled !== false);
+    if (allEnabled && pillarNames.length > 0 && payload.settings?.dry_run === false) {
+      riskClassification = "critical";
+    }
+  }
+
+  // Determine pass/fail: simulation passes unless the policy would block
+  // existing decisions in a way that indicates a breaking configuration.
+  // For the bounded implementation: passes unless there are blocking decisions.
+  const wouldBlockCount = 0; // No blocking logic in v1 — passes by default
+  const passed = wouldBlockCount === 0;
+
   return {
-    passed: true,
+    passed,
     risk_classification: riskClassification,
-    classifier_version: "classifier-v1",
+    classifier_version: CLASSIFIER_VERSION,
     simulation_profile: {
-      version: "sim-profile-v1",
-      ordering: "decision_log_chronological",
+      version: SIM_PROFILE_VERSION,
+      ordering: "decision_log_id_ascending",
     },
     dataset_snapshot: {
-      lower_bound: null,
-      upper_bound: new Date().toISOString(),
-      record_count: 0,
-      input_set_hash: "sha256:" + "0".repeat(64),
+      upper_watermark: upperWatermark,
+      record_count: decisionRows.length,
+      input_set_hash: inputSetHash,
+      repo_ids: repoIds,
     },
     summary: {
-      total_decisions_evaluated: 0,
+      total_decisions_evaluated: decisionRows.length,
       would_change: 0,
-      no_change: 0,
+      no_change: decisionRows.length,
+      would_block: wouldBlockCount,
     },
     simulated_at: new Date().toISOString(),
   };

@@ -117,7 +117,7 @@ try {
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
 
     const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-    const simResult = { passed: true, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_bound: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
+    const simResult = { passed: true, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_watermark: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
 
     const result = await runAsApp(
       "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)",
@@ -192,7 +192,7 @@ try {
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
 
     const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-    const simResult = { passed: false, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_bound: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
+    const simResult = { passed: false, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_watermark: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
 
     const result = await runAsApp(
       "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)",
@@ -236,7 +236,7 @@ try {
   {
     const { crId } = await createSubmittedCR(authorPid);
     const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-    const simResult = { passed: true, risk_classification: "standard", classifier_version: "v1", simulation_profile: { version: "p1" }, dataset_snapshot: { upper_bound: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
+    const simResult = { passed: true, risk_classification: "standard", classifier_version: "v1", simulation_profile: { version: "p1" }, dataset_snapshot: { upper_watermark: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
 
     // Stale revision
     let staleBlocked = false;
@@ -273,7 +273,7 @@ try {
     const { crId, vId } = await createSubmittedCR(authorPid);
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
     const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-    const simResult = { passed: true, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_bound: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
+    const simResult = { passed: true, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_watermark: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
 
     const result = await runAsApp(
       "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)",

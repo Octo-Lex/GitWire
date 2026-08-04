@@ -245,6 +245,41 @@ BEGIN
     RAISE EXCEPTION 'finalize_policy_evaluation: simulation_result and evaluator_version are required when validation passes';
   END IF;
 
+  -- Strict envelope validation: engine versions must be nonempty
+  IF btrim(p_validator_version) = '' THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: validator_version must not be empty';
+  END IF;
+  IF btrim(p_evaluator_version) = '' THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: evaluator_version must not be empty';
+  END IF;
+
+  -- Strict envelope validation: simulation result fields must be present and well-formed
+  IF p_simulation_result->'simulation_profile' IS NULL
+     OR jsonb_typeof(p_simulation_result->'simulation_profile') != 'object' THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: simulation_result.simulation_profile must be a JSON object';
+  END IF;
+  IF (p_simulation_result->'simulation_profile'->>'version') IS NULL
+     OR btrim(p_simulation_result->'simulation_profile'->>'version') = '' THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: simulation_result.simulation_profile.version must be nonempty';
+  END IF;
+
+  IF p_simulation_result->'dataset_snapshot' IS NULL
+     OR jsonb_typeof(p_simulation_result->'dataset_snapshot') != 'object' THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: simulation_result.dataset_snapshot must be a JSON object';
+  END IF;
+  IF (p_simulation_result->'dataset_snapshot'->>'upper_watermark') IS NULL THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: simulation_result.dataset_snapshot.upper_watermark must be present';
+  END IF;
+  IF (p_simulation_result->'dataset_snapshot'->>'input_set_hash') IS NULL
+     OR (p_simulation_result->'dataset_snapshot'->>'input_set_hash') !~ '^sha256:[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: simulation_result.dataset_snapshot.input_set_hash must be sha256:<64 hex>';
+  END IF;
+
+  IF (p_simulation_result->>'classifier_version') IS NULL
+     OR btrim(p_simulation_result->>'classifier_version') = '' THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: simulation_result.classifier_version must be nonempty';
+  END IF;
+
   -- Extract simulation result's 'passed' boolean (must be JSON boolean)
   IF jsonb_typeof(p_simulation_result->'passed') IS NULL THEN
     RAISE EXCEPTION 'finalize_policy_evaluation: simulation_result.passed is missing';

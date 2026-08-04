@@ -126,7 +126,7 @@ try {
   console.log("\n=== Phase 1: Apply migrations 001-046 ===");
   await applyMigrations(pool);
   const migCount = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
-  check("migration ledger >= 46", migCount >= 46, "count=" + migCount);
+  check("migration ledger = 47", migCount === 47, "count=" + migCount);
 
   // ═══ Phase 2: Direct SQL denied ═══════════════════════════════════════
   console.log("\n=== Phase 2: Direct SQL denied ===");
@@ -149,16 +149,17 @@ try {
     "gitwire_policy.expire_policy_approval(uuid,bigint,uuid)",
     "gitwire_policy.evaluate_approval_sufficiency(uuid)",
     "gitwire_policy.approve_policy_change_request(uuid,bigint,uuid)",
+    "gitwire_policy.finalize_policy_evaluation(uuid,bigint,jsonb,text,jsonb,text,uuid)",
   ].sort();
 
-  // SECURITY DEFINER set
+  // SECURITY DEFINER set — exact match against the 11 known function signatures
   const { rows: secDefRows } = await pool.query(
     "SELECT p.oid::regprocedure::text as sig FROM pg_proc p JOIN pg_roles r ON p.proowner = r.oid JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND r.rolname = 'gitwire_policy_fn_owner' AND p.prosecdef = true AND p.proname != 'canonical_jsonb' ORDER BY 1"
   );
   const secDefSigs = secDefRows.map(f => f.sig);
-  check("SECURITY DEFINER set match (>= 10 functions)", secDefSigs.length >= 10, "found=" + JSON.stringify(secDefSigs));
+  check("SECURITY DEFINER set exact match (11 functions)", JSON.stringify(secDefSigs) === JSON.stringify(expectedAllSigs), "found=" + JSON.stringify(secDefSigs));
 
-  // Executable set
+  // Executable set — exact match
   const { rows: allFns } = await pool.query("SELECT p.oid, p.oid::regprocedure::text as sig FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' ORDER BY 2");
   const execSigs = [];
   for (const fn of allFns) {
@@ -166,7 +167,7 @@ try {
     if (priv.can) execSigs.push(fn.sig);
   }
   execSigs.sort();
-  check("gitwire_app executable set match (>= 10 functions)", execSigs.length >= 10, "found=" + JSON.stringify(execSigs));
+  check("gitwire_app executable set exact match (11 functions)", JSON.stringify(execSigs) === JSON.stringify(expectedAllSigs), "found=" + JSON.stringify(execSigs));
 
   // ═══ Phase 4: Schema CHECK constraints ════════════════════════════════
   console.log("\n=== Phase 4: Schema CHECK constraints ===");
@@ -1359,7 +1360,7 @@ try {
       // Reapply
       await applyMigrations(rbPool);
       const finalLedger = (await rbPool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
-      check("ledger = 46 after reapply", finalLedger >= 46);
+      check("ledger = 46 after reapply", finalLedger === 47);
 
       // GP-03 functions restored
       const gp03Restored = (await rbPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval','expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')")).rows[0].n;
