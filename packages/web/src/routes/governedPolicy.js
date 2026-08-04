@@ -25,6 +25,9 @@ import {
   approveChangeRequest,
   getApprovalRules,
   getApprovals,
+  evaluateChangeRequest,
+  getValidationEvidence,
+  getSimulationEvidence,
 } from "../services/governedPolicyService.js";
 
 export const governedPolicyRouter = Router();
@@ -383,5 +386,81 @@ governedPolicyRouter.post("/approvals/:id/expire", async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: "Failed to expire" });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// GP-04: Validation and simulation evidence (issue #100)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/policy/change-requests/:id/evaluate
+ * Validate, simulate, and atomically finalize the change request.
+ * Body: { expectedStateRevision }
+ */
+governedPolicyRouter.post("/change-requests/:id/evaluate", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { expectedStateRevision } = req.body;
+    if (expectedStateRevision === undefined) {
+      return res.status(400).json({ error: "expectedStateRevision is required" });
+    }
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_change_request:evaluate",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const result = await evaluateChangeRequest({ changeRequestId: id, expectedStateRevision: Number(expectedStateRevision), principalId });
+    if (result.state === "rejected") {
+      return res.status(422).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to evaluate change request");
+    if (err.message.includes("CAS failed") || err.message.includes("revision mismatch")) {
+      return res.status(409).json({ error: "Conflict: change request was modified concurrently" });
+    }
+    if (err.message.includes("not found") || err.message.includes("submitted") || err.message.includes("version") || err.message.includes("required") || err.message.includes("boolean")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to evaluate" });
+  }
+});
+
+/**
+ * GET /api/policy/change-requests/:id/validation-evidence
+ * List validation evidence for a change request.
+ */
+governedPolicyRouter.get("/change-requests/:id/validation-evidence", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await observeAuthorize(req, {
+      permission: "policy_validation_evidence:read",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const evidence = await getValidationEvidence({ changeRequestId: id });
+    res.json({ data: evidence });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list validation evidence");
+    res.status(500).json({ error: "Failed to list validation evidence" });
+  }
+});
+
+/**
+ * GET /api/policy/change-requests/:id/simulation-evidence
+ * List simulation evidence for a change request.
+ */
+governedPolicyRouter.get("/change-requests/:id/simulation-evidence", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await observeAuthorize(req, {
+      permission: "policy_simulation_evidence:read",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const evidence = await getSimulationEvidence({ changeRequestId: id });
+    res.json({ data: evidence });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list simulation evidence");
+    res.status(500).json({ error: "Failed to list simulation evidence" });
   }
 });
