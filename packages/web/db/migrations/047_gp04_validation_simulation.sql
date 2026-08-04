@@ -94,11 +94,11 @@ CREATE FUNCTION finalize_policy_evaluation(
   p_evaluator_version text,
   p_actor_principal_id uuid
 ) RETURNS TABLE (
-  change_request_id uuid,
-  state text,
-  state_revision bigint,
-  validation_evidence_hash text,
-  simulation_evidence_hash text
+  out_change_request_id uuid,
+  out_state text,
+  out_state_revision bigint,
+  out_validation_evidence_hash text,
+  out_simulation_evidence_hash text
 )
 SECURITY DEFINER
 SET search_path = gitwire_policy, pg_catalog
@@ -231,7 +231,12 @@ BEGIN
         'state_revision', v_new_revision
       ));
 
-    RETURN QUERY SELECT p_change_request_id, 'rejected'::text, v_new_revision, v_val_hash, NULL::text;
+    out_change_request_id := p_change_request_id;
+    out_state := 'rejected';
+    out_state_revision := v_new_revision;
+    out_validation_evidence_hash := v_val_hash;
+    out_simulation_evidence_hash := NULL;
+    RETURN NEXT;
     RETURN;
   END IF;
 
@@ -319,7 +324,12 @@ BEGIN
       ));
   END IF;
 
-  RETURN QUERY SELECT p_change_request_id, v_new_state, v_new_revision, v_val_hash, v_sim_hash;
+  out_change_request_id := p_change_request_id;
+  out_state := v_new_state;
+  out_state_revision := v_new_revision;
+  out_validation_evidence_hash := v_val_hash;
+  out_simulation_evidence_hash := v_sim_hash;
+  RETURN NEXT;
 END;
 $$;
 
