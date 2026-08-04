@@ -182,6 +182,11 @@ BEGIN
     RAISE EXCEPTION 'finalize_policy_evaluation: actor must be the request author or an active fleet admin';
   END IF;
 
+  -- Validate engine versions are nonempty (checked early, before any evidence work)
+  IF btrim(p_validator_version) = '' THEN
+    RAISE EXCEPTION 'finalize_policy_evaluation: validator_version must not be empty';
+  END IF;
+
   -- Extract validation result's 'valid' boolean (must be JSON boolean, not string)
   IF jsonb_typeof(p_validation_result->'valid') IS NULL THEN
     RAISE EXCEPTION 'finalize_policy_evaluation: validation_result.valid is missing';

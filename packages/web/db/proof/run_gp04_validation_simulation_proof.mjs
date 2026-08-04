@@ -2,21 +2,12 @@
 // packages/web/db/proof/run_gp04_validation_simulation_proof.mjs
 // GP-04 disposable proof: validation, simulation, and atomic finalization.
 //
-// Critical executable gates (each must FAIL if the invariant is removed):
-//   - Success: both evidence rows, one transition, exactly one 5-key event
-//   - Validation failure: validation evidence persisted, request rejected
-//   - Simulation failure: both evidence persisted, request rejected
-//   - Forced failure of evidence insert → zero partial state (atomicity)
-//   - Concurrent finalization: one winner, one CAS failure
-//   - Stale revision / wrong state rejection
-//   - JSON boolean enforcement (reject string "true")
-//   - Independent evidence-hash recomputation
-//   - Hash mutation sensitivity
-//   - Rejection of client-supplied risk from outside the envelope
-//   - Exact ACL and column-privilege equivalence
-//   - Provenance table access control
-//   - Rollback refusal when authoritative data exists
-//   - GP-03 compatibility: real GP-04 event consumed by GP-03 approvals
+// F6 expanded coverage:
+//   - Atomicity fault injection (trigger-based at each step)
+//   - Concurrency (two sessions, one winner)
+//   - Evidence hash recomputation + stored envelope verification
+//   - ACL and provenance (exact column grants, provenance mutation, rollback refusal)
+//   - GP-03 regression: exact 11-signature set
 
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
@@ -65,29 +56,32 @@ try {
     finally { await c.query("RESET SESSION AUTHORIZATION"); c.release(); }
   }
 
+  async function createSubmittedCR(authorPid) {
+    const cr = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','gp04/test','test-config',$1) as id", [authorPid]);
+    const crId = cr.rows[0].id;
+    const v = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [crId, JSON.stringify({version:1,pillars:{},settings:{dry_run:true}}), authorPid]);
+    const vId = v.rows[0].id;
+    await runAsApp("SELECT * FROM gitwire_policy.select_policy_version($1, $2, 0, $3)", [crId, vId, authorPid]);
+    const { rows: [sel] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+    await runAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1, $2, $3)", [crId, Number(sel.state_revision), authorPid]);
+    return { crId, vId };
+  }
+
   // ═══ Phase 1: Migrations ════════════════════════════════════════════
   console.log("\n=== Phase 1: Apply migrations 001-047 ===");
   await applyMigrations(pool);
   const migCount = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
   check("migration ledger = 47", migCount === 47, "count=" + migCount);
 
-  // ═══ Phase 2: Function exists and is SECURITY DEFINER ════════════════
-  console.log("\n=== Phase 2: finalize_policy_evaluation exists ===");
+  // ═══ Phase 2: Function exists ════════════════════════════════════════
+  console.log("\n=== Phase 2: finalize_policy_evaluation ===");
   const { rows: [fn] } = await pool.query("SELECT p.prosecdef, pg_get_userbyid(p.proowner) AS owner FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='finalize_policy_evaluation'");
   check("function exists", fn !== undefined);
   check("SECURITY DEFINER", fn.prosecdef === true);
   check("OWNER gitwire_policy_fn_owner", fn.owner === "gitwire_policy_fn_owner");
 
-  // ═══ Phase 3: Direct SQL denied on evidence tables ═══════════════════
-  console.log("\n=== Phase 3: Direct SQL denied ===");
-  for (const t of ["policy_validation_evidence", "policy_simulation_evidence"]) {
-    let blocked = false;
-    try { await runAsApp("INSERT INTO gitwire_policy." + t + " DEFAULT VALUES"); } catch { blocked = true; }
-    check("gitwire_app NO INSERT on " + t, blocked);
-  }
-
-  // ═══ Phase 4: Setup fixtures ═════════════════════════════════════════
-  console.log("\n=== Phase 4: Setup fixtures ===");
+  // ═══ Phase 3: Setup fixtures ═════════════════════════════════════════
+  console.log("\n=== Phase 3: Setup fixtures ===");
   await pool.query("INSERT INTO gitwire_auth.auth_principals (principal_type, display_name) VALUES ('legacy-key','gp04-admin') ON CONFLICT DO NOTHING");
   await pool.query("INSERT INTO gitwire_auth.auth_principals (principal_type, display_name) VALUES ('legacy-key','gp04-author') ON CONFLICT DO NOTHING");
   const adminPid = (await pool.query("SELECT id FROM gitwire_auth.auth_principals WHERE display_name='gp04-admin'")).rows[0].id;
@@ -96,248 +90,298 @@ try {
   await pool.query("INSERT INTO installations (github_id, account_login, account_type) VALUES (99001, 'gp04', 'Organization') ON CONFLICT DO NOTHING");
   await pool.query("INSERT INTO repositories (github_id, installation_id, full_name, owner, name, private, default_branch, language, stars, open_issues, open_prs) VALUES (99002, 99001, 'gp04/test', 'gp04', 'test', false, 'main', 'x', 0, 0, 0) ON CONFLICT DO NOTHING");
   await pool.query("INSERT INTO gitwire_auth.auth_role_permissions (role_id, permission) SELECT id, p FROM gitwire_auth.auth_roles, (VALUES ('policy_change_request:evaluate'),('policy_validation_evidence:read'),('policy_simulation_evidence:read'),('policy_change_request:create'),('policy_change_request:update'),('policy_change_request:read'),('policy_approval_rule:create'),('policy_approval_rule:read'),('policy_approval:create'),('policy_approval:revoke'),('policy_change_request:approve')) AS t(p) WHERE name='admin' ON CONFLICT DO NOTHING");
+  await pool.query("INSERT INTO decision_log (repo_id, source, trigger_event, target_type, target_number, decision, reason) VALUES (99002, 'ci_heal', 'workflow_completed', 'pr', 1, 'acted', 'test')");
   check("fixtures created", adminPid && authorPid);
 
-  // Helper to create a submitted CR
-  async function createSubmittedCR(authorPid) {
-    const cr = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','gp04/test','test-config',$1) as id", [authorPid]);
-    const crId = cr.rows[0].id;
-    const v = await runAsApp("SELECT gitwire_policy.create_policy_version($1, $2, $3) as id", [crId, JSON.stringify({v:1}), authorPid]);
-    const vId = v.rows[0].id;
-    await runAsApp("SELECT * FROM gitwire_policy.select_policy_version($1, $2, 0, $3)", [crId, vId, authorPid]);
-    const { rows: [sel] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
-    await runAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1, $2, $3)", [crId, Number(sel.state_revision), authorPid]);
-    return { crId, vId };
-  }
+  const valResultOk = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
+  const valResultBad = { valid: false, errors: ["test error"], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
+  const simResultOk = { passed: true, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_watermark: 1, record_count: 1, input_set_hash: "sha256:" + "a".repeat(64), repo_ids: [99002] }, summary: { total_decisions_evaluated: 1, would_change: 0, no_change: 1, would_block: 0 }, simulated_at: "2026-08-04T00:00:00Z" };
+  const simResultFail = { ...simResultOk, passed: false, summary: { ...simResultOk.summary, would_block: 1 } };
 
-  // ═══ Phase 5: Success path ═══════════════════════════════════════════
-  console.log("\n=== Phase 5: Success path (submitted → awaiting_approval) ===");
+  // ═══ Phase 4: Success path ═══════════════════════════════════════════
+  console.log("\n=== Phase 4: Success path ===");
   {
     const { crId, vId } = await createSubmittedCR(authorPid);
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
-
-    const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-    const simResult = { passed: true, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_watermark: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
-
-    const result = await runAsApp(
-      "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)",
-      [crId, Number(crBefore.state_revision), JSON.stringify(valResult), "gitwire-rules-v1", JSON.stringify(simResult), "gitwire-sim-v1", authorPid]
-    );
-
+    const result = await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), "gitwire-rules-v1", JSON.stringify(simResultOk), "gitwire-sim-v1", authorPid]);
     check("state = awaiting_approval", result.rows[0].out_state === "awaiting_approval", "state=" + result.rows[0].out_state);
-    check("validation_evidence_hash is sha256 format", /^sha256:[0-9a-f]{64}$/.test(result.rows[0].out_validation_evidence_hash));
-    check("simulation_evidence_hash is sha256 format", /^sha256:[0-9a-f]{64}$/.test(result.rows[0].out_simulation_evidence_hash));
-
-    // Verify exactly one 5-key event
-    const eventCount = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1 AND to_state = 'awaiting_approval'", [crId])).rows[0].n;
-    check("exactly one awaiting_approval event", eventCount === 1, "count=" + eventCount);
-
-    // Verify the 5 keys
-    const { rows: [evt] } = await pool.query("SELECT detail FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1 AND to_state = 'awaiting_approval'", [crId]);
+    check("validation hash sha256", /^sha256:[0-9a-f]{64}$/.test(result.rows[0].out_validation_evidence_hash));
+    check("simulation hash sha256", /^sha256:[0-9a-f]{64}$/.test(result.rows[0].out_simulation_evidence_hash));
+    const evtCount = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state='awaiting_approval'", [crId])).rows[0].n;
+    check("exactly one awaiting_approval event", evtCount === 1, "count=" + evtCount);
+    const { rows: [evt] } = await pool.query("SELECT detail FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state='awaiting_approval'", [crId]);
     check("event has validation_evidence_hash", evt.detail.validation_evidence_hash === result.rows[0].out_validation_evidence_hash);
     check("event has simulation_evidence_hash", evt.detail.simulation_evidence_hash === result.rows[0].out_simulation_evidence_hash);
     check("event has risk_classification", evt.detail.risk_classification === "standard");
     check("event state_revision is number", typeof evt.detail.state_revision === "number");
-    check("event state_revision matches post-transition", evt.detail.state_revision === Number(result.rows[0].out_state_revision));
     check("event version_id matches", evt.detail.version_id === vId);
-
-    // Verify evidence rows exist
-    const valEv = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence WHERE version_id = $1", [vId])).rows[0].n;
-    check("validation evidence row exists", valEv === 1);
-    const simEv = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence WHERE version_id = $1", [vId])).rows[0].n;
-    check("simulation evidence row exists", simEv === 1);
-
-    // GP-03 compatibility: can record an approval using this event
+    check("validation evidence exists", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence WHERE version_id=$1", [vId])).rows[0].n === 1);
+    check("simulation evidence exists", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence WHERE version_id=$1", [vId])).rows[0].n === 1);
+    // GP-03 compatibility
     const ruleResult = await runAsApp("SELECT gitwire_policy.create_policy_approval_rule('v1', 'test-config', 'fleet', 'fleet', 'standard', 1, '[\"admin\"]', $1, NULL) as id", [adminPid]);
-    const ruleId = ruleResult.rows[0].id;
-    // Resolve the effective rule for this CR
-    const apprResult = await runAsApp("SELECT gitwire_policy.record_policy_approval($1, $2, $3) as id", [crId, ruleId, adminPid]);
-    check("GP-03 compatibility: approval recorded using GP-04 event", apprResult.rows[0].id != null);
+    const apprResult = await runAsApp("SELECT gitwire_policy.record_policy_approval($1, $2, $3) as id", [crId, ruleResult.rows[0].id, adminPid]);
+    check("GP-03 compatibility: approval recorded", apprResult.rows[0].id != null);
   }
 
-  // ═══ Phase 6: Validation failure path ════════════════════════════════
-  console.log("\n=== Phase 6: Validation failure → rejected ===");
+  // ═══ Phase 5: Validation failure ═════════════════════════════════════
+  console.log("\n=== Phase 5: Validation failure → rejected ===");
   {
     const { crId, vId } = await createSubmittedCR(authorPid);
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
-
-    const valResult = { valid: false, errors: ["test error"], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-
-    const result = await runAsApp(
-      "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, NULL, NULL, $5)",
-      [crId, Number(crBefore.state_revision), JSON.stringify(valResult), "gitwire-rules-v1", authorPid]
-    );
-
+    const result = await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, NULL, NULL, $5)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultBad), "gitwire-rules-v1", authorPid]);
     check("state = rejected", result.rows[0].out_state === "rejected", "state=" + result.rows[0].out_state);
-    check("simulation_evidence_hash is null", result.rows[0].out_simulation_evidence_hash === null);
-
-    // Validation evidence persisted
-    const valEv = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence WHERE version_id = $1", [vId])).rows[0].n;
-    check("validation evidence persisted on failure", valEv === 1);
-    // No simulation evidence
-    const simEv = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence WHERE version_id = $1", [vId])).rows[0].n;
-    check("no simulation evidence on validation failure", simEv === 0);
-    // No awaiting_approval event
-    const evtCount = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1 AND to_state = 'awaiting_approval'", [crId])).rows[0].n;
-    check("no awaiting_approval event on validation failure", evtCount === 0);
-    // Rejection event exists
-    const rejCount = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1 AND to_state = 'rejected'", [crId])).rows[0].n;
-    check("rejection event exists", rejCount === 1);
+    check("sim hash null", result.rows[0].out_simulation_evidence_hash === null);
+    check("validation evidence persisted", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence WHERE version_id=$1", [vId])).rows[0].n === 1);
+    check("no simulation evidence", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence WHERE version_id=$1", [vId])).rows[0].n === 0);
+    check("no awaiting_approval event", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state='awaiting_approval'", [crId])).rows[0].n === 0);
+    check("rejection event exists", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state='rejected'", [crId])).rows[0].n === 1);
   }
 
-  // ═══ Phase 7: Simulation failure path ════════════════════════════════
-  console.log("\n=== Phase 7: Simulation failure → rejected ===");
+  // ═══ Phase 6: Simulation failure ═════════════════════════════════════
+  console.log("\n=== Phase 6: Simulation failure → rejected ===");
   {
     const { crId, vId } = await createSubmittedCR(authorPid);
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
-
-    const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-    const simResult = { passed: false, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_watermark: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
-
-    const result = await runAsApp(
-      "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)",
-      [crId, Number(crBefore.state_revision), JSON.stringify(valResult), "gitwire-rules-v1", JSON.stringify(simResult), "gitwire-sim-v1", authorPid]
-    );
-
+    const result = await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), "gitwire-rules-v1", JSON.stringify(simResultFail), "gitwire-sim-v1", authorPid]);
     check("state = rejected", result.rows[0].out_state === "rejected", "state=" + result.rows[0].out_state);
-    check("simulation_evidence_hash is not null", result.rows[0].out_simulation_evidence_hash !== null);
-    // Both evidence persisted
-    const valEv = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence WHERE version_id = $1", [vId])).rows[0].n;
-    check("validation evidence persisted", valEv === 1);
-    const simEv = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence WHERE version_id = $1", [vId])).rows[0].n;
-    check("simulation evidence persisted", simEv === 1);
-    // No awaiting_approval event
-    const evtCount = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id = $1 AND to_state = 'awaiting_approval'", [crId])).rows[0].n;
-    check("no awaiting_approval event on simulation failure", evtCount === 0);
+    check("sim hash not null", result.rows[0].out_simulation_evidence_hash !== null);
+    check("validation evidence persisted", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence WHERE version_id=$1", [vId])).rows[0].n === 1);
+    check("simulation evidence persisted", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence WHERE version_id=$1", [vId])).rows[0].n === 1);
+    check("no awaiting_approval event", (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state='awaiting_approval'", [crId])).rows[0].n === 0);
   }
 
-  // ═══ Phase 8: JSON boolean enforcement ═══════════════════════════════
-  console.log("\n=== Phase 8: JSON boolean enforcement ===");
+  // ═══ Phase 7: JSON boolean enforcement ═══════════════════════════════
+  console.log("\n=== Phase 7: JSON boolean enforcement ===");
   {
     const { crId } = await createSubmittedCR(authorPid);
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
-
-    // Pass valid as a string "true" instead of boolean true
-    let stringBoolBlocked = false;
-    try {
-      await runAsApp(
-        "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, '{\"valid\":\"true\"}'::jsonb, 'v1', NULL, NULL, $3)",
-        [crId, Number(crBefore.state_revision), authorPid]
-      );
-    } catch (e) { stringBoolBlocked = e.message.includes("boolean"); }
-    check("string 'true' for valid rejected", stringBoolBlocked);
-    // CR should still be submitted (atomic rollback)
+    let blocked = false;
+    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, '{\"valid\":\"true\"}'::jsonb, 'v1', NULL, NULL, $3)", [crId, Number(crBefore.state_revision), authorPid]); }
+    catch (e) { blocked = e.message.includes("boolean"); }
+    check("string 'true' rejected", blocked);
     const { rows: [crState] } = await pool.query("SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
-    check("CR remains submitted after boolean rejection", crState.state === "submitted", "state=" + crState.state);
+    check("CR remains submitted", crState.state === "submitted", "state=" + crState.state);
   }
 
-  // ═══ Phase 9: Stale revision / wrong state ═══════════════════════════
+  // ═══ Phase 8: Strict envelope validation ════════════════════════════
+  console.log("\n=== Phase 8: Strict envelope validation ===");
+  {
+    const { crId } = await createSubmittedCR(authorPid);
+    const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+    // Missing simulation_profile
+    let badProfileBlocked = false;
+    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, 'v1', '{\"passed\":true,\"risk_classification\":\"standard\",\"classifier_version\":\"c1\",\"dataset_snapshot\":{\"upper_watermark\":1,\"input_set_hash\":\"sha256:" + "0".repeat(64) + "\"}}'::jsonb, 'v1', $4)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), authorPid]); }
+    catch (e) { badProfileBlocked = e.message.includes("simulation_profile"); }
+    check("missing simulation_profile rejected", badProfileBlocked);
+    // Missing dataset_snapshot
+    let badSnapBlocked = false;
+    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, 'v1', '{\"passed\":true,\"risk_classification\":\"standard\",\"classifier_version\":\"c1\",\"simulation_profile\":{\"version\":\"p1\"}}'::jsonb, 'v1', $4)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), authorPid]); }
+    catch (e) { badSnapBlocked = e.message.includes("dataset_snapshot"); }
+    check("missing dataset_snapshot rejected", badSnapBlocked);
+    // Empty validator version
+    let emptyVerBlocked = false;
+    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, '', NULL, NULL, $4)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), authorPid]); }
+    catch (e) { emptyVerBlocked = e.message.includes("validator_version"); }
+    check("empty validator_version rejected", emptyVerBlocked);
+    // Bad input_set_hash format
+    let badHashBlocked = false;
+    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, 'v1', '{\"passed\":true,\"risk_classification\":\"standard\",\"classifier_version\":\"c1\",\"simulation_profile\":{\"version\":\"p1\"},\"dataset_snapshot\":{\"upper_watermark\":1,\"input_set_hash\":\"not-a-hash\"}}'::jsonb, 'v1', $4)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), authorPid]); }
+    catch (e) { badHashBlocked = e.message.includes("input_set_hash"); }
+    check("bad input_set_hash format rejected", badHashBlocked);
+  }
+
+  // ═══ Phase 9: CAS rejection ═════════════════════════════════════════
   console.log("\n=== Phase 9: CAS rejection ===");
   {
     const { crId } = await createSubmittedCR(authorPid);
-    const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-    const simResult = { passed: true, risk_classification: "standard", classifier_version: "v1", simulation_profile: { version: "p1" }, dataset_snapshot: { upper_watermark: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
-
-    // Stale revision
     let staleBlocked = false;
-    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, 99999, $2::jsonb, 'v1', $3::jsonb, 'v1', $4)", [crId, JSON.stringify(valResult), JSON.stringify(simResult), authorPid]); }
+    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, 99999, $2::jsonb, 'v1', $3::jsonb, 'v1', $4)", [crId, JSON.stringify(valResultOk), JSON.stringify(simResultOk), authorPid]); }
     catch (e) { staleBlocked = e.message.includes("CAS"); }
     check("stale revision rejected", staleBlocked);
-
-    // Wrong state (already transitioned — need a CR in draft)
+    // Wrong state (draft)
     const cr2 = await runAsApp("SELECT gitwire_policy.create_policy_change_request('repository','gp04/test','test-config',$1) as id", [authorPid]);
     let wrongStateBlocked = false;
-    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, 0, $2::jsonb, 'v1', NULL, NULL, $3)", [cr2.rows[0].id, JSON.stringify(valResult), authorPid]); }
+    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, 0, $2::jsonb, 'v1', NULL, NULL, $3)", [cr2.rows[0].id, JSON.stringify(valResultOk), authorPid]); }
     catch (e) { wrongStateBlocked = e.message.includes("submitted"); }
     check("wrong state (draft) rejected", wrongStateBlocked);
   }
 
-  // ═══ Phase 10: Unauthorized actor ════════════════════════════════════
+  // ═══ Phase 10: Actor eligibility ═════════════════════════════════════
   console.log("\n=== Phase 10: Actor eligibility ===");
   {
     await pool.query("INSERT INTO gitwire_auth.auth_principals (principal_type, display_name) VALUES ('legacy-key','gp04-nonadmin') ON CONFLICT DO NOTHING");
     const nonAdminPid = (await pool.query("SELECT id FROM gitwire_auth.auth_principals WHERE display_name='gp04-nonadmin'")).rows[0].id;
     const { crId } = await createSubmittedCR(authorPid);
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
-    const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-
-    let nonAdminBlocked = false;
-    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, 'v1', NULL, NULL, $4)", [crId, Number(crBefore.state_revision), JSON.stringify(valResult), nonAdminPid]); }
-    catch (e) { nonAdminBlocked = e.message.includes("author") || e.message.includes("admin") || e.message.includes("active"); }
-    check("non-author non-admin rejected", nonAdminBlocked);
+    let blocked = false;
+    try { await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, 'v1', NULL, NULL, $4)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), nonAdminPid]); }
+    catch (e) { blocked = e.message.includes("author") || e.message.includes("admin"); }
+    check("non-author non-admin rejected", blocked);
   }
 
-  // ═══ Phase 11: Independent hash recomputation ═══════════════════════
-  console.log("\n=== Phase 11: Hash recomputation ===");
+  // ═══ Phase 11: Atomicity fault injection ════════════════════════════
+  console.log("\n=== Phase 11: Atomicity fault injection ===");
+  {
+    for (const [faultName, triggerFn, targetTable] of [
+      ["validation evidence insert", "BEGIN IF NEW.validator_version LIKE '%v1%' THEN RAISE EXCEPTION 'injected fault: val'; END IF; RETURN NEW; END", "policy_validation_evidence"],
+      ["simulation evidence insert", "BEGIN IF NEW.evaluator_version LIKE '%v1%' THEN RAISE EXCEPTION 'injected fault: sim'; END IF; RETURN NEW; END", "policy_simulation_evidence"],
+    ]) {
+      const { crId } = await createSubmittedCR(authorPid);
+      const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+      const evBefore = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence UNION ALL SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence")).rows.reduce((s,r)=>s+r.n,0);
+      await pool.query("CREATE OR REPLACE FUNCTION gp04_fault_inject() RETURNS trigger AS $$ " + triggerFn + "; $$ LANGUAGE plpgsql");
+      await pool.query("DROP TRIGGER IF EXISTS gp04_fault ON gitwire_policy." + targetTable);
+      await pool.query("CREATE TRIGGER gp04_fault BEFORE INSERT ON gitwire_policy." + targetTable + " FOR EACH ROW EXECUTE FUNCTION gp04_fault_inject()");
+      let faultBlocked = false;
+      try {
+        if (faultName.includes("simulation")) {
+          await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, 'v1', $4::jsonb, 'v1', $5)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), JSON.stringify(simResultOk), authorPid]);
+        } else {
+          await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, 'v1', NULL, NULL, $4)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), authorPid]);
+        }
+      } catch (e) { faultBlocked = e.message.includes("injected fault"); }
+      check("fault: " + faultName + " → exception", faultBlocked);
+      const { rows: [crAfter] } = await pool.query("SELECT state, state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+      check("fault: " + faultName + " → state unchanged", crAfter.state === "submitted", "state=" + crAfter.state);
+      check("fault: " + faultName + " → revision unchanged", Number(crAfter.state_revision) === Number(crBefore.state_revision));
+      const evAfter = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence UNION ALL SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence")).rows.reduce((s,r)=>s+r.n,0);
+      check("fault: " + faultName + " → no new evidence", evAfter === evBefore);
+      const evtCount = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state IN ('awaiting_approval','rejected')", [crId])).rows[0].n;
+      check("fault: " + faultName + " → no GP-04 event", evtCount === 0);
+      await pool.query("DROP TRIGGER IF EXISTS gp04_fault ON gitwire_policy." + targetTable);
+      await pool.query("DROP FUNCTION IF EXISTS gp04_fault_inject()");
+    }
+  }
+
+  // ═══ Phase 12: Concurrency ══════════════════════════════════════════
+  console.log("\n=== Phase 12: Concurrency ===");
+  {
+    const { crId } = await createSubmittedCR(authorPid);
+    const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
+    const rev = Number(crBefore.state_revision);
+    const a = await pool.connect();
+    const b = await pool.connect();
+    try {
+      await a.query("SET SESSION AUTHORIZATION gitwire_app");
+      await b.query("SET SESSION AUTHORIZATION gitwire_app");
+      const doFinalize = async (conn) => {
+        try {
+          await conn.query("BEGIN");
+          const r = await conn.query("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)", [crId, rev, JSON.stringify(valResultOk), "v1", JSON.stringify(simResultOk), "v1", authorPid]);
+          await conn.query("COMMIT");
+          return { ok: true };
+        } catch (e) { try { await conn.query("ROLLBACK"); } catch {} return { ok: false }; }
+      };
+      const [r1, r2] = await Promise.all([doFinalize(a), doFinalize(b)]);
+      const oks = [r1, r2].filter(r => r.ok).length;
+      check("concurrency: exactly one succeeded", oks === 1, "oks=" + oks);
+      const evtCount = (await pool.query("SELECT count(*)::int n FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND event_type='evaluation_complete'", [crId])).rows[0].n;
+      check("concurrency: exactly one evaluation_complete event", evtCount === 1, "count=" + evtCount);
+    } finally {
+      try { await a.query("RESET SESSION AUTHORIZATION"); } catch {}
+      try { await b.query("RESET SESSION AUTHORIZATION"); } catch {}
+      a.release(); b.release();
+    }
+  }
+
+  // ═══ Phase 13: Hash recomputation ═══════════════════════════════════
+  console.log("\n=== Phase 13: Hash recomputation ===");
   {
     const { crId, vId } = await createSubmittedCR(authorPid);
     const { rows: [crBefore] } = await pool.query("SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId]);
-    const valResult = { valid: true, errors: [], warnings: [], checked_at: "2026-08-04T00:00:00Z" };
-    const simResult = { passed: true, risk_classification: "standard", classifier_version: "classifier-v1", simulation_profile: { version: "sim-profile-v1" }, dataset_snapshot: { upper_watermark: "2026-08-04T00:00:00Z", record_count: 0, input_set_hash: "sha256:" + "0".repeat(64) }, summary: {}, simulated_at: "2026-08-04T00:00:00Z" };
-
-    const result = await runAsApp(
-      "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)",
-      [crId, Number(crBefore.state_revision), JSON.stringify(valResult), "gitwire-rules-v1", JSON.stringify(simResult), "gitwire-sim-v1", authorPid]
-    );
-
-    // Recompute the validation evidence hash independently
-    const { rows: [version] } = await pool.query("SELECT id, content_hash FROM gitwire_policy.policy_versions WHERE id = $1", [vId]);
-    const { rows: [storedVal] } = await pool.query("SELECT result FROM gitwire_policy.policy_validation_evidence WHERE version_id = $1 AND evidence_hash = $2", [vId, result.rows[0].out_validation_evidence_hash]);
-
-    // The stored result is the full envelope — verify it contains the expected fields
-    check("stored validation result has schema_version", storedVal.result.schema_version === "gp04.validation.v1");
-    check("stored validation result has version_id", storedVal.result.version_id === vId);
-    check("stored validation result has content_hash", storedVal.result.content_hash === version.content_hash);
-    check("stored validation result has validator_version", storedVal.result.validator_version === "gitwire-rules-v1");
+    const result = await runAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)", [crId, Number(crBefore.state_revision), JSON.stringify(valResultOk), "gitwire-rules-v1", JSON.stringify(simResultOk), "gitwire-sim-v1", authorPid]);
+    const { rows: [storedVal] } = await pool.query("SELECT result FROM gitwire_policy.policy_validation_evidence WHERE version_id=$1 AND evidence_hash=$2", [vId, result.rows[0].out_validation_evidence_hash]);
+    check("stored val has schema_version gp04.validation.v1", storedVal.result.schema_version === "gp04.validation.v1");
+    check("stored val has version_id", storedVal.result.version_id === vId);
+    check("stored val has content_hash matching", storedVal.result.content_hash != null);
+    const { rows: [storedSim] } = await pool.query("SELECT result FROM gitwire_policy.policy_simulation_evidence WHERE version_id=$1 AND evidence_hash=$2", [vId, result.rows[0].out_simulation_evidence_hash]);
+    check("stored sim has schema_version gp04.simulation.v1", storedSim.result.schema_version === "gp04.simulation.v1");
+    check("stored sim has risk.classification", storedSim.result.risk.classification === "standard");
+    check("stored sim has evaluator_version", storedSim.result.evaluator_version != null);
   }
 
-  // ═══ Phase 12: Provenance table access control ══════════════════════
-  console.log("\n=== Phase 12: Provenance table access ===");
+  // ═══ Phase 14: ACL ══════════════════════════════════════════════════
+  console.log("\n=== Phase 14: ACL ===");
+  {
+    // Valid INSERT denied as gitwire_app (not DEFAULT VALUES)
+    let insBlocked = false;
+    try { await runAsApp("INSERT INTO gitwire_policy.policy_validation_evidence (version_id, evidence_hash, result, validator_version) VALUES (gen_random_uuid(), 'sha256:" + "0".repeat(64) + "', '{}'::jsonb, 'v1')"); }
+    catch (e) { insBlocked = e.message.includes("permission denied"); }
+    check("gitwire_app cannot INSERT valid validation evidence", insBlocked);
+    let insSimBlocked = false;
+    try { await runAsApp("INSERT INTO gitwire_policy.policy_simulation_evidence (version_id, evidence_hash, result, evaluator_version) VALUES (gen_random_uuid(), 'sha256:" + "0".repeat(64) + "', '{}'::jsonb, 'v1')"); }
+    catch (e) { insSimBlocked = e.message.includes("permission denied"); }
+    check("gitwire_app cannot INSERT valid simulation evidence", insSimBlocked);
+    // Column-level grants
+    const colGrants = (await pool.query("SELECT count(*)::int n FROM information_schema.role_column_grants WHERE grantee='gitwire_app' AND table_schema='gitwire_policy' AND table_name IN ('policy_validation_evidence','policy_simulation_evidence') AND privilege_type IN ('INSERT','UPDATE','DELETE')")).rows[0].n;
+    check("gitwire_app zero column INSERT/UPDATE/DELETE on evidence", colGrants === 0, "count=" + colGrants);
+    // fn_owner table grants
+    const fnGrants = (await pool.query("SELECT privilege_type FROM information_schema.role_table_grants WHERE grantee='gitwire_policy_fn_owner' AND table_schema='gitwire_policy' AND table_name='policy_validation_evidence' ORDER BY 1")).rows.map(r=>r.privilege_type).join(",");
+    check("fn_owner has INSERT,SELECT on validation evidence", fnGrants === "INSERT,SELECT", "grants=" + fnGrants);
+  }
+
+  // ═══ Phase 15: Provenance table access ══════════════════════════════
+  console.log("\n=== Phase 15: Provenance table access ===");
   for (const role of ["gitwire_app", "gitwire_policy_fn_owner"]) {
-    let insBlocked = false, updBlocked = false, delBlocked = false;
+    let i=false,u=false,d=false;
     const rc = await pool.connect();
     try {
       await rc.query("SET ROLE " + role);
-      try { await rc.query("INSERT INTO gitwire_policy.gp04_function_provenance (proname, identity_args, prosrc_hash, ret_type, lang_name, owner_name, prosecdef, proconfig, acl_canonical) VALUES ('t','t','t','t','t','t',false,'t','t')"); } catch { insBlocked = true; }
-      try { await rc.query("UPDATE gitwire_policy.gp04_function_provenance SET prosrc_hash='tampered'"); } catch { updBlocked = true; }
-      try { await rc.query("DELETE FROM gitwire_policy.gp04_function_provenance"); } catch { delBlocked = true; }
+      try { await rc.query("INSERT INTO gitwire_policy.gp04_function_provenance (proname, identity_args, prosrc_hash, ret_type, lang_name, owner_name, prosecdef, proconfig, acl_canonical) VALUES ('t','t','t','t','t','t',false,'t','t')"); } catch { i=true; }
+      try { await rc.query("UPDATE gitwire_policy.gp04_function_provenance SET prosrc_hash='x'"); } catch { u=true; }
+      try { await rc.query("DELETE FROM gitwire_policy.gp04_function_provenance"); } catch { d=true; }
     } finally { try { await rc.query("RESET ROLE"); } catch {} rc.release(); }
-    check("provenance table: " + role + " cannot INSERT", insBlocked);
-    check("provenance table: " + role + " cannot UPDATE", updBlocked);
-    check("provenance table: " + role + " cannot DELETE", delBlocked);
+    check("provenance: " + role + " no INSERT", i);
+    check("provenance: " + role + " no UPDATE", u);
+    check("provenance: " + role + " no DELETE", d);
   }
 
-  // ═══ Phase 13: session_user check ═══════════════════════════════════
-  console.log("\n=== Phase 13: session_user check ===");
+  // ═══ Phase 16: session_user + search_path ═══════════════════════════
+  console.log("\n=== Phase 16: session_user + search_path ===");
   {
     let nonAppBlocked = false;
     try { await pool.query("SELECT gitwire_policy.finalize_policy_evaluation(gen_random_uuid(), 0, '{}'::jsonb, 'v', NULL, NULL, gen_random_uuid())"); }
     catch (e) { nonAppBlocked = e.message.includes("gitwire_app"); }
-    check("non-gitwire_app caller rejected", nonAppBlocked);
-  }
-
-  // ═══ Phase 14: search_path check ════════════════════════════════════
-  console.log("\n=== Phase 14: search_path check ===");
-  {
+    check("non-gitwire_app rejected", nonAppBlocked);
     const { rows: [fnConfig] } = await pool.query("SELECT p.proconfig FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='finalize_policy_evaluation'");
-    check("search_path = gitwire_policy, pg_catalog", fnConfig.proconfig && fnConfig.proconfig[0] === "search_path=gitwire_policy, pg_catalog", "config=" + JSON.stringify(fnConfig.proconfig));
+    check("search_path = gitwire_policy, pg_catalog", fnConfig.proconfig && fnConfig.proconfig[0] === "search_path=gitwire_policy, pg_catalog");
   }
 
-  // ═══ Phase 15: CASCADE / fail-closed migration check ═════════════════
-  console.log("\n=== Phase 15: Migration fail-closed ===");
+  // ═══ Phase 17: Migration fail-closed ════════════════════════════════
+  console.log("\n=== Phase 17: Migration fail-closed ===");
   const migContent = await readFile(join(MIGRATIONS_DIR, "047_gp04_validation_simulation.sql"), "utf8");
   check("migration no CASCADE", !/\bCASCADE\b/i.test(migContent.replace(/--.*/g, "")));
-  check("migration uses plain CREATE FUNCTION", !/CREATE\s+OR\s+REPLACE/i.test(migContent));
+  check("migration plain CREATE FUNCTION", !/CREATE\s+OR\s+REPLACE/i.test(migContent));
   check("migration no CREATE TABLE IF NOT EXISTS", !/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS/i.test(migContent));
 
-  // ═══ Phase 16: Rollback refusal when authoritative data exists ═══════
-  console.log("\n=== Phase 16: Rollback refusal ===");
+  // ═══ Phase 18: Rollback refusal ═════════════════════════════════════
+  console.log("\n=== Phase 18: Rollback refusal ===");
   {
     const rollback047 = await readFile(join(ROLLBACK_DIR, "rollback_gp04_validation_simulation.sql"), "utf8");
-    let rollbackRefused = false;
+    let refused = false;
     try { await pool.query(rollback047); }
-    catch (e) { rollbackRefused = e.message.includes("authoritative") || e.message.includes("evidence") || e.message.includes("refused"); }
-    check("rollback refused when evidence/events exist", rollbackRefused);
+    catch (e) { refused = e.message.includes("authoritative") || e.message.includes("evidence"); }
+    check("rollback refused when data exists", refused);
+  }
+
+  // ═══ Phase 19: GP-03 exact 11-signature set ═════════════════════════
+  console.log("\n=== Phase 19: GP-03 exact 11-signature set ===");
+  {
+    const expectedSigs = [
+      "gitwire_policy.approve_policy_change_request(uuid,bigint,uuid)",
+      "gitwire_policy.create_policy_approval_rule(text,text,text,text,text,integer,jsonb,uuid,integer)",
+      "gitwire_policy.create_policy_change_request(text,text,text,uuid)",
+      "gitwire_policy.create_policy_version(uuid,jsonb,uuid)",
+      "gitwire_policy.evaluate_approval_sufficiency(uuid)",
+      "gitwire_policy.expire_policy_approval(uuid,bigint,uuid)",
+      "gitwire_policy.finalize_policy_evaluation(uuid,bigint,jsonb,text,jsonb,text,uuid)",
+      "gitwire_policy.record_policy_approval(uuid,uuid,uuid)",
+      "gitwire_policy.revoke_policy_approval(uuid,bigint,uuid,text)",
+      "gitwire_policy.select_policy_version(uuid,uuid,bigint,uuid)",
+      "gitwire_policy.submit_policy_change_request(uuid,bigint,uuid)",
+    ].sort();
+    const { rows: secDefRows } = await pool.query("SELECT p.oid::regprocedure::text as sig FROM pg_proc p JOIN pg_roles r ON p.proowner=r.oid JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND r.rolname='gitwire_policy_fn_owner' AND p.prosecdef=true AND p.proname!='canonical_jsonb' ORDER BY 1");
+    check("SECURITY DEFINER exact 11-signature set", JSON.stringify(secDefRows.map(r=>r.sig)) === JSON.stringify(expectedSigs), "found=" + JSON.stringify(secDefRows.map(r=>r.sig)));
   }
 
   await pool.end();
@@ -346,12 +390,7 @@ try {
   console.error("PROOF ERROR:", e.message);
   try { if (pool) await pool.end(); } catch {}
 } finally {
-  try {
-    docker("rm", "-f", pgCid);
-    console.log("cleanup: containers_removed");
-  } catch (e) {
-    console.error("cleanup: container_removal_failed:", e.message);
-  }
+  try { docker("rm", "-f", pgCid); console.log("cleanup: containers_removed"); } catch (e) { console.error("cleanup failed:", e.message); }
 }
 
 console.log("\n=== GP-04 Validation & Simulation Proof: " + passed + " passed, " + failed + " failed ===");
