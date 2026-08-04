@@ -861,6 +861,21 @@ try {
       try { await iso.query(rollback047Sql); }
       catch (e) { refused = true; } // any rollback failure = fail-closed gate fired
       check("prov-struct [" + label + "]: rollback aborted", refused);
+      // Mutated function object preservation — prove the specific mutated
+      // function still exists with its altered identity, and the original
+      // identity is absent. This establishes transaction atomicity directly.
+      if (field === "proname") {
+        check("prov-struct [proname]: renamed function exists", (await iso.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='finalize_policy_evaluation_renamed'")).rows[0].n === 1);
+        check("prov-struct [proname]: original function identity absent", (await iso.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='finalize_policy_evaluation'")).rows[0].n === 0);
+      } else if (field === "identity_args") {
+        const argsRow = (await iso.query("SELECT pg_get_function_identity_arguments(p.oid) AS args FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='finalize_policy_evaluation'")).rows;
+        check("prov-struct [identity_args]: altered-arg function exists", argsRow.length === 1, "found=" + JSON.stringify(argsRow.map(r => r.args)));
+        check("prov-struct [identity_args]: exact changed identity args", argsRow[0]?.args === "uuid, bigint, jsonb, text, jsonb, text, bigint", "args=" + argsRow[0]?.args);
+      } else if (field === "ret_type") {
+        const retRow = (await iso.query("SELECT pg_get_function_result(p.oid) AS ret FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='finalize_policy_evaluation'")).rows;
+        check("prov-struct [ret_type]: altered-return function exists", retRow.length === 1);
+        check("prov-struct [ret_type]: exact changed return type", retRow[0]?.ret === "void", "ret=" + retRow[0]?.ret);
+      }
       // Provenance + ledger preserved
       check("prov-struct [" + label + "]: provenance preserved", (await iso.query("SELECT count(*)::int n FROM gitwire_policy.gp04_function_provenance")).rows[0].n === 1);
       check("prov-struct [" + label + "]: ledger preserved", (await iso.query("SELECT count(*)::int n FROM public.schema_migrations WHERE version='047_gp04_validation_simulation.sql'")).rows[0].n === 1);
@@ -890,8 +905,36 @@ try {
     });
   }
 
-  // lang_name: comparator-only control (no safe in-place DDL mutation exists).
-  await withIsolatedDb("cmp-lang_name", null, async (iso) => {
+  // lang_name: live DDL mutation in an isolated DB. DROP the plpgsql function
+  // and recreate the same identity/signature in LANGUAGE sql with an inert
+  // implementation. Run the real rollback; prove it aborts; prove the altered-
+  // language function object remains; provenance + ledger preserved.
+  // Secondary changes: lang_name (plpgsql → sql), prosrc_hash (new body),
+  // prosecdef preserved (still SECURITY DEFINER), ret_type preserved (same
+  // RETURNS TABLE). The rollback detects the lang_name + prosrc_hash mismatch.
+  await withIsolatedDb("struct-lang_name", null, async (iso) => {
+    await iso.query("SET search_path = gitwire_policy, pg_catalog");
+    await iso.query("DROP FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jsonb, text, uuid)");
+    // Recreate in LANGUAGE sql with an inert NULL return (the RETURNS TABLE
+    // columns require a row; use NULLs). This is a valid sql function.
+    await iso.query("CREATE FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jsonb, text, uuid) RETURNS TABLE(out_change_request_id uuid, out_state text, out_state_revision bigint, out_validation_evidence_hash text, out_simulation_evidence_hash text) LANGUAGE sql SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog AS $$ SELECT NULL::uuid, NULL::text, NULL::bigint, NULL::text, NULL::text $$");
+    await iso.query("ALTER FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jsonb, text, uuid) OWNER TO gitwire_policy_fn_owner");
+    await iso.query("REVOKE ALL ON FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jsonb, text, uuid) FROM PUBLIC");
+    await iso.query("GRANT EXECUTE ON FUNCTION finalize_policy_evaluation(uuid, bigint, jsonb, text, jsonb, text, uuid) TO gitwire_app");
+
+    let refused = false;
+    try { await iso.query(rollback047Sql); }
+    catch (e) { refused = true; }
+    check("prov-struct [lang_name]: rollback aborted", refused);
+    // The altered-language function object remains
+    check("prov-struct [lang_name]: function preserved", (await iso.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname='finalize_policy_evaluation'")).rows[0].n === 1);
+    // Language is now sql (proves the mutation took effect)
+    const langRow = (await iso.query("SELECT l.lanname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid JOIN pg_language l ON p.prolang=l.oid WHERE n.nspname='gitwire_policy' AND p.proname='finalize_policy_evaluation'")).rows[0];
+    check("prov-struct [lang_name]: language is now sql", langRow.lanname === "sql");
+    check("prov-struct [lang_name]: provenance preserved", (await iso.query("SELECT count(*)::int n FROM gitwire_policy.gp04_function_provenance")).rows[0].n === 1);
+    check("prov-struct [lang_name]: ledger preserved", (await iso.query("SELECT count(*)::int n FROM public.schema_migrations WHERE version='047_gp04_validation_simulation.sql'")).rows[0].n === 1);
+
+    // Comparator-level negative control on the copied tuple
     const provRow = (await iso.query("SELECT * FROM gitwire_policy.gp04_function_provenance")).rows[0];
     const altered = { ...provRow, lang_name: "internal" };
     check("prov-cmp [lang_name]: altered tuple differs from stored", JSON.stringify(altered) !== JSON.stringify(provRow));
@@ -917,6 +960,9 @@ try {
     await iso.query("GRANT EXECUTE ON FUNCTION gitwire_policy.unauthorized_extra_fn() TO gitwire_app");
     const foundSigs = (await iso.query("SELECT p.oid::regprocedure::text as sig FROM pg_proc p JOIN pg_roles r ON p.proowner=r.oid JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND r.rolname='gitwire_policy_fn_owner' AND p.prosecdef=true AND p.proname!='canonical_jsonb' ORDER BY 1")).rows.map(r => r.sig);
     check("neg-extra: SECURITY DEFINER set != expected (extra fn)", JSON.stringify(foundSigs) !== JSON.stringify(expectedSigs), "found=" + JSON.stringify(foundSigs));
+    // gitwire_app executable set also fails — the extra fn is executable
+    const appExec = (await iso.query("SELECT p.oid::regprocedure::text as sig FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname!='canonical_jsonb' AND has_function_privilege('gitwire_app', p.oid, 'EXECUTE') ORDER BY 1")).rows.map(r => r.sig);
+    check("neg-extra: gitwire_app executable set != expected", JSON.stringify(appExec) !== JSON.stringify(expectedSigs), "found=" + JSON.stringify(appExec));
   });
   // Positive control: untouched installed-047 still matches
   await withIsolatedDb("neg-posit", null, async (iso) => {
