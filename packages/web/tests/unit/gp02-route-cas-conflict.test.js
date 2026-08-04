@@ -8,6 +8,7 @@ const mockSelectVersion = jest.fn();
 const mockSubmitChangeRequest = jest.fn();
 
 jest.unstable_mockModule("../../src/services/governedPolicyService.js", () => ({
+  // GP-02 exports exercised by this test
   createChangeRequest: jest.fn(),
   createVersion: jest.fn(),
   selectVersion: mockSelectVersion,
@@ -16,6 +17,20 @@ jest.unstable_mockModule("../../src/services/governedPolicyService.js", () => ({
   listChangeRequests: jest.fn(),
   getVersions: jest.fn(),
   getTransitionEvents: jest.fn(),
+  // GP-03/04 exports imported by the route module under the cumulative graph.
+  // Not exercised here, but must exist so Jest's ESM linker resolves the
+  // router's named imports against the mock rather than the real service.
+  createApprovalRule: jest.fn(),
+  recordApproval: jest.fn(),
+  revokeApproval: jest.fn(),
+  expireApproval: jest.fn(),
+  evaluateApprovals: jest.fn(),
+  approveChangeRequest: jest.fn(),
+  getApprovalRules: jest.fn(),
+  getApprovals: jest.fn(),
+  evaluateChangeRequest: jest.fn(),
+  getValidationEvidence: jest.fn(),
+  getSimulationEvidence: jest.fn(),
 }));
 
 jest.unstable_mockModule("../../src/services/auth/observeAdopt.js", () => ({
