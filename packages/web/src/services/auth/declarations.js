@@ -79,6 +79,11 @@ const ROUTE_SURFACES = [
   { id: "route:POST:/api/policy/change-requests/:id/approve", kind: "route", permission: "policy_change_request:approve", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:POST:/api/policy/approvals/:id/revoke", kind: "route", permission: "policy_approval:revoke", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "route:POST:/api/policy/approvals/:id/expire", kind: "route", permission: "policy_approval:revoke", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+
+  // Governed Policy Authority (GP-04)
+  { id: "route:POST:/api/policy/change-requests/:id/evaluate", kind: "route", permission: "policy_change_request:evaluate", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:GET:/api/policy/change-requests/:id/validation-evidence", kind: "route", permission: "policy_validation_evidence:read", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  { id: "route:GET:/api/policy/change-requests/:id/simulation-evidence", kind: "route", permission: "policy_simulation_evidence:read", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
 ];
 
 // ── Workers (from the worker inventory) ─────────────────────────────────────

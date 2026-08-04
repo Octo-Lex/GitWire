@@ -25,6 +25,9 @@ import {
   approveChangeRequest,
   getApprovalRules,
   getApprovals,
+  evaluateChangeRequest,
+  getValidationEvidence,
+  getSimulationEvidence,
 } from "../services/governedPolicyService.js";
 
 export const governedPolicyRouter = Router();
@@ -383,5 +386,100 @@ governedPolicyRouter.post("/approvals/:id/expire", async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: "Failed to expire" });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// GP-04: Validation and simulation evidence (issue #100)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/policy/change-requests/:id/evaluate
+ * Validate, simulate, and atomically finalize the change request.
+ * Body: exactly { expectedStateRevision: <safe non-negative integer> }.
+ * Exact-key whitelist: any additional or missing key is rejected with 400
+ * BEFORE authoritativePrincipalId/observeAuthorize/service are called, so
+ * prohibited fields (results, hashes, risk classification, actor/principal
+ * ids, version ids, simulation profiles, date ranges, limits) cannot reach
+ * computation or the database.
+ */
+governedPolicyRouter.post("/change-requests/:id/evaluate", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const body = req.body;
+
+    // Exact-key whitelist. Accept ONLY { expectedStateRevision }. Reject null,
+    // arrays, primitives, prototype-pollution attempts, and any extra/missing key.
+    const proto = body !== null && typeof body === "object" ? Object.getPrototypeOf(body) : null;
+    const isPlainObject =
+      proto === Object.prototype || proto === null;
+    const keys = isPlainObject ? Object.keys(body).sort() : [];
+    if (!isPlainObject || keys.length !== 1 || keys[0] !== "expectedStateRevision") {
+      const received = isPlainObject ? `keys=[${keys.join(",")}]` : `type=${Array.isArray(body) ? "array" : body === null ? "null" : typeof body}`;
+      return res.status(400).json({ error: `Request body must be exactly { expectedStateRevision }; received ${received}` });
+    }
+    // No Number() coercion at the boundary. Strings like "1" are rejected.
+    const rev = body.expectedStateRevision;
+    if (!Number.isSafeInteger(rev) || rev < 0) {
+      return res.status(400).json({ error: "expectedStateRevision must be a non-negative safe integer" });
+    }
+
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_change_request:evaluate",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const result = await evaluateChangeRequest({ changeRequestId: id, expectedStateRevision: rev, principalId });
+    if (result.state === "rejected") {
+      return res.status(422).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to evaluate change request");
+    if (err.message.includes("CAS failed") || err.message.includes("revision mismatch")) {
+      return res.status(409).json({ error: "Conflict: change request was modified concurrently" });
+    }
+    if (err.message.includes("not found") || err.message.includes("submitted") || err.message.includes("version") || err.message.includes("required") || err.message.includes("boolean")) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to evaluate" });
+  }
+});
+
+/**
+ * GET /api/policy/change-requests/:id/validation-evidence
+ * List validation evidence for a change request.
+ */
+governedPolicyRouter.get("/change-requests/:id/validation-evidence", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await observeAuthorize(req, {
+      permission: "policy_validation_evidence:read",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const evidence = await getValidationEvidence({ changeRequestId: id });
+    res.json({ data: evidence });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list validation evidence");
+    res.status(500).json({ error: "Failed to list validation evidence" });
+  }
+});
+
+/**
+ * GET /api/policy/change-requests/:id/simulation-evidence
+ * List simulation evidence for a change request.
+ */
+governedPolicyRouter.get("/change-requests/:id/simulation-evidence", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await observeAuthorize(req, {
+      permission: "policy_simulation_evidence:read",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const evidence = await getSimulationEvidence({ changeRequestId: id });
+    res.json({ data: evidence });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list simulation evidence");
+    res.status(500).json({ error: "Failed to list simulation evidence" });
   }
 });
