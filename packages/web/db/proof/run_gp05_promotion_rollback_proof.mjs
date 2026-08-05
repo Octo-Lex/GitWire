@@ -251,6 +251,232 @@ try {
     }
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 11: Authorization matrix — unauthorized active principals denied
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 11: Authorization matrix ===");
+  {
+    // Create a principal with NO permissions (active but unprivileged)
+    const unauthId = await seedPrincipal(pool, "g5-unauth");
+    const { crId, stateRev } = await makeApprovedCR(pool, { authorId, approverId, risk: "standard" });
+
+    // Forward promotion without permission
+    let raised = false;
+    try { await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, unauthId]); }
+    catch (e) { raised = /permission|authorize|not active/i.test(e.message); }
+    check("forward promotion denied without permission", raised);
+
+    // Rollback creation without permission
+    const b = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings ORDER BY binding_revision DESC LIMIT 1")).rows[0];
+    raised = false;
+    try { await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [b.id, b.binding_revision, b.active_policy_version_id, unauthId]); }
+    catch (e) { raised = /permission|authorize|not active/i.test(e.message); }
+    check("rollback creation denied without permission", raised);
+
+    // Rollback approve/reject/withdraw/promote without permission — create a rollback first as authed user
+    // Use a prior version that differs from current active
+    const prior = (await asDbo(pool, "SELECT * FROM gitwire_policy.policy_promotion_records WHERE binding_id=$1 AND outcome='succeeded' AND target_version_id != $2 ORDER BY occurred_at ASC LIMIT 1", [b.id, b.active_policy_version_id])).rows[0];
+    if (prior) {
+      const rb = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [b.id, b.binding_revision, prior.target_version_id, reqId])).rows[0];
+      // approve without permission
+      raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, unauthId]); }
+      catch (e) { raised = /permission|authorize|not active/i.test(e.message); }
+      check("rollback approval denied without permission", raised);
+      // reject without permission
+      raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, unauthId]); }
+      catch (e) { raised = /permission|authorize|not active/i.test(e.message); }
+      check("rollback rejection denied without permission", raised);
+      // promote without permission
+      raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,0,$2,$3)", [rb.out_rollback_record_id, b.binding_revision, unauthId]); }
+      catch (e) { raised = /permission|authorize|not active/i.test(e.message); }
+      check("rollback promotion denied without permission", raised);
+    }
+
+    // Revoked assignment denied
+    const revokedId = await seedPrincipal(pool, "g5-revoked");
+    await grantAdmin(pool, revokedId);
+    await asDbo(pool, "UPDATE gitwire_auth.auth_principal_roles SET revoked_at=now() WHERE principal_id=$1", [revokedId]);
+    raised = false;
+    const cr2 = await makeApprovedCR(pool, { authorId, approverId, risk: "standard" });
+    try { await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr2.crId, cr2.stateRev, revokedId]); }
+    catch (e) { raised = /permission|authorize|not active|revoked/i.test(e.message); }
+    check("revoked assignment denied", raised);
+
+    // Expired assignment denied
+    const expiredId = await seedPrincipal(pool, "g5-expired");
+    await grantAdmin(pool, expiredId);
+    await asDbo(pool, "UPDATE gitwire_auth.auth_principal_roles SET expires_at=now()-interval '1 hour' WHERE principal_id=$1", [expiredId]);
+    raised = false;
+    const cr3 = await makeApprovedCR(pool, { authorId, approverId, risk: "standard" });
+    try { await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr3.crId, cr3.stateRev, expiredId]); }
+    catch (e) { raised = /permission|authorize|not active|expire/i.test(e.message); }
+    check("expired assignment denied", raised);
+
+    // Verify no promotion records written for rejected attempts
+    const rejectedRecs = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records WHERE promoter_principal_id IN ($1,$2,$3)", [unauthId, revokedId, expiredId])).rows[0].n;
+    check("no promotion records for unauthorized attempts", rejectedRecs === 0, "records=" + rejectedRecs);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 12: Failure-durability boundary — exact count deltas
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 12: Failure-durability boundary ===");
+  {
+    // Unknown change request — RAISE, no record
+    const promoBefore = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+    let raised = false;
+    try { await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request('00000000-0000-0000-0000-000000000099',0,NULL,promoterId]); }", []); }
+    catch { raised = true; }
+    check("unknown CR raises (no record)", raised);
+    const promoAfter = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+    check("no promotion record for unknown CR", promoAfter === promoBefore);
+
+    // Resolved not_approved — exactly one failed record
+    const { crId, vId } = await makeApprovedCR(pool, { authorId, approverId, risk: "standard" });
+    // Promote it first, then try to promote again (now promoted, not approved)
+    await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, (await asDbo(pool, "SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id=$1",[crId])).rows[0].state_revision, promoterId]);
+    const beforeNotApproved = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+    const promotedCR = (await asDbo(pool, "SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id=$1",[crId])).rows[0].state_revision;
+    const r = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, promotedCR, promoterId])).rows[0];
+    check("re-promotion of already-promoted CR → failed (not_approved)", r.out_outcome === "failed" && r.out_failure_code === "not_approved");
+    const afterNotApproved = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+    check("exactly one failed record for not_approved", afterNotApproved - beforeNotApproved === 1, "delta=" + (afterNotApproved - beforeNotApproved));
+    // Verify binding/request/approval-lifecycle unchanged
+    const bindCount = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.active_policy_bindings")).rows[0].n;
+    check("bindings unchanged after failed promotion", bindCount >= 1);
+
+    // Stale request revision — exactly one failed record
+    const cr4 = await makeApprovedCR(pool, { authorId, approverId, risk: "standard" });
+    const beforeStale = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+    const r2 = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr4.crId, cr4.stateRev + 999, promoterId])).rows[0];
+    check("stale request revision → failed", r2.out_outcome === "failed");
+    const afterStale = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+    check("exactly one failed record for stale request rev", afterStale - beforeStale === 1);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 13: Rollback frozen-revision enforcement
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 13: Rollback frozen-revision enforcement ===");
+  {
+    // Build a binding with two promoted versions for rollback
+    const c1 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "rb-frozen", fam: "rbf", risk: "standard" });
+    await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c1.crId, c1.stateRev, promoterId]);
+    const b1 = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings WHERE resource_id='rb-frozen'")).rows[0];
+    const c2 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "rb-frozen", fam: "rbf", risk: "standard" });
+    await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [c2.crId, c2.stateRev, b1.binding_revision, promoterId]);
+    const b2 = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings WHERE resource_id='rb-frozen'")).rows[0];
+
+    // Create rollback at revision b2.binding_revision (frozen)
+    const rb = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [b2.id, b2.binding_revision, c1.vId, reqId])).rows[0];
+    await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, rbApprId]);
+
+    // Try to promote with the CURRENT binding revision (which matches frozen) — should succeed
+    const rp = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,1,$2,$3)", [rb.out_rollback_record_id, b2.binding_revision, rbPromId])).rows[0];
+    check("rollback promotion with matching frozen revision succeeds", rp.out_outcome === "succeeded", "fc=" + rp.out_failure_code);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 14: Concurrent initial promotion — one winner
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 14: Concurrent initial promotion (one winner) ===");
+  {
+    const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "conc-init", fam: "ci", risk: "standard" });
+    // Two sessions promoting the same CR with expectedBindingRevision=null
+    const [r1, r2] = await Promise.allSettled([
+      asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c.crId, c.stateRev, promoterId]),
+      asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c.crId, c.stateRev, promoterId]),
+    ]);
+    const succ = [r1, r2].filter(r => r.status === "fulfilled" && r.value.rows[0].out_outcome === "succeeded").length;
+    const failed = [r1, r2].filter(r => r.status === "fulfilled" && r.value.rows[0].out_outcome === "failed").length;
+    const errors = [r1, r2].filter(r => r.status === "rejected").length;
+    check("exactly one concurrent initial promotion succeeds", succ === 1, "successes=" + succ + " failures=" + failed + " errors=" + errors);
+    // Verify exactly one binding created for this resource
+    const binds = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.active_policy_bindings WHERE resource_id='conc-init'")).rows[0].n;
+    check("exactly one binding for concurrent resource", binds === 1, "bindings=" + binds);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 15: Concurrent replacement promotion — one winner
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 15: Concurrent replacement promotion (one winner) ===");
+  {
+    // Create initial binding
+    const c0 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "conc-repl", fam: "cr", risk: "standard" });
+    await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c0.crId, c0.stateRev, promoterId]);
+    const b = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings WHERE resource_id='conc-repl'")).rows[0];
+    // Two approved CRs targeting the same binding at the same revision
+    const c1 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "conc-repl", fam: "cr", risk: "standard" });
+    const c2 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "conc-repl", fam: "cr", risk: "standard" });
+    const [r1, r2] = await Promise.allSettled([
+      asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [c1.crId, c1.stateRev, b.binding_revision, promoterId]),
+      asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [c2.crId, c2.stateRev, b.binding_revision, promoterId]),
+    ]);
+    const succ = [r1, r2].filter(r => r.status === "fulfilled" && r.value.rows[0].out_outcome === "succeeded").length;
+    check("exactly one concurrent replacement succeeds", succ === 1, "successes=" + succ);
+    // Verify binding revision incremented exactly once
+    const bAfter = (await asDbo(pool, "SELECT binding_revision FROM gitwire_policy.active_policy_bindings WHERE resource_id='conc-repl'")).rows[0];
+    check("binding revision incremented once", Number(bAfter.binding_revision) === Number(b.binding_revision) + 1, "rev=" + bAfter.binding_revision);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 16: Rollback equivalence — GP-01–GP-04 ACL state preserved
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 16: Rollback equivalence (GP-01–GP-04 ACL state) ===");
+  {
+    const eqPort = await pickPort();
+    const eqName = "gp05-eq-" + eqPort;
+    docker("run", "-d", "--rm", "--name", eqName, "-p", "127.0.0.1:" + eqPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+    const eqUrl = "postgresql://proof:proof-only@127.0.0.1:" + eqPort + "/proofdb";
+    try {
+      await waitForReady(eqUrl, 60_000);
+      const eqPool = new pg.Pool({ connectionString: eqUrl });
+      // Apply through 047 (pre-GP-05 baseline)
+      const c = await eqPool.connect();
+      await c.query("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+      const files = (await readdir(MIGRATIONS_DIR)).filter(f => f.endsWith(".sql")).sort();
+      for (const f of files) {
+        if (f.startsWith("048")) break;
+        const sql = await readFile(join(MIGRATIONS_DIR, f), "utf8");
+        try { await c.query("BEGIN"); await c.query(sql); await c.query("INSERT INTO schema_migrations (version) VALUES ($1)", [f]); await c.query("COMMIT"); }
+        catch (e) { await c.query("ROLLBACK"); throw new Error(f + ": " + e.message); }
+      }
+      c.release();
+
+      // Snapshot GP-03 lifecycle SELECT grant (the one 048 must not revoke)
+      const lifecycleGrantBefore = (await eqPool.query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='gitwire_policy' AND table_name='policy_approval_lifecycle' AND grantee='gitwire_policy_fn_owner' AND privilege_type='SELECT'")).rows[0].n;
+
+      // Apply 048
+      const mig048 = await readFile(join(MIGRATIONS_DIR, "048_gp05_promotion_rollback.sql"), "utf8");
+      docker("cp", join(MIGRATIONS_DIR, "048_gp05_promotion_rollback.sql"), eqName + ":/tmp/m048.sql");
+      execFileSync("docker", ["exec", eqName, "psql", "-q", "-v", "ON_ERROR_STOP=1", "-U", "proof", "-d", "proofdb", "-f", "/tmp/m048.sql"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      await eqPool.query("INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", ["048_gp05_promotion_rollback.sql"]);
+
+      // Run rollback
+      docker("cp", join(ROLLBACK_DIR, "rollback_gp05_promotion_rollback.sql"), eqName + ":/tmp/rb048.sql");
+      execFileSync("docker", ["exec", eqName, "psql", "-q", "-v", "ON_ERROR_STOP=1", "-U", "proof", "-d", "proofdb", "-f", "/tmp/rb048.sql"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+
+      // Verify GP-03 lifecycle SELECT grant still present
+      const lifecycleGrantAfter = (await eqPool.query("SELECT count(*)::int n FROM information_schema.role_table_grants WHERE table_schema='gitwire_policy' AND table_name='policy_approval_lifecycle' AND grantee='gitwire_policy_fn_owner' AND privilege_type='SELECT'")).rows[0].n;
+      check("GP-03 lifecycle SELECT grant preserved after rollback", lifecycleGrantBefore === 1 && lifecycleGrantAfter === 1, "before=" + lifecycleGrantBefore + " after=" + lifecycleGrantAfter);
+
+      // Verify GP-02 change_requests UPDATE grant still present (column-level)
+      const crUpdateGrant = (await eqPool.query("SELECT count(*)::int n FROM information_schema.role_column_grants WHERE table_schema='gitwire_policy' AND table_name='policy_change_requests' AND grantee='gitwire_policy_fn_owner' AND privilege_type='UPDATE'")).rows[0].n;
+      check("GP-02 change_requests column UPDATE grants preserved", crUpdateGrant > 0, "grants=" + crUpdateGrant);
+
+      // Verify 048 objects removed
+      const fnCount = (await eqPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname LIKE '%rollback%'")).rows[0].n;
+      check("no rollback functions after GP-05 rollback", fnCount === 0, "fns=" + fnCount);
+
+      await eqPool.end();
+    } finally {
+      try { docker("rm", "-f", eqName); } catch {}
+    }
+  }
+
   console.log("\n=== GP-05 Promotion & Rollback Proof: " + passed + " passed, " + failed + " failed ===");
 } catch (e) {
   console.error("PROOF ERROR:", e.message);

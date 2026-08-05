@@ -240,6 +240,7 @@ DECLARE
   v_repo_row_count int;
   v_version_resolved boolean := false;
   v_rule_resolved    boolean := false;
+  v_binding_resolved boolean := false;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'promote_policy_change_request: caller must be gitwire_app, got %', session_user;
@@ -274,6 +275,14 @@ BEGIN
       RAISE EXCEPTION 'promote_policy_change_request: change request % not found', p_change_request_id;
     END IF;
 
+    -- Resolve version early so that resolved domain refusals (not_approved,
+    -- stale_request_revision) can write a failed record with version context.
+    IF v_cr.selected_version_id IS NOT NULL THEN
+      SELECT id, content_hash, author_principal_id AS version_author INTO v_version
+        FROM policy_versions WHERE id = v_cr.selected_version_id;
+      IF FOUND THEN v_version_resolved := true; END IF;
+    END IF;
+
     IF v_cr.state != 'approved' THEN
       v_failure_code := 'not_approved'; EXIT;
     END IF;
@@ -283,12 +292,7 @@ BEGIN
     IF v_cr.selected_version_id IS NULL THEN
       v_failure_code := 'no_selected_version'; EXIT;
     END IF;
-
-    -- steps 3-4: resolve version + content_hash
-    SELECT id, content_hash, author_principal_id AS version_author INTO v_version
-      FROM policy_versions WHERE id = v_cr.selected_version_id;
-    IF NOT FOUND THEN v_failure_code := 'version_not_found'; EXIT; END IF;
-    v_version_resolved := true;
+    IF NOT v_version_resolved THEN v_failure_code := 'version_not_found'; EXIT; END IF;
 
     -- ── Defect 2: resolve evidence hashes from the awaiting_approval event ──
     -- Match by version_id (not state_revision, since the CR has since transitioned
@@ -435,8 +439,9 @@ BEGIN
     SELECT * INTO v_binding FROM active_policy_bindings
       WHERE resource_type = v_cr.resource_type AND resource_id = v_cr.resource_id AND policy_family = v_cr.policy_family
       FOR UPDATE;
+    v_binding_resolved := FOUND;
 
-    IF v_binding.id IS NULL THEN
+    IF NOT v_binding_resolved THEN
       IF p_expected_binding_revision IS NOT NULL THEN v_failure_code := 'stale_binding_revision'; EXIT; END IF;
       v_base_version_id := NULL;
       v_base_revision := 0;
@@ -499,7 +504,7 @@ BEGIN
       'risk_classification', v_risk,
       'approval_rule_id', CASE WHEN v_rule_resolved THEN v_rule.id ELSE NULL END,
       'counted_approval_ids', to_jsonb(v_approval_ids),
-      'base_binding_id', v_binding.id,
+      'base_binding_id', CASE WHEN v_binding_resolved THEN v_binding.id ELSE NULL END,
       'base_version_id', v_base_version_id,
       'base_revision', v_base_revision,
       'promoter_principal_id', p_actor_principal_id,
@@ -508,14 +513,16 @@ BEGIN
       (id, binding_id, resource_type, resource_id, policy_family,
        change_request_id, target_version_id, base_version_id, base_revision,
        promoter_principal_id, outcome, failure_code, promotion_kind, evidence_snapshot, occurred_at)
-    VALUES (v_promo_id, v_binding.id, v_cr.resource_type, v_cr.resource_id, v_cr.policy_family,
+    VALUES (v_promo_id, CASE WHEN v_binding_resolved THEN v_binding.id ELSE NULL END,
+       v_cr.resource_type, v_cr.resource_id, v_cr.policy_family,
        p_change_request_id, v_version.id,
        v_base_version_id, v_base_revision,
        p_actor_principal_id, 'failed', v_failure_code, 'forward', v_evidence_snapshot, v_now);
 
     out_promotion_record_id := v_promo_id; out_outcome := 'failed';
     out_failure_code := v_failure_code;
-    out_binding_id := v_binding.id; out_binding_revision := v_binding.binding_revision;
+    out_binding_id := CASE WHEN v_binding_resolved THEN v_binding.id ELSE NULL END;
+    out_binding_revision := CASE WHEN v_binding_resolved THEN v_binding.binding_revision ELSE NULL END;
     out_change_request_id := p_change_request_id; out_new_state := v_cr.state; out_new_state_revision := v_cr.state_revision;
     RETURN NEXT; RETURN;
   END IF;
