@@ -1,10 +1,14 @@
-# docker/docker-compose.yml
+# packages/web/docker/docker-compose.yml
 # Starts PostgreSQL + Redis for local development.
 # The Node.js app runs directly on your machine (not in Docker).
 #
-# Usage:
-#   cd docker && docker compose up -d
-#   cd .. && npm run dev
+# Usage (from the repository root):
+#   docker compose -f packages/web/docker/docker-compose.yml up -d --wait
+#   npm run db:migrate
+#   npm run dev
+#
+# The npm migration runner (scripts/migrate.js) is the sole migration path.
+# Migrations are NOT mounted into PostgreSQL init scripts.
 
 services:
   postgres:
@@ -18,7 +22,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../db/migrations:/docker-entrypoint-initdb.d   # auto-runs migrations on first start
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gitops -d gitops_hub"]
       interval: 5s

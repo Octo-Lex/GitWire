@@ -456,29 +456,57 @@ GitWire ships with a Telegram bot for operational checks and lightweight command
 - Node.js 20+
 - npm
 - Docker and Docker Compose
-- GitHub App credentials
-- Anthropic API key
 
-### Run Locally
+GitHub App credentials and an Anthropic API key are needed for GitHub
+connection, AI diagnosis, and action execution. They are **not** required
+to start the local server — see [GitHub App setup](docs/installation/github-app-setup.md)
+and [Environment variables](docs/installation/environment-variables.md) when
+you are ready to connect GitHub.
+
+### Local Development
+
+The local development setup runs PostgreSQL and Redis in Docker containers
+and the Node.js application directly on your machine.
 
 ```bash
+# 1. Clone and install dependencies
 git clone https://github.com/Octo-Lex/GitWire.git
 cd GitWire
 npm install
 
+# 2. Copy the environment template
 cp packages/web/.env.example packages/web/.env
-# Edit packages/web/.env with your GitHub App and API credentials.
+# The template already contains local-development defaults:
+#   DATABASE_URL=postgresql://gitops:password@localhost:5432/gitops_hub
+#   REDIS_URL=redis://localhost:6379
+# GitHub and Anthropic credentials can be added later.
 
-cd docker
-docker compose up -d
-cd ..
+# 3. Start PostgreSQL and Redis (waits for health checks)
+docker compose -f packages/web/docker/docker-compose.yml up -d --wait
 
+# 4. Apply database migrations (run once during initial setup)
 npm run db:migrate
+# Re-running this command is safe — it reports already-applied migrations.
+
+# 5. Start the backend server
 npm run dev
+# Backend: http://localhost:3000
+
+# 6. In a separate terminal, start the dashboard
+npm --workspace=web-dashboard run dev
+# Dashboard: http://localhost:3001
 ```
 
-- Backend: `http://localhost:3000`
-- Dashboard: `http://localhost:3001`
+### Verify the local server
+
+```bash
+curl http://localhost:3000/health
+# Expected: {"status":"ok",...}
+```
+
+GitHub connection, repository diagnosis, AI recommendations, and action
+execution require their external credentials and are outside the
+infrastructure-only startup described above.
 
 ### Common Commands
 
