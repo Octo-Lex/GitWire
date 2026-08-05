@@ -399,6 +399,8 @@ BEGIN
         AND a.approval_rule_id = v_rule.id
         AND a.approval_rule_hash = v_rule.rule_hash
         AND a.risk_classification = v_risk
+        AND a.resource_scope_type = v_cr.resource_type
+        AND a.resource_scope_id = v_cr.resource_id
         AND (a.expires_at IS NULL OR a.expires_at > v_now)
         AND EXISTS (
           SELECT 1 FROM policy_approval_lifecycle pal
