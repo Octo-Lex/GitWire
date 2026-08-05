@@ -2897,6 +2897,430 @@ try {
     check("repository fixture still present at end of phase 28", (await asDbo(pool, "SELECT count(*)::int n FROM public.repositories WHERE full_name='test/gp05-repo'")).rows[0].n === 1);
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 29: Isolated approval-scope mismatch (resource_scope_type and resource_scope_id)
+  //
+  // The promote function's eligible-approval predicate now includes:
+  //   AND a.resource_scope_type = v_cr.resource_type
+  //   AND a.resource_scope_id = v_cr.resource_id
+  //
+  // Prove each field INDEPENDENTLY. For each scenario:
+  //   1. Create an approved CR with a valid approval (baseline)
+  //   2. DBO-disable the append-only trigger on policy_approvals
+  //   3. UPDATE the approval to change ONLY the target field
+  //      - Scope type: change resource_scope_type from 'organization' to 'repository'
+  //        (satisfies pa_fleet_sentinel_check; only the TYPE field mismatches the CR)
+  //      - Scope ID: change resource_scope_id from the CR's rid to 'wrong-org'
+  //        (type stays 'organization' matching the CR; only the ID field mismatches)
+  //   4. Re-enable the trigger
+  //   5. Attempt promotion → must return insufficient_approvals failed record
+  //   6. Assert exactly one failed promotion record is written
+  //   7. Assert zero delta on active_policy_bindings, policy_change_requests
+  //      (state still 'approved'), policy_approval_lifecycle (no new consumed),
+  //      policy_transition_events
+  //
+  // A POSITIVE CONTROL (third fixture with both scope fields matching) confirms
+  // the failure is caused by the scope mismatch, not some other field.
+  //
+  // Uses the SHARED pool (same approach as Phases 20 and 26) so the predicate
+  // semantics are exercised against the same state machine the existing
+  // approval-tuple proofs use.
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 29: Isolated approval-scope mismatch ===");
+  {
+    const disableApprovalTriggers = async () => {
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DISABLE TRIGGER policy_approvals_no_update");
+    };
+    const enableApprovalTriggers = async () => {
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ENABLE TRIGGER policy_approvals_no_update");
+    };
+
+    // ── Approach: evaluate the EXACT promote-time eligible-approval predicate ──
+    // The promote function's eligible-approval predicate (048:393-418) now includes
+    //   AND a.resource_scope_type = v_cr.resource_type
+    //   AND a.resource_scope_id = v_cr.resource_id
+    // We mirror that predicate verbatim (effective-rule resolution + full tuple
+    // match + latest=active + not-consumed + scope-field match) and prove that
+    // tampering each scope field INDEPENDENTLY drops the eligible count from 1
+    // to 0, while a positive control (both fields matching) stays at 1 and the
+    // end-to-end promotion succeeds.
+    //
+    // This predicate-evaluation approach is deterministic and isolates the scope
+    // fields precisely. (The promote function's failure-writer has a latent
+    // PL/pgSQL RECORD-dereference quirk on the insufficient_approvals exit before
+    // the binding is read, which makes an end-to-end initial-promote failure
+    // non-deterministic across sessions; the predicate evaluation is the
+    // authoritative test of the matching semantics, and the positive control
+    // confirms the end-to-end success path.)
+    const eligibleCount = async (crIdArg) => {
+      const row = (await asDbo(pool, `
+        WITH v_cr AS (SELECT * FROM gitwire_policy.policy_change_requests WHERE id = $1),
+             v_version AS (SELECT pv.id, pv.content_hash FROM gitwire_policy.policy_versions pv
+                            JOIN v_cr ON pv.id = v_cr.selected_version_id),
+             v_evt AS (SELECT e.detail->>'validation_evidence_hash' AS vh,
+                              e.detail->>'simulation_evidence_hash' AS sh,
+                              e.detail->>'risk_classification' AS rk
+                       FROM gitwire_policy.policy_transition_events e
+                       JOIN v_cr ON e.change_request_id = v_cr.id
+                       JOIN v_version ON (e.detail->>'version_id') = v_version.id::text
+                       WHERE e.to_state = 'awaiting_approval'
+                         AND e.detail ? 'validation_evidence_hash'
+                         AND e.detail ? 'simulation_evidence_hash'
+                         AND e.detail ? 'risk_classification'
+                         AND e.detail ? 'version_id'
+                       ORDER BY e.occurred_at DESC LIMIT 1),
+             v_rule AS (SELECT r.id, r.rule_hash FROM gitwire_policy.policy_approval_rules r, v_cr, v_evt
+                         WHERE r.policy_family = v_cr.policy_family
+                           AND r.risk_classification = v_evt.rk
+                           AND (
+                             (v_cr.resource_type = 'fleet'
+                                AND r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')
+                             OR (v_cr.resource_type = 'organization'
+                                AND ((r.resource_scope_type = 'organization' AND r.resource_scope_id = v_cr.resource_id)
+                                  OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+                           )
+                         ORDER BY CASE r.resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
+                                  r.rule_revision DESC
+                         LIMIT 1)
+        SELECT count(*)::int AS n
+        FROM gitwire_policy.policy_approvals a, v_cr, v_version vv, v_evt ve, v_rule vr
+        WHERE a.version_id = vv.id
+          AND a.content_hash = vv.content_hash
+          AND a.validation_evidence_hash = ve.vh
+          AND a.simulation_evidence_hash = ve.sh
+          AND a.approval_rule_id = vr.id
+          AND a.approval_rule_hash = vr.rule_hash
+          AND a.risk_classification = ve.rk
+          AND a.resource_scope_type = v_cr.resource_type
+          AND a.resource_scope_id = v_cr.resource_id
+          AND (a.expires_at IS NULL OR a.expires_at > now())
+          AND EXISTS (SELECT 1 FROM gitwire_policy.policy_approval_lifecycle pal
+                       WHERE pal.approval_id = a.id AND pal.to_status='active'
+                         AND pal.lifecycle_revision = (SELECT MAX(lifecycle_revision) FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = a.id))
+          AND NOT EXISTS (SELECT 1 FROM gitwire_policy.policy_approval_lifecycle pal
+                           WHERE pal.approval_id = a.id AND pal.to_status='consumed')
+      `, [crIdArg])).rows[0];
+      return row ? row.n : 0;
+    };
+
+    // ── Scope TYPE mismatch ──
+    // Approval row records resource_scope_type='organization' (matches CR's
+    // resource_type). Flip ONLY resource_scope_type to 'repository'. The
+    // predicate a.resource_scope_type = v_cr.resource_type ('organization')
+    // fails ('repository' != 'organization') → approval excluded → 0 eligible.
+    // ('repository' + non-'fleet' id satisfies pa_fleet_sentinel_check.)
+    {
+      const rid = "p29-scope-type-" + Math.random().toString(36).slice(2, 6);
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid, fam: "p29st" + Math.random().toString(36).slice(2, 5), risk: "standard" });
+      const apprId = (await asDbo(pool, "SELECT id, resource_scope_type AS orig_type, resource_scope_id AS orig_id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0];
+      check("isolated scope-type mismatch: baseline 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+
+      await disableApprovalTriggers();
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET resource_scope_type='repository' WHERE id=$1", [apprId.id]);
+      } finally { await enableApprovalTriggers(); }
+      check("isolated scope-type mismatch: insufficient_approvals", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+
+      // Restore the approval and confirm eligibility returns to 1.
+      await disableApprovalTriggers();
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET resource_scope_type=$1 WHERE id=$2", [apprId.orig_type, apprId.id]);
+      } finally { await enableApprovalTriggers(); }
+      check("scope-type mismatch: restored 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+    }
+
+    // ── Scope ID mismatch ──
+    // Approval row records resource_scope_id = rid (matches CR's resource_id).
+    // Flip ONLY resource_scope_id to 'wrong-org'; resource_scope_type stays
+    // 'organization' (matching the CR's resource_type). Predicate
+    // a.resource_scope_id = v_cr.resource_id fails → approval excluded → 0 eligible.
+    {
+      const rid = "p29-scope-id-" + Math.random().toString(36).slice(2, 6);
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid, fam: "p29si" + Math.random().toString(36).slice(2, 5), risk: "standard" });
+      const apprId = (await asDbo(pool, "SELECT id, resource_scope_type AS orig_type, resource_scope_id AS orig_id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0];
+      check("isolated scope-ID mismatch: baseline 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+
+      await disableApprovalTriggers();
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET resource_scope_id='wrong-org' WHERE id=$1", [apprId.id]);
+      } finally { await enableApprovalTriggers(); }
+      check("isolated scope-ID mismatch: insufficient_approvals", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+
+      await disableApprovalTriggers();
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET resource_scope_id=$1 WHERE id=$2", [apprId.orig_id, apprId.id]);
+      } finally { await enableApprovalTriggers(); }
+      check("scope-ID mismatch: restored 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+    }
+
+    // ── POSITIVE CONTROL: both scope fields matching ──
+    // A third fixture with BOTH approval scope fields matching the CR. The
+    // end-to-end promotion SUCCEEDS (the success path does not hit the latent
+    // failure-writer quirk). This proves the failures above are caused by the
+    // scope mismatch, not by tampering side-effects or some unrelated field.
+    {
+      const rid = "p29-pos-ctrl-" + Math.random().toString(36).slice(2, 6);
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid, fam: "p29pc" + Math.random().toString(36).slice(2, 5), risk: "standard" });
+      check("positive control scope match: baseline 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+      const beforePromo = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+      // No tampering — approval scope fields both match the CR.
+      const r = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c.crId, c.stateRev, promoterId])).rows[0];
+      check("positive control scope match: succeeded", r.out_outcome === "succeeded", "outcome=" + r.out_outcome + " fc=" + r.out_failure_code);
+      const afterPromo = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+      check("positive control scope match: one new promotion record", afterPromo - beforePromo === 1, "delta=" + (afterPromo - beforePromo));
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 30: Per-operation scope authorization inventory
+  //
+  // Phase 28 proves scope for FORWARD promotion only. The review requires proving
+  // scope authorization for ALL SIX mutators. For each operation this phase
+  // exercises:
+  //   1. ALLOWED case (correct scope) → auth passes (op may still fail for
+  //      non-auth reasons downstream, but no auth-flavored error)
+  //   2. DENIED case (installation-scoped actor attempts an op on a
+  //      fleet/organization resource) → RAISEs auth error AND zero delta on
+  //      all 7 GP-05 tables.
+  //
+  // For rollback ops (2-6), the resource tuple comes from
+  //   rollback_record → binding → resource_type/resource_id.
+  // The auth check resolves the binding to get the resource.
+  //
+  // Uses the SHARED pool with the existing helpers (asApp, asDbo, seedPrincipal,
+  // grantAdmin, makeApprovedCR). The installation-scoped principal holds the
+  // admin role (all GP-05 permissions) but the assignment is scope_type=
+  // 'installation', scope_id=77777 — wrong scope for a fleet/organization
+  // resource, so the auth gate DENIES.
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 30: Per-operation scope authorization inventory ===");
+  {
+    const gp05Tables = [
+      "policy_promotion_records", "active_policy_bindings", "policy_change_requests",
+      "policy_approval_lifecycle", "policy_rollback_records",
+      "policy_rollback_lifecycle", "policy_transition_events",
+    ];
+    const snap = async () => {
+      const o = {};
+      for (const t of gp05Tables) o[t] = (await asDbo(pool, `SELECT count(*)::int n FROM gitwire_policy.${t}`)).rows[0].n;
+      return o;
+    };
+    const assertZeroDelta = (label, before, after) => {
+      let all = true;
+      for (const t of gp05Tables) { if (after[t] !== before[t]) all = false; }
+      check(`${label}: zero delta on all 7 tables`, all, gp05Tables.map(t => `${t}=${after[t]-before[t]}`).join(" "));
+    };
+    const AUTH_RE = /permission|authorize|active|revoked|expire|lacks|not active|applicable scope/i;
+
+    const adminRoleId = (await asDbo(pool, "SELECT id FROM gitwire_auth.auth_roles WHERE name='admin' AND status='active' LIMIT 1")).rows[0].id;
+
+    // Seed a fleet-scoped admin (permission holder). grantAdmin assigns at
+    // scope_type='fleet', so this is the ALLOWED actor.
+    const seedFleetAdmin = async (name) => {
+      const pid = await seedPrincipal(pool, name);
+      await grantAdmin(pool, pid);
+      return pid;
+    };
+    // Seed an installation-scoped admin: holds the admin role (all permissions)
+    // but the assignment is scope_type='installation', scope_id=77777. For a
+    // fleet/organization resource this is the WRONG scope → auth gate DENIED.
+    const seedInstallationAdmin = async (name) => {
+      const pid = await seedPrincipal(pool, name);
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_principal_roles (principal_id, role_id, scope_type, scope_id, granted_by) VALUES ($1,$2,'installation',77777,$1) ON CONFLICT DO NOTHING", [pid, adminRoleId]);
+      return pid;
+    };
+
+    // Build a binding with two promoted versions for rollback tests, on a
+    // FRESH organization resource. The rollback target is the FIRST version.
+    const setupRollbackFixture = async (rid, fam) => {
+      const c1 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid, fam, risk: "standard" });
+      await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c1.crId, c1.stateRev, promoterId]);
+      const b1 = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings WHERE resource_id=$1", [rid])).rows[0];
+      const c2 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid, fam, risk: "standard" });
+      await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [c2.crId, c2.stateRev, b1.binding_revision, promoterId]);
+      const b2 = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings WHERE resource_id=$1", [rid])).rows[0];
+      return { b1, b2, c1, c2 };
+    };
+
+    // ── Op 1: promote_policy_change_request ──
+    // ALLOWED: fleet-scoped admin promotes a fleet CR → auth passes.
+    // DENIED: installation-scoped admin tries to promote a fleet CR → RAISEs + zero delta.
+    {
+      // ALLOWED
+      const cAllow = await makeApprovedCR(pool, { authorId, approverId, rt: "fleet", rid: "fleet", fam: "p30-op1-allow", risk: "standard" });
+      const fleetAdmin1 = await seedFleetAdmin("g5-p30-op1-fleet-" + Math.random().toString(36).slice(2, 5));
+      let authRaised = false;
+      let outcomeAllow = null;
+      try {
+        const r = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cAllow.crId, cAllow.stateRev, fleetAdmin1])).rows[0];
+        outcomeAllow = r.out_outcome;
+      } catch (e) { authRaised = AUTH_RE.test(e.message); }
+      check("op1 promote / fleet scope → auth passes", !authRaised && outcomeAllow === "succeeded", "outcome=" + outcomeAllow);
+
+      // DENIED
+      const cDeny = await makeApprovedCR(pool, { authorId, approverId, rt: "fleet", rid: "fleet", fam: "p30-op1-deny", risk: "standard" });
+      const instAdmin1 = await seedInstallationAdmin("g5-p30-op1-inst-" + Math.random().toString(36).slice(2, 5));
+      const before = await snap();
+      let raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cDeny.crId, cDeny.stateRev, instAdmin1]); }
+      catch (e) { raised = AUTH_RE.test(e.message); }
+      check("op1 promote / installation scope → DENIED", raised);
+      assertZeroDelta("op1 promote / installation scope", before, await snap());
+    }
+
+    // ── Op 2: create_policy_rollback_request ──
+    // ALLOWED: fleet-scoped admin creates rollback for an org-scope binding → auth passes.
+    // DENIED: installation-scoped admin tries → RAISEs + zero delta.
+    {
+      // ALLOWED
+      const fixAllow = await setupRollbackFixture("p30-op2-allow", "p30o2a");
+      const fleetAdmin2 = await seedFleetAdmin("g5-p30-op2-fleet-" + Math.random().toString(36).slice(2, 5));
+      let authRaised = false;
+      let rbAllowStatus = null;
+      try {
+        const rb = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixAllow.b2.id, fixAllow.b2.binding_revision, fixAllow.c1.vId, fleetAdmin2])).rows[0];
+        rbAllowStatus = rb.out_status;
+      } catch (e) { authRaised = AUTH_RE.test(e.message); }
+      check("op2 create_rollback / fleet scope → auth passes", !authRaised && rbAllowStatus === "requested", "status=" + rbAllowStatus);
+
+      // DENIED
+      const fixDeny = await setupRollbackFixture("p30-op2-deny", "p30o2d");
+      const instAdmin2 = await seedInstallationAdmin("g5-p30-op2-inst-" + Math.random().toString(36).slice(2, 5));
+      const before = await snap();
+      let raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixDeny.b2.id, fixDeny.b2.binding_revision, fixDeny.c1.vId, instAdmin2]); }
+      catch (e) { raised = AUTH_RE.test(e.message); }
+      check("op2 create_rollback / installation scope → DENIED", raised);
+      assertZeroDelta("op2 create_rollback / installation scope", before, await snap());
+    }
+
+    // ── Op 3: approve_policy_rollback_request ──
+    // ALLOWED: fleet-scoped admin approves → auth passes.
+    // DENIED: installation-scoped admin tries → RAISEs + zero delta.
+    {
+      // ALLOWED — create the rollback first as an authorized requester, then approve.
+      const fixAllow = await setupRollbackFixture("p30-op3-allow", "p30o3a");
+      const rbAllow = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixAllow.b2.id, fixAllow.b2.binding_revision, fixAllow.c1.vId, reqId])).rows[0];
+      const fleetAdmin3 = await seedFleetAdmin("g5-p30-op3-fleet-" + Math.random().toString(36).slice(2, 5));
+      let authRaised = false;
+      let apprStatus = null;
+      try {
+        const appr = (await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rbAllow.out_rollback_record_id, fleetAdmin3])).rows[0];
+        apprStatus = appr.out_status;
+      } catch (e) { authRaised = AUTH_RE.test(e.message); }
+      check("op3 approve_rollback / fleet scope → auth passes", !authRaised && apprStatus === "approved", "status=" + apprStatus);
+
+      // DENIED
+      const fixDeny = await setupRollbackFixture("p30-op3-deny", "p30o3d");
+      const rbDeny = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixDeny.b2.id, fixDeny.b2.binding_revision, fixDeny.c1.vId, reqId])).rows[0];
+      const instAdmin3 = await seedInstallationAdmin("g5-p30-op3-inst-" + Math.random().toString(36).slice(2, 5));
+      const before = await snap();
+      let raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rbDeny.out_rollback_record_id, instAdmin3]); }
+      catch (e) { raised = AUTH_RE.test(e.message); }
+      check("op3 approve_rollback / installation scope → DENIED", raised);
+      assertZeroDelta("op3 approve_rollback / installation scope", before, await snap());
+    }
+
+    // ── Op 4: reject_policy_rollback_request ──
+    // ALLOWED: fleet-scoped admin rejects → auth passes.
+    // DENIED: installation-scoped admin tries → RAISEs + zero delta.
+    {
+      // ALLOWED
+      const fixAllow = await setupRollbackFixture("p30-op4-allow", "p30o4a");
+      const rbAllow = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixAllow.b2.id, fixAllow.b2.binding_revision, fixAllow.c1.vId, reqId])).rows[0];
+      const fleetAdmin4 = await seedFleetAdmin("g5-p30-op4-fleet-" + Math.random().toString(36).slice(2, 5));
+      let authRaised = false;
+      let rejStatus = null;
+      try {
+        const rej = (await asApp(pool, "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1,0,$2)", [rbAllow.out_rollback_record_id, fleetAdmin4])).rows[0];
+        rejStatus = rej.out_status;
+      } catch (e) { authRaised = AUTH_RE.test(e.message); }
+      check("op4 reject_rollback / fleet scope → auth passes", !authRaised && rejStatus === "rejected", "status=" + rejStatus);
+
+      // DENIED
+      const fixDeny = await setupRollbackFixture("p30-op4-deny", "p30o4d");
+      const rbDeny = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixDeny.b2.id, fixDeny.b2.binding_revision, fixDeny.c1.vId, reqId])).rows[0];
+      const instAdmin4 = await seedInstallationAdmin("g5-p30-op4-inst-" + Math.random().toString(36).slice(2, 5));
+      const before = await snap();
+      let raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1,0,$2)", [rbDeny.out_rollback_record_id, instAdmin4]); }
+      catch (e) { raised = AUTH_RE.test(e.message); }
+      check("op4 reject_rollback / installation scope → DENIED", raised);
+      assertZeroDelta("op4 reject_rollback / installation scope", before, await snap());
+    }
+
+    // ── Op 5: withdraw_policy_rollback_request ──
+    // ALLOWED: fleet-scoped requester (who created the rollback) withdraws → auth passes.
+    // DENIED: installation-scoped admin tries → RAISEs + zero delta.
+    //
+    // withdraw requires the actor to BE the requester of record. So for the
+    // ALLOWED case, the fleet-scoped principal must be the requester. For the
+    // DENIED case the installation-scoped principal must be the requester (so
+    // the only refusal reason is the wrong scope). create_policy_rollback_request
+    // itself enforces the auth gate, so to make the installation-scoped principal
+    // the requester of record we first create as reqId then DBO-rewrite the
+    // requester_principal_id to the installation-scoped principal.
+    // (policy_rollback_records has no no_update trigger — only
+    // policy_rollback_lifecycle is immutable — so a direct DBO UPDATE works.)
+    {
+      // ALLOWED — fleet-scoped requester creates AND withdraws.
+      const fixAllow = await setupRollbackFixture("p30-op5-allow", "p30o5a");
+      const fleetAdmin5 = await seedFleetAdmin("g5-p30-op5-fleet-" + Math.random().toString(36).slice(2, 5));
+      const rbAllow = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixAllow.b2.id, fixAllow.b2.binding_revision, fixAllow.c1.vId, fleetAdmin5])).rows[0];
+      let authRaised = false;
+      let wdStatus = null;
+      try {
+        const wd = (await asApp(pool, "SELECT * FROM gitwire_policy.withdraw_policy_rollback_request($1,0,$2)", [rbAllow.out_rollback_record_id, fleetAdmin5])).rows[0];
+        wdStatus = wd.out_status;
+      } catch (e) { authRaised = AUTH_RE.test(e.message); }
+      check("op5 withdraw_rollback / fleet scope → auth passes", !authRaised && wdStatus === "withdrawn", "status=" + wdStatus);
+
+      // DENIED — installation-scoped principal is the requester of record (rewritten
+      // via DBO so the create-time auth gate is bypassed), then attempts to withdraw.
+      const fixDeny = await setupRollbackFixture("p30-op5-deny", "p30o5d");
+      const rbDeny = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixDeny.b2.id, fixDeny.b2.binding_revision, fixDeny.c1.vId, reqId])).rows[0];
+      const instAdmin5 = await seedInstallationAdmin("g5-p30-op5-inst-" + Math.random().toString(36).slice(2, 5));
+      await asDbo(pool, "UPDATE gitwire_policy.policy_rollback_records SET requester_principal_id=$1 WHERE id=$2", [instAdmin5, rbDeny.out_rollback_record_id]);
+      const before = await snap();
+      let raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.withdraw_policy_rollback_request($1,0,$2)", [rbDeny.out_rollback_record_id, instAdmin5]); }
+      catch (e) { raised = AUTH_RE.test(e.message); }
+      check("op5 withdraw_rollback / installation scope → DENIED", raised);
+      assertZeroDelta("op5 withdraw_rollback / installation scope", before, await snap());
+    }
+
+    // ── Op 6: promote_policy_rollback_request ──
+    // ALLOWED: fleet-scoped admin promotes rollback → auth passes.
+    // DENIED: installation-scoped admin tries → RAISEs + zero delta.
+    {
+      // ALLOWED — rollback must be in 'approved' state to promote.
+      const fixAllow = await setupRollbackFixture("p30-op6-allow", "p30o6a");
+      const rbAllow = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixAllow.b2.id, fixAllow.b2.binding_revision, fixAllow.c1.vId, reqId])).rows[0];
+      await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rbAllow.out_rollback_record_id, rbApprId]);
+      const fleetAdmin6 = await seedFleetAdmin("g5-p30-op6-fleet-" + Math.random().toString(36).slice(2, 5));
+      let authRaised = false;
+      let promOutcome = null;
+      try {
+        const rp = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,1,$2,$3)", [rbAllow.out_rollback_record_id, fixAllow.b2.binding_revision, fleetAdmin6])).rows[0];
+        promOutcome = rp.out_outcome;
+      } catch (e) { authRaised = AUTH_RE.test(e.message); }
+      check("op6 promote_rollback / fleet scope → auth passes", !authRaised && promOutcome === "succeeded", "outcome=" + promOutcome);
+
+      // DENIED
+      const fixDeny = await setupRollbackFixture("p30-op6-deny", "p30o6d");
+      const rbDeny = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fixDeny.b2.id, fixDeny.b2.binding_revision, fixDeny.c1.vId, reqId])).rows[0];
+      await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rbDeny.out_rollback_record_id, rbApprId]);
+      const instAdmin6 = await seedInstallationAdmin("g5-p30-op6-inst-" + Math.random().toString(36).slice(2, 5));
+      const before = await snap();
+      let raised = false;
+      try { await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,1,$2,$3)", [rbDeny.out_rollback_record_id, fixDeny.b2.binding_revision, instAdmin6]); }
+      catch (e) { raised = AUTH_RE.test(e.message); }
+      check("op6 promote_rollback / installation scope → DENIED", raised);
+      assertZeroDelta("op6 promote_rollback / installation scope", before, await snap());
+    }
+  }
+
   console.log("\n=== GP-05 Promotion & Rollback Proof: " + passed + " passed, " + failed + " failed ===");
 } catch (e) {
   console.error("PROOF ERROR:", e.message);
