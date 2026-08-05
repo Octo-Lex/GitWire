@@ -121,13 +121,17 @@ DROP FUNCTION reject_policy_rollback_request(uuid, bigint, uuid);
 DROP FUNCTION withdraw_policy_rollback_request(uuid, bigint, uuid);
 DROP FUNCTION promote_policy_rollback_request(uuid, bigint, bigint, uuid);
 
--- Revoke GP-05 fn_owner grants (only those added by migration 048)
+-- Revoke GP-05 fn_owner grants (only those added by migration 048).
+-- NOTE: migration 048 no longer grants UPDATE on policy_change_requests or
+-- SELECT on policy_approval_lifecycle to gitwire_policy_fn_owner — those are
+-- owned by GP-02/045 and GP-03/046 respectively. Rolling back 048 must not
+-- REVOKE privileges it never granted (doing so would strip the column-level
+-- UPDATE from 045 and the SELECT from 046, breaking earlier functions).
 REVOKE SELECT, INSERT ON policy_rollback_lifecycle FROM gitwire_policy_fn_owner;
 REVOKE SELECT, INSERT, UPDATE ON active_policy_bindings FROM gitwire_policy_fn_owner;
 REVOKE SELECT, INSERT ON policy_promotion_records FROM gitwire_policy_fn_owner;
 REVOKE SELECT, INSERT, UPDATE ON policy_rollback_records FROM gitwire_policy_fn_owner;
-REVOKE UPDATE ON policy_change_requests FROM gitwire_policy_fn_owner;
-REVOKE SELECT ON policy_approval_lifecycle FROM gitwire_policy_fn_owner;
+REVOKE SELECT ON gitwire_auth.auth_role_permissions FROM gitwire_policy_fn_owner;
 
 -- Drop the rollback lifecycle table (GP-05-owned, no GP-01..04 references it)
 DROP TABLE policy_rollback_lifecycle;

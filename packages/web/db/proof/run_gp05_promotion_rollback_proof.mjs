@@ -131,12 +131,18 @@ try {
     check("binding not mutated", Number(r.out_binding_revision) === Number(b.binding_revision));
   }
 
-  console.log("\n=== Phase 4: Inactive actor denied ===");
+  console.log("\n=== Phase 4: Inactive actor denied (attempt-local refusal, no record) ===");
   {
     const b = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings LIMIT 1")).rows[0];
     const { crId, stateRev } = await makeApprovedCR(pool, { authorId, approverId, rt: b.resource_type, rid: b.resource_id, fam: b.policy_family, risk: "standard" });
-    const r = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [crId, stateRev, b.binding_revision, inactId])).rows[0];
-    check("inactive actor refused", r.out_outcome === "failed" && r.out_failure_code === "inactive_actor", "fc=" + r.out_failure_code);
+    let raised = false;
+    try {
+      await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [crId, stateRev, b.binding_revision, inactId]);
+    } catch { raised = true; }
+    check("inactive actor RAISEs (attempt-local refusal)", raised);
+    // Verify no failed promotion record was written for this CR
+    const recs = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records WHERE change_request_id=$1", [crId])).rows[0].n;
+    check("no failed record for inactive actor", recs === 0, "records=" + recs);
   }
 
   console.log("\n=== Phase 5: Direct runtime DML denial ===");

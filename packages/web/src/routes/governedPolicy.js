@@ -3,6 +3,57 @@
 // GP-02 (issue #98): Immutable policy versions and change-request state machine.
 //
 // All mutating routes call observeAuthorize (Wave 2 observe-only seam) and
+
+// ── GP-05 exact-key body whitelist helpers ─────────────────────────────────
+// Reject unknown keys, non-object bodies, and malformed revision values.
+
+/**
+ * Validate that the request body is a plain object containing exactly the
+ * allowed keys. Returns { ok: true, values } or { ok: false, error }.
+ */
+function validateBody(body, allowedKeys) {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "Request body must be a JSON object" };
+  }
+  const present = Object.keys(body);
+  const extra = present.filter((k) => !allowedKeys.includes(k));
+  if (extra.length > 0) {
+    return { ok: false, error: `Unknown fields: ${extra.join(", ")}` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Parse a required non-negative integer revision from the body.
+ * Returns { ok: true, value } or { ok: false, error }.
+ */
+function parseRevision(body, key) {
+  const raw = body[key];
+  if (raw === undefined || raw === null) {
+    return { ok: false, error: `${key} is required` };
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+    return { ok: false, error: `${key} must be a non-negative integer` };
+  }
+  return { ok: true, value: n };
+}
+
+/**
+ * Parse an optional nullable revision. null is allowed (asserts no binding);
+ * a non-negative integer asserts an existing binding. Returns { ok, value }.
+ */
+function parseOptionalRevision(body, key) {
+  const raw = body[key];
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: null };
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+    return { ok: false, error: `${key} must be null or a non-negative integer` };
+  }
+  return { ok: true, value: n };
+}
 // use authoritativePrincipalId(req) for server-owned principal attribution.
 
 import { Router } from "express";
@@ -506,10 +557,12 @@ governedPolicyRouter.get("/change-requests/:id/simulation-evidence", async (req,
 governedPolicyRouter.post("/change-requests/:id/promote", async (req, res) => {
   try {
     const { id } = req.params;
-    const { expectedStateRevision, expectedBindingRevision } = req.body;
-    if (expectedStateRevision === undefined || expectedStateRevision === null) {
-      return res.status(400).json({ error: "expectedStateRevision is required" });
-    }
+    const bodyCheck = validateBody(req.body, ["expectedStateRevision", "expectedBindingRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const rev = parseRevision(req.body, "expectedStateRevision");
+    if (!rev.ok) return res.status(400).json({ error: rev.error });
+    const bindRev = parseOptionalRevision(req.body, "expectedBindingRevision");
+    if (!bindRev.ok) return res.status(400).json({ error: bindRev.error });
     const principalId = authoritativePrincipalId(req);
     await observeAuthorize(req, {
       permission: "policy_change_request:promote",
@@ -517,8 +570,8 @@ governedPolicyRouter.post("/change-requests/:id/promote", async (req, res) => {
     });
     const result = await promoteChangeRequest({
       changeRequestId: id,
-      expectedStateRevision: Number(expectedStateRevision),
-      expectedBindingRevision: expectedBindingRevision === undefined || expectedBindingRevision === null ? null : Number(expectedBindingRevision),
+      expectedStateRevision: rev.value,
+      expectedBindingRevision: bindRev.value,
       principalId,
     });
     if (result.outcome === "failed" && /CAS|stale|concurrently/i.test(result.failureCode || "")) {
@@ -541,9 +594,13 @@ governedPolicyRouter.post("/change-requests/:id/promote", async (req, res) => {
 governedPolicyRouter.post("/bindings/:id/rollback-requests", async (req, res) => {
   try {
     const { id } = req.params;
-    const { expectedBindingRevision, targetVersionId } = req.body;
-    if (expectedBindingRevision === undefined || expectedBindingRevision === null || !targetVersionId) {
-      return res.status(400).json({ error: "expectedBindingRevision and targetVersionId are required" });
+    const bodyCheck = validateBody(req.body, ["expectedBindingRevision", "targetVersionId"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const bindRev = parseRevision(req.body, "expectedBindingRevision");
+    if (!bindRev.ok) return res.status(400).json({ error: bindRev.error });
+    const { targetVersionId } = req.body;
+    if (!targetVersionId || typeof targetVersionId !== "string") {
+      return res.status(400).json({ error: "targetVersionId must be a non-empty string" });
     }
     const principalId = authoritativePrincipalId(req);
     await observeAuthorize(req, {
@@ -552,7 +609,7 @@ governedPolicyRouter.post("/bindings/:id/rollback-requests", async (req, res) =>
     });
     const result = await createRollbackRequest({
       bindingId: id,
-      expectedBindingRevision: Number(expectedBindingRevision),
+      expectedBindingRevision: bindRev.value,
       targetVersionId,
       principalId,
     });
@@ -570,10 +627,10 @@ governedPolicyRouter.post("/bindings/:id/rollback-requests", async (req, res) =>
 governedPolicyRouter.post("/rollback-requests/:id/approve", async (req, res) => {
   try {
     const { id } = req.params;
-    const { expectedStatusRevision } = req.body;
-    if (expectedStatusRevision === undefined || expectedStatusRevision === null) {
-      return res.status(400).json({ error: "expectedStatusRevision is required" });
-    }
+    const bodyCheck = validateBody(req.body, ["expectedStatusRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const rev = parseRevision(req.body, "expectedStatusRevision");
+    if (!rev.ok) return res.status(400).json({ error: rev.error });
     const principalId = authoritativePrincipalId(req);
     await observeAuthorize(req, {
       permission: "policy_rollback_request:approve",
@@ -581,7 +638,7 @@ governedPolicyRouter.post("/rollback-requests/:id/approve", async (req, res) => 
     });
     const result = await approveRollbackRequest({
       rollbackRequestId: id,
-      expectedStatusRevision: Number(expectedStatusRevision),
+      expectedStatusRevision: rev.value,
       principalId,
     });
     res.json({ data: result });
@@ -598,10 +655,10 @@ governedPolicyRouter.post("/rollback-requests/:id/approve", async (req, res) => 
 governedPolicyRouter.post("/rollback-requests/:id/reject", async (req, res) => {
   try {
     const { id } = req.params;
-    const { expectedStatusRevision } = req.body;
-    if (expectedStatusRevision === undefined || expectedStatusRevision === null) {
-      return res.status(400).json({ error: "expectedStatusRevision is required" });
-    }
+    const bodyCheck = validateBody(req.body, ["expectedStatusRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const rev = parseRevision(req.body, "expectedStatusRevision");
+    if (!rev.ok) return res.status(400).json({ error: rev.error });
     const principalId = authoritativePrincipalId(req);
     await observeAuthorize(req, {
       permission: "policy_rollback_request:approve",
@@ -609,7 +666,7 @@ governedPolicyRouter.post("/rollback-requests/:id/reject", async (req, res) => {
     });
     const result = await rejectRollbackRequest({
       rollbackRequestId: id,
-      expectedStatusRevision: Number(expectedStatusRevision),
+      expectedStatusRevision: rev.value,
       principalId,
     });
     res.json({ data: result });
@@ -626,10 +683,10 @@ governedPolicyRouter.post("/rollback-requests/:id/reject", async (req, res) => {
 governedPolicyRouter.post("/rollback-requests/:id/withdraw", async (req, res) => {
   try {
     const { id } = req.params;
-    const { expectedStatusRevision } = req.body;
-    if (expectedStatusRevision === undefined || expectedStatusRevision === null) {
-      return res.status(400).json({ error: "expectedStatusRevision is required" });
-    }
+    const bodyCheck = validateBody(req.body, ["expectedStatusRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const rev = parseRevision(req.body, "expectedStatusRevision");
+    if (!rev.ok) return res.status(400).json({ error: rev.error });
     const principalId = authoritativePrincipalId(req);
     await observeAuthorize(req, {
       permission: "policy_rollback_request:create",
@@ -637,7 +694,7 @@ governedPolicyRouter.post("/rollback-requests/:id/withdraw", async (req, res) =>
     });
     const result = await withdrawRollbackRequest({
       rollbackRequestId: id,
-      expectedStatusRevision: Number(expectedStatusRevision),
+      expectedStatusRevision: rev.value,
       principalId,
     });
     res.json({ data: result });
@@ -654,11 +711,12 @@ governedPolicyRouter.post("/rollback-requests/:id/withdraw", async (req, res) =>
 governedPolicyRouter.post("/rollback-requests/:id/promote", async (req, res) => {
   try {
     const { id } = req.params;
-    const { expectedStatusRevision, expectedBindingRevision } = req.body;
-    if (expectedStatusRevision === undefined || expectedStatusRevision === null
-        || expectedBindingRevision === undefined || expectedBindingRevision === null) {
-      return res.status(400).json({ error: "expectedStatusRevision and expectedBindingRevision are required" });
-    }
+    const bodyCheck = validateBody(req.body, ["expectedStatusRevision", "expectedBindingRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const stRev = parseRevision(req.body, "expectedStatusRevision");
+    if (!stRev.ok) return res.status(400).json({ error: stRev.error });
+    const bindRev = parseRevision(req.body, "expectedBindingRevision");
+    if (!bindRev.ok) return res.status(400).json({ error: bindRev.error });
     const principalId = authoritativePrincipalId(req);
     await observeAuthorize(req, {
       permission: "policy_rollback_request:promote",
@@ -666,8 +724,8 @@ governedPolicyRouter.post("/rollback-requests/:id/promote", async (req, res) => 
     });
     const result = await promoteRollbackRequest({
       rollbackRequestId: id,
-      expectedStatusRevision: Number(expectedStatusRevision),
-      expectedBindingRevision: Number(expectedBindingRevision),
+      expectedStatusRevision: stRev.value,
+      expectedBindingRevision: bindRev.value,
       principalId,
     });
     if (result.outcome === "failed") {

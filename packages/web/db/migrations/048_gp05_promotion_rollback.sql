@@ -149,10 +149,13 @@ GRANT SELECT, INSERT, UPDATE ON active_policy_bindings TO gitwire_policy_fn_owne
 GRANT SELECT, INSERT ON policy_promotion_records TO gitwire_policy_fn_owner;
 -- policy_rollback_records: SELECT (lock/resolve), INSERT (create), UPDATE (status transitions)
 GRANT SELECT, INSERT, UPDATE ON policy_rollback_records TO gitwire_policy_fn_owner;
--- policy_change_requests: UPDATE needed for approved→promoted transition (SELECT+INSERT already via 045)
-GRANT UPDATE ON policy_change_requests TO gitwire_policy_fn_owner;
--- policy_approval_lifecycle: INSERT already via 046; ensure SELECT for re-evaluation
-GRANT SELECT ON policy_approval_lifecycle TO gitwire_policy_fn_owner;
+-- auth_role_permissions: SELECT needed for transactional permission checks
+-- (GP-03/046 already grants auth_principals, auth_roles, auth_principal_roles)
+GRANT SELECT ON gitwire_auth.auth_role_permissions TO gitwire_policy_fn_owner;
+-- NOTE: policy_change_requests UPDATE is NOT granted here — GP-02/045 already
+-- grants the column-level UPDATE the approved→promoted transition needs.
+-- NOTE: policy_approval_lifecycle SELECT is NOT granted here — GP-03/046
+-- already grants SELECT, INSERT on that table to gitwire_policy_fn_owner.
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 5. Function provenance metadata (mandatory, GP-03/04 pattern)
@@ -219,6 +222,8 @@ DECLARE
   v_risk         text;
   v_approval_ids uuid[];
   v_counted      int;
+  v_distinct_approvers int;
+  v_missing_roles text[];
   v_sod_ok       boolean;
   v_is_high_risk boolean;
   v_promo_id     uuid;
@@ -229,6 +234,12 @@ DECLARE
   v_base_revision   bigint := 0;
   v_evidence_snapshot jsonb;
   v_failure_code text := NULL;
+  v_context_count int;
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
+  v_version_resolved boolean := false;
+  v_rule_resolved    boolean := false;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'promote_policy_change_request: caller must be gitwire_app, got %', session_user;
@@ -236,10 +247,29 @@ BEGIN
 
   v_now := clock_timestamp();
 
+  -- ── Defect 1: transactional authorization (server time, before any lock) ──
+  IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
+    -- cannot promote without an active identity: operational error, no failed record
+    RAISE EXCEPTION 'promote_policy_change_request: actor principal % is not active', p_actor_principal_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM gitwire_auth.auth_principal_roles pr
+    JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+    JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
+    WHERE pr.principal_id = p_actor_principal_id
+      AND rp.permission = 'policy_change_request:promote'
+      AND r.status = 'active'
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+  ) THEN
+    RAISE EXCEPTION 'promote_policy_change_request: actor lacks current policy_change_request:promote permission';
+  END IF;
+
   <<attempt>>
   LOOP
-    -- steps 1-2: lock and resolve the change request
-    SELECT * INTO v_cr FROM policy_change_requests WHERE id = p_change_request_id FOR UPDATE;
+    -- ── Defect 3: resolve CR WITHOUT row lock first ──
+    SELECT * INTO v_cr FROM policy_change_requests WHERE id = p_change_request_id;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'promote_policy_change_request: change request % not found', p_change_request_id;
     END IF;
@@ -254,31 +284,102 @@ BEGIN
       v_failure_code := 'no_selected_version'; EXIT;
     END IF;
 
-    -- steps 3-4: resolve version + evidence
+    -- steps 3-4: resolve version + content_hash
     SELECT id, content_hash, author_principal_id AS version_author INTO v_version
       FROM policy_versions WHERE id = v_cr.selected_version_id;
     IF NOT FOUND THEN v_failure_code := 'version_not_found'; EXIT; END IF;
+    v_version_resolved := true;
 
-    SELECT evidence_hash INTO v_val_hash FROM policy_validation_evidence
-      WHERE version_id = v_version.id ORDER BY created_at DESC LIMIT 1;
-    IF v_val_hash IS NULL THEN v_failure_code := 'evidence_missing'; EXIT; END IF;
+    -- ── Defect 2: resolve evidence hashes from the awaiting_approval event ──
+    -- Match by version_id (not state_revision, since the CR has since transitioned
+    -- to approved at a higher revision). Use the most recent awaiting_approval event.
+    SELECT count(*) INTO v_context_count
+      FROM policy_transition_events
+      WHERE change_request_id = p_change_request_id
+        AND to_state = 'awaiting_approval'
+        AND detail ? 'validation_evidence_hash'
+        AND detail ? 'simulation_evidence_hash'
+        AND detail ? 'risk_classification'
+        AND detail ? 'version_id'
+        AND (detail->>'version_id') = v_version.id::text;
+    IF v_context_count = 0 THEN
+      RAISE EXCEPTION 'promote_policy_change_request: no awaiting_approval context event for version %', v_version.id;
+    END IF;
 
-    SELECT evidence_hash INTO v_sim_hash FROM policy_simulation_evidence
-      WHERE version_id = v_version.id ORDER BY created_at DESC LIMIT 1;
-    IF v_sim_hash IS NULL THEN v_failure_code := 'evidence_missing'; EXIT; END IF;
+    SELECT detail->>'validation_evidence_hash',
+           detail->>'simulation_evidence_hash',
+           detail->>'risk_classification'
+      INTO v_val_hash, v_sim_hash, v_risk
+      FROM policy_transition_events
+      WHERE change_request_id = p_change_request_id
+        AND to_state = 'awaiting_approval'
+        AND detail ? 'validation_evidence_hash'
+        AND detail ? 'simulation_evidence_hash'
+        AND detail ? 'risk_classification'
+        AND detail ? 'version_id'
+        AND (detail->>'version_id') = v_version.id::text
+      ORDER BY occurred_at DESC LIMIT 1;
 
-    -- step 5: re-evaluate approval sufficiency
-    SELECT * INTO v_rule FROM policy_approval_rules
-      WHERE resource_scope_type = v_cr.resource_type
-        AND resource_scope_id   = v_cr.resource_id
-        AND policy_family        = v_cr.policy_family
-      ORDER BY rule_revision DESC LIMIT 1;
+    IF v_val_hash IS NULL OR btrim(v_val_hash) = ''
+       OR v_sim_hash IS NULL OR btrim(v_sim_hash) = ''
+       OR v_risk IS NULL OR v_risk NOT IN ('standard','elevated','critical') THEN
+      v_failure_code := 'invalid_risk'; EXIT;
+    END IF;
+    v_is_high_risk := v_risk IN ('elevated','critical');
+
+    -- step 5: re-evaluate approval sufficiency.
+    -- ── Defect 2: rule selected filtered by risk_classification, not just
+    -- scope/family (matches GP-03 effective-rule resolution). ──
+    v_repo_installation_id := NULL;
+    v_repo_github_id := NULL;
+    IF v_cr.resource_type = 'repository' THEN
+      SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_cr.resource_id;
+      IF v_repo_row_count != 1 THEN v_failure_code := 'invalid_risk'; EXIT; END IF;
+      SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+        FROM public.repositories repo WHERE repo.full_name = v_cr.resource_id;
+    END IF;
+
+    SELECT * INTO v_rule
+      FROM (
+        SELECT r.*,
+               ROW_NUMBER() OVER (
+                 ORDER BY
+                   CASE r.resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
+                   r.rule_revision DESC
+               ) AS rn
+        FROM policy_approval_rules r
+        WHERE r.policy_family = v_cr.policy_family
+          AND r.risk_classification = v_risk
+          AND (
+            (v_cr.resource_type = 'repository'
+               AND ((r.resource_scope_type = 'repository' AND r.resource_scope_id = v_cr.resource_id)
+                 OR (r.resource_scope_type = 'organization' AND r.resource_scope_id = (
+                      SELECT i.account_login FROM public.repositories repo
+                      JOIN public.installations i ON i.github_id = repo.installation_id
+                      WHERE repo.full_name = v_cr.resource_id))
+                 OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+            OR (v_cr.resource_type = 'organization'
+               AND ((r.resource_scope_type = 'organization' AND r.resource_scope_id = v_cr.resource_id)
+                 OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+            OR (v_cr.resource_type = 'fleet'
+               AND r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')
+          )
+      ) e
+      WHERE e.rn = 1;
     IF NOT FOUND THEN v_failure_code := 'no_approval_rule'; EXIT; END IF;
+    v_rule_resolved := true;
 
-    -- gather active, unconsumed approvals for this exact version
+    -- ── Defect 2: gather approvals on the FULL tuple, latest=active, never consumed ──
     SELECT array_agg(a.id ORDER BY a.id) INTO v_approval_ids
       FROM policy_approvals a
       WHERE a.version_id = v_version.id
+        AND a.content_hash = v_version.content_hash
+        AND a.validation_evidence_hash = v_val_hash
+        AND a.simulation_evidence_hash = v_sim_hash
+        AND a.approval_rule_id = v_rule.id
+        AND a.approval_rule_hash = v_rule.rule_hash
+        AND a.risk_classification = v_risk
+        AND (a.expires_at IS NULL OR a.expires_at > v_now)
         AND EXISTS (
           SELECT 1 FROM policy_approval_lifecycle pal
           WHERE pal.approval_id = a.id
@@ -290,22 +391,47 @@ BEGIN
         AND NOT EXISTS (
           SELECT 1 FROM policy_approval_lifecycle pal
           WHERE pal.approval_id = a.id AND pal.to_status = 'consumed'
+        )
+        AND EXISTS (  -- approver still active
+          SELECT 1 FROM gitwire_auth.auth_principals p
+            WHERE p.id = a.approver_principal_id AND p.status = 'active'
         );
     IF v_approval_ids IS NULL THEN v_approval_ids := ARRAY[]::uuid[]; END IF;
-    v_counted := COALESCE(array_length(v_approval_ids, 1), 0);
+    v_counted := (SELECT count(DISTINCT a2.approver_principal_id)
+                   FROM policy_approvals a2 WHERE a2.id = ANY(v_approval_ids));
     IF v_counted < v_rule.required_count THEN v_failure_code := 'insufficient_approvals'; EXIT; END IF;
 
-    -- step 6: derive authoritative risk
-    v_risk := (SELECT result->'risk'->>'classification' FROM policy_simulation_evidence
-               WHERE version_id = v_version.id ORDER BY created_at DESC LIMIT 1);
-    IF v_risk NOT IN ('standard','elevated','critical') THEN v_failure_code := 'invalid_risk'; EXIT; END IF;
-    v_is_high_risk := v_risk IN ('elevated','critical');
+    -- required role coverage among the counted approvers (current scope-applicable roles)
+    SELECT COALESCE(array_agg(role ORDER BY role COLLATE "C"), ARRAY[]::text[]) INTO v_missing_roles
+      FROM (
+        SELECT req.role
+        FROM jsonb_array_elements_text(v_rule.required_roles) AS req(role)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM policy_approvals aa
+          JOIN gitwire_auth.auth_principal_roles pr2 ON pr2.principal_id = aa.approver_principal_id
+            AND pr2.revoked_at IS NULL
+            AND (pr2.expires_at IS NULL OR pr2.expires_at > v_now)
+          JOIN gitwire_auth.auth_roles r2 ON r2.id = pr2.role_id AND r2.status = 'active'
+          WHERE aa.id = ANY(v_approval_ids)
+            AND r2.name = req.role
+            AND (
+              pr2.scope_type = 'fleet'
+              OR (v_cr.resource_type = 'repository'
+                  AND ((pr2.scope_type = 'installation' AND pr2.scope_id = v_repo_installation_id)
+                    OR (pr2.scope_type = 'repository' AND pr2.scope_id = v_repo_github_id)))
+            )
+        )
+      ) z;
+    IF v_missing_roles IS NOT NULL AND array_length(v_missing_roles, 1) IS NOT NULL THEN
+      v_failure_code := 'insufficient_approvals'; EXIT;
+    END IF;
 
-    -- step 7: acquire resource-binding advisory lock
+    -- step 7: ── Defect 3: acquire advisory lock BEFORE locking the binding ──
     v_lock_key := jsonb_build_array('gp05-active-binding', v_cr.resource_type, v_cr.resource_id, v_cr.policy_family)::text;
     PERFORM pg_advisory_xact_lock(hashtextextended(v_lock_key, 0));
 
-    -- steps 8-9: resolve and lock current binding, enforce CAS
+    -- steps 8-9: lock and re-read the binding row under the advisory lock
     SELECT * INTO v_binding FROM active_policy_bindings
       WHERE resource_type = v_cr.resource_type AND resource_id = v_cr.resource_id AND policy_family = v_cr.policy_family
       FOR UPDATE;
@@ -322,11 +448,7 @@ BEGIN
       v_base_revision := v_binding.binding_revision;
     END IF;
 
-    -- step 10: actor status + separation of duties
-    IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
-      v_failure_code := 'inactive_actor'; EXIT;
-    END IF;
-
+    -- step 10: separation of duties (actor authorization was checked up front)
     -- SoD: counted approver distinct from change-request author
     IF EXISTS (SELECT 1 FROM policy_approvals a WHERE a.id = ANY(v_approval_ids) AND a.approver_principal_id = v_cr.author_principal_id) THEN
       v_failure_code := 'sod_author_as_approver'; EXIT;
@@ -350,8 +472,16 @@ BEGIN
   -- ══════════════════════════════════════════════════════════════════════════
   -- Domain-refusal path: write FAILED promotion record, return normally.
   -- No binding / request / approval-lifecycle / transition-event mutation.
+  -- ── Defect 4: explicit resolution boundary. If the version/rule weren't
+  -- resolved, this is an operational error (RAISE, no record). If the binding
+  -- wasn't reached, use NULL for the binding fields. ──
   -- ══════════════════════════════════════════════════════════════════════════
   IF v_failure_code IS NOT NULL THEN
+    IF NOT v_version_resolved THEN
+      -- request/version could not be resolved: operational error, no record
+      RAISE EXCEPTION 'promote_policy_change_request: cannot write failed record — version not resolved (failure_code=%)', v_failure_code;
+    END IF;
+
     SELECT gen_random_uuid() INTO v_promo_id;
     v_evidence_snapshot := jsonb_build_object(
       'schema_version', 'gp05.promotion.v1',
@@ -367,7 +497,7 @@ BEGIN
       'validation_evidence_hash', v_val_hash,
       'simulation_evidence_hash', v_sim_hash,
       'risk_classification', v_risk,
-      'approval_rule_id', v_rule.id,
+      'approval_rule_id', CASE WHEN v_rule_resolved THEN v_rule.id ELSE NULL END,
       'counted_approval_ids', to_jsonb(v_approval_ids),
       'base_binding_id', v_binding.id,
       'base_version_id', v_base_version_id,
@@ -379,7 +509,7 @@ BEGIN
        change_request_id, target_version_id, base_version_id, base_revision,
        promoter_principal_id, outcome, failure_code, promotion_kind, evidence_snapshot, occurred_at)
     VALUES (v_promo_id, v_binding.id, v_cr.resource_type, v_cr.resource_id, v_cr.policy_family,
-       p_change_request_id, COALESCE(v_version.id, v_cr.selected_version_id),
+       p_change_request_id, v_version.id,
        v_base_version_id, v_base_revision,
        p_actor_principal_id, 'failed', v_failure_code, 'forward', v_evidence_snapshot, v_now);
 
@@ -546,6 +676,8 @@ DECLARE
   v_base_promo   RECORD;
   v_lock_key     text;
   v_now          timestamptz;
+  v_base_risk    text;
+  v_target_risk  text;
   v_risk_rank    int;
   v_base_rank    int;
   v_target_rank  int;
@@ -564,14 +696,38 @@ BEGIN
 
   v_now := clock_timestamp();
 
-  -- acquire binding advisory lock BEFORE resolving anything
-  SELECT * INTO v_binding FROM active_policy_bindings WHERE id = p_binding_id FOR UPDATE;
+  -- ── Defect 1: transactional authorization (server time) ──
+  IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_requester_principal_id AND p.status = 'active') THEN
+    RAISE EXCEPTION 'create_policy_rollback_request: requester principal % is not active', p_requester_principal_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM gitwire_auth.auth_principal_roles pr
+    JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+    JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
+    WHERE pr.principal_id = p_requester_principal_id
+      AND rp.permission = 'policy_rollback_request:create'
+      AND r.status = 'active'
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+  ) THEN
+    RAISE EXCEPTION 'create_policy_rollback_request: requester lacks current policy_rollback_request:create permission';
+  END IF;
+
+  -- ── Defect 3: resolve binding WITHOUT row lock, advisory lock, then re-read ──
+  SELECT * INTO v_binding FROM active_policy_bindings WHERE id = p_binding_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'create_policy_rollback_request: binding % not found', p_binding_id;
   END IF;
 
   v_lock_key := jsonb_build_array('gp05-active-binding', v_binding.resource_type, v_binding.resource_id, v_binding.policy_family)::text;
   PERFORM pg_advisory_xact_lock(hashtextextended(v_lock_key, 0));
+
+  SELECT * INTO v_binding FROM active_policy_bindings
+    WHERE id = p_binding_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'create_policy_rollback_request: binding % disappeared under advisory lock', p_binding_id;
+  END IF;
 
   -- enforce expected binding revision
   IF v_binding.binding_revision != p_expected_binding_revision THEN
@@ -604,16 +760,19 @@ BEGIN
     RAISE EXCEPTION 'create_policy_rollback_request: base promotion record not found';
   END IF;
 
-  -- Amendment 4: authoritative rollback risk = max(base risk, target risk)
-  v_base_rank   := CASE v_base_promo.evidence_snapshot->>'risk_classification' WHEN 'standard' THEN 1 WHEN 'elevated' THEN 2 WHEN 'critical' THEN 3 ELSE 1 END;
-  v_target_rank := CASE v_target.evidence_snapshot->>'risk_classification'   WHEN 'standard' THEN 1 WHEN 'elevated' THEN 2 WHEN 'critical' THEN 3 ELSE 1 END;
+  -- Amendment 4: authoritative rollback risk = max(base risk, target risk).
+  -- ── Defect 6: fail closed on unknown/malformed risk in EITHER source. ──
+  v_base_risk   := v_base_promo.evidence_snapshot->>'risk_classification';
+  v_target_risk := v_target.evidence_snapshot->>'risk_classification';
+  IF v_base_risk NOT IN ('standard','elevated','critical')
+     OR v_target_risk NOT IN ('standard','elevated','critical') THEN
+    RAISE EXCEPTION 'create_policy_rollback_request: source promotion snapshot has invalid risk (base=%, target=%) — refusing rollback creation',
+      v_base_risk, v_target_risk;
+  END IF;
+  v_base_rank   := CASE v_base_risk   WHEN 'standard' THEN 1 WHEN 'elevated' THEN 2 WHEN 'critical' THEN 3 END;
+  v_target_rank := CASE v_target_risk WHEN 'standard' THEN 1 WHEN 'elevated' THEN 2 WHEN 'critical' THEN 3 END;
   v_risk_rank   := GREATEST(v_base_rank, v_target_rank);
   v_risk        := CASE v_risk_rank WHEN 1 THEN 'standard' WHEN 2 THEN 'elevated' WHEN 3 THEN 'critical' END;
-
-  -- requester must be active
-  IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_requester_principal_id AND p.status = 'active') THEN
-    RAISE EXCEPTION 'create_policy_rollback_request: requester principal is not active';
-  END IF;
 
   -- create rollback record + revision-zero lifecycle atomically
   SELECT gen_random_uuid() INTO v_new_id;
@@ -622,8 +781,8 @@ BEGIN
     'risk_source', 'max(base_risk, target_risk)',
     'base_promotion_record_id', v_base_promo.id,
     'target_promotion_record_id', v_target.id,
-    'base_risk', v_base_promo.evidence_snapshot->>'risk_classification',
-    'target_risk', v_target.evidence_snapshot->>'risk_classification',
+    'base_risk', v_base_risk,
+    'target_risk', v_target_risk,
     'resolved_risk', v_risk,
     'authorization_basis', jsonb_build_object(
       'requester_principal_id', p_requester_principal_id,
@@ -688,16 +847,34 @@ BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'approve_policy_rollback_request: caller must be gitwire_app, got %', session_user;
   END IF;
-  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
+
+  -- ── Defect 1: transactional authorization (server time, before any lock) ──
+  IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
+    RAISE EXCEPTION 'approve_policy_rollback_request: actor principal % is not active', p_actor_principal_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM gitwire_auth.auth_principal_roles pr
+    JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+    JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
+    WHERE pr.principal_id = p_actor_principal_id
+      AND rp.permission = 'policy_rollback_request:approve'
+      AND r.status = 'active'
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+  ) THEN
+    RAISE EXCEPTION 'approve_policy_rollback_request: actor lacks current policy_rollback_request:approve permission';
+  END IF;
+
+  -- ── Defect 3: resolve tuple, then re-read under FOR UPDATE ──
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'approve_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
   IF v_rb.status != 'requested' THEN RAISE EXCEPTION 'approve_policy_rollback_request: status is %, only requested can be approved', v_rb.status; END IF;
   IF v_rb.status_revision != p_expected_status_revision THEN RAISE EXCEPTION 'approve_policy_rollback_request: CAS failed — expected %, got %', p_expected_status_revision, v_rb.status_revision; END IF;
   SELECT COALESCE(MAX(lifecycle_revision), 0) INTO v_max FROM policy_rollback_lifecycle WHERE rollback_record_id = p_rollback_record_id;
   IF v_max != v_rb.status_revision THEN RAISE EXCEPTION 'approve_policy_rollback_request: lifecycle max % != record revision %', v_max, v_rb.status_revision; END IF;
-  -- actor must be active and distinct from requester
-  IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
-    RAISE EXCEPTION 'approve_policy_rollback_request: actor is not active';
-  END IF;
+  -- distinct from requester
   IF p_actor_principal_id = v_rb.requester_principal_id THEN
     RAISE EXCEPTION 'approve_policy_rollback_request: requester cannot approve their own rollback';
   END IF;
@@ -729,10 +906,34 @@ CREATE FUNCTION reject_policy_rollback_request(
 ) RETURNS TABLE (out_rollback_record_id uuid, out_status text, out_status_revision bigint)
 SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog LANGUAGE plpgsql AS $$
 DECLARE v_rb RECORD; v_max bigint; v_new bigint;
+  v_now timestamptz := clock_timestamp();
 BEGIN
   IF session_user != 'gitwire_app' THEN RAISE EXCEPTION 'reject_policy_rollback_request: caller must be gitwire_app, got %', session_user; END IF;
-  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
+
+  -- ── Defect 1: transactional authorization. The original reject did not even
+  -- verify the actor was active. Reject is an approver's negative action, so
+  -- it requires policy_rollback_request:approve. ──
+  IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
+    RAISE EXCEPTION 'reject_policy_rollback_request: actor principal % is not active', p_actor_principal_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM gitwire_auth.auth_principal_roles pr
+    JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+    JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
+    WHERE pr.principal_id = p_actor_principal_id
+      AND rp.permission = 'policy_rollback_request:approve'
+      AND r.status = 'active'
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+  ) THEN
+    RAISE EXCEPTION 'reject_policy_rollback_request: actor lacks current policy_rollback_request:approve permission';
+  END IF;
+
+  -- ── Defect 3: resolve tuple, then re-read under FOR UPDATE ──
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'reject_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
   IF v_rb.status != 'requested' THEN RAISE EXCEPTION 'reject_policy_rollback_request: status is %, only requested can be rejected', v_rb.status; END IF;
   IF v_rb.status_revision != p_expected_status_revision THEN RAISE EXCEPTION 'reject_policy_rollback_request: CAS failed — expected %, got %', p_expected_status_revision, v_rb.status_revision; END IF;
   SELECT COALESCE(MAX(lifecycle_revision), 0) INTO v_max FROM policy_rollback_lifecycle WHERE rollback_record_id = p_rollback_record_id;
@@ -760,10 +961,33 @@ CREATE FUNCTION withdraw_policy_rollback_request(
 ) RETURNS TABLE (out_rollback_record_id uuid, out_status text, out_status_revision bigint)
 SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog LANGUAGE plpgsql AS $$
 DECLARE v_rb RECORD; v_max bigint; v_new bigint;
+  v_now timestamptz := clock_timestamp();
 BEGIN
   IF session_user != 'gitwire_app' THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: caller must be gitwire_app, got %', session_user; END IF;
-  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
+
+  -- ── Defect 1: transactional authorization. Withdraw is by the requester, so
+  -- it requires policy_rollback_request:create (the requester's permission). ──
+  IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
+    RAISE EXCEPTION 'withdraw_policy_rollback_request: actor principal % is not active', p_actor_principal_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM gitwire_auth.auth_principal_roles pr
+    JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+    JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
+    WHERE pr.principal_id = p_actor_principal_id
+      AND rp.permission = 'policy_rollback_request:create'
+      AND r.status = 'active'
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+  ) THEN
+    RAISE EXCEPTION 'withdraw_policy_rollback_request: actor lacks current policy_rollback_request:create permission';
+  END IF;
+
+  -- ── Defect 3: resolve tuple, then re-read under FOR UPDATE ──
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
   IF v_rb.status NOT IN ('requested','approved') THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: status is %, only requested/approved can be withdrawn', v_rb.status; END IF;
   IF v_rb.status_revision != p_expected_status_revision THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: CAS failed — expected %, got %', p_expected_status_revision, v_rb.status_revision; END IF;
   SELECT COALESCE(MAX(lifecycle_revision), 0) INTO v_max FROM policy_rollback_lifecycle WHERE rollback_record_id = p_rollback_record_id;
@@ -831,23 +1055,53 @@ DECLARE
   v_new_binding_rev bigint;
   v_new_status_rev  bigint;
   v_evidence_snapshot jsonb;
+  v_lifecycle_max    bigint;
+  v_fail_resource_type   text;
+  v_fail_resource_id     text;
+  v_fail_policy_family   text;
+  v_fail_change_request_id uuid;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'promote_policy_rollback_request: caller must be gitwire_app, got %', session_user;
   END IF;
   v_now := clock_timestamp();
 
+  -- ── Defect 1: transactional authorization (server time, before any lock) ──
+  IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
+    RAISE EXCEPTION 'promote_policy_rollback_request: actor principal % is not active', p_actor_principal_id;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM gitwire_auth.auth_principal_roles pr
+    JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+    JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
+    WHERE pr.principal_id = p_actor_principal_id
+      AND rp.permission = 'policy_rollback_request:promote'
+      AND r.status = 'active'
+      AND pr.revoked_at IS NULL
+      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+  ) THEN
+    RAISE EXCEPTION 'promote_policy_rollback_request: actor lacks current policy_rollback_request:promote permission';
+  END IF;
+
   <<attempt>>
   LOOP
-    SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
+    -- ── Defect 3: resolve the rollback record WITHOUT row lock first ──
+    SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
     IF NOT FOUND THEN RAISE EXCEPTION 'promote_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
 
     -- attempt-local refusals (these RAISE, not domain-refusal)
     IF v_rb.status != 'approved' THEN RAISE EXCEPTION 'promote_policy_rollback_request: status is %, only approved can be promoted', v_rb.status; END IF;
     IF v_rb.status_revision != p_expected_status_revision THEN RAISE EXCEPTION 'promote_policy_rollback_request: stale status revision (expected %, got %)', p_expected_status_revision, v_rb.status_revision; END IF;
-    IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
-      RAISE EXCEPTION 'promote_policy_rollback_request: actor is not active';
+
+    -- ── Defect 5: verify status_revision equals the current lifecycle maximum
+    -- BEFORE executing. ──
+    SELECT COALESCE(MAX(lifecycle_revision), 0) INTO v_lifecycle_max
+      FROM policy_rollback_lifecycle WHERE rollback_record_id = p_rollback_record_id;
+    IF v_lifecycle_max != v_rb.status_revision THEN
+      RAISE EXCEPTION 'promote_policy_rollback_request: lifecycle max % != record revision %', v_lifecycle_max, v_rb.status_revision;
     END IF;
+
     -- SoD: requester cannot be promoter; high-risk: approver cannot be promoter either
     IF p_actor_principal_id = v_rb.requester_principal_id THEN
       RAISE EXCEPTION 'promote_policy_rollback_request: requester cannot promote their own rollback';
@@ -859,14 +1113,26 @@ BEGIN
       END IF;
     END IF;
 
-    -- acquire binding advisory lock (same expression as forward promotion)
-    SELECT * INTO v_binding FROM active_policy_bindings WHERE id = v_rb.binding_id FOR UPDATE;
+    -- ── Defect 3: acquire advisory lock BEFORE locking the binding row ──
+    -- The advisory lock key requires binding columns; resolve them first with
+    -- a non-locking SELECT (the lock namespace is the resource tuple).
+    SELECT * INTO v_binding FROM active_policy_bindings WHERE id = v_rb.binding_id;
     IF NOT FOUND THEN v_failure_code := 'binding_missing'; v_request_invalidating := true; EXIT; END IF;
 
     v_lock_key := jsonb_build_array('gp05-active-binding', v_binding.resource_type, v_binding.resource_id, v_binding.policy_family)::text;
     PERFORM pg_advisory_xact_lock(hashtextextended(v_lock_key, 0));
 
+    -- now lock and re-read the binding row under the advisory lock
+    SELECT * INTO v_binding FROM active_policy_bindings WHERE id = v_rb.binding_id FOR UPDATE;
+    IF NOT FOUND THEN v_failure_code := 'binding_missing'; v_request_invalidating := true; EXIT; END IF;
+
     -- request-invalidating checks (binding drifted / target provenance broken)
+
+    -- ── Defect 5: frozen-revision enforcement. ALL THREE must be equal:
+    -- caller-expected == rollback-record-expected == current binding. ──
+    IF p_expected_binding_revision != v_rb.expected_binding_revision THEN
+      v_failure_code := 'stale_binding_revision'; v_request_invalidating := true; EXIT;
+    END IF;
     IF v_binding.binding_revision != p_expected_binding_revision THEN
       v_failure_code := 'stale_binding_revision'; v_request_invalidating := true; EXIT;
     END IF;
@@ -892,22 +1158,60 @@ BEGIN
 
   -- ══════════════════════════════════════════════════════════════════════════
   -- Request-invalidating refusal: approved → failed + failed promotion record
+  -- ── Defect 4: do not dereference v_binding / v_target_promo fields when the
+  -- matching path left them unassigned. binding_missing is an operational FK
+  -- integrity error (RAISE, no record). For the other request-invalidating
+  -- codes, v_binding is resolved; for change_request_id we use a guarded lookup
+  -- rather than dereferencing v_target_promo (which is unassigned on
+  -- target_provenance_invalid). ──
   -- ══════════════════════════════════════════════════════════════════════════
   IF v_failure_code IS NOT NULL AND v_request_invalidating THEN
+    IF v_failure_code = 'binding_missing' THEN
+      -- The binding referenced by the rollback record does not exist. The FK
+      -- constraint would normally prevent this; reaching here means data
+      -- corruption. Do not attempt to write a promotion record (we have no
+      -- resource_type/id/family); surface as an operational error.
+      RAISE EXCEPTION 'promote_policy_rollback_request: binding % referenced by rollback % does not exist (data integrity failure)',
+        v_rb.binding_id, p_rollback_record_id;
+    END IF;
+
+    -- v_binding IS resolved for stale_binding_revision / base_version_mismatch /
+    -- target_provenance_invalid. Resolve change_request_id WITHOUT dereferencing
+    -- v_target_promo (unassigned on target_provenance_invalid): pull from the
+    -- target promotion row by id; if that row is gone too, fall back to the
+    -- base binding's promotion record.
+    v_fail_resource_type := v_binding.resource_type;
+    v_fail_resource_id   := v_binding.resource_id;
+    v_fail_policy_family := v_binding.policy_family;
+    SELECT ppr.change_request_id INTO v_fail_change_request_id
+      FROM policy_promotion_records ppr
+      WHERE ppr.id = v_rb.target_promotion_record_id;
+    IF v_fail_change_request_id IS NULL THEN
+      SELECT ppr.change_request_id INTO v_fail_change_request_id
+        FROM policy_promotion_records ppr WHERE ppr.id = v_binding.promotion_record_id;
+    END IF;
+    IF v_fail_change_request_id IS NULL THEN
+      -- Cannot satisfy the NOT NULL change_request_id column; operational error.
+      RAISE EXCEPTION 'promote_policy_rollback_request: cannot resolve change_request_id for failed record (failure_code=%)', v_failure_code;
+    END IF;
+
     SELECT gen_random_uuid() INTO v_promo_id;
     v_evidence_snapshot := jsonb_build_object(
       'schema_version', 'gp05.promotion.v1', 'promotion_kind', 'rollback',
       'rollback_record_id', p_rollback_record_id, 'failure_code', v_failure_code,
       'target_version_id', v_rb.target_version_id, 'risk_classification', v_rb.risk_classification,
       'binding_id', v_rb.binding_id, 'expected_binding_revision', p_expected_binding_revision,
+      'caller_expected_binding_revision', p_expected_binding_revision,
+      'rollback_record_expected_binding_revision', v_rb.expected_binding_revision,
+      'current_binding_revision', v_binding.binding_revision,
       'promoter_principal_id', p_actor_principal_id, 'decision_timestamp', v_now);
 
     INSERT INTO policy_promotion_records
       (id, binding_id, resource_type, resource_id, policy_family,
        change_request_id, target_version_id, base_version_id, base_revision,
        promoter_principal_id, outcome, failure_code, promotion_kind, evidence_snapshot, occurred_at)
-    VALUES (v_promo_id, v_binding.id, v_binding.resource_type, v_binding.resource_id, v_binding.policy_family,
-       v_target_promo.change_request_id, v_rb.target_version_id, v_binding.active_policy_version_id, v_binding.binding_revision,
+    VALUES (v_promo_id, v_binding.id, v_fail_resource_type, v_fail_resource_id, v_fail_policy_family,
+       v_fail_change_request_id, v_rb.target_version_id, v_rb.base_version_id, v_binding.binding_revision,
        p_actor_principal_id, 'failed', v_failure_code, 'rollback', v_evidence_snapshot, v_now);
 
     -- transition rollback record approved → failed, link promotion record
