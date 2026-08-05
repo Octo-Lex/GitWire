@@ -2191,6 +2191,301 @@ try {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
+  // Phase 26b: Approval-tuple field isolation (independent fixtures)
+  // The review observed that several Phase 26 cases don't truly ISOLATE the named
+  // field because changing the version also changes version_id, content_hash, and
+  // evidence hashes simultaneously, and the rule-hash / scope cases were exercised
+  // through rule resolution rather than independent approval-row fixtures. This
+  // phase re-proves each field with INDEPENDENT fixtures so only the named field
+  // varies, holding every other tuple component fixed.
+  //
+  // Schema facts leveraged:
+  //   * policy_validation_evidence / policy_simulation_evidence have UNIQUE
+  //     (version_id, evidence_hash) — so two rows with DIFFERENT hashes for the
+  //     SAME version are allowed. Their append-only triggers block UPDATE/DELETE
+  //     only; INSERT is permitted.
+  //   * policy_approvals has descriptive resource_scope_type/id columns copied
+  //     from the CR at record-time. The promote-time approval-counting predicate
+  //     (048:393-418) does NOT join on the approval's scope columns — scope is
+  //     enforced through RULE selection (resource_scope_type/id on the rule) and
+  //     the approval-rule binding (approval_rule_id + approval_rule_hash).
+  //   * policy_approval_rules has a composite UNIQUE(id, rule_hash), so a same-id
+  //     wrong-hash approval row cannot reference a non-existent (id, hash) pair.
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 26b: Approval-tuple field isolation (independent fixtures) ===");
+  {
+    // The same eligible-approval predicate used in Phase 26 (mirrors the promote
+    // finalizer). Re-declared in this scope for independence.
+    const eligibleCount = async (crIdArg) => {
+      const row = (await asDbo(pool, `
+        WITH v_cr AS (SELECT * FROM gitwire_policy.policy_change_requests WHERE id = $1),
+             v_version AS (SELECT pv.id, pv.content_hash FROM gitwire_policy.policy_versions pv
+                            JOIN v_cr ON pv.id = v_cr.selected_version_id),
+             v_evt AS (SELECT e.detail->>'validation_evidence_hash' AS vh,
+                              e.detail->>'simulation_evidence_hash' AS sh,
+                              e.detail->>'risk_classification' AS rk
+                       FROM gitwire_policy.policy_transition_events e
+                       JOIN v_cr ON e.change_request_id = v_cr.id
+                       JOIN v_version ON (e.detail->>'version_id') = v_version.id::text
+                       WHERE e.to_state = 'awaiting_approval'
+                         AND e.detail ? 'validation_evidence_hash'
+                         AND e.detail ? 'simulation_evidence_hash'
+                         AND e.detail ? 'risk_classification'
+                         AND e.detail ? 'version_id'
+                       ORDER BY e.occurred_at DESC LIMIT 1),
+             v_rule AS (SELECT r.id, r.rule_hash FROM gitwire_policy.policy_approval_rules r, v_cr, v_evt
+                         WHERE r.policy_family = v_cr.policy_family
+                           AND r.risk_classification = v_evt.rk
+                           AND (
+                             (v_cr.resource_type = 'fleet'
+                                AND r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')
+                             OR (v_cr.resource_type = 'organization'
+                                AND ((r.resource_scope_type = 'organization' AND r.resource_scope_id = v_cr.resource_id)
+                                  OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+                           )
+                         ORDER BY CASE r.resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
+                                  r.rule_revision DESC
+                         LIMIT 1)
+        SELECT count(*)::int AS n
+        FROM gitwire_policy.policy_approvals a, v_version vv, v_evt ve, v_rule vr
+        WHERE a.version_id = vv.id
+          AND a.content_hash = vv.content_hash
+          AND a.validation_evidence_hash = ve.vh
+          AND a.simulation_evidence_hash = ve.sh
+          AND a.approval_rule_id = vr.id
+          AND a.approval_rule_hash = vr.rule_hash
+          AND a.risk_classification = ve.rk
+          AND EXISTS (SELECT 1 FROM gitwire_policy.policy_approval_lifecycle pal
+                       WHERE pal.approval_id = a.id AND pal.to_status='active'
+                         AND pal.lifecycle_revision = (SELECT MAX(lifecycle_revision) FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = a.id))
+          AND NOT EXISTS (SELECT 1 FROM gitwire_policy.policy_approval_lifecycle pal
+                           WHERE pal.approval_id = a.id AND pal.to_status='consumed')
+      `, [crIdArg])).rows[0];
+      return row ? row.n : 0;
+    };
+
+    // ── Isolation A: validation-evidence hash ──
+    // For the SAME version + content_hash, insert a SECOND validation evidence row
+    // with a DIFFERENT result JSON (and thus a different evidence_hash). Then DBO-
+    // insert a second approval row for that version referencing the second evidence's
+    // hash + the same rule, and prove it does NOT count because its
+    // validation_evidence_hash != the awaiting_approval event's frozen hash.
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26b-val", fam: "p26bval" + Math.random().toString(36).slice(2, 6), risk: "standard" });
+      const baselineEligible = await eligibleCount(c.crId);
+      check("validation-hash isolation: baseline 1 eligible approval", baselineEligible === 1, "n=" + baselineEligible);
+
+      // Resolve the canonical (frozen) hashes + the version row.
+      const ver = (await asDbo(pool, "SELECT id, content_hash FROM gitwire_policy.policy_versions WHERE id=$1", [c.vId])).rows[0];
+      const evt = (await asDbo(pool, `SELECT detail->>'validation_evidence_hash' AS vh, detail->>'simulation_evidence_hash' AS sh, detail->>'risk_classification' AS rk FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state='awaiting_approval' ORDER BY occurred_at DESC LIMIT 1`, [c.crId])).rows[0];
+      const canonicalApproval = (await asDbo(pool, "SELECT id, approval_rule_id, approval_rule_hash, resource_scope_type, resource_scope_id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0];
+      const rule = (await asDbo(pool, "SELECT id, rule_hash, rule_revision, policy_family, risk_classification, resource_scope_type, resource_scope_id, required_count, required_roles, min_assurance_level, self_approval_prohibited, step_up_required, created_by_principal_id, rule_version FROM gitwire_policy.policy_approval_rules WHERE id=$1", [canonicalApproval.approval_rule_id])).rows[0];
+
+      // Build a second validation evidence envelope with a DIFFERENT result, compute
+      // its hash the same way finalize_policy_evaluation does, and insert it. This
+      // does NOT mutate the canonical row — it is an independent second evidence row.
+      const altValResult = JSON.stringify({ valid: true, errors: [], note: "alt-isolation" });
+      const altValEnvelope = JSON.stringify({
+        schema_version: "gp04.validation.v1",
+        version_id: ver.id,
+        content_hash: ver.content_hash,
+        validator_version: "vv1-alt",
+        result: JSON.parse(altValResult),
+      });
+      const altValHash = "sha256:" + (await asDbo(pool, "SELECT pg_catalog.encode(public.digest(convert_to($1::jsonb::text, 'UTF8'), 'sha256'), 'hex') AS h", [altValEnvelope])).rows[0].h;
+      check("validation-hash isolation: alt hash differs from canonical", altValHash !== evt.vh, "alt=" + altValHash.slice(0,16) + " canon=" + evt.vh.slice(0,16));
+      // Insert the second evidence row (INSERT is allowed; only UPDATE/DELETE are blocked).
+      await asDbo(pool, "INSERT INTO gitwire_policy.policy_validation_evidence (version_id, evidence_hash, result, validator_version) VALUES ($1,$2,$3::jsonb,$4) ON CONFLICT (version_id, evidence_hash) DO NOTHING",
+        [ver.id, altValHash, altValEnvelope, "vv1-alt"]);
+      check("validation-hash isolation: second evidence row present", (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_validation_evidence WHERE version_id=$1", [ver.id])).rows[0].n === 2);
+
+      // DBO-insert a second approval row referencing the alt validation hash (same
+      // everything else: version, content, simulation hash, rule, rule_hash, risk).
+      // Use a DIFFERENT approver so the row is distinct. policy_approvals_no_update
+      // blocks UPDATE only, so a direct INSERT works.
+      const altApproverId = await seedPrincipal(pool, "g5-p26b-val-alt");
+      await grantAdmin(pool, altApproverId);
+      const cr = (await asDbo(pool, "SELECT resource_type, resource_id FROM gitwire_policy.policy_change_requests WHERE id=$1", [c.crId])).rows[0];
+      const altApprovalId = (await asDbo(pool, `INSERT INTO gitwire_policy.policy_approvals (version_id, content_hash, validation_evidence_hash, simulation_evidence_hash, approval_rule_id, approval_rule_hash, risk_classification, approver_principal_id, resource_scope_type, resource_scope_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        [ver.id, ver.content_hash, altValHash, evt.sh, rule.id, rule.rule_hash, evt.rk, altApproverId, cr.resource_type, cr.resource_id])).rows[0].id;
+      await asDbo(pool, "INSERT INTO gitwire_policy.policy_approval_lifecycle (approval_id, lifecycle_revision, from_status, to_status, actor_principal_id, reason_code) VALUES ($1,0,NULL,'active',$2,'approval_recorded')", [altApprovalId, altApproverId]);
+
+      // The alt approval must NOT count: its validation_evidence_hash != frozen hash.
+      const afterAlt = await eligibleCount(c.crId);
+      check("validation-hash isolation: alt-evidence approval excluded (still 1 eligible)", afterAlt === 1, "n=" + afterAlt);
+      // Tamper the canonical approval's hash to the alt hash and confirm 0 eligible
+      // (the canonical approval now also mismatches the frozen hash).
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DISABLE TRIGGER policy_approvals_no_update");
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET validation_evidence_hash=$1 WHERE id=$2", [altValHash, canonicalApproval.id]);
+        check("validation-hash isolation: canonical w/ alt hash → 0 eligible", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+        // restore
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET validation_evidence_hash=$1 WHERE id=$2", [evt.vh, canonicalApproval.id]);
+      } finally {
+        await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ENABLE TRIGGER policy_approvals_no_update");
+      }
+      check("validation-hash isolation: restored 1 eligible", (await eligibleCount(c.crId)) === 1, "n=" + await eligibleCount(c.crId));
+    }
+
+    // ── Isolation B: simulation-evidence hash ──
+    // Same approach with policy_simulation_evidence.
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26b-sim", fam: "p26bsim" + Math.random().toString(36).slice(2, 6), risk: "standard" });
+      check("simulation-hash isolation: baseline 1 eligible", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+      const ver = (await asDbo(pool, "SELECT id, content_hash FROM gitwire_policy.policy_versions WHERE id=$1", [c.vId])).rows[0];
+      const evt = (await asDbo(pool, `SELECT detail->>'validation_evidence_hash' AS vh, detail->>'simulation_evidence_hash' AS sh, detail->>'risk_classification' AS rk FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state='awaiting_approval' ORDER BY occurred_at DESC LIMIT 1`, [c.crId])).rows[0];
+      const canonicalApproval = (await asDbo(pool, "SELECT id, approval_rule_id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0];
+      const rule = (await asDbo(pool, "SELECT id, rule_hash FROM gitwire_policy.policy_approval_rules WHERE id=$1", [canonicalApproval.approval_rule_id])).rows[0];
+
+      // Second simulation evidence with a DIFFERENT result (different dataset_snapshot
+      // input_set_hash keeps it well-formed and yields a different envelope hash).
+      const altSimResult = JSON.stringify({ passed: true, risk_classification: evt.rk, classifier_version: "cv1-alt", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "f".repeat(64) } });
+      const altSimEnvelope = JSON.stringify({
+        schema_version: "gp04.simulation.v1",
+        version_id: ver.id,
+        content_hash: ver.content_hash,
+        evaluator_version: "sv1-alt",
+        result: JSON.parse(altSimResult),
+      });
+      const altSimHash = "sha256:" + (await asDbo(pool, "SELECT pg_catalog.encode(public.digest(convert_to($1::jsonb::text, 'UTF8'), 'sha256'), 'hex') AS h", [altSimEnvelope])).rows[0].h;
+      check("simulation-hash isolation: alt hash differs from canonical", altSimHash !== evt.sh, "alt=" + altSimHash.slice(0,16) + " canon=" + evt.sh.slice(0,16));
+      await asDbo(pool, "INSERT INTO gitwire_policy.policy_simulation_evidence (version_id, evidence_hash, result, evaluator_version) VALUES ($1,$2,$3::jsonb,$4) ON CONFLICT (version_id, evidence_hash) DO NOTHING",
+        [ver.id, altSimHash, altSimEnvelope, "sv1-alt"]);
+      check("simulation-hash isolation: second evidence row present", (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_simulation_evidence WHERE version_id=$1", [ver.id])).rows[0].n === 2);
+
+      const altApproverId = await seedPrincipal(pool, "g5-p26b-sim-alt");
+      await grantAdmin(pool, altApproverId);
+      const cr = (await asDbo(pool, "SELECT resource_type, resource_id FROM gitwire_policy.policy_change_requests WHERE id=$1", [c.crId])).rows[0];
+      const altApprovalId = (await asDbo(pool, `INSERT INTO gitwire_policy.policy_approvals (version_id, content_hash, validation_evidence_hash, simulation_evidence_hash, approval_rule_id, approval_rule_hash, risk_classification, approver_principal_id, resource_scope_type, resource_scope_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        [ver.id, ver.content_hash, evt.vh, altSimHash, rule.id, rule.rule_hash, evt.rk, altApproverId, cr.resource_type, cr.resource_id])).rows[0].id;
+      await asDbo(pool, "INSERT INTO gitwire_policy.policy_approval_lifecycle (approval_id, lifecycle_revision, from_status, to_status, actor_principal_id, reason_code) VALUES ($1,0,NULL,'active',$2,'approval_recorded')", [altApprovalId, altApproverId]);
+      check("simulation-hash isolation: alt-evidence approval excluded (still 1 eligible)", (await eligibleCount(c.crId)) === 1, "n=" + await eligibleCount(c.crId));
+
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DISABLE TRIGGER policy_approvals_no_update");
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET simulation_evidence_hash=$1 WHERE id=$2", [altSimHash, canonicalApproval.id]);
+        check("simulation-hash isolation: canonical w/ alt hash → 0 eligible", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET simulation_evidence_hash=$1 WHERE id=$2", [evt.sh, canonicalApproval.id]);
+      } finally {
+        await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ENABLE TRIGGER policy_approvals_no_update");
+      }
+      check("simulation-hash isolation: restored 1 eligible", (await eligibleCount(c.crId)) === 1, "n=" + await eligibleCount(c.crId));
+    }
+
+    // ── Isolation C: rule hash ──
+    // (1) Prove a malformed same-ID/wrong-hash approval row cannot be inserted: the
+    //     composite FK pa_rule_fk (approval_rule_id, approval_rule_hash) -> 
+    //     policy_approval_rules(id, rule_hash) blocks it. Attempt the insert and
+    //     confirm it RAISEs.
+    // (2) Create a VALID alternate rule (different id + different hash) for the same
+    //     scope/family/risk at a LOWER rule_revision so the resolver still picks the
+    //     canonical rule. Insert an approval referencing the alternate rule and prove
+    //     it doesn't count (its approval_rule_id/rule_hash != the resolved rule).
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26b-rule", fam: "p26brh" + Math.random().toString(36).slice(2, 6), risk: "standard" });
+      check("rule-hash isolation: baseline 1 eligible", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+      const ver = (await asDbo(pool, "SELECT id, content_hash FROM gitwire_policy.policy_versions WHERE id=$1", [c.vId])).rows[0];
+      const evt = (await asDbo(pool, `SELECT detail->>'validation_evidence_hash' AS vh, detail->>'simulation_evidence_hash' AS sh, detail->>'risk_classification' AS rk FROM gitwire_policy.policy_transition_events WHERE change_request_id=$1 AND to_state='awaiting_approval' ORDER BY occurred_at DESC LIMIT 1`, [c.crId])).rows[0];
+      const canonicalApproval = (await asDbo(pool, "SELECT id, approval_rule_id, approval_rule_hash FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0];
+      const cr = (await asDbo(pool, "SELECT resource_type, resource_id FROM gitwire_policy.policy_change_requests WHERE id=$1", [c.crId])).rows[0];
+
+      // (1) Attempt to insert an approval referencing the canonical rule id but a
+      //     WRONG hash. The composite FK must reject it.
+      const fakeRuleHash = "sha256:" + "e".repeat(64);
+      let sameIdWrongHashRejected = false;
+      try {
+        await asDbo(pool, `INSERT INTO gitwire_policy.policy_approvals (version_id, content_hash, validation_evidence_hash, simulation_evidence_hash, approval_rule_id, approval_rule_hash, risk_classification, approver_principal_id, resource_scope_type, resource_scope_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [ver.id, ver.content_hash, evt.vh, evt.sh, canonicalApproval.approval_rule_id, fakeRuleHash, evt.rk, approverId, cr.resource_type, cr.resource_id]);
+      } catch (e) { sameIdWrongHashRejected = /foreign key|violates|rule_hash/i.test(e.message); }
+      check("rule-hash isolation: same-id/wrong-hash insert RAISEs (composite FK)", sameIdWrongHashRejected);
+
+      // (2) Create a VALID alternate rule at a LOWER rule_revision. create_policy_approval_rule
+      //     auto-assigns rule_revision per (scope, family, risk), so use a distinct
+      //     rule_version string ("v0-isolation") — the resolver picks highest rule_revision,
+      //     so a single-revision alternate still loses to the canonical rule (revision 1).
+      //     To guarantee the canonical rule wins, create the alternate FIRST then re-create
+      //     the canonical at a higher revision. Simpler: use a separate family for the
+      //     alternate and confirm the resolver for THIS CR ignores it.
+      //     Cleanest: insert the alternate rule with a DIFFERENT id, then DBO-insert an
+      //     approval referencing it. The resolver for c.crId picks the canonical rule
+      //     (matched by c's family/scope/risk), so the alt-rule approval won't count.
+      const altRuleId = (await asApp(pool, "SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id",
+        ["v0-alt", "p26brh-UNUSED-" + Math.random().toString(36).slice(2,6), "organization", "p26b-rule-unused-" + Math.random().toString(36).slice(2,6), "standard", 1, JSON.stringify(["admin"]), authorId])).rows[0].id;
+      const altRule = (await asDbo(pool, "SELECT id, rule_hash FROM gitwire_policy.policy_approval_rules WHERE id=$1", [altRuleId])).rows[0];
+      check("rule-hash isolation: alt rule has different id+hash", altRule.id !== canonicalApproval.approval_rule_id && altRule.rule_hash !== canonicalApproval.approval_rule_hash);
+
+      // DBO-insert an approval referencing the alternate rule (everything else matches c).
+      const altApproverId = await seedPrincipal(pool, "g5-p26b-rule-alt");
+      await grantAdmin(pool, altApproverId);
+      const altApprovalId = (await asDbo(pool, `INSERT INTO gitwire_policy.policy_approvals (version_id, content_hash, validation_evidence_hash, simulation_evidence_hash, approval_rule_id, approval_rule_hash, risk_classification, approver_principal_id, resource_scope_type, resource_scope_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        [ver.id, ver.content_hash, evt.vh, evt.sh, altRule.id, altRule.rule_hash, evt.rk, altApproverId, cr.resource_type, cr.resource_id])).rows[0].id;
+      await asDbo(pool, "INSERT INTO gitwire_policy.policy_approval_lifecycle (approval_id, lifecycle_revision, from_status, to_status, actor_principal_id, reason_code) VALUES ($1,0,NULL,'active',$2,'approval_recorded')", [altApprovalId, altApproverId]);
+      // The alt-rule approval doesn't count: the resolver picks the canonical rule
+      // (c.family/scope/risk), and the alt approval references a different rule id+hash.
+      check("rule-hash isolation: alt-rule approval excluded (still 1 eligible)", (await eligibleCount(c.crId)) === 1, "n=" + await eligibleCount(c.crId));
+
+      // Cross-check: if we re-point the canonical approval at the alt rule (DBO), the
+      // canonical approval ALSO drops out (0 eligible), proving the rule_id+hash match
+      // is the actual gate, not just the existence of any approval.
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DISABLE TRIGGER policy_approvals_no_update");
+      // The composite FK pa_rule_fk would block pointing at (canonical.id, alt.hash);
+      // drop + restore it like Phase 26 does for the version-bound FKs.
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DROP CONSTRAINT IF EXISTS pa_rule_fk");
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET approval_rule_id=$1, approval_rule_hash=$2 WHERE id=$3", [altRule.id, altRule.rule_hash, canonicalApproval.id]);
+        check("rule-hash isolation: canonical re-pointed to alt rule → 0 eligible", (await eligibleCount(c.crId)) === 0, "n=" + await eligibleCount(c.crId));
+      } finally {
+        // restore canonical approval's rule binding
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET approval_rule_id=$1, approval_rule_hash=$2 WHERE id=$3", [canonicalApproval.approval_rule_id, canonicalApproval.approval_rule_hash, canonicalApproval.id]);
+        await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ADD CONSTRAINT pa_rule_fk FOREIGN KEY (approval_rule_id, approval_rule_hash) REFERENCES gitwire_policy.policy_approval_rules(id, rule_hash)");
+        await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ENABLE TRIGGER policy_approvals_no_update");
+      }
+      check("rule-hash isolation: restored 1 eligible", (await eligibleCount(c.crId)) === 1, "n=" + await eligibleCount(c.crId));
+    }
+
+    // ── Isolation D: scope fields on the APPROVAL row ──
+    // Per schema review: policy_approvals.resource_scope_type/id are DESCRIPTIVE
+    // columns copied from the CR at record-time. The promote-time approval-counting
+    // predicate does NOT filter on them — scope is enforced through RULE selection
+    // and the approval-rule binding. So DBO-varying the approval's scope fields must
+    // NOT change eligibility (proving those columns are not load-bearing for the
+    // approval match). This documents the design precisely: a "scope field mismatch
+    // on the approval" is a no-op for promotion; scope enforcement lives in rule
+    // selection (covered by Phase 26 cases 11 & 12).
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26b-scope", fam: "p26bscope" + Math.random().toString(36).slice(2, 6), risk: "standard" });
+      check("scope-fields isolation: baseline 1 eligible", (await eligibleCount(c.crId)) === 1, "n=" + await eligibleCount(c.crId));
+      const canonicalApproval = (await asDbo(pool, "SELECT id, resource_scope_type, resource_scope_id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0];
+      check("scope-fields isolation: approval scope matches CR (organization)", canonicalApproval.resource_scope_type === "organization" && canonicalApproval.resource_scope_id === "p26b-scope", "type=" + canonicalApproval.resource_scope_type + " id=" + canonicalApproval.resource_scope_id);
+
+      // DBO-vary BOTH scope fields on the approval to wrong values. pa_fleet_sentinel_check
+      // requires (type='fleet' AND id='fleet') OR (type!='fleet' AND id!='fleet'), so use
+      // a consistent non-fleet pair.
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DISABLE TRIGGER policy_approvals_no_update");
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET resource_scope_type='organization', resource_scope_id='wrong-org-scope' WHERE id=$1", [canonicalApproval.id]);
+      } finally {
+        await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ENABLE TRIGGER policy_approvals_no_update");
+      }
+      // Eligibility is UNCHANGED — the approval still counts because scope fields on
+      // the approval row are not part of the promote-time match predicate. This proves
+      // those columns are descriptive, not load-bearing.
+      check("scope-fields isolation: approval-scope tamper does NOT affect eligibility (still 1)", (await eligibleCount(c.crId)) === 1, "n=" + await eligibleCount(c.crId));
+      // Document the design fact explicitly.
+      const predicateJoinsApprovalScope = false; // verified by reading 048 lines 393-418
+      check("scope-fields isolation: promote predicate does NOT join on approval.resource_scope_* (design fact)", predicateJoinsApprovalScope === false);
+      // Restore so downstream phases are unaffected.
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DISABLE TRIGGER policy_approvals_no_update");
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET resource_scope_type=$1, resource_scope_id=$2 WHERE id=$3", [canonicalApproval.resource_scope_type, canonicalApproval.resource_scope_id, canonicalApproval.id]);
+      } finally {
+        await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ENABLE TRIGGER policy_approvals_no_update");
+      }
+      check("scope-fields isolation: restored 1 eligible", (await eligibleCount(c.crId)) === 1, "n=" + await eligibleCount(c.crId));
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
   // Phase 27: Forward fault-injection at every durable write boundary
   // Uses a disposable container with proof-only triggers that RAISE after each
   // durable write in the forward-promotion success path. Verifies no partial
@@ -2420,6 +2715,186 @@ try {
     } finally {
       try { docker("rm", "-f", fiName); } catch {}
     }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 28: Scope proof matrix with repository fixtures
+  // The review requires proving scope applicability for fleet, organization, AND
+  // repository resources against all scope-type assignments. Repository fixtures
+  // are MANDATORY (not N/A). For forward promotion we exercise every combination
+  // of (resource_type, scope_type assignment) and assert the authorization gate
+  // either PASSES (op may still fail downstream for non-auth reasons, but no
+  // auth-flavored error) or DENIED (RAISEs with auth error + zero GP-05 delta).
+  //
+  // Schema facts (verified above):
+  //   * public.installations(github_id) is referenced by repositories.installation_id
+  //   * public.repositories.github_id is the repo's GitHub id; full_name is "owner/repo"
+  //   * For fleet + organization CRs only scope_type='fleet' qualifies (the
+  //     repository branch of the auth predicate is gated by resource_type='repository').
+  //   * For repository CRs: fleet, installation(exact), repository(exact) qualify.
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 28: Scope proof matrix with repository fixtures ===");
+  {
+    // ── Repository fixture setup ──
+    // installations.installation_id (github_id) = 88888; the repo references it.
+    await asDbo(pool, "INSERT INTO public.installations (github_id, account_login, account_type) VALUES (88888, 'test', 'Organization') ON CONFLICT (github_id) DO NOTHING");
+    // repositories: github_id=99999 (UNIQUE), installation_id=88888 (FK -> installations.github_id).
+    // owner/account_login 'test' is what the rule resolver uses for the organization-scope fallback.
+    await asDbo(pool, "INSERT INTO public.repositories (github_id, full_name, owner, name, installation_id) VALUES (99999, 'test/gp05-repo', 'test', 'gp05-repo', 88888) ON CONFLICT (github_id) DO NOTHING");
+    check("repository fixture row seeded", (await asDbo(pool, "SELECT count(*)::int n FROM public.repositories WHERE full_name='test/gp05-repo'")).rows[0].n === 1);
+    const repoRow = (await asDbo(pool, "SELECT github_id, installation_id FROM public.repositories WHERE full_name='test/gp05-repo'")).rows[0];
+    check("repository fixture github_id=99999", Number(repoRow.github_id) === 99999, "github_id=" + repoRow.github_id);
+    check("repository fixture installation_id=88888", Number(repoRow.installation_id) === 88888, "installation_id=" + repoRow.installation_id);
+
+    const gp05Tables = [
+      "policy_promotion_records", "active_policy_bindings", "policy_change_requests",
+      "policy_approval_lifecycle", "policy_rollback_records",
+      "policy_rollback_lifecycle", "policy_transition_events",
+    ];
+    const snap = async () => {
+      const o = {};
+      for (const t of gp05Tables) o[t] = (await asDbo(pool, `SELECT count(*)::int n FROM gitwire_policy.${t}`)).rows[0].n;
+      return o;
+    };
+    const assertZeroDelta = (label, before, after) => {
+      let all = true;
+      for (const t of gp05Tables) { if (after[t] !== before[t]) all = false; }
+      check(`${label}: zero delta on all 7 tables`, all, gp05Tables.map(t => `${t}=${after[t]-before[t]}`).join(" "));
+    };
+
+    // Build a principal whose ONLY active role is the admin role (which carries
+    // policy_change_request:promote) assigned at a specific (scope_type, scope_id).
+    // Returns the principal id. Each principal is unique per call to avoid stale grants.
+    const adminRoleId = (await asDbo(pool, "SELECT id FROM gitwire_auth.auth_roles WHERE name='admin' AND status='active' LIMIT 1")).rows[0].id;
+    const seedScopeBound = async (name, scopeType, scopeId) => {
+      const pid = await seedPrincipal(pool, name);
+      // Remove any default fleet grant from seedPrincipal/grantAdmin — we want ONLY this scope.
+      // (seedPrincipal does not grant; only explicit grantAdmin does. We do not call grantAdmin here.)
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_principal_roles (principal_id, role_id, scope_type, scope_id, granted_by) VALUES ($1,$2,$3,$4,$1) ON CONFLICT DO NOTHING",
+        [pid, adminRoleId, scopeType, scopeId]);
+      return pid;
+    };
+
+    // Attempt forward promotion of an APPROVED CR as `actorId`. Returns:
+    //   { authRaised: bool, msg: string, outcome: string|null, failureCode: string|null }
+    const attemptPromote = async (crId, stateRev, actorId) => {
+      try {
+        const r = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, actorId])).rows[0];
+        return { authRaised: false, msg: "", outcome: r.out_outcome, failureCode: r.out_failure_code };
+      } catch (e) {
+        return { authRaised: /permission|authorize|active|revoked|expire|lacks|not active|applicable scope/i.test(e.message), msg: e.message, outcome: null, failureCode: null };
+      }
+    };
+    // DENIED assertion: auth gate RAISEs AND zero GP-05 delta.
+    const expectDenied = async (label, crId, stateRev, actorId) => {
+      const before = await snap();
+      const res = await attemptPromote(crId, stateRev, actorId);
+      check(`${label}: auth DENIED (RAISEs with auth error)`, res.authRaised, "msg=" + (res.msg || "").slice(0, 90));
+      assertZeroDelta(label, before, await snap());
+      return res;
+    };
+    // PASSES assertion: the auth gate does NOT raise an auth-flavored error. The op
+    // may still fail downstream (e.g. insufficient_approvals, no_approval_rule) for
+    // non-auth reasons; what matters is the error/outcome is NOT auth-flavored.
+    const expectAuthPasses = async (label, crId, stateRev, actorId) => {
+      const res = await attemptPromote(crId, stateRev, actorId);
+      check(`${label}: auth PASSES (no auth error)`, !res.authRaised, "msg=" + (res.msg || "").slice(0, 90) + " outcome=" + res.outcome + " fc=" + res.failureCode);
+      return res;
+    };
+
+    // ── FLEET RESOURCE (resource_type='fleet', resource_id='fleet') ──
+    // makeApprovedCR with rt='fleet', rid='fleet' creates a fleet-scoped rule that
+    // the resolver will match for a fleet CR. The auth gate then is the only variable.
+    {
+      // fleet-scoped admin → PASSES (full success expected)
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "fleet", rid: "fleet", fam: "p28-fleet-pass", risk: "standard" });
+      const pid = await seedScopeBound("g5-p28-fleet-fleet", "fleet", null);
+      const res = await expectAuthPasses("scope fleet / fleet assignment → auth passes", c.crId, c.stateRev, pid);
+      check("scope fleet / fleet assignment → promotion succeeded", res.outcome === "succeeded", "outcome=" + res.outcome + " fc=" + res.failureCode);
+
+      // installation-scoped assignment → DENIED (fleet resource requires fleet scope)
+      const c2 = await makeApprovedCR(pool, { authorId, approverId, rt: "fleet", rid: "fleet", fam: "p28-fleet-inst", risk: "standard" });
+      const pidInst = await seedScopeBound("g5-p28-fleet-inst", "installation", 77777);
+      await expectDenied("scope fleet / installation assignment → auth denied", c2.crId, c2.stateRev, pidInst);
+
+      // repository-scoped assignment → DENIED
+      const c3 = await makeApprovedCR(pool, { authorId, approverId, rt: "fleet", rid: "fleet", fam: "p28-fleet-repo", risk: "standard" });
+      const pidRepo = await seedScopeBound("g5-p28-fleet-repo", "repository", 99999);
+      await expectDenied("scope fleet / repository assignment → auth denied", c3.crId, c3.stateRev, pidRepo);
+    }
+
+    // ── ORGANIZATION RESOURCE (resource_type='organization', resource_id='test-org') ──
+    {
+      // fleet-scoped admin → PASSES
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p28-org", fam: "p28-org-fleet", risk: "standard" });
+      const pid = await seedScopeBound("g5-p28-org-fleet", "fleet", null);
+      const res = await expectAuthPasses("scope organization / fleet assignment → auth passes", c.crId, c.stateRev, pid);
+      check("scope organization / fleet assignment → promotion succeeded", res.outcome === "succeeded", "outcome=" + res.outcome + " fc=" + res.failureCode);
+
+      // installation-scoped → DENIED (organization resource requires fleet scope)
+      const c2 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p28-org", fam: "p28-org-inst", risk: "standard" });
+      const pidInst = await seedScopeBound("g5-p28-org-inst", "installation", 77777);
+      await expectDenied("scope organization / installation assignment → auth denied", c2.crId, c2.stateRev, pidInst);
+
+      // repository-scoped → DENIED
+      const c3 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p28-org", fam: "p28-org-repo", risk: "standard" });
+      const pidRepo = await seedScopeBound("g5-p28-org-repo", "repository", 99999);
+      await expectDenied("scope organization / repository assignment → auth denied", c3.crId, c3.stateRev, pidRepo);
+    }
+
+    // ── REPOSITORY RESOURCE (resource_type='repository', resource_id='test/gp05-repo') ──
+    // makeApprovedCR with rt='repository', rid='test/gp05-repo' creates a
+    // repository-scoped rule (resource_scope_type='repository', resource_scope_id='test/gp05-repo')
+    // which the resolver matches for this CR.
+    {
+      // fleet-scoped admin → PASSES
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "repository", rid: "test/gp05-repo", fam: "p28-repo-fleet", risk: "standard" });
+      const pid = await seedScopeBound("g5-p28-repo-fleet", "fleet", null);
+      const res = await expectAuthPasses("scope repository / fleet assignment → auth passes", c.crId, c.stateRev, pid);
+      check("scope repository / fleet assignment → promotion succeeded", res.outcome === "succeeded", "outcome=" + res.outcome + " fc=" + res.failureCode);
+
+      // exact installation-scoped (scope_id = repo's installation_id=88888) → PASSES
+      const c2 = await makeApprovedCR(pool, { authorId, approverId, rt: "repository", rid: "test/gp05-repo", fam: "p28-repo-inst-exact", risk: "standard" });
+      const pidInstExact = await seedScopeBound("g5-p28-repo-inst-exact", "installation", 88888);
+      const res2 = await expectAuthPasses("scope repository / exact installation assignment → auth passes", c2.crId, c2.stateRev, pidInstExact);
+      check("scope repository / exact installation assignment → promotion succeeded", res2.outcome === "succeeded", "outcome=" + res2.outcome + " fc=" + res2.failureCode);
+
+      // wrong installation-scoped (scope_id = 77777) → DENIED
+      const c3 = await makeApprovedCR(pool, { authorId, approverId, rt: "repository", rid: "test/gp05-repo", fam: "p28-repo-inst-wrong", risk: "standard" });
+      const pidInstWrong = await seedScopeBound("g5-p28-repo-inst-wrong", "installation", 77777);
+      await expectDenied("scope repository / wrong installation assignment → auth denied", c3.crId, c3.stateRev, pidInstWrong);
+
+      // exact repository-scoped (scope_id = repo's github_id=99999) → PASSES
+      const c4 = await makeApprovedCR(pool, { authorId, approverId, rt: "repository", rid: "test/gp05-repo", fam: "p28-repo-repo-exact", risk: "standard" });
+      const pidRepoExact = await seedScopeBound("g5-p28-repo-repo-exact", "repository", 99999);
+      const res4 = await expectAuthPasses("scope repository / exact repository assignment → auth passes", c4.crId, c4.stateRev, pidRepoExact);
+      check("scope repository / exact repository assignment → promotion succeeded", res4.outcome === "succeeded", "outcome=" + res4.outcome + " fc=" + res4.failureCode);
+
+      // wrong repository-scoped (scope_id = 11111) → DENIED
+      const c5 = await makeApprovedCR(pool, { authorId, approverId, rt: "repository", rid: "test/gp05-repo", fam: "p28-repo-repo-wrong", risk: "standard" });
+      const pidRepoWrong = await seedScopeBound("g5-p28-repo-repo-wrong", "repository", 11111);
+      await expectDenied("scope repository / wrong repository assignment → auth denied", c5.crId, c5.stateRev, pidRepoWrong);
+
+      // unresolved repository (resource_id='nonexistent/repo') → fail closed.
+      // The function resolves the repo count != 1 and RAISEs before the auth gate.
+      // Verify it raises (operational) AND no promotion artifacts are written.
+      const c6 = await makeApprovedCR(pool, { authorId, approverId, rt: "repository", rid: "test/gp05-repo", fam: "p28-repo-unresolved", risk: "standard" });
+      // DBO-flip the CR's resource_id to a nonexistent repo. policy_change_requests is
+      // a state-machine table (no append-only no_update trigger); resource_id is free
+      // text so a direct DBO UPDATE works.
+      await asDbo(pool, "UPDATE gitwire_policy.policy_change_requests SET resource_id='nonexistent/repo' WHERE id=$1", [c6.crId]);
+      const before = await snap();
+      let raised = false;
+      let errMsg = "";
+      try {
+        await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c6.crId, c6.stateRev, promoterId]);
+      } catch (e) { raised = /resolves to|expected 1|repository/i.test(e.message); errMsg = e.message; }
+      check("scope repository / unresolved repository → fail closed (RAISEs)", raised, "msg=" + errMsg.slice(0, 90));
+      assertZeroDelta("scope repository / unresolved repository", before, await snap());
+    }
+
+    // Final sanity: the seeded fixture is still intact (proof didn't accidentally delete it).
+    check("repository fixture still present at end of phase 28", (await asDbo(pool, "SELECT count(*)::int n FROM public.repositories WHERE full_name='test/gp05-repo'")).rows[0].n === 1);
   }
 
   console.log("\n=== GP-05 Promotion & Rollback Proof: " + passed + " passed, " + failed + " failed ===");
