@@ -3600,6 +3600,64 @@ try {
       "matched=" + JSON.stringify(matched) + " expected⊆=" + JSON.stringify(expectedAssignmentIds.sort()));
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 35: Expiry-during-lock regression
+  // Session A holds the CR lock. Session B begins promotion (blocks).
+  // Session A expires the approval and commits (releasing the lock).
+  // Session B's promotion must refuse — the post-lock v_now sees the expiry.
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 35: Expiry-during-lock regression ===");
+  {
+    // Build an approved CR with one approval whose assignment expires very soon
+    const expApprover = await seedPrincipal(pool, "g5-exp-lock-approver");
+    await grantAdmin(pool, expApprover);
+    // Set the approver's role assignment to expire in 2 seconds
+    await asDbo(pool, "UPDATE gitwire_auth.auth_principal_roles SET expires_at = now() + interval '2 seconds' WHERE principal_id = $1 AND scope_type = 'fleet'", [expApprover]);
+    const { crId, stateRev } = await makeApprovedCR(pool, { authorId, approverId: expApprover, risk: "standard" });
+
+    const promoBefore = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+    const bindBefore = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.active_policy_bindings")).rows[0].n;
+
+    // Session A: lock the CR as DBO (proof user can FOR UPDATE)
+    const sessA = await pool.connect();
+    await sessA.query("BEGIN");
+    await sessA.query("SELECT * FROM gitwire_policy.policy_change_requests WHERE id = $1 FOR UPDATE", [crId]);
+
+    // Session B: attempt promotion (will block on CR lock)
+    const promoPromise = (async () => {
+      const sessB = await pool.connect();
+      try {
+        await sessB.query("SET SESSION AUTHORIZATION gitwire_app");
+        await sessB.query("SET LOCAL statement_timeout = '15s'");
+        const r = await sessB.query("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, promoterId]);
+        return r.rows[0];
+      } finally { sessB.release(); }
+    })();
+
+    // Wait for the assignment to expire (3 seconds > 2-second TTL)
+    await new Promise(r => setTimeout(r, 3000));
+
+    // Session A: release the lock
+    await sessA.query("COMMIT");
+    sessA.release();
+
+    // Session B: should now complete — promotion must refuse
+    const result = await promoPromise;
+    check("expiry-during-lock: promotion refused", result.out_outcome === "failed", "outcome=" + result.out_outcome + " fc=" + result.out_failure_code);
+
+    // Verify no binding was created
+    const bindAfter = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.active_policy_bindings")).rows[0].n;
+    check("expiry-during-lock: no binding mutation", bindAfter === bindBefore, "delta=" + (bindAfter - bindBefore));
+
+    // Verify CR still approved
+    const crState = (await asDbo(pool, "SELECT state FROM gitwire_policy.policy_change_requests WHERE id = $1", [crId])).rows[0].state;
+    check("expiry-during-lock: CR unchanged (still approved)", crState === "approved", "state=" + crState);
+
+    // Verify exactly one failed record
+    const promoAfter = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records")).rows[0].n;
+    check("expiry-during-lock: exactly one failed record", promoAfter - promoBefore === 1, "delta=" + (promoAfter - promoBefore));
+  }
+
   console.log("\n=== GP-05 Promotion & Rollback Proof: " + passed + " passed, " + failed + " failed ===");
 } catch (e) {
   console.error("PROOF ERROR:", e.message);

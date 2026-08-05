@@ -248,9 +248,7 @@ BEGIN
     RAISE EXCEPTION 'promote_policy_change_request: caller must be gitwire_app, got %', session_user;
   END IF;
 
-  v_now := clock_timestamp();
-
-  -- ── Defect 1: transactional authorization (server time, before any lock) ──
+  -- ── Defect 1: transactional authorization (pre-lock active check only) ──
   IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
     -- cannot promote without an active identity: operational error, no failed record
     RAISE EXCEPTION 'promote_policy_change_request: actor principal % is not active', p_actor_principal_id;
@@ -264,6 +262,11 @@ BEGIN
     IF NOT FOUND THEN
       RAISE EXCEPTION 'promote_policy_change_request: change request % not found', p_change_request_id;
     END IF;
+
+    -- ── Sample server time AFTER acquiring the serialization lock so that
+    -- permission, assignment-expiry, approval-expiry, and evidence checks
+    -- all use a timestamp that cannot predate the lock acquisition. ──
+    v_now := clock_timestamp();
 
     -- ── Scope-applicable authorization (GP-03 scope hierarchy) ──
     -- Permission check happens AFTER the resource tuple is resolved from the
