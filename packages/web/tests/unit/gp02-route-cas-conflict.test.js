@@ -31,6 +31,16 @@ jest.unstable_mockModule("../../src/services/governedPolicyService.js", () => ({
   evaluateChangeRequest: jest.fn(),
   getValidationEvidence: jest.fn(),
   getSimulationEvidence: jest.fn(),
+  // GP-05 exports imported by the route module under the cumulative graph.
+  promoteChangeRequest: jest.fn(),
+  createRollbackRequest: jest.fn(),
+  approveRollbackRequest: jest.fn(),
+  rejectRollbackRequest: jest.fn(),
+  withdrawRollbackRequest: jest.fn(),
+  promoteRollbackRequest: jest.fn(),
+  getActiveBindings: jest.fn(),
+  getPromotionRecords: jest.fn(),
+  getRollbackRequests: jest.fn(),
 }));
 
 jest.unstable_mockModule("../../src/services/auth/observeAdopt.js", () => ({

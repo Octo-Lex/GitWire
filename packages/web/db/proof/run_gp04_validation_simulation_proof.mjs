@@ -72,7 +72,7 @@ async function withIsolatedDb(label, uptoFile, fn) {
   const isoPool = new pg.Pool({ connectionString: url });
   try {
     if (uptoFile) await applyMigrationsUpto(isoPool, uptoFile);
-    else await applyMigrations(isoPool);
+    else await applyMigrationsUpto(isoPool, "047_gp04_validation_simulation.sql");
     return await fn(isoPool);
   } finally {
     try { await isoPool.end(); } catch {}
@@ -108,8 +108,11 @@ try {
   }
 
   // ═══ Phase 1: Migrations ════════════════════════════════════════════
+  // This is a GP-04 baseline proof: cap at 047 so the assertions (47-migration
+  // ledger, 11-function set, GP-04-era privileges) hold against the GP-04-owned
+  // boundary. GP-05 owns the cumulative 048 assertions in its own proof.
   console.log("\n=== Phase 1: Apply migrations 001-047 ===");
-  await applyMigrations(pool);
+  await applyMigrationsUpto(pool, "047_gp04_validation_simulation.sql");
   const migCount = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
   check("migration ledger = 47", migCount === 47, "count=" + migCount);
 

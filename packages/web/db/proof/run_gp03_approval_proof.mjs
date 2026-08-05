@@ -38,6 +38,11 @@ function check(name, ok, detail = "") { if (ok) passed += 1; else failed += 1; c
 function docker(...a) { return execFileSync("docker", a, { encoding: "utf8", stdio: ["pipe","pipe","pipe"] }).trim(); }
 function pickPort() { return new Promise((r,j) => { const s = createServer(); s.unref(); s.on("error",j); s.listen(0,"127.0.0.1",()=>{const {port}=s.address(); s.close(()=>r(port));}); }); }
 function waitForReady(url, ms) { const st=Date.now(); return new Promise((r,j)=>{const t=async()=>{try{const c=new pg.Client({connectionString:url});await c.connect();await c.end();r();}catch{if(Date.now()-st>ms)return j(new Error("not ready"));setTimeout(t,500);}};t();}); }
+// Cap at 047: this is a GP-03 baseline proof. GP-05 owns cumulative 048.
+// All applyMigrations call sites in this proof (initial, isolated DBs, reapply)
+// use this capped function.
+const GP03_BASELINE_LAST = "047_gp04_validation_simulation.sql";
+
 async function applyMigrations(pool) {
   const c = await pool.connect();
   try {
@@ -45,9 +50,32 @@ async function applyMigrations(pool) {
     const { rows } = await c.query("SELECT version FROM schema_migrations");
     const applied = new Set(rows.map(r => r.version));
     const files = (await readdir(MIGRATIONS_DIR)).filter(f => f.endsWith(".sql")).sort();
-    for (const file of files) { if (applied.has(file)) continue; const sql = await readFile(join(MIGRATIONS_DIR, file), "utf8");
+    for (const file of files) {
+      if (applied.has(file)) continue;
+      const sql = await readFile(join(MIGRATIONS_DIR, file), "utf8");
       try { await c.query("BEGIN"); await c.query(sql); await c.query("INSERT INTO schema_migrations (version) VALUES ($1)", [file]); await c.query("COMMIT"); }
-      catch (err) { await c.query("ROLLBACK"); throw new Error(file + ": " + err.message); } }
+      catch (err) { await c.query("ROLLBACK"); throw new Error(file + ": " + err.message); }
+      if (file === GP03_BASELINE_LAST) break;
+    }
+  } finally { c.release(); }
+}
+
+// Uncapped helper (used by internal rollback/reapply tests that need to reapply
+// exactly the migrations that were rolled back, not the full 001-047 set)
+async function applyMigrationsUpto(pool, lastFile) {
+  const c = await pool.connect();
+  try {
+    await c.query("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+    const { rows } = await c.query("SELECT version FROM schema_migrations");
+    const applied = new Set(rows.map(r => r.version));
+    const files = (await readdir(MIGRATIONS_DIR)).filter(f => f.endsWith(".sql")).sort();
+    for (const file of files) {
+      if (applied.has(file)) continue;
+      const sql = await readFile(join(MIGRATIONS_DIR, file), "utf8");
+      try { await c.query("BEGIN"); await c.query(sql); await c.query("INSERT INTO schema_migrations (version) VALUES ($1)", [file]); await c.query("COMMIT"); }
+      catch (err) { await c.query("ROLLBACK"); throw new Error(file + ": " + err.message); }
+      if (file === lastFile) break;
+    }
   } finally { c.release(); }
 }
 
@@ -123,7 +151,8 @@ try {
   }
 
   // ═══ Phase 1: Migrations ══════════════════════════════════════════════
-  console.log("\n=== Phase 1: Apply migrations 001-046 ===");
+  // applyMigrations caps at 047 (GP-03 baseline proof; GP-05 owns 048).
+  console.log("\n=== Phase 1: Apply migrations 001-047 ===");
   await applyMigrations(pool);
   const migCount = (await pool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
   check("migration ledger = 47", migCount === 47, "count=" + migCount);
@@ -1313,7 +1342,9 @@ try {
     try {
       await waitForReady(rbUrl, 60_000);
       const rbPool = new pg.Pool({ connectionString: rbUrl });
-      await applyMigrations(rbPool);
+      // Cap at 046: this test rolls back migration 046, which is only safe when
+      // 047 (which depends on 046) is NOT applied.
+      await applyMigrationsUpto(rbPool, "046_gp03_approval_functions.sql");
 
       // Capture the full ACL + all 16 triggers BEFORE rollback
       const allTriggers = ["policy_versions_no_update","policy_versions_no_delete","policy_validation_evidence_no_update","policy_validation_evidence_no_delete","policy_simulation_evidence_no_update","policy_simulation_evidence_no_delete","policy_approval_rules_no_update","policy_approval_rules_no_delete","policy_approvals_no_update","policy_approvals_no_delete","policy_approval_lifecycle_no_update","policy_approval_lifecycle_no_delete","policy_promotion_records_no_update","policy_promotion_records_no_delete","policy_transition_events_no_update","policy_transition_events_no_delete"];
@@ -1357,10 +1388,10 @@ try {
       const trigAfterNames = trigAfter.map(t => t.tgname).sort();
       check("all 16 append-only triggers preserved through rollback", JSON.stringify(trigBeforeNames) === JSON.stringify(trigAfterNames) && trigBeforeNames.length === 16, "count=" + trigAfterNames.length);
 
-      // Reapply
-      await applyMigrations(rbPool);
+      // Reapply (cap at 046 to match the initial scope)
+      await applyMigrationsUpto(rbPool, "046_gp03_approval_functions.sql");
       const finalLedger = (await rbPool.query("SELECT count(*)::int n FROM schema_migrations")).rows[0].n;
-      check("ledger = 46 after reapply", finalLedger === 47);
+      check("ledger = 46 after reapply", finalLedger === 46);
 
       // GP-03 functions restored
       const gp03Restored = (await rbPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'gitwire_policy' AND p.proname IN ('create_policy_approval_rule','record_policy_approval','revoke_policy_approval','expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request')")).rows[0].n;
@@ -1409,15 +1440,24 @@ try {
            AND table_name IN ('repositories','installations')
          ORDER BY 1,2,3,4)
         ORDER BY 1,2,3,4`;
+      // Pristine comparison pool capped at 046 (matches the rbPool scope)
+      const priPort = await pickPort();
+      const priName = "gp03-pri-" + priPort;
+      const priCid = docker("run", "-d", "--rm", "--name", priName, "-p", "127.0.0.1:" + priPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+      const priUrl = "postgresql://proof:proof-only@127.0.0.1:" + priPort + "/proofdb";
+      await waitForReady(priUrl, 60_000);
+      const priPool = new pg.Pool({ connectionString: priUrl });
+      await applyMigrationsUpto(priPool, "046_gp03_approval_functions.sql");
+
       const { rows: rbAcl } = await rbPool.query(aclQuery);
-      const { rows: priAcl } = await pool.query(aclQuery);
+      const { rows: priAcl } = await priPool.query(aclQuery);
       check("exact ACL equivalence (tables + columns): reapply == fresh apply", JSON.stringify(rbAcl) === JSON.stringify(priAcl), "rb=" + rbAcl.length + " pri=" + priAcl.length);
 
       // Function EXECUTE grants + owners equivalence (all 10 SECURITY DEFINER fns).
       // Use has_function_privilege (authoritative) rather than aclexplode.
       const fnQuery = "SELECT p.proname, pg_get_userbyid(p.proowner) AS owner, has_function_privilege('gitwire_app', p.oid, 'EXECUTE') AS app_exec FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy' AND p.proname IN ('create_policy_change_request','create_policy_version','select_policy_version','submit_policy_change_request','create_policy_approval_rule','record_policy_approval','revoke_policy_approval','expire_policy_approval','evaluate_approval_sufficiency','approve_policy_change_request') ORDER BY p.proname";
       const { rows: rbFns } = await rbPool.query(fnQuery);
-      const { rows: priFns } = await pool.query(fnQuery);
+      const { rows: priFns } = await priPool.query(fnQuery);
       check("exact function owner + EXECUTE-grant equivalence: reapply == fresh apply", JSON.stringify(rbFns) === JSON.stringify(priFns), "rb=" + rbFns.length + " pri=" + priFns.length);
       // All 10 functions owned by gitwire_policy_fn_owner and executable by gitwire_app
       const allOwned = rbFns.every(f => f.owner === "gitwire_policy_fn_owner");
@@ -1427,9 +1467,11 @@ try {
 
       // Schema USAGE grant equivalence
       const rbUsage = (await rbPool.query("SELECT has_schema_privilege('gitwire_policy_fn_owner','gitwire_auth','USAGE') as h")).rows[0].h;
-      const priUsage = (await pool.query("SELECT has_schema_privilege('gitwire_policy_fn_owner','gitwire_auth','USAGE') as h")).rows[0].h;
+      const priUsage = (await priPool.query("SELECT has_schema_privilege('gitwire_policy_fn_owner','gitwire_auth','USAGE') as h")).rows[0].h;
       check("schema USAGE equivalence: reapply == fresh apply", rbUsage === priUsage);
 
+      await priPool.end();
+      try { docker("rm", "-f", priCid); } catch {}
       await rbPool.end();
     } finally {
       try { docker("rm", "-f", rbCid); } catch {}

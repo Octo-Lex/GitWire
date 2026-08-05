@@ -584,3 +584,145 @@ async function simulatePolicyObject({ payload, resourceScope }) {
     simulated_at: new Date().toISOString(),
   };
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// GP-05: Atomic promotion and governed rollback
+// All mutating functions invoke SECURITY DEFINER finalizers; the Node layer
+// supplies only expected revisions + identity from req.auth. The server-side
+// SQL resolves scope, evidence, risk, approvals, and binding state.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Promote a change request atomically (approved → promoted).
+ */
+export async function promoteChangeRequest({ changeRequestId, expectedStateRevision, expectedBindingRevision, principalId }) {
+  const { rows: [r] } = await db.query(
+    "SELECT * FROM gitwire_policy.promote_policy_change_request($1, $2, $3, $4)",
+    [changeRequestId, expectedStateRevision, expectedBindingRevision, principalId]
+  );
+  if (r.out_outcome === "succeeded") {
+    logger.info({ changeRequestId, principalId, bindingId: r.out_binding_id, revision: r.out_binding_revision }, "Policy change request promoted");
+  } else {
+    logger.warn({ changeRequestId, principalId, failureCode: r.out_failure_code }, "Policy promotion refused (domain)");
+  }
+  return {
+    promotionRecordId: r.out_promotion_record_id,
+    outcome: r.out_outcome,
+    failureCode: r.out_failure_code,
+    bindingId: r.out_binding_id,
+    bindingRevision: r.out_binding_revision,
+    changeRequestId: r.out_change_request_id,
+    newState: r.out_new_state,
+    newStateRevision: r.out_new_state_revision,
+  };
+}
+
+/** Create a governed rollback request. Server resolves target provenance and risk. */
+export async function createRollbackRequest({ bindingId, expectedBindingRevision, targetVersionId, principalId }) {
+  const { rows: [r] } = await db.query(
+    "SELECT * FROM gitwire_policy.create_policy_rollback_request($1, $2, $3, $4)",
+    [bindingId, expectedBindingRevision, targetVersionId, principalId]
+  );
+  logger.info({ rollbackRecordId: r.out_rollback_record_id, principalId, risk: r.out_risk_classification }, "Rollback request created");
+  return {
+    rollbackRecordId: r.out_rollback_record_id,
+    status: r.out_status,
+    statusRevision: r.out_status_revision,
+    riskClassification: r.out_risk_classification,
+    targetPromotionRecordId: r.out_target_promotion_record_id,
+  };
+}
+
+/** Approve a rollback request (requested → approved). */
+export async function approveRollbackRequest({ rollbackRequestId, expectedStatusRevision, principalId }) {
+  const { rows: [r] } = await db.query(
+    "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1, $2, $3)",
+    [rollbackRequestId, expectedStatusRevision, principalId]
+  );
+  logger.info({ rollbackRequestId, principalId }, "Rollback request approved");
+  return { rollbackRecordId: r.out_rollback_record_id, status: r.out_status, statusRevision: r.out_status_revision };
+}
+
+/** Reject a rollback request (requested → rejected). */
+export async function rejectRollbackRequest({ rollbackRequestId, expectedStatusRevision, principalId }) {
+  const { rows: [r] } = await db.query(
+    "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1, $2, $3)",
+    [rollbackRequestId, expectedStatusRevision, principalId]
+  );
+  logger.info({ rollbackRequestId, principalId }, "Rollback request rejected");
+  return { rollbackRecordId: r.out_rollback_record_id, status: r.out_status, statusRevision: r.out_status_revision };
+}
+
+/** Withdraw a rollback request (requested/approved → withdrawn, requester only). */
+export async function withdrawRollbackRequest({ rollbackRequestId, expectedStatusRevision, principalId }) {
+  const { rows: [r] } = await db.query(
+    "SELECT * FROM gitwire_policy.withdraw_policy_rollback_request($1, $2, $3)",
+    [rollbackRequestId, expectedStatusRevision, principalId]
+  );
+  logger.info({ rollbackRequestId, principalId }, "Rollback request withdrawn");
+  return { rollbackRecordId: r.out_rollback_record_id, status: r.out_status, statusRevision: r.out_status_revision };
+}
+
+/** Promote a rollback request atomically (approved → promoted). */
+export async function promoteRollbackRequest({ rollbackRequestId, expectedStatusRevision, expectedBindingRevision, principalId }) {
+  const { rows: [r] } = await db.query(
+    "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1, $2, $3, $4)",
+    [rollbackRequestId, expectedStatusRevision, expectedBindingRevision, principalId]
+  );
+  if (r.out_outcome === "succeeded") {
+    logger.info({ rollbackRequestId, principalId, bindingRevision: r.out_binding_revision }, "Rollback promoted");
+  } else {
+    logger.warn({ rollbackRequestId, principalId, failureCode: r.out_failure_code }, "Rollback promotion refused (domain)");
+  }
+  return {
+    promotionRecordId: r.out_promotion_record_id,
+    outcome: r.out_outcome,
+    failureCode: r.out_failure_code,
+    rollbackRecordId: r.out_rollback_record_id,
+    status: r.out_status,
+    statusRevision: r.out_status_revision,
+    bindingId: r.out_binding_id,
+    bindingRevision: r.out_binding_revision,
+  };
+}
+
+/** Read surfaces for the accepted architecture. */
+export async function getActiveBindings({ resourceType, resourceId, policyFamily } = {}) {
+  const where = [];
+  const params = [];
+  if (resourceType) { params.push(resourceType); where.push(`resource_type = $${params.length}`); }
+  if (resourceId) { params.push(resourceId); where.push(`resource_id = $${params.length}`); }
+  if (policyFamily) { params.push(policyFamily); where.push(`policy_family = $${params.length}`); }
+  const clause = where.length ? "WHERE " + where.join(" AND ") : "";
+  const { rows } = await db.query(
+    `SELECT * FROM gitwire_policy.active_policy_bindings ${clause} ORDER BY updated_at DESC LIMIT 100`,
+    params
+  );
+  return rows;
+}
+
+export async function getPromotionRecords({ changeRequestId, bindingId } = {}) {
+  const where = [];
+  const params = [];
+  if (changeRequestId) { params.push(changeRequestId); where.push(`change_request_id = $${params.length}`); }
+  if (bindingId) { params.push(bindingId); where.push(`binding_id = $${params.length}`); }
+  const clause = where.length ? "WHERE " + where.join(" AND ") : "";
+  const { rows } = await db.query(
+    `SELECT * FROM gitwire_policy.policy_promotion_records ${clause} ORDER BY occurred_at DESC LIMIT 100`,
+    params
+  );
+  return rows;
+}
+
+export async function getRollbackRequests({ bindingId, status } = {}) {
+  const where = [];
+  const params = [];
+  if (bindingId) { params.push(bindingId); where.push(`binding_id = $${params.length}`); }
+  if (status) { params.push(status); where.push(`status = $${params.length}`); }
+  const clause = where.length ? "WHERE " + where.join(" AND ") : "";
+  const { rows } = await db.query(
+    `SELECT * FROM gitwire_policy.policy_rollback_records ${clause} ORDER BY created_at DESC LIMIT 100`,
+    params
+  );
+  return rows;
+}

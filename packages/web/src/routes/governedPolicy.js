@@ -3,6 +3,57 @@
 // GP-02 (issue #98): Immutable policy versions and change-request state machine.
 //
 // All mutating routes call observeAuthorize (Wave 2 observe-only seam) and
+
+// ── GP-05 exact-key body whitelist helpers ─────────────────────────────────
+// Reject unknown keys, non-object bodies, and malformed revision values.
+
+/**
+ * Validate that the request body is a plain object containing exactly the
+ * allowed keys. Returns { ok: true, values } or { ok: false, error }.
+ */
+function validateBody(body, allowedKeys) {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "Request body must be a JSON object" };
+  }
+  const present = Object.keys(body);
+  const extra = present.filter((k) => !allowedKeys.includes(k));
+  if (extra.length > 0) {
+    return { ok: false, error: `Unknown fields: ${extra.join(", ")}` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Parse a required non-negative integer revision from the body.
+ * Returns { ok: true, value } or { ok: false, error }.
+ */
+function parseRevision(body, key) {
+  const raw = body[key];
+  if (raw === undefined || raw === null) {
+    return { ok: false, error: `${key} is required` };
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+    return { ok: false, error: `${key} must be a non-negative integer` };
+  }
+  return { ok: true, value: n };
+}
+
+/**
+ * Parse an optional nullable revision. null is allowed (asserts no binding);
+ * a non-negative integer asserts an existing binding. Returns { ok, value }.
+ */
+function parseOptionalRevision(body, key) {
+  const raw = body[key];
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: null };
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+    return { ok: false, error: `${key} must be null or a non-negative integer` };
+  }
+  return { ok: true, value: n };
+}
 // use authoritativePrincipalId(req) for server-owned principal attribution.
 
 import { Router } from "express";
@@ -28,6 +79,16 @@ import {
   evaluateChangeRequest,
   getValidationEvidence,
   getSimulationEvidence,
+  // GP-05
+  promoteChangeRequest,
+  createRollbackRequest,
+  approveRollbackRequest,
+  rejectRollbackRequest,
+  withdrawRollbackRequest,
+  promoteRollbackRequest,
+  getActiveBindings,
+  getPromotionRecords,
+  getRollbackRequests,
 } from "../services/governedPolicyService.js";
 
 export const governedPolicyRouter = Router();
@@ -481,5 +542,236 @@ governedPolicyRouter.get("/change-requests/:id/simulation-evidence", async (req,
   } catch (err) {
     logger.error({ err: err.message }, "Failed to list simulation evidence");
     res.status(500).json({ error: "Failed to list simulation evidence" });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// GP-05: Atomic promotion and governed rollback routes
+// Exact-key request whitelists; identity from req.auth only.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/policy/change-requests/:id/promote
+ * Forward promotion. Body whitelist: expectedStateRevision, expectedBindingRevision.
+ */
+governedPolicyRouter.post("/change-requests/:id/promote", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bodyCheck = validateBody(req.body, ["expectedStateRevision", "expectedBindingRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const rev = parseRevision(req.body, "expectedStateRevision");
+    if (!rev.ok) return res.status(400).json({ error: rev.error });
+    const bindRev = parseOptionalRevision(req.body, "expectedBindingRevision");
+    if (!bindRev.ok) return res.status(400).json({ error: bindRev.error });
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_change_request:promote",
+      resource: { type: "policy_definition", resourceId: id },
+    });
+    const result = await promoteChangeRequest({
+      changeRequestId: id,
+      expectedStateRevision: rev.value,
+      expectedBindingRevision: bindRev.value,
+      principalId,
+    });
+    if (result.outcome === "failed" && /CAS|stale|concurrently/i.test(result.failureCode || "")) {
+      return res.status(409).json({ error: "Request or binding state changed concurrently", ...result });
+    }
+    if (result.outcome === "failed") {
+      return res.status(422).json({ error: `Promotion refused: ${result.failureCode}`, ...result });
+    }
+    res.json({ data: result });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to promote change request");
+    res.status(500).json({ error: "Failed to promote change request" });
+  }
+});
+
+/**
+ * POST /api/policy/bindings/:id/rollback-requests
+ * Create rollback request. Body whitelist: expectedBindingRevision, targetVersionId.
+ */
+governedPolicyRouter.post("/bindings/:id/rollback-requests", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bodyCheck = validateBody(req.body, ["expectedBindingRevision", "targetVersionId"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const bindRev = parseRevision(req.body, "expectedBindingRevision");
+    if (!bindRev.ok) return res.status(400).json({ error: bindRev.error });
+    const { targetVersionId } = req.body;
+    if (!targetVersionId || typeof targetVersionId !== "string") {
+      return res.status(400).json({ error: "targetVersionId must be a non-empty string" });
+    }
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_rollback_request:create",
+      resource: { type: "policy_binding", resourceId: id },
+    });
+    const result = await createRollbackRequest({
+      bindingId: id,
+      expectedBindingRevision: bindRev.value,
+      targetVersionId,
+      principalId,
+    });
+    res.json({ data: result });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to create rollback request");
+    res.status(500).json({ error: "Failed to create rollback request" });
+  }
+});
+
+/**
+ * POST /api/policy/rollback-requests/:id/approve
+ * Body whitelist: expectedStatusRevision.
+ */
+governedPolicyRouter.post("/rollback-requests/:id/approve", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bodyCheck = validateBody(req.body, ["expectedStatusRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const rev = parseRevision(req.body, "expectedStatusRevision");
+    if (!rev.ok) return res.status(400).json({ error: rev.error });
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_rollback_request:approve",
+      resource: { type: "policy_rollback", resourceId: id },
+    });
+    const result = await approveRollbackRequest({
+      rollbackRequestId: id,
+      expectedStatusRevision: rev.value,
+      principalId,
+    });
+    res.json({ data: result });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to approve rollback request");
+    res.status(500).json({ error: "Failed to approve rollback request" });
+  }
+});
+
+/**
+ * POST /api/policy/rollback-requests/:id/reject
+ * Body whitelist: expectedStatusRevision.
+ */
+governedPolicyRouter.post("/rollback-requests/:id/reject", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bodyCheck = validateBody(req.body, ["expectedStatusRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const rev = parseRevision(req.body, "expectedStatusRevision");
+    if (!rev.ok) return res.status(400).json({ error: rev.error });
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_rollback_request:approve",
+      resource: { type: "policy_rollback", resourceId: id },
+    });
+    const result = await rejectRollbackRequest({
+      rollbackRequestId: id,
+      expectedStatusRevision: rev.value,
+      principalId,
+    });
+    res.json({ data: result });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to reject rollback request");
+    res.status(500).json({ error: "Failed to reject rollback request" });
+  }
+});
+
+/**
+ * POST /api/policy/rollback-requests/:id/withdraw
+ * Body whitelist: expectedStatusRevision. Requester only (enforced in SQL).
+ */
+governedPolicyRouter.post("/rollback-requests/:id/withdraw", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bodyCheck = validateBody(req.body, ["expectedStatusRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const rev = parseRevision(req.body, "expectedStatusRevision");
+    if (!rev.ok) return res.status(400).json({ error: rev.error });
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_rollback_request:create",
+      resource: { type: "policy_rollback", resourceId: id },
+    });
+    const result = await withdrawRollbackRequest({
+      rollbackRequestId: id,
+      expectedStatusRevision: rev.value,
+      principalId,
+    });
+    res.json({ data: result });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to withdraw rollback request");
+    res.status(500).json({ error: "Failed to withdraw rollback request" });
+  }
+});
+
+/**
+ * POST /api/policy/rollback-requests/:id/promote
+ * Rollback promotion. Body whitelist: expectedStatusRevision, expectedBindingRevision.
+ */
+governedPolicyRouter.post("/rollback-requests/:id/promote", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const bodyCheck = validateBody(req.body, ["expectedStatusRevision", "expectedBindingRevision"]);
+    if (!bodyCheck.ok) return res.status(400).json({ error: bodyCheck.error });
+    const stRev = parseRevision(req.body, "expectedStatusRevision");
+    if (!stRev.ok) return res.status(400).json({ error: stRev.error });
+    const bindRev = parseRevision(req.body, "expectedBindingRevision");
+    if (!bindRev.ok) return res.status(400).json({ error: bindRev.error });
+    const principalId = authoritativePrincipalId(req);
+    await observeAuthorize(req, {
+      permission: "policy_rollback_request:promote",
+      resource: { type: "policy_rollback", resourceId: id },
+    });
+    const result = await promoteRollbackRequest({
+      rollbackRequestId: id,
+      expectedStatusRevision: stRev.value,
+      expectedBindingRevision: bindRev.value,
+      principalId,
+    });
+    if (result.outcome === "failed") {
+      return res.status(422).json({ error: `Rollback promotion refused: ${result.failureCode}`, ...result });
+    }
+    res.json({ data: result });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to promote rollback request");
+    res.status(500).json({ error: "Failed to promote rollback request" });
+  }
+});
+
+// ── Read surfaces ───────────────────────────────────────────────────────────
+
+governedPolicyRouter.get("/bindings", async (req, res) => {
+  try {
+    const { resourceType, resourceId, policyFamily } = req.query;
+    await observeAuthorize(req, { permission: "policy_active_binding:read", resource: { type: "policy_definition" } });
+    const rows = await getActiveBindings({ resourceType, resourceId, policyFamily });
+    res.json({ data: rows });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list bindings");
+    res.status(500).json({ error: "Failed to list bindings" });
+  }
+});
+
+governedPolicyRouter.get("/promotion-records", async (req, res) => {
+  try {
+    const { changeRequestId, bindingId } = req.query;
+    await observeAuthorize(req, { permission: "policy_promotion_record:read", resource: { type: "policy_definition" } });
+    const rows = await getPromotionRecords({ changeRequestId, bindingId });
+    res.json({ data: rows });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list promotion records");
+    res.status(500).json({ error: "Failed to list promotion records" });
+  }
+});
+
+governedPolicyRouter.get("/rollback-requests", async (req, res) => {
+  try {
+    const { bindingId, status } = req.query;
+    await observeAuthorize(req, { permission: "policy_rollback_request:read", resource: { type: "policy_definition" } });
+    const rows = await getRollbackRequests({ bindingId, status });
+    res.json({ data: rows });
+  } catch (err) {
+    logger.error({ err: err.message }, "Failed to list rollback requests");
+    res.status(500).json({ error: "Failed to list rollback requests" });
   }
 });
