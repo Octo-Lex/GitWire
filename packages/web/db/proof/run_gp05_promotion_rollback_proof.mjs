@@ -3321,6 +3321,285 @@ try {
     }
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 31: Current-role count sensitivity (P1 fix)
+  // Verifies that the eligible-approval query joins auth_principal_roles with
+  // required-role + scope-applicable conditions INSIDE the eligible set, so an
+  // approver whose role assignment was revoked AFTER recording no longer counts
+  // toward required_count at promote time.
+  // ────────────────────────────────────────────────────────────────────────────
+  // Setup: rule with required_count=2, two approvers both holding fleet admin,
+  // both record an approval. Revoke approver2's fleet admin assignment, then
+  // promote → must fail with insufficient_approvals (only 1 eligible now).
+  // Assert exactly one failed forward-promotion record and zero delta on the
+  // other GP-05 tables (binding unchanged, CR still approved, no new consumed
+  // lifecycle, no transition event).
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 31: Current-role count sensitivity ===");
+  {
+    const appr1 = await seedPrincipal(pool, "g5-p31-appr1");
+    const appr2 = await seedPrincipal(pool, "g5-p31-appr2");
+    await grantAdmin(pool, appr1);
+    await grantAdmin(pool, appr2);
+
+    // Build an approved CR with required_count=2 and TWO recorded approvals.
+    // makeApprovedCR creates required_count=1, so do the steps manually here.
+    const fam = "p31rc" + Math.random().toString(36).slice(2, 6);
+    const rid = "p31-" + fam;
+    const crId = (await asApp(pool, "SELECT gitwire_policy.create_policy_change_request($1,$2,$3,$4) AS id", ["organization", rid, fam, authorId])).rows[0].id;
+    const vId = (await asApp(pool, "SELECT gitwire_policy.create_policy_version($1,$2::jsonb,$3) AS id", [crId, JSON.stringify({ v: "1" }), authorId])).rows[0].id;
+    await asApp(pool, "SELECT * FROM gitwire_policy.select_policy_version($1,$2,0,$3)", [crId, vId, authorId]);
+    await asApp(pool, "SELECT * FROM gitwire_policy.submit_policy_change_request($1,1,$2)", [crId, authorId]);
+    const val = JSON.stringify({ valid: true, errors: [] });
+    const sim = JSON.stringify({ passed: true, risk_classification: "standard", classifier_version: "cv1", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "a".repeat(64) } });
+    await asApp(pool, "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1,2,$2::jsonb,'vv1',$3::jsonb,'sv1',$4)", [crId, val, sim, authorId]);
+    // Rule with required_count=2, requiring the 'admin' role.
+    const ruleId = (await asApp(pool, "SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id",
+      ["v1", fam, "organization", rid, "standard", 2, JSON.stringify(["admin"]), authorId])).rows[0].id;
+    // Record two approvals from two distinct admins.
+    await asApp(pool, "SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, appr1]);
+    await asApp(pool, "SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, appr2]);
+    // Approve the CR (both approvals satisfy required_count=2). Use a third admin
+    // (the original approverId) as the approving actor.
+    const st = (await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_change_request($1,3,$2)", [crId, approverId])).rows[0];
+    const stateRev = st.state_revision;
+
+    // Snapshot counts before the revoke + promote.
+    const gp05Tables = [
+      "policy_promotion_records", "active_policy_bindings", "policy_change_requests",
+      "policy_approval_lifecycle", "policy_transition_events",
+    ];
+    const snap = async () => {
+      const o = {};
+      for (const t of gp05Tables) o[t] = (await asDbo(pool, `SELECT count(*)::int n FROM gitwire_policy.${t}`)).rows[0].n;
+      return o;
+    };
+    const before = await snap();
+
+    // Revoke appr2's fleet-scoped admin assignment. The promote-time eligible
+    // query joins auth_principal_roles with revoked_at IS NULL, so appr2's
+    // approval should drop out of the eligible set.
+    await asDbo(pool, "UPDATE gitwire_auth.auth_principal_roles SET revoked_at = now() WHERE principal_id = $1 AND scope_type = 'fleet'", [appr2]);
+
+    const promoBefore = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records WHERE promotion_kind='forward'")).rows[0].n;
+    const r = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, promoterId])).rows[0];
+    check("role-count-sensitivity: insufficient_approvals after role revocation",
+      r.out_outcome === "failed" && r.out_failure_code === "insufficient_approvals",
+      "outcome=" + r.out_outcome + " fc=" + r.out_failure_code);
+
+    // Exactly one failed forward-promotion record written.
+    const promoAfter = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.policy_promotion_records WHERE promotion_kind='forward'")).rows[0].n;
+    check("role-count-sensitivity: exactly one failed forward-promotion record", promoAfter - promoBefore === 1, "delta=" + (promoAfter - promoBefore));
+
+    // Zero delta on the durable-mutation tables (no binding, CR still approved,
+    // no consumed lifecycle, no transition event).
+    const after = await snap();
+    check("role-count-sensitivity: active_policy_bindings unchanged", after.active_policy_bindings === before.active_policy_bindings, "delta=" + (after.active_policy_bindings - before.active_policy_bindings));
+    check("role-count-sensitivity: policy_change_requests unchanged (still approved)", after.policy_change_requests === before.policy_change_requests, "delta=" + (after.policy_change_requests - before.policy_change_requests));
+    check("role-count-sensitivity: policy_approval_lifecycle unchanged (no new consumed)", after.policy_approval_lifecycle === before.policy_approval_lifecycle, "delta=" + (after.policy_approval_lifecycle - before.policy_approval_lifecycle));
+    check("role-count-sensitivity: policy_transition_events unchanged", after.policy_transition_events === before.policy_transition_events, "delta=" + (after.policy_transition_events - before.policy_transition_events));
+    // And the failed-record delta is the only promotion_records change.
+    check("role-count-sensitivity: policy_promotion_records +1 only", after.policy_promotion_records - before.policy_promotion_records === 1, "delta=" + (after.policy_promotion_records - before.policy_promotion_records));
+    // CR is still in 'approved' state.
+    const crState = (await asDbo(pool, "SELECT state FROM gitwire_policy.policy_change_requests WHERE id=$1", [crId])).rows[0].state;
+    check("role-count-sensitivity: CR remains 'approved'", crState === "approved", "state=" + crState);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 32: Promotion-versus-revocation concurrency (P1 fix)
+  // Verifies that the CR FOR UPDATE lock serializes promotion against approval
+  // revocation. Two independent sessions compete:
+  //   Session A: approve_policy_change_request then promote_policy_change_request
+  //   Session B: revoke_policy_approval (appends active → revoked lifecycle)
+  // Both lock the CR FOR UPDATE, so they serialize. Valid outcomes:
+  //   - promotion wins: approval becomes consumed, revocation fails
+  //   - revocation wins: approval becomes revoked, promotion returns insufficient_approvals
+  // FORBIDDEN: promotion succeeds AND the approval lifecycle ends with 'revoked'
+  //            BEFORE a 'consumed' event (i.e. consumed never gets written).
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 32: Promotion-versus-revocation concurrency ===");
+  {
+    const apprA = await seedPrincipal(pool, "g5-p32-appr");
+    await grantAdmin(pool, apprA);
+
+    // Build a CR that is awaiting_approval with one recorded approval.
+    const fam = "p32pv" + Math.random().toString(36).slice(2, 6);
+    const rid = "p32-" + fam;
+    const crId = (await asApp(pool, "SELECT gitwire_policy.create_policy_change_request($1,$2,$3,$4) AS id", ["organization", rid, fam, authorId])).rows[0].id;
+    const vId = (await asApp(pool, "SELECT gitwire_policy.create_policy_version($1,$2::jsonb,$3) AS id", [crId, JSON.stringify({ v: "1" }), authorId])).rows[0].id;
+    await asApp(pool, "SELECT * FROM gitwire_policy.select_policy_version($1,$2,0,$3)", [crId, vId, authorId]);
+    await asApp(pool, "SELECT * FROM gitwire_policy.submit_policy_change_request($1,1,$2)", [crId, authorId]);
+    const val = JSON.stringify({ valid: true, errors: [] });
+    const sim = JSON.stringify({ passed: true, risk_classification: "standard", classifier_version: "cv1", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "a".repeat(64) } });
+    await asApp(pool, "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1,2,$2::jsonb,'vv1',$3::jsonb,'sv1',$4)", [crId, val, sim, authorId]);
+    const ruleId = (await asApp(pool, "SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id",
+      ["v1", fam, "organization", rid, "standard", 1, JSON.stringify(["admin"]), authorId])).rows[0].id;
+    // Record the one approval that both sessions will race on.
+    await asApp(pool, "SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, apprA]);
+    const approvalId = (await asDbo(pool, "SELECT id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [vId])).rows[0].id;
+    const awaitingStateRev = (await asDbo(pool, "SELECT state_revision FROM gitwire_policy.policy_change_requests WHERE id=$1", [crId])).rows[0].state_revision;
+
+    const sessA = await pool.connect();
+    const sessB = await pool.connect();
+    try {
+      await sessA.query("SET statement_timeout = 10000");
+      await sessB.query("SET statement_timeout = 10000");
+
+      const sessApp = async (c, sql, params) => {
+        try { await c.query("SET SESSION AUTHORIZATION gitwire_app"); return await c.query(sql, params); }
+        finally { await c.query("RESET SESSION AUTHORIZATION"); }
+      };
+
+      // Session A: approve (awaiting → approved) then promote (approved → promoted).
+      // Session B: revoke the approval (CAS on lifecycle revision 0 = 'active').
+      // Both touch the CR with FOR UPDATE, so the second to arrive blocks until
+      // the first commits (each asApp call runs in its own implicit transaction).
+      const [rA, rB] = await Promise.allSettled([
+        (async () => {
+          // Step 1: approve the CR (still awaiting_approval at race start).
+          const appr = await sessApp(sessA, "SELECT * FROM gitwire_policy.approve_policy_change_request($1,$2,$3)", [crId, awaitingStateRev, approverId]);
+          const approvedStateRev = appr.rows[0].state_revision;
+          // Step 2: promote (locks CR FOR UPDATE again, re-reads approvals).
+          const promo = await sessApp(sessA, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, approvedStateRev, promoterId]);
+          return { approvedStateRev, promo: promo.rows[0] };
+        })(),
+        // revoke_policy_approval: locks CR FOR UPDATE, CAS-checks lifecycle rev 0.
+        sessApp(sessB, "SELECT * FROM gitwire_policy.revoke_policy_approval($1,$2,$3,$4)", [approvalId, 0, apprA, "test_revoke"]),
+      ]);
+
+      const aRes = rA.status === "fulfilled" ? rA.value : null;
+      const aErr = rA.status === "rejected" ? String(rA.reason.message) : null;
+      const bErr = rB.status === "rejected" ? String(rB.reason.message) : null;
+      const bOk = rB.status === "fulfilled";
+
+      // Resolve the final approval lifecycle and CR state.
+      const lcRows = (await asDbo(pool, "SELECT to_status, reason_code, promotion_record_id FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id=$1 ORDER BY lifecycle_revision ASC", [approvalId])).rows;
+      const finalStatuses = lcRows.map(r => r.to_status);
+      const consumedWritten = finalStatuses.includes("consumed");
+      const revokedWritten = finalStatuses.includes("revoked");
+      const lastStatus = finalStatuses.length ? finalStatuses[finalStatuses.length - 1] : null;
+      const crFinal = (await asDbo(pool, "SELECT state FROM gitwire_policy.policy_change_requests WHERE id=$1", [crId])).rows[0].state;
+
+      // Determine which side won.
+      const promoWon = aRes && aRes.promo && aRes.promo.out_outcome === "succeeded";
+      const promoFailedInsuff = aRes && aRes.promo && aRes.promo.out_outcome === "failed" && aRes.promo.out_failure_code === "insufficient_approvals";
+      const promoRaised = rA.status === "rejected";
+
+      // Valid outcomes:
+      //   (a) promotion wins: approval consumed, revocation fails (CR not awaiting).
+      //   (b) revocation wins: approval revoked, promotion returns insufficient_approvals.
+      const outcomeA = promoWon && consumedWritten && !revokedWritten && bErr && /only awaiting_approval allows revocation|state .* only awaiting_approval/i.test(bErr);
+      const outcomeB = bOk && revokedWritten && promoFailedInsuff;
+      check("promotion-vs-revocation: no forbidden outcome",
+        outcomeA || outcomeB,
+        "promoWon=" + promoWon + " consumed=" + consumedWritten + " revoked=" + revokedWritten + " last=" + lastStatus + " crState=" + crFinal + " A=" + (aRes ? aRes.promo.out_outcome + "/" + aRes.promo.out_failure_code : "ERR:" + aErr) + " B=" + (bOk ? "ok" : "ERR:" + bErr));
+
+      // FORBIDDEN cross-check: promotion succeeded AND the lifecycle ends in
+      // 'revoked' (i.e. consumed never persisted despite a successful promotion).
+      const forbidden = promoWon && lastStatus === "revoked" && !consumedWritten;
+      check("promotion-vs-revocation: not (promotion succeeded AND lifecycle ends revoked w/o consumed)", !forbidden, "promoWon=" + promoWon + " last=" + lastStatus + " consumed=" + consumedWritten);
+
+      // The CR must end in a coherent state: either 'promoted' (A won) or still
+      // 'approved' (B won — approval revoked after state advanced, so promotion
+      // returned insufficient_approvals without mutating the CR).
+      check("promotion-vs-revocation: CR state coherent", crFinal === "promoted" || crFinal === "approved", "crState=" + crFinal);
+
+      // No deadlock should have fired.
+      const anyDeadlock = [aErr, bErr].some(e => e && /deadlock/i.test(e));
+      check("promotion-vs-revocation: no deadlock", !anyDeadlock);
+    } finally {
+      sessA.release();
+      sessB.release();
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 33: Frozen evidence snapshot
+  // On a successful forward promotion, the promotion record's evidence_snapshot
+  // must capture the exact approvals that counted at freeze time:
+  //   - counted_approval_ids:        array of the counted approval UUIDs
+  //   - counted_approval_revisions:  array of {approval_id, revision}
+  //                                  (revision = MAX(lifecycle_revision) at freeze)
+  //   - matched_assignment_ids:      array of role-assignment UUIDs used
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 33: Frozen evidence snapshot ===");
+  {
+    const appr1 = await seedPrincipal(pool, "g5-p33-appr1");
+    const appr2 = await seedPrincipal(pool, "g5-p33-appr2");
+    await grantAdmin(pool, appr1);
+    await grantAdmin(pool, appr2);
+
+    // Build an approved CR with required_count=2 and two recorded approvals,
+    // each from a distinct fleet admin. Promote successfully, then inspect the
+    // frozen evidence_snapshot on the resulting promotion record.
+    const fam = "p33fe" + Math.random().toString(36).slice(2, 6);
+    const rid = "p33-" + fam;
+    const crId = (await asApp(pool, "SELECT gitwire_policy.create_policy_change_request($1,$2,$3,$4) AS id", ["organization", rid, fam, authorId])).rows[0].id;
+    const vId = (await asApp(pool, "SELECT gitwire_policy.create_policy_version($1,$2::jsonb,$3) AS id", [crId, JSON.stringify({ v: "1" }), authorId])).rows[0].id;
+    await asApp(pool, "SELECT * FROM gitwire_policy.select_policy_version($1,$2,0,$3)", [crId, vId, authorId]);
+    await asApp(pool, "SELECT * FROM gitwire_policy.submit_policy_change_request($1,1,$2)", [crId, authorId]);
+    const val = JSON.stringify({ valid: true, errors: [] });
+    const sim = JSON.stringify({ passed: true, risk_classification: "standard", classifier_version: "cv1", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "a".repeat(64) } });
+    await asApp(pool, "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1,2,$2::jsonb,'vv1',$3::jsonb,'sv1',$4)", [crId, val, sim, authorId]);
+    const ruleId = (await asApp(pool, "SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id",
+      ["v1", fam, "organization", rid, "standard", 2, JSON.stringify(["admin"]), authorId])).rows[0].id;
+    await asApp(pool, "SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, appr1]);
+    await asApp(pool, "SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, appr2]);
+    const expectedApprovalIds = (await asDbo(pool, "SELECT id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY id", [vId])).rows.map(r => r.id);
+    const st = (await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_change_request($1,3,$2)", [crId, approverId])).rows[0];
+    const stateRev = st.state_revision;
+
+    // Capture the pre-promotion lifecycle revisions (each approval has one
+    // 'active' event at revision 0).
+    const revsBefore = (await asDbo(pool,
+      "SELECT approval_id, MAX(lifecycle_revision) AS revision FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = ANY($1::uuid[]) GROUP BY approval_id",
+      [expectedApprovalIds])).rows;
+    // Build by approval_id for the assertion below.
+    const expectedRevByApprovalId = new Map(revsBefore.map(r => [String(r.approval_id), Number(r.revision)]));
+
+    // Capture the matched role-assignment IDs the snapshot should reference.
+    const adminRole = (await asDbo(pool, "SELECT id FROM gitwire_auth.auth_roles WHERE name='admin' AND status='active' LIMIT 1")).rows[0];
+    const expectedAssignmentIds = (await asDbo(pool,
+      "SELECT id FROM gitwire_auth.auth_principal_roles WHERE principal_id = ANY($1::uuid[]) AND role_id = $2 AND scope_type = 'fleet' AND revoked_at IS NULL ORDER BY id",
+      [[appr1, appr2], adminRole.id])).rows.map(r => r.id);
+
+    const r = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, promoterId])).rows[0];
+    check("frozen evidence: promotion succeeded", r.out_outcome === "succeeded", "fc=" + r.out_failure_code);
+
+    const pr = (await asDbo(pool, "SELECT evidence_snapshot FROM gitwire_policy.policy_promotion_records WHERE id=$1", [r.out_promotion_record_id])).rows[0];
+    const ev = pr.evidence_snapshot;
+
+    // counted_approval_ids is an array with exactly the two recorded approval IDs.
+    const counted = (ev.counted_approval_ids || []).slice().sort();
+    check("frozen evidence: counted_approval_ids present",
+      Array.isArray(ev.counted_approval_ids) && counted.length === expectedApprovalIds.length &&
+      counted.every((id, i) => String(id) === String(expectedApprovalIds[i])),
+      "counted=" + JSON.stringify(counted) + " expected=" + JSON.stringify(expectedApprovalIds));
+
+    // counted_approval_revisions: array of {approval_id, revision} matching the
+    // pre-promotion MAX(lifecycle_revision) for each counted approval.
+    const revisions = ev.counted_approval_revisions || [];
+    check("frozen evidence: counted_approval_revisions shape",
+      Array.isArray(revisions) && revisions.length === expectedApprovalIds.length,
+      "revisions=" + JSON.stringify(revisions));
+    let revOk = revisions.length === expectedApprovalIds.length;
+    for (const e of revisions) {
+      const aid = String(e.approval_id);
+      const exp = expectedRevByApprovalId.get(aid);
+      const got = e.revision !== undefined ? Number(e.revision) : null;
+      if (exp === undefined || got !== exp) { revOk = false; }
+    }
+    check("frozen evidence: counted_approval_revisions match freeze-time MAX(lifecycle_revision)", revOk, "revisions=" + JSON.stringify(revisions));
+
+    // matched_assignment_ids: array of role-assignment UUIDs covering the
+    // counted approvers' fleet-scoped admin grants.
+    const matched = (ev.matched_assignment_ids || []).slice().sort();
+    check("frozen evidence: matched_assignment_ids present",
+      Array.isArray(ev.matched_assignment_ids) && matched.length >= 1 &&
+      expectedAssignmentIds.every(id => matched.some(m => String(m) === String(id))),
+      "matched=" + JSON.stringify(matched) + " expected⊆=" + JSON.stringify(expectedAssignmentIds.sort()));
+  }
+
   console.log("\n=== GP-05 Promotion & Rollback Proof: " + passed + " passed, " + failed + " failed ===");
 } catch (e) {
   console.error("PROOF ERROR:", e.message);

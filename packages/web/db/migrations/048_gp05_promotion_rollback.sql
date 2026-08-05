@@ -232,6 +232,8 @@ DECLARE
   v_new_state_rev   bigint;
   v_base_version_id uuid := NULL;
   v_base_revision   bigint := 0;
+  v_resolved_binding_id uuid := NULL;
+  v_resolved_binding_rev bigint := NULL;
   v_evidence_snapshot jsonb;
   v_failure_code text := NULL;
   v_context_count int;
@@ -256,8 +258,9 @@ BEGIN
 
   <<attempt>>
   LOOP
-    -- ── Defect 3: resolve CR WITHOUT row lock first ──
-    SELECT * INTO v_cr FROM policy_change_requests WHERE id = p_change_request_id;
+    -- ── P1 fix: lock CR FOR UPDATE to serialize against GP-03 revocation/expiry,
+    -- which also locks the CR row before appending lifecycle events. ──
+    SELECT * INTO v_cr FROM policy_change_requests WHERE id = p_change_request_id FOR UPDATE;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'promote_policy_change_request: change request % not found', p_change_request_id;
     END IF;
@@ -389,7 +392,12 @@ BEGIN
     IF NOT FOUND THEN v_failure_code := 'no_approval_rule'; EXIT; END IF;
     v_rule_resolved := true;
 
-    -- ── Defect 2: gather approvals on the FULL tuple, latest=active, never consumed ──
+    -- ── P1 fix: one canonical eligible-approval query that joins the
+    -- required-role assignment INSIDE the eligible set before counting.
+    -- An approval is eligible only if its approver currently has at least
+    -- one active, non-revoked, non-expired, scope-applicable role named
+    -- by the effective rule. This prevents an approver whose role was
+    -- revoked/expired from counting toward required_count. ──
     SELECT array_agg(a.id ORDER BY a.id) INTO v_approval_ids
       FROM policy_approvals a
       WHERE a.version_id = v_version.id
@@ -417,13 +425,31 @@ BEGIN
         AND EXISTS (  -- approver still active
           SELECT 1 FROM gitwire_auth.auth_principals p
             WHERE p.id = a.approver_principal_id AND p.status = 'active'
+        )
+        AND EXISTS (  -- P1 fix: approver has current scope-applicable required role
+          SELECT 1
+          FROM gitwire_auth.auth_principal_roles pr
+          JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+            AND r.status = 'active'
+            AND r.name = ANY(SELECT jsonb_array_elements_text(v_rule.required_roles))
+          WHERE pr.principal_id = a.approver_principal_id
+            AND pr.revoked_at IS NULL
+            AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+            AND (
+              pr.scope_type = 'fleet'
+              OR (v_cr.resource_type = 'repository'
+                  AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+                    OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+            )
         );
     IF v_approval_ids IS NULL THEN v_approval_ids := ARRAY[]::uuid[]; END IF;
     v_counted := (SELECT count(DISTINCT a2.approver_principal_id)
                    FROM policy_approvals a2 WHERE a2.id = ANY(v_approval_ids));
     IF v_counted < v_rule.required_count THEN v_failure_code := 'insufficient_approvals'; EXIT; END IF;
 
-    -- required role coverage among the counted approvers (current scope-applicable roles)
+    -- P1 fix: required role coverage among the ELIGIBLE approvers (those who
+    -- passed the role-join above). This is now a redundant safety check —
+    -- if an approver passed the EXISTS join, their role is represented.
     SELECT COALESCE(array_agg(role ORDER BY role COLLATE "C"), ARRAY[]::text[]) INTO v_missing_roles
       FROM (
         SELECT req.role
@@ -435,8 +461,8 @@ BEGIN
             AND pr2.revoked_at IS NULL
             AND (pr2.expires_at IS NULL OR pr2.expires_at > v_now)
           JOIN gitwire_auth.auth_roles r2 ON r2.id = pr2.role_id AND r2.status = 'active'
-          WHERE aa.id = ANY(v_approval_ids)
             AND r2.name = req.role
+          WHERE aa.id = ANY(v_approval_ids)
             AND (
               pr2.scope_type = 'fleet'
               OR (v_cr.resource_type = 'repository'
@@ -463,7 +489,15 @@ BEGIN
       IF p_expected_binding_revision IS NOT NULL THEN v_failure_code := 'stale_binding_revision'; EXIT; END IF;
       v_base_version_id := NULL;
       v_base_revision := 0;
+      v_resolved_binding_id := NULL;
+      v_resolved_binding_rev := NULL;
     ELSE
+      -- Capture binding identity into scalars so the domain-refusal path below
+      -- can populate the failed-record's binding fields WITHOUT dereferencing
+      -- the v_binding RECORD (which is "not assigned yet" on code paths that
+      -- exit the attempt loop before this SELECT runs, e.g. insufficient_approvals).
+      v_resolved_binding_id := v_binding.id;
+      v_resolved_binding_rev := v_binding.binding_revision;
       IF p_expected_binding_revision IS NULL OR v_binding.binding_revision != p_expected_binding_revision THEN
         v_failure_code := 'stale_binding_revision'; EXIT;
       END IF;
@@ -522,7 +556,7 @@ BEGIN
       'risk_classification', v_risk,
       'approval_rule_id', CASE WHEN v_rule_resolved THEN v_rule.id ELSE NULL END,
       'counted_approval_ids', to_jsonb(v_approval_ids),
-      'base_binding_id', CASE WHEN v_binding_resolved THEN v_binding.id ELSE NULL END,
+      'base_binding_id', v_resolved_binding_id,
       'base_version_id', v_base_version_id,
       'base_revision', v_base_revision,
       'promoter_principal_id', p_actor_principal_id,
@@ -531,7 +565,7 @@ BEGIN
       (id, binding_id, resource_type, resource_id, policy_family,
        change_request_id, target_version_id, base_version_id, base_revision,
        promoter_principal_id, outcome, failure_code, promotion_kind, evidence_snapshot, occurred_at)
-    VALUES (v_promo_id, CASE WHEN v_binding_resolved THEN v_binding.id ELSE NULL END,
+    VALUES (v_promo_id, v_resolved_binding_id,
        v_cr.resource_type, v_cr.resource_id, v_cr.policy_family,
        p_change_request_id, v_version.id,
        v_base_version_id, v_base_revision,
@@ -539,8 +573,8 @@ BEGIN
 
     out_promotion_record_id := v_promo_id; out_outcome := 'failed';
     out_failure_code := v_failure_code;
-    out_binding_id := CASE WHEN v_binding_resolved THEN v_binding.id ELSE NULL END;
-    out_binding_revision := CASE WHEN v_binding_resolved THEN v_binding.binding_revision ELSE NULL END;
+    out_binding_id := v_resolved_binding_id;
+    out_binding_revision := v_resolved_binding_rev;
     out_change_request_id := p_change_request_id; out_new_state := v_cr.state; out_new_state_revision := v_cr.state_revision;
     RETURN NEXT; RETURN;
   END IF;
@@ -572,6 +606,21 @@ BEGIN
       (SELECT jsonb_agg(jsonb_build_object('approval_id', a.id, 'revision',
         (SELECT MAX(lifecycle_revision) FROM policy_approval_lifecycle WHERE approval_id = a.id)))
        FROM policy_approvals a WHERE a.id = ANY(v_approval_ids)),
+    'matched_assignment_ids',
+      (SELECT jsonb_agg(DISTINCT pr.id ORDER BY pr.id)
+       FROM policy_approvals a
+       JOIN gitwire_auth.auth_principal_roles pr ON pr.principal_id = a.approver_principal_id
+         AND pr.revoked_at IS NULL
+         AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+       JOIN gitwire_auth.auth_roles r ON r.id = pr.role_id AND r.status = 'active'
+         AND r.name = ANY(SELECT jsonb_array_elements_text(v_rule.required_roles))
+       WHERE a.id = ANY(v_approval_ids)
+         AND (
+           pr.scope_type = 'fleet'
+           OR (v_cr.resource_type = 'repository'
+               AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+                 OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+         )),
     'base_binding_id', v_binding.id,
     'base_version_id', v_base_version_id,
     'base_revision', v_base_revision,
@@ -627,7 +676,33 @@ BEGIN
     END IF;
   END IF;
 
-  -- step 15: consume approvals (active → consumed), each linked to the promotion record
+  -- step 15: P1 fix — assert each counted approval's latest lifecycle is still
+  -- 'active' before consuming. This closes the revocation race: if a concurrent
+  -- revocation appended 'active → revoked' while we held the CR lock, the
+  -- latest status is no longer 'active' and we RAISE (operational rollback).
+  -- The CR FOR UPDATE lock (acquired at the top of the attempt loop) serializes
+  -- against GP-03 revocation, which also locks the CR before appending lifecycle
+  -- events. Under that serialization, this assertion is a safety net that
+  -- catches any lifecycle change that slipped through.
+  PERFORM 1
+    FROM policy_approvals a
+    WHERE a.id = ANY(v_approval_ids)
+      AND (
+        -- latest lifecycle is NOT 'active' for this approval
+        NOT EXISTS (
+          SELECT 1 FROM policy_approval_lifecycle pal
+          WHERE pal.approval_id = a.id
+            AND pal.to_status = 'active'
+            AND pal.lifecycle_revision = (
+              SELECT MAX(pal2.lifecycle_revision) FROM policy_approval_lifecycle pal2 WHERE pal2.approval_id = a.id
+            )
+        )
+      );
+  IF FOUND THEN
+    RAISE EXCEPTION 'promote_policy_change_request: approval lifecycle changed between evaluation and consumption';
+  END IF;
+
+  -- consume approvals (active → consumed), each linked to the promotion record
   INSERT INTO policy_approval_lifecycle
     (approval_id, lifecycle_revision, from_status, to_status, actor_principal_id, reason_code, promotion_record_id)
   SELECT a.id,
