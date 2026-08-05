@@ -253,19 +253,6 @@ BEGIN
     -- cannot promote without an active identity: operational error, no failed record
     RAISE EXCEPTION 'promote_policy_change_request: actor principal % is not active', p_actor_principal_id;
   END IF;
-  IF NOT EXISTS (
-    SELECT 1
-    FROM gitwire_auth.auth_principal_roles pr
-    JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
-    JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
-    WHERE pr.principal_id = p_actor_principal_id
-      AND rp.permission = 'policy_change_request:promote'
-      AND r.status = 'active'
-      AND pr.revoked_at IS NULL
-      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
-  ) THEN
-    RAISE EXCEPTION 'promote_policy_change_request: actor lacks current policy_change_request:promote permission';
-  END IF;
 
   <<attempt>>
   LOOP
@@ -273,6 +260,42 @@ BEGIN
     SELECT * INTO v_cr FROM policy_change_requests WHERE id = p_change_request_id;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'promote_policy_change_request: change request % not found', p_change_request_id;
+    END IF;
+
+    -- ── Scope-applicable authorization (GP-03 scope hierarchy) ──
+    -- Permission check happens AFTER the resource tuple is resolved from the
+    -- change request but BEFORE acquiring any locks. Repository resources
+    -- resolve github_id/installation_id from public.repositories (exactly one
+    -- row required; fail closed on zero or ambiguous).
+    v_repo_github_id := NULL;
+    v_repo_installation_id := NULL;
+    IF v_cr.resource_type = 'repository' THEN
+      SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_cr.resource_id;
+      IF v_repo_row_count != 1 THEN
+        RAISE EXCEPTION 'promote_policy_change_request: repository % resolves to % rows (expected 1)',
+          v_cr.resource_id, v_repo_row_count;
+      END IF;
+      SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+        FROM public.repositories repo WHERE repo.full_name = v_cr.resource_id;
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1
+      FROM gitwire_auth.auth_principal_roles pr
+      JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+      JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
+      WHERE pr.principal_id = p_actor_principal_id
+        AND rp.permission = 'policy_change_request:promote'
+        AND r.status = 'active'
+        AND pr.revoked_at IS NULL
+        AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+        AND (
+          pr.scope_type = 'fleet'
+          OR (v_cr.resource_type = 'repository'
+              AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+                OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+        )
+    ) THEN
+      RAISE EXCEPTION 'promote_policy_change_request: actor lacks current policy_change_request:promote permission with applicable scope';
     END IF;
 
     -- Resolve version early so that resolved domain refusals (not_approved,
@@ -333,16 +356,9 @@ BEGIN
 
     -- step 5: re-evaluate approval sufficiency.
     -- ── Defect 2: rule selected filtered by risk_classification, not just
-    -- scope/family (matches GP-03 effective-rule resolution). ──
-    v_repo_installation_id := NULL;
-    v_repo_github_id := NULL;
-    IF v_cr.resource_type = 'repository' THEN
-      SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_cr.resource_id;
-      IF v_repo_row_count != 1 THEN v_failure_code := 'invalid_risk'; EXIT; END IF;
-      SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
-        FROM public.repositories repo WHERE repo.full_name = v_cr.resource_id;
-    END IF;
-
+    -- scope/family (matches GP-03 effective-rule resolution). Repository
+    -- github_id/installation_id were resolved above during the scope-applicable
+    -- authorization check and are reused here. ──
     SELECT * INTO v_rule
       FROM (
         SELECT r.*,
@@ -691,6 +707,9 @@ DECLARE
   v_risk         text;
   v_new_id       uuid;
   v_detail       jsonb;
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'create_policy_rollback_request: caller must be gitwire_app, got %', session_user;
@@ -707,6 +726,29 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_requester_principal_id AND p.status = 'active') THEN
     RAISE EXCEPTION 'create_policy_rollback_request: requester principal % is not active', p_requester_principal_id;
   END IF;
+
+  -- ── Defect 3: resolve binding WITHOUT row lock first (needed for the
+  -- scope-applicable authorization check below). Advisory lock + FOR UPDATE
+  -- re-read happen after the permission check. ──
+  SELECT * INTO v_binding FROM active_policy_bindings WHERE id = p_binding_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'create_policy_rollback_request: binding % not found', p_binding_id;
+  END IF;
+
+  -- ── Scope-applicable authorization (GP-03 scope hierarchy) ──
+  -- Resource tuple comes from the active binding. Permission check happens
+  -- AFTER the resource tuple is resolved but BEFORE acquiring locks.
+  v_repo_github_id := NULL;
+  v_repo_installation_id := NULL;
+  IF v_binding.resource_type = 'repository' THEN
+    SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_binding.resource_id;
+    IF v_repo_row_count != 1 THEN
+      RAISE EXCEPTION 'create_policy_rollback_request: repository % resolves to % rows (expected 1)',
+        v_binding.resource_id, v_repo_row_count;
+    END IF;
+    SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+      FROM public.repositories repo WHERE repo.full_name = v_binding.resource_id;
+  END IF;
   IF NOT EXISTS (
     SELECT 1
     FROM gitwire_auth.auth_principal_roles pr
@@ -717,14 +759,14 @@ BEGIN
       AND r.status = 'active'
       AND pr.revoked_at IS NULL
       AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND (
+        pr.scope_type = 'fleet'
+        OR (v_binding.resource_type = 'repository'
+            AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+              OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+      )
   ) THEN
-    RAISE EXCEPTION 'create_policy_rollback_request: requester lacks current policy_rollback_request:create permission';
-  END IF;
-
-  -- ── Defect 3: resolve binding WITHOUT row lock, advisory lock, then re-read ──
-  SELECT * INTO v_binding FROM active_policy_bindings WHERE id = p_binding_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'create_policy_rollback_request: binding % not found', p_binding_id;
+    RAISE EXCEPTION 'create_policy_rollback_request: requester lacks current policy_rollback_request:create permission with applicable scope';
   END IF;
 
   v_lock_key := jsonb_build_array('gp05-active-binding', v_binding.resource_type, v_binding.resource_id, v_binding.policy_family)::text;
@@ -846,10 +888,14 @@ CREATE FUNCTION approve_policy_rollback_request(
 SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog LANGUAGE plpgsql AS $$
 DECLARE
   v_rb    RECORD;
+  v_binding RECORD;
   v_max   bigint;
   v_new   bigint;
   v_detail jsonb;
   v_now   timestamptz := clock_timestamp();
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'approve_policy_rollback_request: caller must be gitwire_app, got %', session_user;
@@ -858,6 +904,27 @@ BEGIN
   -- ── Defect 1: transactional authorization (server time, before any lock) ──
   IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
     RAISE EXCEPTION 'approve_policy_rollback_request: actor principal % is not active', p_actor_principal_id;
+  END IF;
+
+  -- ── Defect 3: resolve tuple WITHOUT row lock first so the scope-applicable
+  -- authorization check can use the resource tuple. FOR UPDATE re-read below. ──
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'approve_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
+  SELECT * INTO v_binding FROM active_policy_bindings WHERE id = v_rb.binding_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'approve_policy_rollback_request: binding % not found', v_rb.binding_id; END IF;
+
+  -- ── Scope-applicable authorization (GP-03 scope hierarchy) ──
+  -- Resource tuple comes from rollback record → binding.
+  v_repo_github_id := NULL;
+  v_repo_installation_id := NULL;
+  IF v_binding.resource_type = 'repository' THEN
+    SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_binding.resource_id;
+    IF v_repo_row_count != 1 THEN
+      RAISE EXCEPTION 'approve_policy_rollback_request: repository % resolves to % rows (expected 1)',
+        v_binding.resource_id, v_repo_row_count;
+    END IF;
+    SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+      FROM public.repositories repo WHERE repo.full_name = v_binding.resource_id;
   END IF;
   IF NOT EXISTS (
     SELECT 1
@@ -869,13 +936,16 @@ BEGIN
       AND r.status = 'active'
       AND pr.revoked_at IS NULL
       AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND (
+        pr.scope_type = 'fleet'
+        OR (v_binding.resource_type = 'repository'
+            AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+              OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+      )
   ) THEN
-    RAISE EXCEPTION 'approve_policy_rollback_request: actor lacks current policy_rollback_request:approve permission';
+    RAISE EXCEPTION 'approve_policy_rollback_request: actor lacks current policy_rollback_request:approve permission with applicable scope';
   END IF;
 
-  -- ── Defect 3: resolve tuple, then re-read under FOR UPDATE ──
-  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
-  IF NOT FOUND THEN RAISE EXCEPTION 'approve_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
   SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
   IF v_rb.status != 'requested' THEN RAISE EXCEPTION 'approve_policy_rollback_request: status is %, only requested can be approved', v_rb.status; END IF;
   IF v_rb.status_revision != p_expected_status_revision THEN RAISE EXCEPTION 'approve_policy_rollback_request: CAS failed — expected %, got %', p_expected_status_revision, v_rb.status_revision; END IF;
@@ -912,8 +982,11 @@ CREATE FUNCTION reject_policy_rollback_request(
   p_actor_principal_id     uuid
 ) RETURNS TABLE (out_rollback_record_id uuid, out_status text, out_status_revision bigint)
 SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog LANGUAGE plpgsql AS $$
-DECLARE v_rb RECORD; v_max bigint; v_new bigint;
+DECLARE v_rb RECORD; v_binding RECORD; v_max bigint; v_new bigint;
   v_now timestamptz := clock_timestamp();
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
 BEGIN
   IF session_user != 'gitwire_app' THEN RAISE EXCEPTION 'reject_policy_rollback_request: caller must be gitwire_app, got %', session_user; END IF;
 
@@ -922,6 +995,27 @@ BEGIN
   -- it requires policy_rollback_request:approve. ──
   IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
     RAISE EXCEPTION 'reject_policy_rollback_request: actor principal % is not active', p_actor_principal_id;
+  END IF;
+
+  -- ── Defect 3: resolve tuple WITHOUT row lock first so the scope-applicable
+  -- authorization check can use the resource tuple. FOR UPDATE re-read below. ──
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'reject_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
+  SELECT * INTO v_binding FROM active_policy_bindings WHERE id = v_rb.binding_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'reject_policy_rollback_request: binding % not found', v_rb.binding_id; END IF;
+
+  -- ── Scope-applicable authorization (GP-03 scope hierarchy) ──
+  -- Resource tuple comes from rollback record → binding.
+  v_repo_github_id := NULL;
+  v_repo_installation_id := NULL;
+  IF v_binding.resource_type = 'repository' THEN
+    SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_binding.resource_id;
+    IF v_repo_row_count != 1 THEN
+      RAISE EXCEPTION 'reject_policy_rollback_request: repository % resolves to % rows (expected 1)',
+        v_binding.resource_id, v_repo_row_count;
+    END IF;
+    SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+      FROM public.repositories repo WHERE repo.full_name = v_binding.resource_id;
   END IF;
   IF NOT EXISTS (
     SELECT 1
@@ -933,13 +1027,16 @@ BEGIN
       AND r.status = 'active'
       AND pr.revoked_at IS NULL
       AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND (
+        pr.scope_type = 'fleet'
+        OR (v_binding.resource_type = 'repository'
+            AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+              OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+      )
   ) THEN
-    RAISE EXCEPTION 'reject_policy_rollback_request: actor lacks current policy_rollback_request:approve permission';
+    RAISE EXCEPTION 'reject_policy_rollback_request: actor lacks current policy_rollback_request:approve permission with applicable scope';
   END IF;
 
-  -- ── Defect 3: resolve tuple, then re-read under FOR UPDATE ──
-  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
-  IF NOT FOUND THEN RAISE EXCEPTION 'reject_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
   SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
   IF v_rb.status != 'requested' THEN RAISE EXCEPTION 'reject_policy_rollback_request: status is %, only requested can be rejected', v_rb.status; END IF;
   IF v_rb.status_revision != p_expected_status_revision THEN RAISE EXCEPTION 'reject_policy_rollback_request: CAS failed — expected %, got %', p_expected_status_revision, v_rb.status_revision; END IF;
@@ -967,8 +1064,11 @@ CREATE FUNCTION withdraw_policy_rollback_request(
   p_actor_principal_id     uuid
 ) RETURNS TABLE (out_rollback_record_id uuid, out_status text, out_status_revision bigint)
 SECURITY DEFINER SET search_path = gitwire_policy, pg_catalog LANGUAGE plpgsql AS $$
-DECLARE v_rb RECORD; v_max bigint; v_new bigint;
+DECLARE v_rb RECORD; v_binding RECORD; v_max bigint; v_new bigint;
   v_now timestamptz := clock_timestamp();
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
 BEGIN
   IF session_user != 'gitwire_app' THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: caller must be gitwire_app, got %', session_user; END IF;
 
@@ -976,6 +1076,27 @@ BEGIN
   -- it requires policy_rollback_request:create (the requester's permission). ──
   IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
     RAISE EXCEPTION 'withdraw_policy_rollback_request: actor principal % is not active', p_actor_principal_id;
+  END IF;
+
+  -- ── Defect 3: resolve tuple WITHOUT row lock first so the scope-applicable
+  -- authorization check can use the resource tuple. FOR UPDATE re-read below. ──
+  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
+  SELECT * INTO v_binding FROM active_policy_bindings WHERE id = v_rb.binding_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: binding % not found', v_rb.binding_id; END IF;
+
+  -- ── Scope-applicable authorization (GP-03 scope hierarchy) ──
+  -- Resource tuple comes from rollback record → binding.
+  v_repo_github_id := NULL;
+  v_repo_installation_id := NULL;
+  IF v_binding.resource_type = 'repository' THEN
+    SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_binding.resource_id;
+    IF v_repo_row_count != 1 THEN
+      RAISE EXCEPTION 'withdraw_policy_rollback_request: repository % resolves to % rows (expected 1)',
+        v_binding.resource_id, v_repo_row_count;
+    END IF;
+    SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+      FROM public.repositories repo WHERE repo.full_name = v_binding.resource_id;
   END IF;
   IF NOT EXISTS (
     SELECT 1
@@ -987,13 +1108,16 @@ BEGIN
       AND r.status = 'active'
       AND pr.revoked_at IS NULL
       AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+      AND (
+        pr.scope_type = 'fleet'
+        OR (v_binding.resource_type = 'repository'
+            AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+              OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+      )
   ) THEN
-    RAISE EXCEPTION 'withdraw_policy_rollback_request: actor lacks current policy_rollback_request:create permission';
+    RAISE EXCEPTION 'withdraw_policy_rollback_request: actor lacks current policy_rollback_request:create permission with applicable scope';
   END IF;
 
-  -- ── Defect 3: resolve tuple, then re-read under FOR UPDATE ──
-  SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
-  IF NOT FOUND THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
   SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id FOR UPDATE;
   IF v_rb.status NOT IN ('requested','approved') THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: status is %, only requested/approved can be withdrawn', v_rb.status; END IF;
   IF v_rb.status_revision != p_expected_status_revision THEN RAISE EXCEPTION 'withdraw_policy_rollback_request: CAS failed — expected %, got %', p_expected_status_revision, v_rb.status_revision; END IF;
@@ -1067,6 +1191,9 @@ DECLARE
   v_fail_resource_id     text;
   v_fail_policy_family   text;
   v_fail_change_request_id uuid;
+  v_repo_github_id bigint;
+  v_repo_installation_id bigint;
+  v_repo_row_count int;
 BEGIN
   IF session_user != 'gitwire_app' THEN
     RAISE EXCEPTION 'promote_policy_rollback_request: caller must be gitwire_app, got %', session_user;
@@ -1077,25 +1204,52 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM gitwire_auth.auth_principals p WHERE p.id = p_actor_principal_id AND p.status = 'active') THEN
     RAISE EXCEPTION 'promote_policy_rollback_request: actor principal % is not active', p_actor_principal_id;
   END IF;
-  IF NOT EXISTS (
-    SELECT 1
-    FROM gitwire_auth.auth_principal_roles pr
-    JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
-    JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
-    WHERE pr.principal_id = p_actor_principal_id
-      AND rp.permission = 'policy_rollback_request:promote'
-      AND r.status = 'active'
-      AND pr.revoked_at IS NULL
-      AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
-  ) THEN
-    RAISE EXCEPTION 'promote_policy_rollback_request: actor lacks current policy_rollback_request:promote permission';
-  END IF;
 
   <<attempt>>
   LOOP
     -- ── Defect 3: resolve the rollback record WITHOUT row lock first ──
     SELECT * INTO v_rb FROM policy_rollback_records WHERE id = p_rollback_record_id;
     IF NOT FOUND THEN RAISE EXCEPTION 'promote_policy_rollback_request: rollback record % not found', p_rollback_record_id; END IF;
+
+    -- ── Scope-applicable authorization (GP-03 scope hierarchy) ──
+    -- Resource tuple comes from rollback record → binding. Resolve the binding
+    -- WITHOUT a row lock so the permission check can use the resource tuple
+    -- before any lock is acquired. If the binding is missing the request-
+    -- invalidating 'binding_missing' path below handles it (RAISEs as a data
+    -- integrity failure); the scope check only runs when the tuple resolves.
+    SELECT * INTO v_binding FROM active_policy_bindings WHERE id = v_rb.binding_id;
+    IF FOUND THEN
+      v_repo_github_id := NULL;
+      v_repo_installation_id := NULL;
+      IF v_binding.resource_type = 'repository' THEN
+        SELECT count(*) INTO v_repo_row_count FROM public.repositories WHERE full_name = v_binding.resource_id;
+        IF v_repo_row_count != 1 THEN
+          RAISE EXCEPTION 'promote_policy_rollback_request: repository % resolves to % rows (expected 1)',
+            v_binding.resource_id, v_repo_row_count;
+        END IF;
+        SELECT repo.github_id, repo.installation_id INTO v_repo_github_id, v_repo_installation_id
+          FROM public.repositories repo WHERE repo.full_name = v_binding.resource_id;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1
+        FROM gitwire_auth.auth_principal_roles pr
+        JOIN gitwire_auth.auth_roles r ON pr.role_id = r.id
+        JOIN gitwire_auth.auth_role_permissions rp ON rp.role_id = r.id
+        WHERE pr.principal_id = p_actor_principal_id
+          AND rp.permission = 'policy_rollback_request:promote'
+          AND r.status = 'active'
+          AND pr.revoked_at IS NULL
+          AND (pr.expires_at IS NULL OR pr.expires_at > v_now)
+          AND (
+            pr.scope_type = 'fleet'
+            OR (v_binding.resource_type = 'repository'
+                AND ((pr.scope_type = 'installation' AND pr.scope_id = v_repo_installation_id)
+                  OR (pr.scope_type = 'repository' AND pr.scope_id = v_repo_github_id)))
+          )
+      ) THEN
+        RAISE EXCEPTION 'promote_policy_rollback_request: actor lacks current policy_rollback_request:promote permission with applicable scope';
+      END IF;
+    END IF;
 
     -- attempt-local refusals (these RAISE, not domain-refusal)
     IF v_rb.status != 'approved' THEN RAISE EXCEPTION 'promote_policy_rollback_request: status is %, only approved can be promoted', v_rb.status; END IF;

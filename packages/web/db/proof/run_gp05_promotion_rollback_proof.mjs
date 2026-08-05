@@ -1782,17 +1782,14 @@ try {
       const before1 = await snap();
       await expectAuthRaise("op1 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, retiredId]));
       assertZeroDelta("op1 inactive-role", before1, await snap());
-      // (3) wrong scope type (installation). The GP-05 promote auth check is
-      //     permission-based and does NOT filter by scope_type, so an
-      //     installation-scoped role holding the permission PASSES the auth gate.
-      //     Verify the auth gate passes (the op proceeds and may succeed).
+      // (3) wrong scope type (installation). The GP-05 promote auth check now
+      //     enforces the GP-03 scope hierarchy: for a fleet resource only
+      //     scope_type='fleet' qualifies. An installation-scoped role holding the
+      //     permission must be REJECTED at the auth gate (fail closed).
       const wrongScopeId = await seedWrongScopeType("g5-p25-fwd-scope", "policy_change_request:promote");
-      let fwdOutcome;
-      await expectAuthPass("op1 wrong-scope-type", async () => {
-        const r = await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, wrongScopeId]);
-        fwdOutcome = r.rows[0].out_outcome;
-      });
-      check("op1 wrong-scope-type: auth gate passes (op proceeded)", fwdOutcome === "succeeded", "outcome=" + fwdOutcome);
+      const before3 = await snap();
+      await expectAuthRaise("op1 wrong-scope-type", () => asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, wrongScopeId]));
+      assertZeroDelta("op1 wrong-scope-type", before3, await snap());
       // (4) wrong scope id — N/A for forward promotion (resource is fleet/organization; not repo-gated)
       check("op1 wrong-scope-id: N/A (forward promotion is not repo-scoped)", true);
     }
@@ -1805,12 +1802,9 @@ try {
       await expectAuthRaise("op2 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, retiredId]));
       assertZeroDelta("op2 inactive-role", before1, await snap());
       const wrongScopeId = await seedWrongScopeType("g5-p25-rbc-scope", "policy_rollback_request:create");
-      let rbcOutcome;
-      await expectAuthPass("op2 wrong-scope-type", async () => {
-        const r = await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, wrongScopeId]);
-        rbcOutcome = r.rows[0].out_status;
-      });
-      check("op2 wrong-scope-type: auth gate passes (rollback created)", rbcOutcome === "requested", "status=" + rbcOutcome);
+      const before3 = await snap();
+      await expectAuthRaise("op2 wrong-scope-type", () => asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, wrongScopeId]));
+      assertZeroDelta("op2 wrong-scope-type", before3, await snap());
       check("op2 wrong-scope-id: N/A (rollback create is binding-scoped, not repo-id-scoped)", true);
     }
 
@@ -1823,12 +1817,9 @@ try {
       await expectAuthRaise("op3 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, retiredId]));
       assertZeroDelta("op3 inactive-role", before1, await snap());
       const wrongScopeId = await seedWrongScopeType("g5-p25-rba-scope", "policy_rollback_request:approve");
-      let rbaOutcome;
-      await expectAuthPass("op3 wrong-scope-type", async () => {
-        const r = await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, wrongScopeId]);
-        rbaOutcome = r.rows[0].out_status;
-      });
-      check("op3 wrong-scope-type: auth gate passes (rollback approved)", rbaOutcome === "approved", "status=" + rbaOutcome);
+      const before3 = await snap();
+      await expectAuthRaise("op3 wrong-scope-type", () => asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, wrongScopeId]));
+      assertZeroDelta("op3 wrong-scope-type", before3, await snap());
     }
 
     // ── Op 4: reject_policy_rollback_request (requires policy_rollback_request:approve) ──
@@ -1840,12 +1831,9 @@ try {
       await expectAuthRaise("op4 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, retiredId]));
       assertZeroDelta("op4 inactive-role", before1, await snap());
       const wrongScopeId = await seedWrongScopeType("g5-p25-rbr-scope", "policy_rollback_request:approve");
-      let rbrOutcome;
-      await expectAuthPass("op4 wrong-scope-type", async () => {
-        const r = await asApp(pool, "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, wrongScopeId]);
-        rbrOutcome = r.rows[0].out_status;
-      });
-      check("op4 wrong-scope-type: auth gate passes (rollback rejected)", rbrOutcome === "rejected", "status=" + rbrOutcome);
+      const before3 = await snap();
+      await expectAuthRaise("op4 wrong-scope-type", () => asApp(pool, "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, wrongScopeId]));
+      assertZeroDelta("op4 wrong-scope-type", before3, await snap());
     }
 
     // ── Op 5: withdraw_policy_rollback_request (requires policy_rollback_request:create) ──
@@ -1869,17 +1857,15 @@ try {
       assertZeroDelta("op5 inactive-role", before1, await snap());
 
       // wrong-scope-type for withdraw: requester-of-record whose only active role
-      // is installation-scoped create. Same pattern.
+      // is installation-scoped create. For an organization resource only fleet
+      // scope qualifies, so the auth gate must REJECT the withdraw.
       const wrongScopeId = await seedWrongScopeType("g5-p25-rbw-scope", "policy_rollback_request:create");
       await asDbo(pool, "INSERT INTO gitwire_auth.auth_principal_roles (principal_id, role_id, scope_type, granted_by) VALUES ($1,$2,'fleet',$1) ON CONFLICT DO NOTHING", [wrongScopeId, activeCreateRid]);
       const rb2 = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, wrongScopeId])).rows[0];
       await asDbo(pool, "DELETE FROM gitwire_auth.auth_principal_roles WHERE principal_id=$1 AND role_id=$2", [wrongScopeId, activeCreateRid]);
-      let rbwOutcome;
-      await expectAuthPass("op5 wrong-scope-type", async () => {
-        const r = await asApp(pool, "SELECT * FROM gitwire_policy.withdraw_policy_rollback_request($1,0,$2)", [rb2.out_rollback_record_id, wrongScopeId]);
-        rbwOutcome = r.rows[0].out_status;
-      });
-      check("op5 wrong-scope-type: auth gate passes (rollback withdrawn)", rbwOutcome === "withdrawn", "status=" + rbwOutcome);
+      const before3 = await snap();
+      await expectAuthRaise("op5 wrong-scope-type", () => asApp(pool, "SELECT * FROM gitwire_policy.withdraw_policy_rollback_request($1,0,$2)", [rb2.out_rollback_record_id, wrongScopeId]));
+      assertZeroDelta("op5 wrong-scope-type", before3, await snap());
     }
 
     // ── Op 6: promote_policy_rollback_request (requires policy_rollback_request:promote) ──
@@ -1892,19 +1878,16 @@ try {
       await expectAuthRaise("op6 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,1,$2,$3)", [rb.out_rollback_record_id, fix.b2.binding_revision, retiredId]));
       assertZeroDelta("op6 inactive-role", before1, await snap());
       const wrongScopeId = await seedWrongScopeType("g5-p25-rbp-scope", "policy_rollback_request:promote");
-      let rbpOutcome;
-      await expectAuthPass("op6 wrong-scope-type", async () => {
-        const r = await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,1,$2,$3)", [rb.out_rollback_record_id, fix.b2.binding_revision, wrongScopeId]);
-        rbpOutcome = r.rows[0].out_outcome;
-      });
-      check("op6 wrong-scope-type: auth gate passes (op proceeded)", rbpOutcome !== undefined, "outcome=" + rbpOutcome);
+      const before3 = await snap();
+      await expectAuthRaise("op6 wrong-scope-type", () => asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,1,$2,$3)", [rb.out_rollback_record_id, fix.b2.binding_revision, wrongScopeId]));
+      assertZeroDelta("op6 wrong-scope-type", before3, await snap());
     }
 
     // ── (5,6,7) Scope applicability: fleet admin authorized for fleet + organization ──
-    // The GP-05 promote/rollback auth checks are permission-based (not scope-filtered),
-    // so a fleet-scoped admin holding the permission passes the auth gate for any
-    // resource scope. Verify the authorization gate PASSES (the op may then fail for
-    // other reasons, but NOT for an auth error).
+    // The GP-05 promote/rollback auth checks enforce the GP-03 scope hierarchy.
+    // A fleet-scoped admin holding the permission qualifies for both fleet and
+    // organization resources (scope_type='fleet' is always applicable). Verify the
+    // authorization gate PASSES and the op succeeds.
     {
       // (5) Fleet scope — fleet-scoped admin authorization passes
       const crFleet = await makeApprovedCR(pool, { authorId, approverId, rt: "fleet", rid: "fleet", fam: "p25-scope-fleet", risk: "standard" });
