@@ -147,10 +147,18 @@ try {
     check("direct DML as gitwire_app denied", denied);
   }
 
-  console.log("\n=== Phase 6: Exact provenance set ===");
+  console.log("\n=== Phase 6: Exact provenance set + FK semantics ===");
   {
     const prov = (await asDbo(pool, "SELECT count(*)::int n FROM gitwire_policy.gp05_function_provenance")).rows[0].n;
     check("gp05 provenance rows = 6", prov === 6, "rows=" + prov);
+    // Verify the original active_policy_bindings.promotion_record_id FK is NOT deferred
+    // (migration 048 must not alter its deferrability — the cycle is broken by the
+    // deferred policy_promotion_records.binding_id FK on the opposite side).
+    const fk = (await asDbo(pool, "SELECT condeferred FROM pg_constraint WHERE conname='active_policy_bindings_promotion_record_id_fkey' AND connamespace='gitwire_policy'::regnamespace")).rows[0];
+    check("active_binding FK is NOT deferred (immediate)", fk && fk.condeferred === false, "condeferred=" + (fk ? fk.condeferred : "not found"));
+    // And verify the promotion_records.binding_id FK IS deferred (the cycle breaker)
+    const pprFk = (await asDbo(pool, "SELECT condeferred FROM pg_constraint WHERE conname='ppr_binding_fk' AND connamespace='gitwire_policy'::regnamespace")).rows[0];
+    check("promotion_records.binding_id FK IS deferred", pprFk && pprFk.condeferred === true, "condeferred=" + (pprFk ? pprFk.condeferred : "not found"));
   }
 
   console.log("\n=== Phase 7: Rollback lifecycle (create + approve) ===");
@@ -228,6 +236,9 @@ try {
       const reapplied = (await isoPool.query("SELECT count(*)::int n FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='gitwire_policy'")).rows[0].n;
       check("reapply restored function count", reapplied === before, "reapplied=" + reapplied);
       check("provenance re-registered", (await isoPool.query("SELECT count(*)::int n FROM gitwire_policy.gp05_function_provenance")).rows[0].n === 6);
+      // Verify original FK semantics unchanged after rollback + reapplication
+      const fkAfter = (await isoPool.query("SELECT condeferred FROM pg_constraint WHERE conname='active_policy_bindings_promotion_record_id_fkey' AND connamespace='gitwire_policy'::regnamespace")).rows[0];
+      check("active_binding FK still NOT deferred after reapply", fkAfter && fkAfter.condeferred === false, "condeferred=" + (fkAfter ? fkAfter.condeferred : "not found"));
       await isoPool.end();
     } finally {
       try { docker("rm", "-f", isoName); } catch {}

@@ -40,17 +40,6 @@ BEGIN
 END $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- 0b. Make active_policy_bindings.promotion_record_id FK deferrable
--- The inline FK created in 043 is immediate. GP-05 initial promotion inserts the
--- binding before the promotion record (the promotion record's CHECK requires a
--- non-null binding_id for succeeded). Deferring the binding's FK to the promotion
--- record allows both inserts to succeed within one transaction. Additive ALTER.
--- ════════════════════════════════════════════════════════════════════════════
-ALTER TABLE active_policy_bindings
-  ALTER CONSTRAINT active_policy_bindings_promotion_record_id_fkey
-  DEFERRABLE INITIALLY DEFERRED;
-
--- ════════════════════════════════════════════════════════════════════════════
 -- 1. Promotion discriminator column
 -- ════════════════════════════════════════════════════════════════════════════
 
@@ -435,18 +424,17 @@ BEGIN
     'decision_timestamp', v_now
   );
 
-  -- step 13-14: insert promotion record + binding (order depends on initial vs replacement)
-  -- For initial promotion: binding doesn't exist yet. Generate both UUIDs up front,
-  -- insert the binding first (deferred FK allows referencing not-yet-existing promo record),
-  -- then insert the promotion record with the binding_id (satisfies the CHECK constraint).
+  -- step 13-14: insert promotion record then binding (accepted write order)
+  -- For initial promotion: generate both UUIDs up front, insert the promotion
+  -- record first with the pre-generated binding_id (the existing DEFERRABLE
+  -- INITIALLY DEFERRED policy_promotion_records.binding_id FK permits this),
+  -- then insert the binding referencing the already-existing promotion record
+  -- (the immediate active_policy_bindings.promotion_record_id FK is satisfied).
+  -- No ALTER CONSTRAINT is needed — the existing schema's deferred binding_id
+  -- FK is the cycle-breaking mechanism. Promotion records are append-only;
+  -- no post-insert UPDATE.
   IF v_binding.id IS NULL THEN
-    -- initial: generate binding ID, insert binding, then insert promo record
     SELECT gen_random_uuid() INTO v_binding_id;
-    INSERT INTO active_policy_bindings
-      (id, resource_type, resource_id, policy_family, active_policy_version_id,
-       binding_revision, promotion_record_id, activated_at, updated_at)
-    VALUES (v_binding_id, v_cr.resource_type, v_cr.resource_id, v_cr.policy_family,
-       v_version.id, 0, v_promo_id, v_now, v_now);
     v_new_binding_rev := 0;
 
     INSERT INTO policy_promotion_records
@@ -456,6 +444,12 @@ BEGIN
     VALUES (v_promo_id, v_binding_id, v_cr.resource_type, v_cr.resource_id, v_cr.policy_family,
        p_change_request_id, v_version.id, v_base_version_id, v_base_revision,
        p_actor_principal_id, 'succeeded', NULL, 'forward', v_evidence_snapshot, v_now);
+
+    INSERT INTO active_policy_bindings
+      (id, resource_type, resource_id, policy_family, active_policy_version_id,
+       binding_revision, promotion_record_id, activated_at, updated_at)
+    VALUES (v_binding_id, v_cr.resource_type, v_cr.resource_id, v_cr.policy_family,
+       v_version.id, 0, v_promo_id, v_now, v_now);
   ELSE
     -- replacement: binding exists, insert promo record then CAS-update binding
     INSERT INTO policy_promotion_records
