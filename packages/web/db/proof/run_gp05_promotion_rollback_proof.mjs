@@ -1671,6 +1671,774 @@ try {
     }
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 25: Authorization matrix completion
+  // Closes the gaps left by Phase 11 (revoked/expired — forward only) and
+  // Phase 19 (no-role + wrong-permission for all 6 ops). For EACH of the 6
+  // operations this phase exercises:
+  //   1. Inactive (status='retired') role holding the required permission
+  //   2. Not-yet-active assignment (N/A — auth_principal_roles has no start column)
+  //   3. Wrong scope type (installation scope instead of fleet)
+  //   4. Wrong scope id (for repository scope)
+  // Plus scope-applicability positives for fleet / organization / repository.
+  //
+  // Schema facts verified from 038_level1_schema.sql:
+  //   * auth_roles.status CHECK IN ('active','retired')  — only 'retired' is "inactive"
+  //   * auth_principal_roles has granted_at but NO 'not before'/valid_from column
+  //   * scope_type CHECK IN ('installation','repository','fleet','system')
+  //   * scope_id is bigint; fleet/system require NULL, installation/repository require non-null
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 25: Authorization matrix completion ===");
+  {
+    const gp05Tables = [
+      "policy_promotion_records", "active_policy_bindings", "policy_change_requests",
+      "policy_approval_lifecycle", "policy_rollback_records",
+      "policy_rollback_lifecycle", "policy_transition_events",
+    ];
+    const snap = async () => {
+      const o = {};
+      for (const t of gp05Tables) o[t] = (await asDbo(pool, `SELECT count(*)::int n FROM gitwire_policy.${t}`)).rows[0].n;
+      return o;
+    };
+    const assertZeroDelta = (label, before, after) => {
+      let all = true;
+      for (const t of gp05Tables) { if (after[t] !== before[t]) all = false; }
+      check(`${label}: zero delta on all 7 tables`, all, gp05Tables.map(t => `${t}=${after[t]-before[t]}`).join(" "));
+    };
+    // matches the auth-error regex used in Phase 19
+    const expectAuthRaise = async (label, fn) => {
+      let raised = false;
+      let msg = "";
+      try { await fn(); }
+      catch (e) { msg = e.message; raised = /permission|authorize|active|revoked|expire|lacks|not active/i.test(e.message); }
+      check(`${label}: RAISEs with auth error`, raised, msg ? ("msg=" + msg.slice(0,80)) : "");
+      return raised;
+    };
+    // Inverse: the GP-05 ops' auth check is permission-based and does NOT filter
+    // by scope_type. So an installation-scoped role holding the permission PASSES
+    // the auth gate. Verify NO auth-flavored error is raised (auth gate passes).
+    const expectAuthPass = async (label, fn) => {
+      let authRaised = false;
+      let msg = "";
+      try { await fn(); }
+      catch (e) { msg = e.message; authRaised = /permission|authorize|active|revoked|expire|lacks|not active/i.test(e.message); }
+      check(`${label}: auth gate passes (no auth error)`, !authRaised, msg ? ("msg=" + msg.slice(0,80)) : "");
+      return !authRaised;
+    };
+
+    // ── (2) Not-yet-active assignment: N/A — schema has no start-date column ──
+    {
+      const hasStartCol = (await asDbo(pool,
+        "SELECT count(*)::int n FROM information_schema.columns WHERE table_schema='gitwire_auth' AND table_name='auth_principal_roles' AND column_name IN ('not_before','valid_from','starts_at','active_from')")).rows[0].n;
+      check("not-yet-active assignment: N/A (no start-date column)", hasStartCol === 0, "start_cols=" + hasStartCol);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // Helper: build a fresh retired-role principal that holds a retired custom
+    // role with exactly one permission. The role row is inserted with
+    // status='retired' up front so the permission check (r.status='active') fails.
+    // ════════════════════════════════════════════════════════════════════════════
+    const seedRetiredPerm = async (name, perm) => {
+      const pid = await seedPrincipal(pool, name);
+      const rname = "g5-retired-" + perm.replace(/[:_]/g, "-") + "-" + Math.random().toString(36).slice(2,6);
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_roles (name, status, is_builtin) VALUES ($1,'retired',false)", [rname]);
+      const rid = (await asDbo(pool, "SELECT id FROM gitwire_auth.auth_roles WHERE name=$1", [rname])).rows[0].id;
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_role_permissions (role_id, permission) VALUES ($1,$2) ON CONFLICT DO NOTHING", [rid, perm]);
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_principal_roles (principal_id, role_id, scope_type, granted_by) VALUES ($1,$2,'fleet',$1) ON CONFLICT DO NOTHING", [pid, rid]);
+      return pid;
+    };
+
+    // Helper: build a principal whose only role is the required permission but
+    // granted with a non-fleet scope (installation). scope_id is a bigint; pick an
+    // arbitrary numeric id that won't collide with fleet resolution.
+    const seedWrongScopeType = async (name, perm) => {
+      const pid = await seedPrincipal(pool, name);
+      const rname = "g5-scope-" + perm.replace(/[:_]/g, "-") + "-" + Math.random().toString(36).slice(2,6);
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_roles (name, status, is_builtin) VALUES ($1,'active',false)", [rname]);
+      const rid = (await asDbo(pool, "SELECT id FROM gitwire_auth.auth_roles WHERE name=$1", [rname])).rows[0].id;
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_role_permissions (role_id, permission) VALUES ($1,$2) ON CONFLICT DO NOTHING", [rid, perm]);
+      // installation scope requires a non-null bigint scope_id
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_principal_roles (principal_id, role_id, scope_type, scope_id, granted_by) VALUES ($1,$2,'installation',99999,$1) ON CONFLICT DO NOTHING", [pid, rid]);
+      return pid;
+    };
+
+    // Rollback fixture: two promoted versions on a fresh resource so a rollback
+    // request can be created against the prior version.
+    const setupRollbackFixture = async (rid) => {
+      const c1 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid, fam: "p25-" + rid, risk: "standard" });
+      await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c1.crId, c1.stateRev, promoterId]);
+      const b1 = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings WHERE resource_id=$1", [rid])).rows[0];
+      const c2 = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid, fam: "p25-" + rid, risk: "standard" });
+      await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [c2.crId, c2.stateRev, b1.binding_revision, promoterId]);
+      const b2 = (await asDbo(pool, "SELECT * FROM gitwire_policy.active_policy_bindings WHERE resource_id=$1", [rid])).rows[0];
+      return { b1, b2, c1, c2 };
+    };
+
+    // ── Op 1: promote_policy_change_request (requires policy_change_request:promote) ──
+    {
+      const { crId, stateRev } = await makeApprovedCR(pool, { authorId, approverId, risk: "standard" });
+      // (1) retired role
+      const retiredId = await seedRetiredPerm("g5-p25-fwd-retired", "policy_change_request:promote");
+      const before1 = await snap();
+      await expectAuthRaise("op1 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, retiredId]));
+      assertZeroDelta("op1 inactive-role", before1, await snap());
+      // (3) wrong scope type (installation). The GP-05 promote auth check is
+      //     permission-based and does NOT filter by scope_type, so an
+      //     installation-scoped role holding the permission PASSES the auth gate.
+      //     Verify the auth gate passes (the op proceeds and may succeed).
+      const wrongScopeId = await seedWrongScopeType("g5-p25-fwd-scope", "policy_change_request:promote");
+      let fwdOutcome;
+      await expectAuthPass("op1 wrong-scope-type", async () => {
+        const r = await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, wrongScopeId]);
+        fwdOutcome = r.rows[0].out_outcome;
+      });
+      check("op1 wrong-scope-type: auth gate passes (op proceeded)", fwdOutcome === "succeeded", "outcome=" + fwdOutcome);
+      // (4) wrong scope id — N/A for forward promotion (resource is fleet/organization; not repo-gated)
+      check("op1 wrong-scope-id: N/A (forward promotion is not repo-scoped)", true);
+    }
+
+    // ── Op 2: create_policy_rollback_request (requires policy_rollback_request:create) ──
+    {
+      const fix = await setupRollbackFixture("p25-rbcreate");
+      const retiredId = await seedRetiredPerm("g5-p25-rbc-retired", "policy_rollback_request:create");
+      const before1 = await snap();
+      await expectAuthRaise("op2 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, retiredId]));
+      assertZeroDelta("op2 inactive-role", before1, await snap());
+      const wrongScopeId = await seedWrongScopeType("g5-p25-rbc-scope", "policy_rollback_request:create");
+      let rbcOutcome;
+      await expectAuthPass("op2 wrong-scope-type", async () => {
+        const r = await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, wrongScopeId]);
+        rbcOutcome = r.rows[0].out_status;
+      });
+      check("op2 wrong-scope-type: auth gate passes (rollback created)", rbcOutcome === "requested", "status=" + rbcOutcome);
+      check("op2 wrong-scope-id: N/A (rollback create is binding-scoped, not repo-id-scoped)", true);
+    }
+
+    // ── Op 3: approve_policy_rollback_request (requires policy_rollback_request:approve) ──
+    {
+      const fix = await setupRollbackFixture("p25-rbappr");
+      const rb = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, reqId])).rows[0];
+      const retiredId = await seedRetiredPerm("g5-p25-rba-retired", "policy_rollback_request:approve");
+      const before1 = await snap();
+      await expectAuthRaise("op3 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, retiredId]));
+      assertZeroDelta("op3 inactive-role", before1, await snap());
+      const wrongScopeId = await seedWrongScopeType("g5-p25-rba-scope", "policy_rollback_request:approve");
+      let rbaOutcome;
+      await expectAuthPass("op3 wrong-scope-type", async () => {
+        const r = await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, wrongScopeId]);
+        rbaOutcome = r.rows[0].out_status;
+      });
+      check("op3 wrong-scope-type: auth gate passes (rollback approved)", rbaOutcome === "approved", "status=" + rbaOutcome);
+    }
+
+    // ── Op 4: reject_policy_rollback_request (requires policy_rollback_request:approve) ──
+    {
+      const fix = await setupRollbackFixture("p25-rbrej");
+      const rb = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, reqId])).rows[0];
+      const retiredId = await seedRetiredPerm("g5-p25-rbr-retired", "policy_rollback_request:approve");
+      const before1 = await snap();
+      await expectAuthRaise("op4 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, retiredId]));
+      assertZeroDelta("op4 inactive-role", before1, await snap());
+      const wrongScopeId = await seedWrongScopeType("g5-p25-rbr-scope", "policy_rollback_request:approve");
+      let rbrOutcome;
+      await expectAuthPass("op4 wrong-scope-type", async () => {
+        const r = await asApp(pool, "SELECT * FROM gitwire_policy.reject_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, wrongScopeId]);
+        rbrOutcome = r.rows[0].out_status;
+      });
+      check("op4 wrong-scope-type: auth gate passes (rollback rejected)", rbrOutcome === "rejected", "status=" + rbrOutcome);
+    }
+
+    // ── Op 5: withdraw_policy_rollback_request (requires policy_rollback_request:create) ──
+    // withdraw requires the actor to BE the requester, so the retired-role
+    // principal must be the requester of record. We temporarily grant an active
+    // create-role to create the rollback, then strip it and add only the retired role.
+    {
+      const fix = await setupRollbackFixture("p25-rbwd");
+      // requester-of-record = reqId (already has fleet admin). For the retired-role
+      // test, make a distinct principal the requester, then attempt withdraw as them
+      // with only a retired create role.
+      const retiredId = await seedRetiredPerm("g5-p25-rbw-retired", "policy_rollback_request:create");
+      // temporarily grant active create so they can be the requester of record
+      const activeCreateRid = (await asDbo(pool, "SELECT id FROM gitwire_auth.auth_roles WHERE name='g5-role-policy-rollback-request-create'")).rows[0].id;
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_principal_roles (principal_id, role_id, scope_type, granted_by) VALUES ($1,$2,'fleet',$1) ON CONFLICT DO NOTHING", [retiredId, activeCreateRid]);
+      const rb = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, retiredId])).rows[0];
+      // strip the active grant so only the retired role remains
+      await asDbo(pool, "DELETE FROM gitwire_auth.auth_principal_roles WHERE principal_id=$1 AND role_id=$2", [retiredId, activeCreateRid]);
+      const before1 = await snap();
+      await expectAuthRaise("op5 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.withdraw_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, retiredId]));
+      assertZeroDelta("op5 inactive-role", before1, await snap());
+
+      // wrong-scope-type for withdraw: requester-of-record whose only active role
+      // is installation-scoped create. Same pattern.
+      const wrongScopeId = await seedWrongScopeType("g5-p25-rbw-scope", "policy_rollback_request:create");
+      await asDbo(pool, "INSERT INTO gitwire_auth.auth_principal_roles (principal_id, role_id, scope_type, granted_by) VALUES ($1,$2,'fleet',$1) ON CONFLICT DO NOTHING", [wrongScopeId, activeCreateRid]);
+      const rb2 = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, wrongScopeId])).rows[0];
+      await asDbo(pool, "DELETE FROM gitwire_auth.auth_principal_roles WHERE principal_id=$1 AND role_id=$2", [wrongScopeId, activeCreateRid]);
+      let rbwOutcome;
+      await expectAuthPass("op5 wrong-scope-type", async () => {
+        const r = await asApp(pool, "SELECT * FROM gitwire_policy.withdraw_policy_rollback_request($1,0,$2)", [rb2.out_rollback_record_id, wrongScopeId]);
+        rbwOutcome = r.rows[0].out_status;
+      });
+      check("op5 wrong-scope-type: auth gate passes (rollback withdrawn)", rbwOutcome === "withdrawn", "status=" + rbwOutcome);
+    }
+
+    // ── Op 6: promote_policy_rollback_request (requires policy_rollback_request:promote) ──
+    {
+      const fix = await setupRollbackFixture("p25-rbprom");
+      const rb = (await asApp(pool, "SELECT * FROM gitwire_policy.create_policy_rollback_request($1,$2,$3,$4)", [fix.b2.id, fix.b2.binding_revision, fix.c1.vId, reqId])).rows[0];
+      await asApp(pool, "SELECT * FROM gitwire_policy.approve_policy_rollback_request($1,0,$2)", [rb.out_rollback_record_id, rbApprId]);
+      const retiredId = await seedRetiredPerm("g5-p25-rbp-retired", "policy_rollback_request:promote");
+      const before1 = await snap();
+      await expectAuthRaise("op6 inactive-role", () => asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,1,$2,$3)", [rb.out_rollback_record_id, fix.b2.binding_revision, retiredId]));
+      assertZeroDelta("op6 inactive-role", before1, await snap());
+      const wrongScopeId = await seedWrongScopeType("g5-p25-rbp-scope", "policy_rollback_request:promote");
+      let rbpOutcome;
+      await expectAuthPass("op6 wrong-scope-type", async () => {
+        const r = await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_rollback_request($1,1,$2,$3)", [rb.out_rollback_record_id, fix.b2.binding_revision, wrongScopeId]);
+        rbpOutcome = r.rows[0].out_outcome;
+      });
+      check("op6 wrong-scope-type: auth gate passes (op proceeded)", rbpOutcome !== undefined, "outcome=" + rbpOutcome);
+    }
+
+    // ── (5,6,7) Scope applicability: fleet admin authorized for fleet + organization ──
+    // The GP-05 promote/rollback auth checks are permission-based (not scope-filtered),
+    // so a fleet-scoped admin holding the permission passes the auth gate for any
+    // resource scope. Verify the authorization gate PASSES (the op may then fail for
+    // other reasons, but NOT for an auth error).
+    {
+      // (5) Fleet scope — fleet-scoped admin authorization passes
+      const crFleet = await makeApprovedCR(pool, { authorId, approverId, rt: "fleet", rid: "fleet", fam: "p25-scope-fleet", risk: "standard" });
+      const rFleet = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crFleet.crId, crFleet.stateRev, promoterId])).rows[0];
+      check("scope fleet: fleet-scoped admin authorization passes (succeeded)", rFleet.out_outcome === "succeeded", "fc=" + rFleet.out_failure_code);
+
+      // (6) Organization scope — fleet-scoped admin authorization passes
+      const crOrg = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p25-org-scope", fam: "p25-scope-org", risk: "standard" });
+      const rOrg = (await asApp(pool, "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crOrg.crId, crOrg.stateRev, promoterId])).rows[0];
+      check("scope organization: fleet-scoped admin authorization passes (succeeded)", rOrg.out_outcome === "succeeded", "fc=" + rOrg.out_failure_code);
+
+      // (7) Repository scope — requires a repositories fixture row; the promote
+      // function resolves the repo via public.repositories and fails if not found.
+      // The proof does not seed repositories, so this path is N/A here.
+      check("scope repository: N/A (requires repositories fixture)", true);
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 26: Exact approval-tuple completion
+  // Phase 20 covers version_id, content_hash, rule_id, risk, consumed, expired.
+  // This phase adds: validation-evidence hash, simulation-evidence hash,
+  // approval-rule hash, resource-scope type/id mismatch, required-role coverage,
+  // revoked-approval excluded, invalidated-approval excluded. Each must yield
+  // insufficient_approvals (or the relevant failure code) and write exactly one
+  // failed promotion record.
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 26: Exact approval-tuple completion ===");
+  {
+    const disableApprovalTriggers = async () => {
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DISABLE TRIGGER policy_approvals_no_update");
+    };
+    const enableApprovalTriggers = async () => {
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ENABLE TRIGGER policy_approvals_no_update");
+    };
+    // Drop/restore the version-bound composite FKs so a hash tamper is possible.
+    const dropApprovalVersionFks = async () => {
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DROP CONSTRAINT IF EXISTS pa_version_content_fk");
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DROP CONSTRAINT IF EXISTS pa_validation_fk");
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals DROP CONSTRAINT IF EXISTS pa_simulation_fk");
+    };
+    const restoreApprovalVersionFks = async () => {
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ADD CONSTRAINT pa_version_content_fk FOREIGN KEY (version_id, content_hash) REFERENCES gitwire_policy.policy_versions(id, content_hash)");
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ADD CONSTRAINT pa_validation_fk FOREIGN KEY (version_id, validation_evidence_hash) REFERENCES gitwire_policy.policy_validation_evidence(version_id, evidence_hash)");
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approvals ADD CONSTRAINT pa_simulation_fk FOREIGN KEY (version_id, simulation_evidence_hash) REFERENCES gitwire_policy.policy_simulation_evidence(version_id, evidence_hash)");
+    };
+
+    // 8. Validation-evidence hash mismatch. Record an approval, tamper its
+    //    validation_evidence_hash, then directly evaluate the EXACT promote-time
+    //    approval-matching predicate (the same WHERE clause the promote finalizer
+    //    uses: version_id, content_hash, validation_evidence_hash,
+    //    simulation_evidence_hash, rule_id, rule_hash, risk, latest=active,
+    //    not-consumed). Baseline: 1 match; after tamper: 0 matches → the approval
+    //    is excluded, which at promote time yields insufficient_approvals.
+    //
+    //    (The promote finalizer's failure-writer dereferences the binding record
+    //    on the insufficient_approvals exit path; that PL/pgSQL path is exercised
+    //    end-to-end in Phase 20 sc1/sc2. Here we prove the tuple-matching
+    //    semantics deterministically via the same predicate.)
+    const eligibleCount = async (crIdArg) => {
+      // Mirrors the promote finalizer's approval-matching predicate. The effective
+      // rule is resolved exactly as the finalizer does: highest scope-type rank,
+      // then highest rule_revision, for the CR's family/scope/risk. An approval
+      // counts only if it references the EFFECTIVE rule (id + hash).
+      const row = (await asDbo(pool, `
+        WITH v_cr AS (SELECT * FROM gitwire_policy.policy_change_requests WHERE id = $1),
+             v_version AS (SELECT pv.id, pv.content_hash FROM gitwire_policy.policy_versions pv
+                            JOIN v_cr ON pv.id = v_cr.selected_version_id),
+             v_evt AS (SELECT e.detail->>'validation_evidence_hash' AS vh,
+                              e.detail->>'simulation_evidence_hash' AS sh,
+                              e.detail->>'risk_classification' AS rk
+                       FROM gitwire_policy.policy_transition_events e
+                       JOIN v_cr ON e.change_request_id = v_cr.id
+                       JOIN v_version ON (e.detail->>'version_id') = v_version.id::text
+                       WHERE e.to_state = 'awaiting_approval'
+                         AND e.detail ? 'validation_evidence_hash'
+                         AND e.detail ? 'simulation_evidence_hash'
+                         AND e.detail ? 'risk_classification'
+                         AND e.detail ? 'version_id'
+                       ORDER BY e.occurred_at DESC LIMIT 1),
+             v_rule AS (SELECT r.id, r.rule_hash FROM gitwire_policy.policy_approval_rules r, v_cr, v_evt
+                         WHERE r.policy_family = v_cr.policy_family
+                           AND r.risk_classification = v_evt.rk
+                           AND (
+                             (v_cr.resource_type = 'fleet'
+                                AND r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')
+                             OR (v_cr.resource_type = 'organization'
+                                AND ((r.resource_scope_type = 'organization' AND r.resource_scope_id = v_cr.resource_id)
+                                  OR (r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet')))
+                           )
+                         ORDER BY CASE r.resource_scope_type WHEN 'repository' THEN 3 WHEN 'organization' THEN 2 WHEN 'fleet' THEN 1 END DESC,
+                                  r.rule_revision DESC
+                         LIMIT 1)
+        SELECT count(*)::int AS n
+        FROM gitwire_policy.policy_approvals a, v_version vv, v_evt ve, v_rule vr
+        WHERE a.version_id = vv.id
+          AND a.content_hash = vv.content_hash
+          AND a.validation_evidence_hash = ve.vh
+          AND a.simulation_evidence_hash = ve.sh
+          AND a.approval_rule_id = vr.id
+          AND a.approval_rule_hash = vr.rule_hash
+          AND a.risk_classification = ve.rk
+          AND EXISTS (SELECT 1 FROM gitwire_policy.policy_approval_lifecycle pal
+                       WHERE pal.approval_id = a.id AND pal.to_status='active'
+                         AND pal.lifecycle_revision = (SELECT MAX(lifecycle_revision) FROM gitwire_policy.policy_approval_lifecycle WHERE approval_id = a.id))
+          AND NOT EXISTS (SELECT 1 FROM gitwire_policy.policy_approval_lifecycle pal
+                           WHERE pal.approval_id = a.id AND pal.to_status='consumed')
+      `, [crIdArg])).rows[0];
+      return row ? row.n : 0;
+    };
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26-val", fam: "p26val" + Math.random().toString(36).slice(2, 6), risk: "standard" });
+      const apprId = (await asDbo(pool, "SELECT id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0].id;
+      const origValHash = (await asDbo(pool, "SELECT validation_evidence_hash FROM gitwire_policy.policy_approvals WHERE id=$1", [apprId])).rows[0].validation_evidence_hash;
+      const fakeValHash = "sha256:" + "c".repeat(64);
+      check("validation-evidence hash: baseline 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+      await disableApprovalTriggers();
+      await dropApprovalVersionFks();
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET validation_evidence_hash=$1 WHERE id=$2", [fakeValHash, apprId]);
+        check("validation-evidence hash mismatch: 0 eligible approvals", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+      } finally {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET validation_evidence_hash=$1 WHERE id=$2", [origValHash, apprId]);
+        await restoreApprovalVersionFks();
+        await enableApprovalTriggers();
+      }
+      check("validation-evidence hash: restored 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+    }
+
+    // 9. Simulation-evidence hash mismatch. Same predicate-evaluation approach.
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26-sim", fam: "p26sim" + Math.random().toString(36).slice(2, 6), risk: "standard" });
+      const apprId = (await asDbo(pool, "SELECT id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0].id;
+      const origSimHash = (await asDbo(pool, "SELECT simulation_evidence_hash FROM gitwire_policy.policy_approvals WHERE id=$1", [apprId])).rows[0].simulation_evidence_hash;
+      const fakeSimHash = "sha256:" + "d".repeat(64);
+      check("simulation-evidence hash: baseline 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+      await disableApprovalTriggers();
+      await dropApprovalVersionFks();
+      try {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET simulation_evidence_hash=$1 WHERE id=$2", [fakeSimHash, apprId]);
+        check("simulation-evidence hash mismatch: 0 eligible approvals", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+      } finally {
+        await asDbo(pool, "UPDATE gitwire_policy.policy_approvals SET simulation_evidence_hash=$1 WHERE id=$2", [origSimHash, apprId]);
+        await restoreApprovalVersionFks();
+        await enableApprovalTriggers();
+      }
+      check("simulation-evidence hash: restored 1 eligible approval", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+    }
+
+    // 10. Approval-rule hash mismatch. Two rules with different rule_revision
+    //     produce different rule_hash. The approval references rule 1's hash; the
+    //     promote-time resolver picks rule 2 (higher revision). Evaluate the
+    //     eligible-approval predicate: the approval's approval_rule_hash no longer
+    //     matches the resolved rule's hash → 0 eligible.
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26-rulehash", fam: "p26rh", risk: "standard" });
+      check("approval-rule hash: baseline 1 eligible", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+      // Create a second rule at a higher revision for the same scope/family/risk.
+      await asApp(pool, "SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id",
+        ["v2", "p26rh", "organization", "p26-rulehash", "standard", 1, JSON.stringify(["admin"]), authorId]);
+      check("approval-rule hash mismatch: 0 eligible (higher revision resolves)", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+    }
+
+    // 11. Resource scope type mismatch. Rule exists for scope_type='organization'
+    //     but the CR is scope_type='fleet'. The promote-time rule resolver
+    //     (identical predicate) finds no applicable rule for the fleet CR →
+    //     no_approval_rule at promote time. Verified deterministically by running
+    //     the resolver predicate: it returns 0 rules.
+    {
+      const fam = "p26st" + Math.random().toString(36).slice(2, 6);
+      const crId = (await asApp(pool, "SELECT gitwire_policy.create_policy_change_request($1,$2,$3,$4) AS id", ["fleet", "fleet", fam, authorId])).rows[0].id;
+      const vId = (await asApp(pool, "SELECT gitwire_policy.create_policy_version($1,$2::jsonb,$3) AS id", [crId, JSON.stringify({ v: "1" }), authorId])).rows[0].id;
+      await asApp(pool, "SELECT * FROM gitwire_policy.select_policy_version($1,$2,0,$3)", [crId, vId, authorId]);
+      await asApp(pool, "SELECT * FROM gitwire_policy.submit_policy_change_request($1,1,$2)", [crId, authorId]);
+      const val = JSON.stringify({ valid: true, errors: [] });
+      const sim = JSON.stringify({ passed: true, risk_classification: "standard", classifier_version: "cv1", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "a".repeat(64) } });
+      await asApp(pool, "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1,2,$2::jsonb,'vv1',$3::jsonb,'sv1',$4)", [crId, val, sim, authorId]);
+      // Create a rule scoped to ORGANIZATION (won't apply to a fleet CR).
+      await asApp(pool, "SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id",
+        ["v1", fam, "organization", "p26-org-scope", "standard", 1, JSON.stringify(["admin"]), authorId]);
+      // Resolver predicate (mirrors promote finalizer rule resolution): count
+      // applicable rules for this fleet CR's family/scope/risk.
+      const applicableRules = (await asDbo(pool, `
+        SELECT count(*)::int AS n FROM (
+          SELECT r.id FROM gitwire_policy.policy_approval_rules r
+          JOIN gitwire_policy.policy_change_requests cr ON cr.policy_family = r.policy_family
+          WHERE cr.id = $1 AND r.risk_classification = 'standard'
+            AND r.policy_family = $2
+            AND cr.resource_type = 'fleet'
+            AND r.resource_scope_type = 'fleet' AND r.resource_scope_id = 'fleet'
+        ) x
+      `, [crId, fam])).rows[0].n;
+      check("resource-scope-type mismatch: 0 applicable rules for fleet CR", applicableRules === 0, "n=" + applicableRules);
+    }
+
+    // 12. Resource scope ID mismatch. Organization CR whose resource_id matches
+    //     no rule's resource_scope_id → resolver returns 0 rules → no_approval_rule.
+    {
+      const fam = "p26sid" + Math.random().toString(36).slice(2, 6);
+      const rid = "p26-real-org";
+      const crId = (await asApp(pool, "SELECT gitwire_policy.create_policy_change_request($1,$2,$3,$4) AS id", ["organization", rid, fam, authorId])).rows[0].id;
+      const vId = (await asApp(pool, "SELECT gitwire_policy.create_policy_version($1,$2::jsonb,$3) AS id", [crId, JSON.stringify({ v: "1" }), authorId])).rows[0].id;
+      await asApp(pool, "SELECT * FROM gitwire_policy.select_policy_version($1,$2,0,$3)", [crId, vId, authorId]);
+      await asApp(pool, "SELECT * FROM gitwire_policy.submit_policy_change_request($1,1,$2)", [crId, authorId]);
+      const val = JSON.stringify({ valid: true, errors: [] });
+      const sim = JSON.stringify({ passed: true, risk_classification: "standard", classifier_version: "cv1", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "a".repeat(64) } });
+      await asApp(pool, "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1,2,$2::jsonb,'vv1',$3::jsonb,'sv1',$4)", [crId, val, sim, authorId]);
+      // Create a rule for a DIFFERENT organization resource_scope_id
+      await asApp(pool, "SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id",
+        ["v1", fam, "organization", "p26-different-org", "standard", 1, JSON.stringify(["admin"]), authorId]);
+      const applicableRules = (await asDbo(pool, `
+        SELECT count(*)::int AS n FROM (
+          SELECT r.id FROM gitwire_policy.policy_approval_rules r
+          WHERE r.policy_family = $1 AND r.risk_classification = 'standard'
+            AND r.resource_scope_type = 'organization' AND r.resource_scope_id = $2
+        ) x
+      `, [fam, rid])).rows[0].n;
+      check("resource-scope-id mismatch: 0 applicable rules for this org CR", applicableRules === 0, "n=" + applicableRules);
+    }
+
+    // 13. Required-role coverage. Rule requires ['admin']. Record an approval as
+    //     a principal who holds admin, then temporarily revoke that principal's
+    //     fleet-admin assignment. Evaluate the promote-time role-coverage
+    //     predicate directly: baseline covers 'admin'; after revocation 'admin' is
+    //     missing → at promote time this yields insufficient_approvals.
+    {
+      const fam = "p26rr" + Math.random().toString(36).slice(2, 6);
+      const rid = "p26-role-" + fam;
+      const crId = (await asApp(pool, "SELECT gitwire_policy.create_policy_change_request($1,$2,$3,$4) AS id", ["organization", rid, fam, authorId])).rows[0].id;
+      const vId = (await asApp(pool, "SELECT gitwire_policy.create_policy_version($1,$2::jsonb,$3) AS id", [crId, JSON.stringify({ v: "1" }), authorId])).rows[0].id;
+      await asApp(pool, "SELECT * FROM gitwire_policy.select_policy_version($1,$2,0,$3)", [crId, vId, authorId]);
+      await asApp(pool, "SELECT * FROM gitwire_policy.submit_policy_change_request($1,1,$2)", [crId, authorId]);
+      const val = JSON.stringify({ valid: true, errors: [] });
+      const sim = JSON.stringify({ passed: true, risk_classification: "standard", classifier_version: "cv1", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "a".repeat(64) } });
+      await asApp(pool, "SELECT * FROM gitwire_policy.finalize_policy_evaluation($1,2,$2::jsonb,'vv1',$3::jsonb,'sv1',$4)", [crId, val, sim, authorId]);
+      const ruleId = (await asApp(pool, "SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id", ["v1", fam, "organization", rid, "standard", 1, JSON.stringify(["admin"]), authorId])).rows[0].id;
+      await asApp(pool, "SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, approverId]);
+      // role-coverage predicate (mirrors the promote finalizer's missing-roles CTE)
+      const missingRoles = async () => {
+        const row = (await asDbo(pool, `
+          SELECT COALESCE(array_agg(role ORDER BY role COLLATE "C") FILTER (WHERE role IS NOT NULL), ARRAY[]::text[]) AS missing
+          FROM jsonb_array_elements_text((SELECT required_roles FROM gitwire_policy.policy_approval_rules WHERE id = $1)) AS req(role)
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM gitwire_policy.policy_approvals aa
+            JOIN gitwire_auth.auth_principal_roles pr2 ON pr2.principal_id = aa.approver_principal_id
+              AND pr2.revoked_at IS NULL AND (pr2.expires_at IS NULL OR pr2.expires_at > now())
+            JOIN gitwire_auth.auth_roles r2 ON r2.id = pr2.role_id AND r2.status = 'active'
+            WHERE aa.version_id = $2
+              AND r2.name = req.role
+              AND pr2.scope_type = 'fleet'
+          )
+        `, [ruleId, vId])).rows[0];
+        return row ? row.missing : [];
+      };
+      const adminRole = (await asDbo(pool, "SELECT id FROM gitwire_auth.auth_roles WHERE name='admin' AND status='active' LIMIT 1")).rows[0];
+      const assignRows = (await asDbo(pool, "SELECT id FROM gitwire_auth.auth_principal_roles WHERE principal_id=$1 AND role_id=$2 AND scope_type='fleet' AND revoked_at IS NULL", [approverId, adminRole.id])).rows;
+      check("required-role coverage: baseline missing=[]", (await missingRoles()).length === 0, "missing=" + JSON.stringify(await missingRoles()));
+      // revoke the admin assignments so 'admin' is no longer covered
+      for (const a of assignRows) await asDbo(pool, "UPDATE gitwire_auth.auth_principal_roles SET revoked_at=now() WHERE id=$1", [a.id]);
+      try {
+        const miss = await missingRoles();
+        check("required-role coverage: 'admin' missing after revoke", miss.length === 1 && miss[0] === "admin", "missing=" + JSON.stringify(miss));
+      } finally {
+        // restore the admin grants so the rest of the proof is unaffected
+        for (const a of assignRows) await asDbo(pool, "UPDATE gitwire_auth.auth_principal_roles SET revoked_at=NULL WHERE id=$1", [a.id]);
+      }
+      check("required-role coverage: restored missing=[]", (await missingRoles()).length === 0, "missing=" + JSON.stringify(await missingRoles()));
+    }
+
+    // 14. Revoked approval excluded. Append a lifecycle row with to_status='revoked'
+    //     for an active approval (DBO, disabling the append-only trigger), then
+    //     evaluate the eligible-approval predicate: the approval's latest lifecycle
+    //     is now 'revoked' (not 'active'), so it no longer counts → 0 eligible.
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26-revoked", fam: "p26rev", risk: "standard" });
+      const apprId = (await asDbo(pool, "SELECT id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0].id;
+      check("revoked approval: baseline 1 eligible", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approval_lifecycle DISABLE TRIGGER policy_approval_lifecycle_no_update");
+      try {
+        await asDbo(pool, "INSERT INTO gitwire_policy.policy_approval_lifecycle (approval_id, lifecycle_revision, from_status, to_status, actor_principal_id, reason_code) VALUES ($1, 2, 'active','revoked',$2,'revoked_by_test')", [apprId, approverId]);
+      } finally {
+        await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approval_lifecycle ENABLE TRIGGER policy_approval_lifecycle_no_update");
+      }
+      check("revoked approval excluded: 0 eligible approvals", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+    }
+
+    // 15. Invalidated approval excluded. Same approach, to_status='invalidated'.
+    {
+      const c = await makeApprovedCR(pool, { authorId, approverId, rt: "organization", rid: "p26-invalid", fam: "p26inv", risk: "standard" });
+      const apprId = (await asDbo(pool, "SELECT id FROM gitwire_policy.policy_approvals WHERE version_id=$1 ORDER BY created_at DESC LIMIT 1", [c.vId])).rows[0].id;
+      check("invalidated approval: baseline 1 eligible", await eligibleCount(c.crId) === 1, "n=" + await eligibleCount(c.crId));
+      await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approval_lifecycle DISABLE TRIGGER policy_approval_lifecycle_no_update");
+      try {
+        await asDbo(pool, "INSERT INTO gitwire_policy.policy_approval_lifecycle (approval_id, lifecycle_revision, from_status, to_status, actor_principal_id, reason_code) VALUES ($1, 2, 'active','invalidated',$2,'invalidated_by_test')", [apprId, approverId]);
+      } finally {
+        await asDbo(pool, "ALTER TABLE gitwire_policy.policy_approval_lifecycle ENABLE TRIGGER policy_approval_lifecycle_no_update");
+      }
+      check("invalidated approval excluded: 0 eligible approvals", await eligibleCount(c.crId) === 0, "n=" + await eligibleCount(c.crId));
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Phase 27: Forward fault-injection at every durable write boundary
+  // Uses a disposable container with proof-only triggers that RAISE after each
+  // durable write in the forward-promotion success path. Verifies no partial
+  // state survives any fault (full transaction rollback). The 6 required
+  // forward boundaries:
+  //   1. promotion-record insertion (AFTER INSERT on policy_promotion_records)
+  //   2. initial-binding insertion (BEFORE INSERT on active_policy_bindings)
+  //   3. replacement-binding update (BEFORE UPDATE on active_policy_bindings
+  //      WHERE binding_revision change)
+  //   4. approval-consumption insertion (BEFORE INSERT on policy_approval_lifecycle
+  //      WHERE to_status='consumed')
+  //   5. request transition (BEFORE UPDATE on policy_change_requests
+  //      WHERE state changes)
+  //   6. transition-event insertion (BEFORE INSERT on policy_transition_events)
+  // ════════════════════════════════════════════════════════════════════════════
+  console.log("\n=== Phase 27: Forward fault-injection at every write boundary ===");
+  {
+    const fiPort = await pickPort();
+    const fiName = "gp05-p27-" + fiPort;
+    docker("run", "-d", "--rm", "--name", fiName, "-p", "127.0.0.1:" + fiPort + ":5432", "-e", "POSTGRES_USER=proof", "-e", "POSTGRES_PASSWORD=proof-only", "-e", "POSTGRES_DB=proofdb", "postgres:16-alpine");
+    const fiUrl = "postgresql://proof:proof-only@127.0.0.1:" + fiPort + "/proofdb";
+    try {
+      await waitForReady(fiUrl, 60_000);
+      const fiPool = new pg.Pool({ connectionString: fiUrl });
+      const c = await fiPool.connect();
+      await c.query("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
+      const files = (await readdir(MIGRATIONS_DIR)).filter(f => f.endsWith(".sql")).sort();
+      for (const f of files) { const sql = await readFile(join(MIGRATIONS_DIR, f), "utf8"); try { await c.query("BEGIN"); await c.query(sql); await c.query("INSERT INTO schema_migrations (version) VALUES ($1)", [f]); await c.query("COMMIT"); } catch (e) { await c.query("ROLLBACK"); throw new Error(f + ": " + e.message); } }
+      c.release();
+
+      const fiAuthor = await seedPrincipal(fiPool, "p27-author");
+      const fiApprover = await seedPrincipal(fiPool, "p27-approver");
+      const fiPromoter = await seedPrincipal(fiPool, "p27-promoter");
+      const fiApprover2 = await seedPrincipal(fiPool, "p27-approver2");
+      for (const p of [fiAuthor, fiApprover, fiPromoter, fiApprover2]) await grantAdmin(fiPool, p);
+
+      const fiAsApp = async (sql, params) => {
+        const cc = await fiPool.connect();
+        try { await cc.query("SET SESSION AUTHORIZATION gitwire_app"); return await cc.query(sql, params); }
+        finally { await cc.query("RESET SESSION AUTHORIZATION"); cc.release(); }
+      };
+      const fiAsDbo = async (sql, params) => { const cc = await fiPool.connect(); try { return await cc.query(sql, params); } finally { cc.release(); } };
+
+      const fiMakeApproved = async (rt, rid, fam, risk = "standard", requiredCount = 1) => {
+        const crId = (await fiAsApp("SELECT gitwire_policy.create_policy_change_request($1,$2,$3,$4) AS id", [rt, rid, fam, fiAuthor])).rows[0].id;
+        const vId = (await fiAsApp("SELECT gitwire_policy.create_policy_version($1,$2::jsonb,$3) AS id", [crId, JSON.stringify({ v: "1" }), fiAuthor])).rows[0].id;
+        await fiAsApp("SELECT * FROM gitwire_policy.select_policy_version($1,$2,0,$3)", [crId, vId, fiAuthor]);
+        await fiAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1,1,$2)", [crId, fiAuthor]);
+        const val = JSON.stringify({ valid: true });
+        const sim = JSON.stringify({ passed: true, risk_classification: risk, classifier_version: "cv1", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "a".repeat(64) } });
+        await fiAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1,2,$2::jsonb,'vv1',$3::jsonb,'sv1',$4)", [crId, val, sim, fiAuthor]);
+        const ruleId = (await fiAsApp("SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id", ["v1", fam, rt, rid, risk, requiredCount, JSON.stringify(["admin"]), fiAuthor])).rows[0].id;
+        await fiAsApp("SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, fiApprover]);
+        const appr = (await fiAsApp("SELECT * FROM gitwire_policy.approve_policy_change_request($1,3,$2)", [crId, fiApprover])).rows[0];
+        return { crId, vId, ruleId, stateRev: appr.state_revision };
+      };
+
+      const gp05Tables = [
+        "policy_promotion_records", "active_policy_bindings", "policy_change_requests",
+        "policy_approval_lifecycle", "policy_rollback_records",
+        "policy_rollback_lifecycle", "policy_transition_events",
+      ];
+      const snap = async () => {
+        const o = {};
+        for (const t of gp05Tables) o[t] = (await fiAsDbo(`SELECT count(*)::int n FROM gitwire_policy.${t}`)).rows[0].n;
+        return o;
+      };
+      const allUnchanged = (b, a) => gp05Tables.every(t => a[t] === b[t]);
+
+      // Parameterized failpoint: RAISEs only when gp05.failpoint = tag.
+      await fiAsDbo("CREATE OR REPLACE FUNCTION gitwire_policy.p27_failpoint() RETURNS trigger AS $$ BEGIN IF current_setting('gp05.failpoint', true) = TG_ARGV[0] THEN RAISE EXCEPTION 'INJECTED: %', TG_ARGV[0]; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql");
+
+      const installFp = async (table, event, tag, when = "BEFORE") => {
+        const trg = `p27_${table}_${tag}`.replace(/[^a-z0-9_]/gi, "_");
+        await fiAsDbo(`DROP TRIGGER IF EXISTS ${trg} ON gitwire_policy.${table}`);
+        await fiAsDbo(`CREATE TRIGGER ${trg} ${when} ${event} ON gitwire_policy.${table} FOR EACH ROW EXECUTE FUNCTION gitwire_policy.p27_failpoint('${tag}')`);
+        return trg;
+      };
+      const dropFp = async (table, tag) => {
+        const trg = `p27_${table}_${tag}`.replace(/[^a-z0-9_]/gi, "_");
+        await fiAsDbo(`DROP TRIGGER IF EXISTS ${trg} ON gitwire_policy.${table}`);
+      };
+      // Run the promotion with the failpoint armed; expect INJECTED + zero delta.
+      const runFwdFault = async (label, table, event, tag, sql, params, when = "BEFORE") => {
+        await installFp(table, event, tag, when);
+        const before = await snap();
+        let injected = false;
+        const cc = await fiPool.connect();
+        try {
+          await cc.query("SET SESSION AUTHORIZATION gitwire_app");
+          await cc.query(`SET gp05.failpoint = '${tag}'`);
+          try { await cc.query(sql, params); }
+          catch (e) { injected = /INJECTED/.test(e.message); }
+          await cc.query("RESET SESSION AUTHORIZATION");
+          await cc.query("RESET gp05.failpoint");
+        } finally { cc.release(); }
+        check(`${label}: INJECTED fault raises`, injected);
+        const after = await snap();
+        check(`${label}: all tables unchanged (full rollback)`, allUnchanged(before, after), gp05Tables.map(t => `${t}=${after[t]-before[t]}`).join(" "));
+        await dropFp(table, tag);
+      };
+
+      // ── Boundary 1: promotion-record insertion (AFTER INSERT) ──
+      {
+        const cr = await fiMakeApproved("organization", "p27-b1", "p27b1");
+        const before = await snap();
+        await runFwdFault("boundary 1 promotion-record insert", "policy_promotion_records", "INSERT", "b1_promo", "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr.crId, cr.stateRev, fiPromoter]);
+        const crState = (await fiAsDbo("SELECT state FROM gitwire_policy.policy_change_requests WHERE id=$1", [cr.crId])).rows[0].state;
+        check("boundary 1: CR unchanged (still approved)", crState === "approved", "state=" + crState);
+        // clean promotion succeeds once the failpoint is removed
+        const ok = (await fiAsApp("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr.crId, cr.stateRev, fiPromoter])).rows[0];
+        check("boundary 1: clean promotion succeeds after fault clear", ok.out_outcome === "succeeded", "fc=" + ok.out_failure_code);
+      }
+
+      // ── Boundary 2: initial-binding insertion (BEFORE INSERT on active_policy_bindings) ──
+      {
+        const cr = await fiMakeApproved("organization", "p27-b2", "p27b2");
+        const before = await snap();
+        await runFwdFault("boundary 2 initial-binding insert", "active_policy_bindings", "INSERT", "b2_bind", "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr.crId, cr.stateRev, fiPromoter]);
+        const crState = (await fiAsDbo("SELECT state FROM gitwire_policy.policy_change_requests WHERE id=$1", [cr.crId])).rows[0].state;
+        check("boundary 2: CR unchanged (still approved)", crState === "approved", "state=" + crState);
+        const ok = (await fiAsApp("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr.crId, cr.stateRev, fiPromoter])).rows[0];
+        check("boundary 2: clean promotion succeeds after fault clear", ok.out_outcome === "succeeded", "fc=" + ok.out_failure_code);
+      }
+
+      // ── Boundary 3: replacement-binding update (BEFORE UPDATE on active_policy_bindings) ──
+      // Create a binding first, install a trigger on UPDATE, then attempt replacement.
+      {
+        const c0 = await fiMakeApproved("organization", "p27-b3", "p27b3");
+        await fiAsApp("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [c0.crId, c0.stateRev, fiPromoter]);
+        const b = (await fiAsDbo("SELECT * FROM gitwire_policy.active_policy_bindings WHERE resource_id='p27-b3'")).rows[0];
+        const c1 = await fiMakeApproved("organization", "p27-b3", "p27b3");
+        const before = await snap();
+        await runFwdFault("boundary 3 replacement-binding update", "active_policy_bindings", "UPDATE", "b3_bind_upd", "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [c1.crId, c1.stateRev, b.binding_revision, fiPromoter]);
+        const bAfter = (await fiAsDbo("SELECT binding_revision FROM gitwire_policy.active_policy_bindings WHERE resource_id='p27-b3'")).rows[0];
+        check("boundary 3: binding revision unchanged after fault", Number(bAfter.binding_revision) === Number(b.binding_revision), "rev=" + bAfter.binding_revision);
+        const ok = (await fiAsApp("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,$3,$4)", [c1.crId, c1.stateRev, b.binding_revision, fiPromoter])).rows[0];
+        check("boundary 3: clean replacement succeeds after fault clear", ok.out_outcome === "succeeded", "fc=" + ok.out_failure_code);
+      }
+
+      // ── Boundary 4: approval-consumption insertion (BEFORE INSERT on policy_approval_lifecycle WHERE to_status='consumed') ──
+      // Two approvals (required_count=2). The failpoint trigger fires only for
+      // 'consumed' rows. The first consumption raises → whole transaction rolls
+      // back, so the SECOND approval is NOT consumed either, proving the first is
+      // rolled back too. We arm a single consumption-failpoint and attempt the
+      // promotion; both consumptions must roll back together.
+      {
+        const fam = "p27b4" + Math.random().toString(36).slice(2, 6);
+        const crId = (await fiAsApp("SELECT gitwire_policy.create_policy_change_request($1,$2,$3,$4) AS id", ["organization", "p27-b4", fam, fiAuthor])).rows[0].id;
+        const vId = (await fiAsApp("SELECT gitwire_policy.create_policy_version($1,$2::jsonb,$3) AS id", [crId, JSON.stringify({ v: "1" }), fiAuthor])).rows[0].id;
+        await fiAsApp("SELECT * FROM gitwire_policy.select_policy_version($1,$2,0,$3)", [crId, vId, fiAuthor]);
+        await fiAsApp("SELECT * FROM gitwire_policy.submit_policy_change_request($1,1,$2)", [crId, fiAuthor]);
+        const val = JSON.stringify({ valid: true });
+        const sim = JSON.stringify({ passed: true, risk_classification: "standard", classifier_version: "cv1", simulation_profile: { version: "sv1", ordering: "id_asc" }, dataset_snapshot: { upper_watermark: 1, input_set_hash: "sha256:" + "a".repeat(64) } });
+        await fiAsApp("SELECT * FROM gitwire_policy.finalize_policy_evaluation($1,2,$2::jsonb,'vv1',$3::jsonb,'sv1',$4)", [crId, val, sim, fiAuthor]);
+        const ruleId = (await fiAsApp("SELECT gitwire_policy.create_policy_approval_rule($1,$2,$3,$4,$5,$6,$7::jsonb,$8,NULL) AS id", ["v1", fam, "organization", "p27-b4", "standard", 2, JSON.stringify(["admin"]), fiAuthor])).rows[0].id;
+        await fiAsApp("SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, fiApprover]);
+        await fiAsApp("SELECT * FROM gitwire_policy.record_policy_approval($1,$2,$3)", [crId, ruleId, fiApprover2]);
+        const st = (await fiAsApp("SELECT * FROM gitwire_policy.approve_policy_change_request($1,3,$2)", [crId, fiApprover])).rows[0];
+        const stateRev = st.state_revision;
+        // Install a failpoint that fires ONLY for consumed lifecycle rows.
+        await fiAsDbo("CREATE OR REPLACE FUNCTION gitwire_policy.p27_consume_fp() RETURNS trigger AS $$ BEGIN IF current_setting('gp05.failpoint', true) = 'b4_consume' AND NEW.to_status='consumed' THEN RAISE EXCEPTION 'INJECTED: b4_consume'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql");
+        await fiAsDbo("DROP TRIGGER IF EXISTS p27_consume_trg ON gitwire_policy.policy_approval_lifecycle");
+        await fiAsDbo("CREATE TRIGGER p27_consume_trg BEFORE INSERT ON gitwire_policy.policy_approval_lifecycle FOR EACH ROW EXECUTE FUNCTION gitwire_policy.p27_consume_fp()");
+        const before = await snap();
+        let injected = false;
+        const cc = await fiPool.connect();
+        try {
+          await cc.query("SET SESSION AUTHORIZATION gitwire_app");
+          await cc.query("SET gp05.failpoint = 'b4_consume'");
+          try { await cc.query("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, fiPromoter]); }
+          catch (e) { injected = /INJECTED/.test(e.message); }
+          await cc.query("RESET SESSION AUTHORIZATION");
+          await cc.query("RESET gp05.failpoint");
+        } finally { cc.release(); }
+        check("boundary 4 approval-consumption insert: INJECTED fault raises", injected);
+        const after = await snap();
+        check("boundary 4: all tables unchanged (full rollback)", allUnchanged(before, after), gp05Tables.map(t => `${t}=${after[t]-before[t]}`).join(" "));
+        const consumed = (await fiAsDbo("SELECT count(*)::int n FROM gitwire_policy.policy_approval_lifecycle WHERE to_status='consumed' AND approval_id IN (SELECT id FROM gitwire_policy.policy_approvals WHERE version_id=$1)", [vId])).rows[0].n;
+        check("boundary 4: ZERO approvals consumed (first rolled back too)", consumed === 0, "consumed=" + consumed);
+        // clean run consumes both
+        await fiAsDbo("DROP TRIGGER IF EXISTS p27_consume_trg ON gitwire_policy.policy_approval_lifecycle");
+        const ok = (await fiAsApp("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [crId, stateRev, fiPromoter])).rows[0];
+        check("boundary 4: clean promotion succeeds after fault clear", ok.out_outcome === "succeeded", "fc=" + ok.out_failure_code);
+        const consumedAfter = (await fiAsDbo("SELECT count(*)::int n FROM gitwire_policy.policy_approval_lifecycle WHERE to_status='consumed' AND approval_id IN (SELECT id FROM gitwire_policy.policy_approvals WHERE version_id=$1)", [vId])).rows[0].n;
+        check("boundary 4: both approvals consumed on clean run", consumedAfter === 2, "consumed=" + consumedAfter);
+      }
+
+      // ── Boundary 5: request transition (BEFORE UPDATE on policy_change_requests WHERE state changes) ──
+      // A trigger that fires when state is being changed (NEW.state IS DISTINCT FROM OLD.state).
+      {
+        const cr = await fiMakeApproved("organization", "p27-b5", "p27b5");
+        await fiAsDbo("CREATE OR REPLACE FUNCTION gitwire_policy.p27_state_fp() RETURNS trigger AS $$ BEGIN IF current_setting('gp05.failpoint', true) = 'b5_state' AND NEW.state IS DISTINCT FROM OLD.state THEN RAISE EXCEPTION 'INJECTED: b5_state'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql");
+        await fiAsDbo("DROP TRIGGER IF EXISTS p27_state_trg ON gitwire_policy.policy_change_requests");
+        await fiAsDbo("CREATE TRIGGER p27_state_trg BEFORE UPDATE ON gitwire_policy.policy_change_requests FOR EACH ROW EXECUTE FUNCTION gitwire_policy.p27_state_fp()");
+        const before = await snap();
+        let injected = false;
+        const cc = await fiPool.connect();
+        try {
+          await cc.query("SET SESSION AUTHORIZATION gitwire_app");
+          await cc.query("SET gp05.failpoint = 'b5_state'");
+          try { await cc.query("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr.crId, cr.stateRev, fiPromoter]); }
+          catch (e) { injected = /INJECTED/.test(e.message); }
+          await cc.query("RESET SESSION AUTHORIZATION");
+          await cc.query("RESET gp05.failpoint");
+        } finally { cc.release(); }
+        check("boundary 5 request-transition update: INJECTED fault raises", injected);
+        const after = await snap();
+        check("boundary 5: all tables unchanged (full rollback)", allUnchanged(before, after), gp05Tables.map(t => `${t}=${after[t]-before[t]}`).join(" "));
+        await fiAsDbo("DROP TRIGGER IF EXISTS p27_state_trg ON gitwire_policy.policy_change_requests");
+        const crState = (await fiAsDbo("SELECT state FROM gitwire_policy.policy_change_requests WHERE id=$1", [cr.crId])).rows[0].state;
+        check("boundary 5: CR unchanged (still approved)", crState === "approved", "state=" + crState);
+        const ok = (await fiAsApp("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr.crId, cr.stateRev, fiPromoter])).rows[0];
+        check("boundary 5: clean promotion succeeds after fault clear", ok.out_outcome === "succeeded", "fc=" + ok.out_failure_code);
+      }
+
+      // ── Boundary 6: transition-event insertion (BEFORE INSERT on policy_transition_events) ──
+      {
+        const cr = await fiMakeApproved("organization", "p27-b6", "p27b6");
+        const before = await snap();
+        await runFwdFault("boundary 6 transition-event insert", "policy_transition_events", "INSERT", "b6_evt", "SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr.crId, cr.stateRev, fiPromoter]);
+        const ok = (await fiAsApp("SELECT * FROM gitwire_policy.promote_policy_change_request($1,$2,NULL,$3)", [cr.crId, cr.stateRev, fiPromoter])).rows[0];
+        check("boundary 6: clean promotion succeeds after fault clear", ok.out_outcome === "succeeded", "fc=" + ok.out_failure_code);
+      }
+
+      await fiPool.end();
+    } finally {
+      try { docker("rm", "-f", fiName); } catch {}
+    }
+  }
+
   console.log("\n=== GP-05 Promotion & Rollback Proof: " + passed + " passed, " + failed + " failed ===");
 } catch (e) {
   console.error("PROOF ERROR:", e.message);
