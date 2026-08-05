@@ -1,8 +1,7 @@
-// tests/integration/gp05-service-e2e.test.js
-// GP-05 service-layer integration tests.
+// tests/unit/gp05-service-contract.test.js
+// GP-05 service-layer contract tests (mocked DB).
 // Verifies the service functions call the correct SECURITY DEFINER SQL functions
-// with the right parameters, and that exact-key whitelists are enforced.
-// Uses jest.unstable_mockModule for db + logger (same pattern as gp04-service-e2e).
+// with the right parameters. Uses jest.unstable_mockModule for db + logger.
 
 import { jest } from "@jest/globals";
 
