@@ -95,15 +95,26 @@ function extractBlockingFindings(report) {
     const advisories = [];
 
     for (const v of viaList) {
-      if (v && typeof v === "object" && v.url) {
-        // Direct advisory object — validate canonical identity fields.
-        if (typeof v.severity !== "string" || v.severity.length === 0) {
+      if (typeof v === "string") {
+        // String reference to another package — recursively resolve.
+        const refEntry = vulns[v];
+        if (!refEntry) {
+          fail(`blocking finding for '${pkgName}' references '${v}' which is absent from the audit report — cannot resolve to a stable advisory identity`);
+        }
+        const subAdvisories = resolveAdvisories(v, refEntry, new Set(visited));
+        advisories.push(...subAdvisories);
+      } else if (v && typeof v === "object" && !Array.isArray(v)) {
+        // Advisory object — validate ALL canonical identity fields before use.
+        if (typeof v.url !== "string" || v.url.trim().length === 0) {
+          fail(`advisory for '${pkgName}' has no exact URL`);
+        }
+        if (typeof v.severity !== "string" || v.severity.trim().length === 0) {
           fail(`advisory for '${pkgName}' has no exact severity`);
         }
-        if (typeof v.range !== "string" || v.range.length === 0) {
+        if (typeof v.range !== "string" || v.range.trim().length === 0) {
           fail(`advisory for '${pkgName}' has no exact affected range`);
         }
-        if (typeof v.name === "string" && v.name.length > 0 && v.name !== pkgName) {
+        if (typeof v.name === "string" && v.name.trim().length > 0 && v.name !== pkgName) {
           fail(`advisory package identity '${v.name}' conflicts with vulnerability entry '${pkgName}'`);
         }
         advisories.push({
@@ -112,14 +123,9 @@ function extractBlockingFindings(report) {
           range: v.range,
           pkg: pkgName,
         });
-      } else if (typeof v === "string") {
-        // String reference to another package — recursively resolve.
-        const refEntry = vulns[v];
-        if (!refEntry) {
-          fail(`blocking finding for '${pkgName}' references '${v}' which is absent from the audit report — cannot resolve to a stable advisory identity`);
-        }
-        const subAdvisories = resolveAdvisories(v, refEntry, new Set(visited));
-        advisories.push(...subAdvisories);
+      } else {
+        // Unsupported via element — fail closed.
+        fail(`unsupported via entry for '${pkgName}'`);
       }
     }
 

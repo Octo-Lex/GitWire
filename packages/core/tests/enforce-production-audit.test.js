@@ -492,3 +492,121 @@ describe("enforce-production-audit: meta-vulnerability traversal", () => {
     expect(r.stderr).not.toContain("10.0.0");
   });
 });
+
+// ── Malformed via entry tests ──────────────────────────────────────────────
+
+describe("enforce-production-audit: malformed via entries", () => {
+  it("fails closed on advisory object without url", () => {
+    const noUrl = reportWithFinding({ severity: "high" });
+    delete noUrl.vulnerabilities["vuln-pkg"].via[0].url;
+    const r = runEvaluator(noUrl, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("no exact URL");
+  });
+
+  it("fails closed on advisory object with empty url", () => {
+    const emptyUrl = reportWithFinding({ severity: "high" });
+    emptyUrl.vulnerabilities["vuln-pkg"].via[0].url = "";
+    const r = runEvaluator(emptyUrl, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("no exact URL");
+  });
+
+  it("fails closed on advisory object with whitespace-only url", () => {
+    const wsUrl = reportWithFinding({ severity: "high" });
+    wsUrl.vulnerabilities["vuln-pkg"].via[0].url = "   ";
+    const r = runEvaluator(wsUrl, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("no exact URL");
+  });
+
+  it("fails closed on unsupported via entry (null)", () => {
+    const nullVia = {
+      auditReportVersion: 2,
+      vulnerabilities: {
+        "bad-pkg": {
+          name: "bad-pkg", severity: "high", isDirect: true,
+          via: [null], effects: [], range: "1.0.0", nodes: [], fixAvailable: true,
+        },
+      },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 1, critical: 0, total: 1 }, dependencies: { prod: 10, dev: 0, optional: 0, peer: 0, peerOptional: 0, total: 10 } },
+    };
+    const r = runEvaluator(nullVia, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("unsupported via entry");
+  });
+
+  it("fails closed on unsupported via entry (number)", () => {
+    const numVia = {
+      auditReportVersion: 2,
+      vulnerabilities: {
+        "bad-pkg": {
+          name: "bad-pkg", severity: "high", isDirect: true,
+          via: [42], effects: [], range: "1.0.0", nodes: [], fixAvailable: true,
+        },
+      },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 1, critical: 0, total: 1 }, dependencies: { prod: 10, dev: 0, optional: 0, peer: 0, peerOptional: 0, total: 10 } },
+    };
+    const r = runEvaluator(numVia, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("unsupported via entry");
+  });
+
+  it("fails closed on unsupported via entry (array)", () => {
+    const arrVia = {
+      auditReportVersion: 2,
+      vulnerabilities: {
+        "bad-pkg": {
+          name: "bad-pkg", severity: "high", isDirect: true,
+          via: [["nested"]], effects: [], range: "1.0.0", nodes: [], fixAvailable: true,
+        },
+      },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 1, critical: 0, total: 1 }, dependencies: { prod: 10, dev: 0, optional: 0, peer: 0, peerOptional: 0, total: 10 } },
+    };
+    const r = runEvaluator(arrVia, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("unsupported via entry");
+  });
+
+  it("does not ignore malformed object when another string reference resolves and is excepted", () => {
+    // Key regression test: a blocking package has BOTH a malformed advisory
+    // object (no url) AND a string reference to a valid advisory-bearing
+    // package that IS covered by an exact exception. The evaluator must FAIL
+    // because the malformed object cannot be silently discarded.
+    const mixedMalformed = {
+      auditReportVersion: 2,
+      vulnerabilities: {
+        "pkg-a": {
+          name: "pkg-a", severity: "high", isDirect: true,
+          via: [
+            { severity: "high", range: ">=1 <2" }, // malformed: missing url
+            "pkg-b",
+          ],
+          effects: [], range: "1.0.0", nodes: [], fixAvailable: true,
+        },
+        "pkg-b": {
+          name: "pkg-b", severity: "high", isDirect: false,
+          via: [{ source: 1, name: "pkg-b", dependency: "pkg-b", title: "valid", url: GHSA, severity: "high", range: ">=1.0.0 <2.0.0" }],
+          effects: ["pkg-a"], range: "2.0.0", nodes: [], fixAvailable: true,
+        },
+      },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 2, critical: 0, total: 2 }, dependencies: { prod: 10, dev: 0, optional: 0, peer: 0, peerOptional: 0, total: 10 } },
+    };
+    // Exception covers the valid referenced advisory — but the evaluator
+    // must still fail because of the malformed object in pkg-a's via list.
+    const r = runEvaluator(
+      mixedMalformed,
+      registryWith({
+        advisory: GHSA,
+        package: "pkg-b",
+        range: ">=1.0.0 <2.0.0",
+        expires: FAR_FUTURE,
+        justification: "test exception for valid ref",
+        owner: "test-owner",
+        tracking_issue: "https://github.com/Octo-Lex/GitWire/issues/116",
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("no exact URL");
+  });
+});
