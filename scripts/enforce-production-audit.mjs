@@ -96,12 +96,21 @@ function extractBlockingFindings(report) {
 
     for (const v of viaList) {
       if (v && typeof v === "object" && v.url) {
-        // Direct advisory object — collect it with the advisory-bearing package.
+        // Direct advisory object — validate canonical identity fields.
+        if (typeof v.severity !== "string" || v.severity.length === 0) {
+          fail(`advisory for '${pkgName}' has no exact severity`);
+        }
+        if (typeof v.range !== "string" || v.range.length === 0) {
+          fail(`advisory for '${pkgName}' has no exact affected range`);
+        }
+        if (typeof v.name === "string" && v.name.length > 0 && v.name !== pkgName) {
+          fail(`advisory package identity '${v.name}' conflicts with vulnerability entry '${pkgName}'`);
+        }
         advisories.push({
           url: v.url,
           severity: v.severity,
           range: v.range,
-          pkg: v.name || pkgName,
+          pkg: pkgName,
         });
       } else if (typeof v === "string") {
         // String reference to another package — recursively resolve.
@@ -138,7 +147,7 @@ function extractBlockingFindings(report) {
       const finding = {
         advisory: adv.url,
         pkg: adv.pkg,
-        range: adv.range || entry.range || "*",
+        range: adv.range,
         severity: adv.severity,
       };
 

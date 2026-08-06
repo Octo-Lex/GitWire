@@ -458,4 +458,37 @@ describe("enforce-production-audit: meta-vulnerability traversal", () => {
     expect(r.stderr).toContain(GHSA);
     expect(r.stderr).toContain("vuln-pkg");
   });
+
+  it("fails closed when advisory object has no range", () => {
+    const noRange = reportWithFinding({ severity: "high" });
+    delete noRange.vulnerabilities["vuln-pkg"].via[0].range;
+    const r = runEvaluator(noRange, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("no exact affected range");
+  });
+
+  it("fails closed when advisory object has empty range", () => {
+    const emptyRange = reportWithFinding({ severity: "high" });
+    emptyRange.vulnerabilities["vuln-pkg"].via[0].range = "";
+    const r = runEvaluator(emptyRange, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("no exact affected range");
+  });
+
+  it("fails closed when advisory name conflicts with vulnerability entry key", () => {
+    const conflict = reportWithFinding({ severity: "high", pkg: "vuln-pkg" });
+    conflict.vulnerabilities["vuln-pkg"].via[0].name = "different-pkg";
+    const r = runEvaluator(conflict, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain("conflicts with vulnerability entry");
+  });
+
+  it("uses the advisory-bearing entry's range, never the meta-package range", () => {
+    // minimatch's own range is "10.0.0 || 10.0.2" but brace-expansion's
+    // advisory range is ">=4.0.0 <5.0.9". The finding must use the latter.
+    const r = runEvaluator(META_FIXTURE, emptyRegistry());
+    expect(r.ok).toBe(false);
+    expect(r.stderr).toContain(">=4.0.0 <5.0.9");
+    expect(r.stderr).not.toContain("10.0.0");
+  });
 });
