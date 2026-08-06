@@ -65,40 +65,110 @@ function readJson(file, label) {
 /**
  * Extract blocking advisory findings from an npm audit v2 report.
  * Each finding is { advisory, package, range, severity }.
- * Advisory identity is the GHSA url (stable). Meta-vulnerabilities (via is a
- * string referencing another package) are resolved to their underlying advisory
- * url when traversable; if a blocking finding cannot be assigned a stable
- * advisory identity, the evaluator fails (unknown identity).
+ *
+ * Meta-vulnerabilities (via contains string references to other packages) are
+ * resolved by recursively following those references to entries that contain
+ * advisory objects. The canonical identity uses the advisory-bearing package
+ * (e.g. brace-expansion), not the meta-package (e.g. minimatch).
+ *
+ * Safety properties:
+ *   - String references to absent entries fail closed (unresolved reference).
+ *   - Cyclic reference chains that never reach an advisory fail closed.
+ *   - A blocking entry that resolves to no blocking advisory remains blocking.
  */
 function extractBlockingFindings(report) {
   const findings = [];
   const vulns = report.vulnerabilities || {};
 
+  /**
+   * Recursively resolve advisory objects from a package's via list.
+   * Follows string references to other vulnerability entries.
+   * Returns an array of { url, severity, range, pkg } advisory objects.
+   */
+  function resolveAdvisories(pkgName, entry, visited) {
+    if (visited.has(pkgName)) {
+      fail(`cyclic meta-vulnerability reference chain detected at '${pkgName}' — cannot resolve to a stable advisory identity`);
+    }
+    visited.add(pkgName);
+
+    const viaList = Array.isArray(entry.via) ? entry.via : [];
+    const advisories = [];
+
+    for (const v of viaList) {
+      if (typeof v === "string") {
+        // String reference to another package — recursively resolve.
+        const refEntry = vulns[v];
+        if (!refEntry) {
+          fail(`blocking finding for '${pkgName}' references '${v}' which is absent from the audit report — cannot resolve to a stable advisory identity`);
+        }
+        const subAdvisories = resolveAdvisories(v, refEntry, new Set(visited));
+        advisories.push(...subAdvisories);
+      } else if (v && typeof v === "object" && !Array.isArray(v)) {
+        // Advisory object — validate ALL canonical identity fields before use.
+        if (typeof v.url !== "string" || v.url.trim().length === 0) {
+          fail(`advisory for '${pkgName}' has no exact URL`);
+        }
+        if (typeof v.severity !== "string" || v.severity.trim().length === 0) {
+          fail(`advisory for '${pkgName}' has no exact severity`);
+        }
+        if (typeof v.range !== "string" || v.range.trim().length === 0) {
+          fail(`advisory for '${pkgName}' has no exact affected range`);
+        }
+        if (typeof v.name === "string" && v.name.trim().length > 0 && v.name !== pkgName) {
+          fail(`advisory package identity '${v.name}' conflicts with vulnerability entry '${pkgName}'`);
+        }
+        advisories.push({
+          url: v.url,
+          severity: v.severity,
+          range: v.range,
+          pkg: pkgName,
+        });
+      } else {
+        // Unsupported via element — fail closed.
+        fail(`unsupported via entry for '${pkgName}'`);
+      }
+    }
+
+    return advisories;
+  }
+
+  const seenKeys = new Set();
+
   for (const [pkgName, entry] of Object.entries(vulns)) {
     if (!BLOCKING_SEVERITIES.has(entry.severity)) continue;
 
-    const viaList = Array.isArray(entry.via) ? entry.via : [];
+    const advisories = resolveAdvisories(pkgName, entry, new Set());
 
-    // Collect advisory objects from via. String entries are meta-vuln refs to
-    // other packages; we only act on advisory-object entries here.
-    const advisoryObjs = viaList.filter((v) => v && typeof v === "object" && v.url);
-
-    if (advisoryObjs.length === 0) {
-      // A high/critical finding with no advisory-object url — we cannot assign
-      // a stable identity. Fail rather than silently skip.
-      fail(`blocking finding for '${pkgName}' (severity=${entry.severity}) has no advisory url — cannot assign a stable identity for exception matching`);
+    if (advisories.length === 0) {
+      // A high/critical finding with no resolvable advisory — fail closed.
+      fail(`blocking finding for '${pkgName}' (severity=${entry.severity}) resolves to no advisory object — cannot assign a stable identity for exception matching`);
     }
 
-    for (const adv of advisoryObjs) {
-      // Only consider advisories whose own severity is blocking. A high
-      // package entry may chain through a moderate advisory.
+    let foundBlocking = false;
+    for (const adv of advisories) {
+      // Only consider advisories whose own severity is blocking.
       if (!BLOCKING_SEVERITIES.has(adv.severity)) continue;
-      findings.push({
+      foundBlocking = true;
+
+      const finding = {
         advisory: adv.url,
-        pkg: pkgName,
-        range: adv.range || entry.range || "*",
+        pkg: adv.pkg,
+        range: adv.range,
         severity: adv.severity,
-      });
+      };
+
+      // Deduplicate by advisory URL | advisory-bearing package | range.
+      const key = `${finding.advisory}|${finding.pkg}|${finding.range}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        findings.push(finding);
+      }
+    }
+
+    // If the entry is blocking but none of its resolved advisories are blocking,
+    // it must remain blocking — fail closed.
+    if (!foundBlocking) {
+      fail(`blocking finding for '${pkgName}' (severity=${entry.severity}) resolves to no blocking advisory — cannot assign a stable identity for exception matching`);
     }
   }
   return findings;
