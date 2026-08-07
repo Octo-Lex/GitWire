@@ -14,6 +14,7 @@
 import { Router } from "express";
 import { triageQueue } from "../lib/queue.js";
 import { logger } from "../lib/logger.js";
+import { authorize } from "../services/auth/authorize.js";
 import { logDecision } from "../services/decisionLogService.js";
 import {
   getTriageStatusSummary,
@@ -107,6 +108,28 @@ triageOperationsRouter.post("/failures/:jobId/retry", async (req, res, next) => 
     const target = isPR ? payload.pull_request : payload.issue;
     if (!repository || !target) {
       return res.status(422).json({ error: "Unusable historical payload — missing repository or target" });
+    }
+
+    // Enforce repository-scoped authorization before allowing the retry.
+    // authContext is observe-only (Wave 2); the central authorize() service
+    // is the gate. Requires server-owned installationId + repositoryId.
+    if (!repository.id || !payload.installation?.id) {
+      return res.status(422).json({ error: "Unusable historical payload — missing authoritative installation or repository IDs for authorization" });
+    }
+    const decision = await authorize({
+      principal: req.auth,
+      permission: "issue:update",
+      resource: {
+        type: "repository",
+        installationId: payload.installation.id,
+        repositoryId: repository.id,
+      },
+    });
+    if (!decision.allowed) {
+      return res.status(403).json({
+        error: "Forbidden",
+        code: decision.code,
+      });
     }
 
     const operationKey = buildTriageOperationKey({

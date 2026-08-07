@@ -30,6 +30,7 @@ function makeFailedJob(overrides = {}) {
     data: {
       payload: overrides.payload ?? {
         action: "opened",
+        installation: { id: 11111 },
         repository: { id: 999, full_name: "org/repo" },
         issue: { id: 555, number: 42 },
       },
@@ -69,6 +70,14 @@ await jest.unstable_mockModule("../../src/lib/db.js", () => ({
 const mockLogDecision = jest.fn().mockResolvedValue(undefined);
 await jest.unstable_mockModule("../../src/services/decisionLogService.js", () => ({
   logDecision: mockLogDecision,
+}));
+
+// authorize mock — default allow, toggle per-test to simulate deny
+const mockAuthorize = jest.fn().mockResolvedValue({
+  allowed: true, code: "permission_granted", principalId: "test-principal-uuid",
+});
+await jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
+  authorize: mockAuthorize,
 }));
 
 // isOperationComplete mock — default false (not complete), toggle per-test
@@ -113,6 +122,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockIsOperationComplete.mockResolvedValue(false);
   mockLogDecision.mockResolvedValue(undefined);
+  mockAuthorize.mockResolvedValue({ allowed: true, code: "permission_granted", principalId: "test-principal-uuid" });
   triageQueue.getFailed.mockImplementation(async () => [...mockFailedJobs]);
   triageQueue.getActive.mockImplementation(async () => [...mockActiveJobs]);
   triageQueue.getWaiting.mockImplementation(async () => [...mockWaitingJobs]);
@@ -305,6 +315,38 @@ describe("POST /api/triage/failures/:jobId/retry", () => {
     const app = buildApp();
     const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "" });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("denies retry when authorize() rejects → 403", async () => {
+    const job = makeFailedJob();
+    mockAuthorize.mockResolvedValue({ allowed: false, code: "permission_missing" });
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "valid reason" });
+    expect(res.statusCode).toBe(403);
+    expect(job.retry).not.toHaveBeenCalled();
+  });
+
+  it("returns 422 when payload lacks authoritative installation/repository IDs", async () => {
+    const job = {
+      id: "666",
+      name: "triage-issue",
+      queueName: "triage",
+      failedReason: "error",
+      finishedOn: Date.now(),
+      data: {
+        payload: {
+          action: "opened",
+          repository: { id: 999, full_name: "org/repo" },
+          issue: { id: 555, number: 42 },
+        },
+      },
+      retry: jest.fn(),
+    };
+    mockJobMap.set("666", job);
+
+    const app = buildApp();
+    const res = await supertest(app).post("/api/triage/failures/666/retry").send({ reason: "valid reason" });
+    expect(res.statusCode).toBe(422);
   });
 });
 
