@@ -36,12 +36,14 @@ import { rolloutRouter }        from "./routes/rollouts.js";
 import setupRouter               from "./routes/setup.js";
 import repairsRouter              from "./routes/repairs.js";
 import bootstrapRouter            from "./routes/bootstrap.js";
+import { triageOperationsRouter }  from "./routes/triageOperations.js";
 import { apiKeyAuth }           from "./middleware/auth.js";
 import { authContext }          from "./middleware/authContext.js";
 import { routeAuthObserver }    from "./middleware/routeAuthObserver.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
 import { getDeploymentInfo } from "./lib/deploymentInfo.js";
+import { getTriageHealthBlock } from "./services/triageStatusService.js";
 import { db } from "./lib/db.js";
 import { config } from "../config/index.js";
 
@@ -110,8 +112,8 @@ export function createApp() {
     // Health is anonymous (before apiKeyAuth) and must never crash the server.
     // HTTP stays 200 (liveness-safe: a process that can answer at all is alive),
     // but the body `status` reflects deployment health:
-    //   - "ok"       when db_migration_status === "current"
-    //   - "degraded" when migrations are behind/unknown (drift or DB unreadable)
+    //   - "ok"       when db_migration_status === "current" AND no workflow degraded
+    //   - "degraded" when migrations are behind/unknown OR triage has failures
     // This lets load balancers treat 200 as "up" while operators and CI can
     // detect drift from the body without a separate endpoint.
     let deployment = {};
@@ -122,10 +124,27 @@ export function createApp() {
     }
     const deploymentStatus =
       deployment.db_migration_status === "current" ? "ok" : "degraded";
+
+    // Triage workflow summary — coarse, anonymous-safe, time-bounded.
+    // Never exposes repository names, issue numbers, or error strings.
+    let triageBlock = { status: "unknown", failed_count: 0, oldest_failure_at: null };
+    try {
+      triageBlock = await getTriageHealthBlock({ timeoutMs: 2000 });
+    } catch (err) {
+      logger.warn({ err: err.message }, "/health: triage status read failed");
+    }
+
+    // Top-level status degrades on either deployment OR triage signals
+    const overallStatus =
+      deploymentStatus === "degraded" || triageBlock.status === "degraded" || triageBlock.status === "unknown"
+        ? "degraded"
+        : "ok";
+
     res.json({
-      status: deploymentStatus,
+      status: overallStatus,
       service: "gitwire",
       ts: new Date().toISOString(),
+      workflows: { triage: triageBlock },
       ...deployment,
     });
   });
@@ -165,6 +184,9 @@ export function createApp() {
   app.use("/api/webhooks/deliveries", webhookDeliveriesRouter);
   app.use("/api/actions",            actionsRouter);
   app.use("/api/repos",              transfersRouter);
+
+  // ── Triage failure visibility + safe retry (Commit 3) ────────────────────
+  app.use("/api/triage",            triageOperationsRouter);
 
   // ── GitHub API resilience: cache + rate limits + cooldowns ────────────
   app.use("/api/github-relay",      githubRelayRouter);
