@@ -19,6 +19,11 @@ import { jest } from "@jest/globals";
 
 // ── Mock state ──────────────────────────────────────────────────────────────
 const mockCheckAndMark = jest.fn();
+const mockBeginOperation = jest.fn();
+const mockCompleteOperation = jest.fn();
+const mockAbandonOperation = jest.fn();
+const mockBuildTriageOperationKey = jest.fn(({ targetType, repoId, targetId, action }) =>
+  `repo:${repoId}:${targetType}:${targetId}:${action}`);
 const mockGetConfigForRepo = jest.fn();
 const mockIsWaived = jest.fn();
 const mockLogDecision = jest.fn();
@@ -51,7 +56,32 @@ await jest.unstable_mockModule("../../src/lib/logger.js", () => ({
 }));
 
 await jest.unstable_mockModule("../../src/lib/db.js", () => ({
-  db: { query: jest.fn() },
+  db: { query: jest.fn(async () => ({ rows: [] })) },
+}));
+
+await jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
+  authorize: jest.fn().mockResolvedValue({
+    allowed: true, code: "permission_granted", principalId: "inst-principal-uuid",
+    permission: "issue:update", resource: { type: "repository" },
+    matchedAssignmentId: null, matchedScopeType: null, policyVersion: "level1",
+    authenticationMethod: "webhook_hmac", detail: null,
+  }),
+}));
+
+await jest.unstable_mockModule("../../src/services/auth/decisionLog.js", () => ({
+  logDecision: jest.fn().mockResolvedValue(undefined),
+  countRecentDisagreements: jest.fn().mockResolvedValue(0),
+}));
+
+await jest.unstable_mockModule("../../src/services/auth/principalResolver.js", () => ({
+  getInstallationPrincipal: jest.fn().mockResolvedValue({
+    id: "inst-principal-uuid", principal_type: "installation",
+    display_name: "test-inst", status: "active", auth_epoch: 0,
+    github_user_id: null, installation_id: 11111,
+  }),
+  getSystemPrincipal: jest.fn().mockResolvedValue(null),
+  getPrincipalById: jest.fn().mockResolvedValue(null),
+  principalValidityCode: jest.fn(() => "valid"),
 }));
 
 await jest.unstable_mockModule("../../src/lib/queue.js", () => ({
@@ -70,6 +100,10 @@ await jest.unstable_mockModule("../../src/lib/githubWrapper.js", () => ({
 
 await jest.unstable_mockModule("../../src/services/idempotencyService.js", () => ({
   checkAndMark: mockCheckAndMark,
+  beginOperation: mockBeginOperation,
+  completeOperation: mockCompleteOperation,
+  abandonOperation: mockAbandonOperation,
+  buildTriageOperationKey: mockBuildTriageOperationKey,
 }));
 
 await jest.unstable_mockModule("../../src/services/configService.js", () => ({
@@ -138,6 +172,9 @@ function buildPayload(overrides = {}) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockCheckAndMark.mockResolvedValue(true);
+  mockBeginOperation.mockResolvedValue({ acquired: true, alreadyComplete: false, token: "lease-token" });
+  mockCompleteOperation.mockResolvedValue(true);
+  mockAbandonOperation.mockResolvedValue(true);
   mockGetConfigForRepo.mockResolvedValue({});
   mockIsWaived.mockResolvedValue(null);
   mockAnthropicCreate.mockResolvedValue({
@@ -153,31 +190,51 @@ beforeEach(() => {
   mockExecute.mockResolvedValue({});
   mockSucceed.mockResolvedValue({});
   mockFail.mockResolvedValue({});
+  mockNotifyTriage.mockResolvedValue(null);
 });
 
 describe("PR Triage Behavior Tests", () => {
 
-  // ── Guard 1: Idempotency ──────────────────────────────────────────────────
-  describe("Guard 1: Idempotency", () => {
-    it("skips duplicate PR event — no Anthropic call, no mutation", async () => {
-      // When checkAndMark returns false, the event was already processed
-      mockCheckAndMark.mockResolvedValue(false);
+  // ── Guard 1: Success-bound idempotency lifecycle ──────────────────────────
+  describe("Guard 1: Idempotency lifecycle", () => {
+    it("skips duplicate PR event — lease not acquired, no Anthropic call", async () => {
+      // When beginOperation returns acquired:false, the event is already
+      // being processed or has already completed.
+      mockBeginOperation.mockResolvedValue({ acquired: false, alreadyComplete: false, token: null });
 
-      const result = await mockCheckAndMark("triage", "pr-42-opened");
-      expect(result).toBe(false);
+      const { triagePR } = await import("../../src/workers/triageWorker.js");
+      await triagePR(buildPayload());
 
-      // Verify that in the duplicate case, no downstream services are called.
-      // The triagePR function returns immediately when checkAndMark is false,
-      // so none of these should have been called during this test.
+      // Verify no downstream services are called when the lease is not acquired.
       expect(mockAnthropicCreate).not.toHaveBeenCalled();
       expect(mockLogDecision).not.toHaveBeenCalled();
       expect(mockPropose).not.toHaveBeenCalled();
     });
 
-    it("processes first PR event — checkAndMark returns true", async () => {
-      mockCheckAndMark.mockResolvedValue(true);
-      const result = await mockCheckAndMark("triage", "pr-42-opened");
-      expect(result).toBe(true);
+    it("skips already-complete PR event as a safe no-op", async () => {
+      mockBeginOperation.mockResolvedValue({ acquired: false, alreadyComplete: true, token: null });
+
+      const { triagePR } = await import("../../src/workers/triageWorker.js");
+      await triagePR(buildPayload());
+
+      expect(mockAnthropicCreate).not.toHaveBeenCalled();
+      expect(mockPropose).not.toHaveBeenCalled();
+    });
+
+    it("processes first PR event — lease acquired", async () => {
+      // Default mock: beginOperation returns acquired:true
+      mockBeginOperation.mockResolvedValue({ acquired: true, alreadyComplete: false, token: "t1" });
+      // Provide a working Octokit mock so the worker reaches the LLM call.
+      mockGetInstallationClient.mockResolvedValue({
+        request: jest.fn().mockResolvedValue({ data: [{ name: "size/S" }] }),
+      });
+
+      const { triagePR } = await import("../../src/workers/triageWorker.js");
+      await triagePR(buildPayload());
+
+      // The worker should have called the LLM and the action lifecycle.
+      expect(mockAnthropicCreate).toHaveBeenCalled();
+      expect(mockCompleteOperation).toHaveBeenCalledWith("triage", expect.any(String), "t1");
     });
   });
 

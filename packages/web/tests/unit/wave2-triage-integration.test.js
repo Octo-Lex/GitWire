@@ -49,7 +49,14 @@ jest.unstable_mockModule("../../src/services/issueService.js", () => ({ issueSer
 jest.unstable_mockModule("../../src/services/duplicateDetectionService.js", () => ({
   detectDuplicates: jest.fn(), backfillEmbeddings: jest.fn(),
 }));
-jest.unstable_mockModule("../../src/services/idempotencyService.js", () => ({ checkAndMark: jest.fn().mockResolvedValue(true) }));
+jest.unstable_mockModule("../../src/services/idempotencyService.js", () => ({
+  checkAndMark: jest.fn().mockResolvedValue(true),
+  beginOperation: jest.fn().mockResolvedValue({ acquired: true, alreadyComplete: false, token: "test-token" }),
+  completeOperation: jest.fn().mockResolvedValue(true),
+  abandonOperation: jest.fn().mockResolvedValue(true),
+  buildTriageOperationKey: jest.fn(({ targetType, repoId, targetId, action }) =>
+    `repo:${repoId}:${targetType}:${targetId}:${action}`),
+}));
 jest.unstable_mockModule("../../src/services/waiverService.js", () => ({ isWaived: jest.fn().mockResolvedValue(null) }));
 jest.unstable_mockModule("../../src/services/telegramNotifyService.js", () => ({ notifyTriage: jest.fn().mockResolvedValue(null) }));
 jest.unstable_mockModule("../../src/services/actionStateMachine.js", () => ({

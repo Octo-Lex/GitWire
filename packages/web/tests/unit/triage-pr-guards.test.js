@@ -26,8 +26,11 @@ describe("PR Triage Guard Pipeline (regression)", () => {
   const source = readSource("packages/web/src/workers/triageWorker.js");
   const triagePR = extractFunction(source, "async function triagePR", "// ── Prompt builders");
 
-  it("has idempotency guard (checkAndMark)", () => {
-    expect(triagePR).toMatch(/checkAndMark/);
+  it("has success-bound idempotency lifecycle (begin/complete/abandon)", () => {
+    expect(triagePR).toMatch(/beginOperation/);
+    expect(triagePR).toMatch(/completeOperation/);
+    expect(triagePR).toMatch(/abandonOperation/);
+    expect(triagePR).toMatch(/buildTriageOperationKey/);
   });
 
   it("has pillar enabled check (isPillarEnabled)", () => {

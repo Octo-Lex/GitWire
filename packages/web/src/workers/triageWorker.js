@@ -15,6 +15,12 @@ import { logger } from "../lib/logger.js";
 // recordAction deprecated — all actions go through actionStateMachine
 import { logDecision } from "../services/decisionLogService.js";
 import { checkAndMark } from "../services/idempotencyService.js";
+import {
+  beginOperation,
+  completeOperation,
+  abandonOperation,
+  buildTriageOperationKey,
+} from "../services/idempotencyService.js";
 import { isWaived } from "../services/waiverService.js";
 import { notifyTriage } from "../services/telegramNotifyService.js";
 import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
@@ -60,232 +66,264 @@ async function triageIssue({ payload }) {
 
   logger.info({ repo: repository?.full_name, issue: issue.number }, "Triaging issue");
 
-  // ── Idempotency: skip duplicate triage ──────────────────────────────────
-  if (!(await checkAndMark("triage", "issue-" + issue.number + "-" + payload.action))) {
-    return;
-  }
-
-  // ── Check .gitwire.yml pillar config ────────────────────────────────────
-  const repoConfig = await getConfigForRepo(repository.full_name);
-  if (!isPillarEnabled("triage", repoConfig)) {
-    logger.info({ repo: repository.full_name, issue: issue.number }, "Triage disabled for repo — skipping");
-    await logDecision({
-      repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
-      targetType: "issue", targetNumber: issue.number, pillar: "triage",
-      decision: "skipped", reason: "Pillar triage disabled in config",
-      conditions: [{ check: "pillar_enabled(triage)", result: false }],
-      principalId,
-    });
-    return;
-  }
-
-  // ── Trigger filter: author ─────────────────────────────────────────────
-  if (!shouldTrigger("triage", { author: issue.user?.login }, repoConfig)) {
-    logger.info({ issue: issue.number, author: issue.user?.login }, "Trigger filter: triage skipped for author");
-    await logDecision({
-      repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
-      targetType: "issue", targetNumber: issue.number, pillar: "triage",
-      decision: "skipped", reason: "Trigger filter: author ignored",
-      conditions: [{ check: "trigger_filter(triage)", result: false, author: issue.user?.login }],
-      principalId,
-    });
-    return;
-  }
-
-  // ── Policy waiver check ──────────────────────────────────────────────
-  const waiver = await isWaived({ repoId: repository.id, pillar: "triage" });
-  if (waiver) {
-    logger.info({ issue: issue.number, waiverId: waiver.id }, "Policy waived — skipping triage");
-    await logDecision({
-      repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
-      targetType: "issue", targetNumber: issue.number, pillar: "triage",
-      decision: "skipped",
-      reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
-      conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
-      principalId,
-    });
-    return;
-  }
-
-  let octokit;
-  try {
-    octokit = wrapOctokit(await getInstallationClient(installation.id));
-  } catch (err) {
-    logger.error({ err, installationId: installation.id }, "Failed to get installation client");
-    return;
-  }
-
-  if (!octokit?.request) {
-    logger.error({ installationId: installation.id }, "Invalid Octokit client — check GitHub App credentials");
-    return;
-  }
-
-  // Fetch existing labels for this repo so Claude can choose from them
-  const { data: repoLabels } = await octokit.request('GET /repos/{owner}/{repo}/labels', {
-    owner: repository.owner.login,
-    repo:  repository.name,
-    per_page: 100,
+  // ── Success-bound idempotency lifecycle ─────────────────────────────────
+  // The operation key is repository-scoped to prevent cross-repo collisions
+  // on shared issue numbers. The complete marker is written only on full
+  // success; failures release the active lease so retries can proceed.
+  const operationKey = buildTriageOperationKey({
+    targetType: "issue",
+    repoId: repository.id,
+    targetId: issue.id ?? issue.number,
+    action: payload.action || "opened",
   });
 
-  const labelNames = repoLabels.map((l) => l.name);
-
-  // ── Ask Claude to classify the issue ──────────────────────────────────────
-  const prompt = buildIssueTriagePrompt(issue, labelNames);
-  const message = await anthropic.messages.create({
-    model:      "claude-sonnet-4-20250514",
-    max_tokens: 512,
-    messages:   [{ role: "user", content: prompt }],
-    system:
-      "You are a GitHub triage assistant. Respond only with valid JSON matching the schema in the user prompt. No explanation, no markdown.",
-  });
-
-  let classification;
-  try {
-    let raw = message.content[0].text.trim();
-    // Strip markdown code fences if Claude wrapped the JSON
-    if (raw.startsWith('```')) {
-      raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-    }
-    classification = JSON.parse(raw);
-  } catch (err) {
-    logger.error({ err, raw: message.content[0].text }, "Failed to parse Claude triage response");
-    return;
-  }
-
-  logger.info({ issue: issue.number, classification }, "Issue classified");
-
-  // ── Apply labels ──────────────────────────────────────────────────────────
-  const triageOpts = repoConfig.pillars?.triage || {};
-  const labelsToApply = classification.labels.filter((l) =>
-    labelNames.includes(l)
-  );
-
-  if (labelsToApply.length > 0 && triageOpts.auto_label !== false) {
-    if (isDryRun(repoConfig)) {
-      logger.info({ issue: issue.number, labels: labelsToApply }, "DRY RUN: would apply labels");
+  const lease = await beginOperation("triage", operationKey);
+  if (!lease.acquired) {
+    if (lease.alreadyComplete) {
+      logger.info({ repo: repository.full_name, issue: issue.number }, "Triage already complete — safe no-op");
     } else {
-      // Propose + approve the labeling action
-      const action = await propose({
-        repoFullName: repository.full_name,
-        pillar: "triage",
-        actionType: "add-label",
-        source: "ai_triage",
-        evidence: { issue_number: issue.number, labels: labelsToApply, classification, principalId, surfaceId: "worker:triage" },
-        repoId: repository.id,
-        targetType: "issue",
-        targetNumber: issue.number,
-      });
-      await approve(action.id, { auto_label: true, confidence: classification.confidence });
-      await execute(action.id);
-
-      try {
-        await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-          owner:  repository.owner.login,
-          repo:   repository.name,
-          issue_number: issue.number,
-          labels: labelsToApply,
-        });
-        await succeed(action.id, { labels: labelsToApply });
-      } catch (err) {
-        await fail(action.id, err.message).catch(() => {});
-      }
+      logger.info({ repo: repository.full_name, issue: issue.number }, "Triage in progress elsewhere — skipping");
     }
+    return;
   }
 
-  // ── Persist triage result to database ────────────────────────────────────
-  await issueService.saveTriage(issue.id, {
-    type:     classification.type,
-    priority: classification.priority,
-    summary:  classification.triage_summary,
-    repoId:   repository.id,
-    number:   issue.number,
-    title:    issue.title,
-    state:    issue.state || 'open',
-    labels:   issue.labels?.map((l) => l.name) || [],
-  });
-
-  logger.info({ issue: issue.number, type: classification.type, priority: classification.priority }, "Issue triage persisted");
-
-  // Notify Telegram subscribers (non-blocking but caught)
-  notifyTriage(repository.full_name, {
-    issue_number: issue.number,
-    priority: classification.priority,
-    triage_type: classification.type,
-  }).catch((err) => {
-    logger.warn({ err: err.message, repo: repository.full_name }, "Telegram triage notification failed (non-fatal)");
-  });
-
-  // ── Log decision ──────────────────────────────────────────────────────────
-  await logDecision({
-    repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
-    targetType: "issue", targetNumber: issue.number, pillar: "triage",
-    decision: labelsToApply.length > 0 ? (isDryRun(repoConfig) ? "dry_run" : "acted") : "skipped",
-    reason: labelsToApply.length > 0
-      ? "Classified as " + classification.type + " (" + classification.priority + "), applied labels: " + labelsToApply.join(", ")
-      : "Classified as " + classification.type + " (" + classification.priority + "), no labels to apply",
-    conditions: [
-      { check: "pillar_enabled(triage)", result: true },
-      { check: "auto_label", result: triageOpts.auto_label !== false },
-      { check: "is_dry_run()", result: isDryRun(repoConfig) },
-      { check: "labels_match_repo(" + labelsToApply.length + ")", result: labelsToApply.length > 0 },
-    ],
-    configUsed: { auto_label: triageOpts.auto_label !== false },
-    principalId,
-  });
-
-  // ── Post triage comment if needed ─────────────────────────────────────────
-  if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
-    if (isDryRun(repoConfig)) {
-      logger.info({ issue: issue.number }, "DRY RUN: would post triage comment");
-    } else {
-      const { data: comment } = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-        owner:        repository.owner.login,
-        repo:         repository.name,
-        issue_number: issue.number,
-        body:         buildTriageComment(classification),
+  // From here on, any thrown error must release the lease before propagating.
+  // Intentional skips mark the operation complete so they don't retry forever.
+  try {
+    // ── Check .gitwire.yml pillar config ────────────────────────────────
+    const repoConfig = await getConfigForRepo(repository.full_name);
+    if (!isPillarEnabled("triage", repoConfig)) {
+      logger.info({ repo: repository.full_name, issue: issue.number }, "Triage disabled for repo — skipping");
+      await logDecision({
+        repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
+        targetType: "issue", targetNumber: issue.number, pillar: "triage",
+        decision: "skipped", reason: "Pillar triage disabled in config",
+        conditions: [{ check: "pillar_enabled(triage)", result: false }],
+        principalId,
       });
-      // Managed action via state machine
-      const commentAction = await propose({
-        repoFullName: repository.full_name, pillar: "triage", actionType: "add-comment",
-        source: "ai_triage", evidence: { summary: classification.triage_summary, principalId, surfaceId: "worker:triage" },
-        repoId: repository.id, targetType: "issue", targetNumber: issue.number,
-        actionKey: "comment:triage:summary",
-      });
-      await approve(commentAction.id, { auto_comment: true });
-      await execute(commentAction.id);
-      await succeed(commentAction.id, { githubId: comment.id });
+      await completeOperation("triage", operationKey, lease.token);
+      return;
     }
-  }
 
-  // ── Run duplicate detection (best-effort) ────────────────────────────────
-  // Runs after classification so the embedding is stored alongside triage data.
-  // detectDuplicates handles its own GitHub comment — separate from triage comment.
-  // Controlled by pillars.triage.duplicate_detection in .gitwire.yml.
-  if (triageOpts.duplicate_detection === false) {
-    logger.debug({ issue: issue.number }, "Duplicate detection disabled for repo — skipping");
-  } else {
+    // ── Trigger filter: author ─────────────────────────────────────────
+    if (!shouldTrigger("triage", { author: issue.user?.login }, repoConfig)) {
+      logger.info({ issue: issue.number, author: issue.user?.login }, "Trigger filter: triage skipped for author");
+      await logDecision({
+        repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
+        targetType: "issue", targetNumber: issue.number, pillar: "triage",
+        decision: "skipped", reason: "Trigger filter: author ignored",
+        conditions: [{ check: "trigger_filter(triage)", result: false, author: issue.user?.login }],
+        principalId,
+      });
+      await completeOperation("triage", operationKey, lease.token);
+      return;
+    }
+
+    // ── Policy waiver check ──────────────────────────────────────────────
+    const waiver = await isWaived({ repoId: repository.id, pillar: "triage" });
+    if (waiver) {
+      logger.info({ issue: issue.number, waiverId: waiver.id }, "Policy waived — skipping triage");
+      await logDecision({
+        repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
+        targetType: "issue", targetNumber: issue.number, pillar: "triage",
+        decision: "skipped",
+        reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
+        conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
+        principalId,
+      });
+      await completeOperation("triage", operationKey, lease.token);
+      return;
+    }
+
+    let octokit;
     try {
-      const { duplicates, related } = await detectDuplicates({
-        issue,
-        repository,
-        octokit,
-      });
-
-      if (duplicates.length) {
-        logger.info(
-          { issue: issue.number, topMatch: duplicates[0].number, similarity: duplicates[0].similarity.toFixed(3) },
-          "Duplicate detected"
-        );
-      } else if (related.length) {
-        logger.info(
-          { issue: issue.number, relatedCount: related.length },
-          "Related issues found"
-        );
-      }
+      octokit = wrapOctokit(await getInstallationClient(installation.id));
     } catch (err) {
-      // Duplicate detection is best-effort — never fail the triage job over it
-      logger.warn({ err: err.message, issue: issue.number }, "Duplicate detection failed (non-fatal)");
+      logger.error({ err, installationId: installation.id }, "Failed to get installation client");
+      throw err;
     }
+
+    if (!octokit?.request) {
+      throw new Error("Invalid Octokit client — check GitHub App credentials");
+    }
+
+    // Fetch existing labels for this repo so Claude can choose from them
+    const { data: repoLabels } = await octokit.request('GET /repos/{owner}/{repo}/labels', {
+      owner: repository.owner.login,
+      repo:  repository.name,
+      per_page: 100,
+    });
+
+    const labelNames = repoLabels.map((l) => l.name);
+
+    // ── Ask Claude to classify the issue ──────────────────────────────────────
+    const prompt = buildIssueTriagePrompt(issue, labelNames);
+    const message = await anthropic.messages.create({
+      model:      "claude-sonnet-4-20250514",
+      max_tokens: 512,
+      messages:   [{ role: "user", content: prompt }],
+      system:
+        "You are a GitHub triage assistant. Respond only with valid JSON matching the schema in the user prompt. No explanation, no markdown.",
+    });
+
+    let classification;
+    try {
+      let raw = message.content[0].text.trim();
+      // Strip markdown code fences if Claude wrapped the JSON
+      if (raw.startsWith('```')) {
+        raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
+      classification = JSON.parse(raw);
+    } catch (err) {
+      logger.error({ err, raw: message.content[0].text }, "Failed to parse Claude triage response");
+      throw err;
+    }
+
+    logger.info({ issue: issue.number, classification }, "Issue classified");
+
+    // ── Apply labels ──────────────────────────────────────────────────────────
+    const triageOpts = repoConfig.pillars?.triage || {};
+    const labelsToApply = classification.labels.filter((l) =>
+      labelNames.includes(l)
+    );
+
+    if (labelsToApply.length > 0 && triageOpts.auto_label !== false) {
+      if (isDryRun(repoConfig)) {
+        logger.info({ issue: issue.number, labels: labelsToApply }, "DRY RUN: would apply labels");
+      } else {
+        // Propose + approve the labeling action
+        const action = await propose({
+          repoFullName: repository.full_name,
+          pillar: "triage",
+          actionType: "add-label",
+          source: "ai_triage",
+          evidence: { issue_number: issue.number, labels: labelsToApply, classification, principalId, surfaceId: "worker:triage" },
+          repoId: repository.id,
+          targetType: "issue",
+          targetNumber: issue.number,
+        });
+        await approve(action.id, { auto_label: true, confidence: classification.confidence });
+        await execute(action.id);
+
+        try {
+          await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+            owner:  repository.owner.login,
+            repo:   repository.name,
+            issue_number: issue.number,
+            labels: labelsToApply,
+          });
+          await succeed(action.id, { labels: labelsToApply });
+        } catch (err) {
+          await fail(action.id, err.message).catch(() => {});
+        }
+      }
+    }
+
+    // ── Persist triage result to database ────────────────────────────────────
+    await issueService.saveTriage(issue.id, {
+      type:     classification.type,
+      priority: classification.priority,
+      summary:  classification.triage_summary,
+      repoId:   repository.id,
+      number:   issue.number,
+      title:    issue.title,
+      state:    issue.state || 'open',
+      labels:   issue.labels?.map((l) => l.name) || [],
+    });
+
+    logger.info({ issue: issue.number, type: classification.type, priority: classification.priority }, "Issue triage persisted");
+
+    // Notify Telegram subscribers (non-blocking but caught)
+    notifyTriage(repository.full_name, {
+      issue_number: issue.number,
+      priority: classification.priority,
+      triage_type: classification.type,
+    }).catch((err) => {
+      logger.warn({ err: err.message, repo: repository.full_name }, "Telegram triage notification failed (non-fatal)");
+    });
+
+    // ── Log decision ──────────────────────────────────────────────────────────
+    await logDecision({
+      repoId: repository.id, source: "triage", triggerEvent: "issues." + payload.action,
+      targetType: "issue", targetNumber: issue.number, pillar: "triage",
+      decision: labelsToApply.length > 0 ? (isDryRun(repoConfig) ? "dry_run" : "acted") : "skipped",
+      reason: labelsToApply.length > 0
+        ? "Classified as " + classification.type + " (" + classification.priority + "), applied labels: " + labelsToApply.join(", ")
+        : "Classified as " + classification.type + " (" + classification.priority + "), no labels to apply",
+      conditions: [
+        { check: "pillar_enabled(triage)", result: true },
+        { check: "auto_label", result: triageOpts.auto_label !== false },
+        { check: "is_dry_run()", result: isDryRun(repoConfig) },
+        { check: "labels_match_repo(" + labelsToApply.length + ")", result: labelsToApply.length > 0 },
+      ],
+      configUsed: { auto_label: triageOpts.auto_label !== false },
+      principalId,
+    });
+
+    // ── Post triage comment if needed ─────────────────────────────────────────
+    if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
+      if (isDryRun(repoConfig)) {
+        logger.info({ issue: issue.number }, "DRY RUN: would post triage comment");
+      } else {
+        const { data: comment } = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+          owner:        repository.owner.login,
+          repo:         repository.name,
+          issue_number: issue.number,
+          body:         buildTriageComment(classification),
+        });
+        // Managed action via state machine
+        const commentAction = await propose({
+          repoFullName: repository.full_name, pillar: "triage", actionType: "add-comment",
+          source: "ai_triage", evidence: { summary: classification.triage_summary, principalId, surfaceId: "worker:triage" },
+          repoId: repository.id, targetType: "issue", targetNumber: issue.number,
+          actionKey: "comment:triage:summary",
+        });
+        await approve(commentAction.id, { auto_comment: true });
+        await execute(commentAction.id);
+        await succeed(commentAction.id, { githubId: comment.id });
+      }
+    }
+
+    // ── Run duplicate detection (best-effort) ────────────────────────────────
+    // Runs after classification so the embedding is stored alongside triage data.
+    // detectDuplicates handles its own GitHub comment — separate from triage comment.
+    // Controlled by pillars.triage.duplicate_detection in .gitwire.yml.
+    if (triageOpts.duplicate_detection === false) {
+      logger.debug({ issue: issue.number }, "Duplicate detection disabled for repo — skipping");
+    } else {
+      try {
+        const { duplicates, related } = await detectDuplicates({
+          issue,
+          repository,
+          octokit,
+        });
+
+        if (duplicates.length) {
+          logger.info(
+            { issue: issue.number, topMatch: duplicates[0].number, similarity: duplicates[0].similarity.toFixed(3) },
+            "Duplicate detected"
+          );
+        } else if (related.length) {
+          logger.info(
+            { issue: issue.number, relatedCount: related.length },
+            "Related issues found"
+          );
+        }
+      } catch (err) {
+        // Duplicate detection is best-effort — never fail the triage job over it
+        logger.warn({ err: err.message, issue: issue.number }, "Duplicate detection failed (non-fatal)");
+      }
+    }
+
+    // ── Full success: mark the operation complete ───────────────────────────
+    await completeOperation("triage", operationKey, lease.token);
+  } catch (err) {
+    // Release the active lease so a retry (manual or BullMQ) can re-acquire it.
+    // The complete marker is NOT written — the operation did not finish.
+    await abandonOperation("triage", operationKey, lease.token).catch((abandonErr) => {
+      logger.warn({ err: abandonErr.message || abandonErr, repo: repository.full_name, issue: issue.number }, "Failed to abandon triage lease");
+    });
+    throw err;
   }
 }
 
@@ -307,141 +345,164 @@ async function triagePR({ payload }) {
 
   logger.info({ repo: repository.full_name, pr: pr.number }, "Triaging PR");
 
-  // Guard 1: Idempotency
-  if (!(await checkAndMark("triage", "pr-" + pr.number + "-" + payload.action))) {
-    return;
-  }
-
-  // Guard 2: Pillar enabled
-  const repoConfig = await getConfigForRepo(repository.full_name);
-  if (!isPillarEnabled("triage", repoConfig)) {
-    logger.info({ repo: repository.full_name, pr: pr.number }, "Triage disabled for repo - skipping PR");
-    await logDecision({
-      repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
-      targetType: "pr", targetNumber: pr.number, pillar: "triage",
-      decision: "skipped", reason: "Pillar triage disabled in config",
-      conditions: [{ check: "pillar_enabled(triage)", result: false }],
-      principalId,
-    });
-    return;
-  }
-
-  // Guard 3: Trigger filter
-  if (!shouldTrigger("triage", { author: pr.user?.login, branch: pr.head?.ref }, repoConfig)) {
-    logger.info({ pr: pr.number, author: pr.user?.login }, "Trigger filter: triage skipped for author/branch");
-    await logDecision({
-      repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
-      targetType: "pr", targetNumber: pr.number, pillar: "triage",
-      decision: "skipped", reason: "Trigger filter: author/branch not matched",
-      conditions: [{ check: "trigger_filter(triage)", result: false }],
-      principalId,
-    });
-    return;
-  }
-
-  // Guard 4: Policy waiver
-  const waiver = await isWaived({ repoId: repository.id, pillar: "triage", scope: "target_type", scopeValue: "pr" });
-  if (waiver) {
-    logger.info({ pr: pr.number, waiverId: waiver.id }, "Policy waived - skipping PR triage");
-    await logDecision({
-      repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
-      targetType: "pr", targetNumber: pr.number, pillar: "triage",
-      decision: "skipped",
-      reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
-      conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
-      principalId,
-    });
-    return;
-  }
-
-  let octokit;
-  try {
-    octokit = wrapOctokit(await getInstallationClient(installation.id));
-  } catch (err) {
-    logger.error({ err, installationId: installation.id }, "Failed to get installation client");
-    return;
-  }
-  if (!octokit?.request) {
-    logger.error({ installationId: installation.id }, "Invalid Octokit client");
-    return;
-  }
-
-  const message = await anthropic.messages.create({
-    model:      "claude-sonnet-4-20250514",
-    max_tokens: 512,
-    messages:   [{ role: "user", content: buildPRTriagePrompt(pr) }],
-    system:
-      "You are a GitHub triage assistant. Respond only with valid JSON matching the schema in the user prompt. No explanation, no markdown.",
+  // ── Success-bound idempotency lifecycle ─────────────────────────────────
+  const operationKey = buildTriageOperationKey({
+    targetType: "pr",
+    repoId: repository.id,
+    targetId: pr.id ?? pr.number,
+    action: payload.action || "opened",
   });
 
-  let classification;
-  try {
-    let raw = message.content[0].text.trim();
-    if (raw.startsWith("```")) {
-      var fenceRe = new RegExp("^" + "```" + "(?:json)?\s*\n?", "");
-      var fenceEndRe = new RegExp("\n?" + "```" + "\s*$", "");
-      raw = raw.replace(fenceRe, "").replace(fenceEndRe, "").trim();
+  const lease = await beginOperation("triage", operationKey);
+  if (!lease.acquired) {
+    if (lease.alreadyComplete) {
+      logger.info({ repo: repository.full_name, pr: pr.number }, "PR triage already complete — safe no-op");
+    } else {
+      logger.info({ repo: repository.full_name, pr: pr.number }, "PR triage in progress elsewhere — skipping");
     }
-    classification = JSON.parse(raw);
-  } catch (err) {
-    logger.error({ err, raw: message.content[0].text }, "Failed to parse Claude PR triage response");
     return;
   }
 
-  logger.info({ pr: pr.number, classification }, "PR classified");
-
-  // Apply size label with full lifecycle
-  const triageOpts = repoConfig.pillars?.triage || {};
-  if (classification.size_label && triageOpts.auto_label !== false) {
-    if (isDryRun(repoConfig)) {
-      logger.info({ pr: pr.number, label: classification.size_label }, "DRY RUN: would apply size label");
-    } else {
-      const sizeAction = await propose({
-        repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
-        source: "ai_triage", evidence: { size_label: classification.size_label, classification, principalId, surfaceId: "worker:triage" },
-        repoId: repository.id, targetType: "pr", targetNumber: pr.number,
-        actionKey: "label:" + classification.size_label,
+  try {
+    // Guard 2: Pillar enabled
+    const repoConfig = await getConfigForRepo(repository.full_name);
+    if (!isPillarEnabled("triage", repoConfig)) {
+      logger.info({ repo: repository.full_name, pr: pr.number }, "Triage disabled for repo - skipping PR");
+      await logDecision({
+        repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
+        targetType: "pr", targetNumber: pr.number, pillar: "triage",
+        decision: "skipped", reason: "Pillar triage disabled in config",
+        conditions: [{ check: "pillar_enabled(triage)", result: false }],
+        principalId,
       });
-      await approve(sizeAction.id, { auto_label: true });
-      await execute(sizeAction.id);
-      try {
-        await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
-          owner: repository.owner.login,
-          repo: repository.name,
-          issue_number: pr.number,
-          labels: [classification.size_label],
+      await completeOperation("triage", operationKey, lease.token);
+      return;
+    }
+
+    // Guard 3: Trigger filter
+    if (!shouldTrigger("triage", { author: pr.user?.login, branch: pr.head?.ref }, repoConfig)) {
+      logger.info({ pr: pr.number, author: pr.user?.login }, "Trigger filter: triage skipped for author/branch");
+      await logDecision({
+        repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
+        targetType: "pr", targetNumber: pr.number, pillar: "triage",
+        decision: "skipped", reason: "Trigger filter: author/branch not matched",
+        conditions: [{ check: "trigger_filter(triage)", result: false }],
+        principalId,
+      });
+      await completeOperation("triage", operationKey, lease.token);
+      return;
+    }
+
+    // Guard 4: Policy waiver
+    const waiver = await isWaived({ repoId: repository.id, pillar: "triage", scope: "target_type", scopeValue: "pr" });
+    if (waiver) {
+      logger.info({ pr: pr.number, waiverId: waiver.id }, "Policy waived - skipping PR triage");
+      await logDecision({
+        repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
+        targetType: "pr", targetNumber: pr.number, pillar: "triage",
+        decision: "skipped",
+        reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
+        conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
+        principalId,
+      });
+      await completeOperation("triage", operationKey, lease.token);
+      return;
+    }
+
+    let octokit;
+    try {
+      octokit = wrapOctokit(await getInstallationClient(installation.id));
+    } catch (err) {
+      logger.error({ err, installationId: installation.id }, "Failed to get installation client");
+      throw err;
+    }
+    if (!octokit?.request) {
+      throw new Error("Invalid Octokit client");
+    }
+
+    const message = await anthropic.messages.create({
+      model:      "claude-sonnet-4-20250514",
+      max_tokens: 512,
+      messages:   [{ role: "user", content: buildPRTriagePrompt(pr) }],
+      system:
+        "You are a GitHub triage assistant. Respond only with valid JSON matching the schema in the user prompt. No explanation, no markdown.",
+    });
+
+    let classification;
+    try {
+      let raw = message.content[0].text.trim();
+      if (raw.startsWith("```")) {
+        raw = raw.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+      }
+      classification = JSON.parse(raw);
+    } catch (err) {
+      logger.error({ err, raw: message.content[0].text }, "Failed to parse Claude PR triage response");
+      throw err;
+    }
+
+    logger.info({ pr: pr.number, classification }, "PR classified");
+
+    // Apply size label with full lifecycle
+    const triageOpts = repoConfig.pillars?.triage || {};
+    if (classification.size_label && triageOpts.auto_label !== false) {
+      if (isDryRun(repoConfig)) {
+        logger.info({ pr: pr.number, label: classification.size_label }, "DRY RUN: would apply size label");
+      } else {
+        const sizeAction = await propose({
+          repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
+          source: "ai_triage", evidence: { size_label: classification.size_label, classification, principalId, surfaceId: "worker:triage" },
+          repoId: repository.id, targetType: "pr", targetNumber: pr.number,
+          actionKey: "label:" + classification.size_label,
         });
-        await succeed(sizeAction.id, { label: classification.size_label });
-      } catch (err) {
-        await fail(sizeAction.id, err.message).catch(() => {});
+        await approve(sizeAction.id, { auto_label: true });
+        await execute(sizeAction.id);
+        try {
+          await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+            owner: repository.owner.login,
+            repo: repository.name,
+            issue_number: pr.number,
+            labels: [classification.size_label],
+          });
+          await succeed(sizeAction.id, { label: classification.size_label });
+        } catch (err) {
+          await fail(sizeAction.id, err.message).catch(() => {});
+        }
       }
     }
+
+    // Log decision
+    await logDecision({
+      repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
+      targetType: "pr", targetNumber: pr.number, pillar: "triage",
+      decision: classification.size_label ? (isDryRun(repoConfig) ? "dry_run" : "acted") : "skipped",
+      reason: classification.size_label
+        ? "PR classified as " + (classification.type || "unknown") + ", size: " + classification.size_label + ", risk: " + (classification.risk || "?")
+        : "PR classified as " + (classification.type || "unknown") + ", no size label to apply",
+      conditions: [
+        { check: "pillar_enabled(triage)", result: true },
+        { check: "auto_label", result: triageOpts.auto_label !== false },
+        { check: "is_dry_run()", result: isDryRun(repoConfig) },
+      ],
+      configUsed: { auto_label: triageOpts.auto_label !== false },
+      principalId,
+    });
+
+    notifyTriage(repository.full_name, {
+      pr_number: pr.number,
+      risk: classification.risk,
+      triage_type: classification.type,
+    }).catch((err) => {
+      logger.warn({ err: err.message, repo: repository.full_name }, "Telegram triage notification failed (non-fatal)");
+    });
+
+    // ── Full success: mark the operation complete ───────────────────────────
+    await completeOperation("triage", operationKey, lease.token);
+  } catch (err) {
+    await abandonOperation("triage", operationKey, lease.token).catch((abandonErr) => {
+      logger.warn({ err: abandonErr.message || abandonErr, repo: repository.full_name, pr: pr.number }, "Failed to abandon PR triage lease");
+    });
+    throw err;
   }
-
-  // Log decision
-  await logDecision({
-    repoId: repository.id, source: "triage", triggerEvent: "pull_request." + payload.action,
-    targetType: "pr", targetNumber: pr.number, pillar: "triage",
-    decision: classification.size_label ? (isDryRun(repoConfig) ? "dry_run" : "acted") : "skipped",
-    reason: classification.size_label
-      ? "PR classified as " + (classification.type || "unknown") + ", size: " + classification.size_label + ", risk: " + (classification.risk || "?")
-      : "PR classified as " + (classification.type || "unknown") + ", no size label to apply",
-    conditions: [
-      { check: "pillar_enabled(triage)", result: true },
-      { check: "auto_label", result: triageOpts.auto_label !== false },
-      { check: "is_dry_run()", result: isDryRun(repoConfig) },
-    ],
-    configUsed: { auto_label: triageOpts.auto_label !== false },
-    principalId,
-  });
-
-  notifyTriage(repository.full_name, {
-    pr_number: pr.number,
-    risk: classification.risk,
-    triage_type: classification.type,
-  }).catch((err) => {
-    logger.warn({ err: err.message, repo: repository.full_name }, "Telegram triage notification failed (non-fatal)");
-  });
 }
 
 // ── Prompt builders ──────────────────────────────────────────────────────────
