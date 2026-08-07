@@ -402,6 +402,39 @@ export async function getStaleActions() {
   return rows;
 }
 
+/**
+ * Find an equivalent completed triage action for a target.
+ *
+ * Used by the triage worker's recovery path: before creating a new label
+ * mutation, check whether a prior attempt already succeeded (or was
+ * reconciled) for the same repo, target, and action key. If so, recover as a
+ * no-op instead of creating a duplicate GitHub mutation.
+ *
+ * This is a narrow read helper — it does not modify the state machine.
+ *
+ * @param {object} args
+ * @param {string} args.repoFullName
+ * @param {"issue"|"pr"} args.targetType
+ * @param {number} args.targetNumber
+ * @param {string} args.actionKey - deterministic key, e.g. "triage:label:issue:<n>"
+ * @returns {Promise<object|null>} the matching action row, or null
+ */
+export async function findCompletedTriageAction({ repoFullName, targetType, targetNumber, actionKey }) {
+  const targetCol = targetType === "pr" ? "pr_number" : "issue_number";
+  const { rows } = await db.query(
+    `SELECT * FROM managed_actions
+      WHERE repo_full_name = $1
+        AND pillar = 'triage'
+        AND ${targetCol} = $2
+        AND action_key = $3
+        AND status IN ('succeeded', 'reconciled')
+      ORDER BY COALESCE(resolved_at, executed_at, proposed_at, created_at) DESC
+      LIMIT 1`,
+    [repoFullName, targetNumber, actionKey],
+  );
+  return rows[0] ?? null;
+}
+
 // ── Internal ─────────────────────────────────────────────────────────────────
 
 /**

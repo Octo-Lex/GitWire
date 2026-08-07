@@ -23,8 +23,10 @@ import {
 } from "../services/idempotencyService.js";
 import { isWaived } from "../services/waiverService.js";
 import { notifyTriage } from "../services/telegramNotifyService.js";
-import { propose, approve, execute, succeed, fail, cancel } from "../services/actionStateMachine.js";
+import { propose, approve, execute, succeed, fail, cancel, findCompletedTriageAction } from "../services/actionStateMachine.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
+import { classifyTriageFailure, isPermanentFailure, sanitizeForRetention } from "../services/triageFailureService.js";
+import { postMarkedComment, buildMarker } from "../lib/commentMarkers.js";
 
 const anthropic = new Anthropic({ 
   apiKey: config.anthropic.apiKey,
@@ -33,13 +35,62 @@ const anthropic = new Anthropic({
 
 export function startTriageWorker() {
   return createWorker(QUEUES.TRIAGE, async (job) => {
-    switch (job.name) {
-      case "triage-issue":
-        await triageIssue(job.data);
-        break;
-      case "triage-pr":
-        await triagePR(job.data);
-        break;
+    try {
+      switch (job.name) {
+        case "triage-issue":
+          await triageIssue(job.data, job);
+          break;
+        case "triage-pr":
+          await triagePR(job.data, job);
+          break;
+      }
+    } catch (err) {
+      // Classify, sanitize, and retain failure metadata on the job before
+      // letting BullMQ move it to the failed set. Permanent auth failures
+      // are discarded so they don't consume pointless retries; transient
+      // failures fall through to BullMQ's normal retry/backoff.
+      const classification = classifyTriageFailure(err);
+      const priorFailure = job.data?.gitwireFailure;
+      const attempts = (priorFailure?.attempts ?? 0) + 1;
+      const firstFailedAt = priorFailure?.firstFailedAt ?? classification.failedAt;
+      const retained = sanitizeForRetention(classification, { attempts, firstFailedAt });
+
+      try {
+        await job.updateData({ ...job.data, gitwireFailure: retained });
+      } catch (updateErr) {
+        logger.warn({ err: updateErr.message || updateErr }, "Failed to retain gitwireFailure on job data");
+      }
+
+      // Record terminal failure in the durable decision log.
+      try {
+        const repo = job.data?.payload?.repository?.full_name;
+        const targetNumber = job.data?.payload?.issue?.number ?? job.data?.payload?.pull_request?.number;
+        const targetType = job.data?.payload?.pull_request ? "pr" : "issue";
+        if (repo && targetNumber) {
+          await logDecision({
+            repoId: job.data?.payload?.repository?.id,
+            source: "triage",
+            triggerEvent: job.name,
+            targetType,
+            targetNumber,
+            pillar: "triage",
+            decision: "failed",
+            reason: `${classification.failureClass}: ${retained.safeMessage}`,
+          });
+        }
+      } catch (logErr) {
+        logger.warn({ err: logErr.message || logErr }, "Failed to record triage failure decision");
+      }
+
+      if (isPermanentFailure(classification) && typeof job.discard === "function") {
+        logger.warn(
+          { failureClass: classification.failureClass, statusCode: classification.statusCode, jobId: job.id },
+          "Triage job permanently failed — discarding to prevent pointless retries",
+        );
+        await job.discard();
+      }
+
+      throw err; // BullMQ moves the job to failed and applies retry/backoff
     }
   });
 }
@@ -48,7 +99,7 @@ export function startTriageWorker() {
 export { triageIssue, triagePR };
 
 // ── Issue triage ─────────────────────────────────────────────────────────────
-async function triageIssue({ payload }) {
+async function triageIssue({ payload }, job = null) {
   const { issue, repository, installation } = payload;
   if (!issue || !installation) return;
 
@@ -191,30 +242,65 @@ async function triageIssue({ payload }) {
       if (isDryRun(repoConfig)) {
         logger.info({ issue: issue.number, labels: labelsToApply }, "DRY RUN: would apply labels");
       } else {
-        // Propose + approve the labeling action
-        const action = await propose({
+        // Deterministic action key for label dedup. Before creating a new
+        // GitHub mutation, check whether a prior attempt already succeeded or
+        // was reconciled for the same repo + issue + label set. If so, recover
+        // as a no-op — the labels are already on the issue.
+        const labelActionKey = `triage:label:issue:${issue.number}:${labelsToApply.slice().sort().join(",")}`;
+        const priorCompleted = await findCompletedTriageAction({
           repoFullName: repository.full_name,
-          pillar: "triage",
-          actionType: "add-label",
-          source: "ai_triage",
-          evidence: { issue_number: issue.number, labels: labelsToApply, classification, principalId, surfaceId: "worker:triage" },
-          repoId: repository.id,
           targetType: "issue",
           targetNumber: issue.number,
+          actionKey: labelActionKey,
+        }).catch((err) => {
+          logger.warn({ err: err.message || err, issue: issue.number }, "Label dedup check failed — proceeding with mutation");
+          return null;
         });
-        await approve(action.id, { auto_label: true, confidence: classification.confidence });
-        await execute(action.id);
 
-        try {
-          await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
-            owner:  repository.owner.login,
-            repo:   repository.name,
-            issue_number: issue.number,
-            labels: labelsToApply,
+        if (priorCompleted) {
+          // Recovery: a prior attempt applied these labels but the complete
+          // marker wasn't written. Recover as a no-op — GitHub label-set
+          // semantics are idempotent, so the labels are already present.
+          logger.info(
+            { issue: issue.number, actionId: priorCompleted.id, labels: labelsToApply },
+            "Label action already succeeded on prior attempt — recovering as no-op",
+          );
+          // Record recovery evidence through the decision log.
+          await logDecision({
+            repoId: repository.id, source: "triage-recovery", triggerEvent: "issues." + payload.action,
+            targetType: "issue", targetNumber: issue.number, pillar: "triage",
+            decision: "succeeded",
+            reason: "Label mutation recovered as no-op after prior completed action",
+            conditions: [{ check: "completed_action_found(" + priorCompleted.id + ")", result: true }],
+            principalId,
+          }).catch(() => {});
+        } else {
+          // Propose + approve the labeling action
+          const action = await propose({
+            repoFullName: repository.full_name,
+            pillar: "triage",
+            actionType: "add-label",
+            source: "ai_triage",
+            evidence: { issue_number: issue.number, labels: labelsToApply, classification, principalId, surfaceId: "worker:triage" },
+            repoId: repository.id,
+            targetType: "issue",
+            targetNumber: issue.number,
+            actionKey: labelActionKey,
           });
-          await succeed(action.id, { labels: labelsToApply });
-        } catch (err) {
-          await fail(action.id, err.message).catch(() => {});
+          await approve(action.id, { auto_label: true, confidence: classification.confidence });
+          await execute(action.id);
+
+          try {
+            await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+              owner:  repository.owner.login,
+              repo:   repository.name,
+              issue_number: issue.number,
+              labels: labelsToApply,
+            });
+            await succeed(action.id, { labels: labelsToApply });
+          } catch (err) {
+            await fail(action.id, err.message).catch(() => {});
+          }
         }
       }
     }
@@ -260,27 +346,46 @@ async function triageIssue({ payload }) {
       principalId,
     });
 
-    // ── Post triage comment if needed ─────────────────────────────────────────
+    // ── Post triage comment if needed (marker-backed) ──────────────────────────
+    // Uses the existing commentMarkers machinery so a retry after a partial
+    // failure finds and UPDATES the existing comment instead of creating a
+    // duplicate. An ambiguous marker (multiple matches) is treated as a
+    // blocking processing error rather than creating another comment.
     if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
       if (isDryRun(repoConfig)) {
         logger.info({ issue: issue.number }, "DRY RUN: would post triage comment");
       } else {
-        const { data: comment } = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-          owner:        repository.owner.login,
-          repo:         repository.name,
-          issue_number: issue.number,
-          body:         buildTriageComment(classification),
-        });
-        // Managed action via state machine
+        const commentMarkerId = `${repository.id}:${issue.number}`;
+        const commentBody = buildTriageComment(classification);
+        const result = await postMarkedComment(
+          octokit,
+          repository.owner.login,
+          repository.name,
+          issue.number,
+          "triage",
+          commentMarkerId,
+          commentBody,
+        );
+
+        if (result.action === "blocked") {
+          // Ambiguous marker — multiple existing comments matched. This is an
+          // unsafe state; do not create another comment. Throw so the job
+          // retries (transient) and the operator can clean up the duplicates.
+          throw new Error(`Triage comment marker ambiguous (${result.detail?.matchCount} matches) — refusing to create another comment`);
+        }
+
+        // Managed action via state machine. Associate with the existing
+        // GitHub comment ID (created or updated) so the ledger stays accurate
+        // even when the comment was recovered from a prior attempt.
         const commentAction = await propose({
           repoFullName: repository.full_name, pillar: "triage", actionType: "add-comment",
           source: "ai_triage", evidence: { summary: classification.triage_summary, principalId, surfaceId: "worker:triage" },
           repoId: repository.id, targetType: "issue", targetNumber: issue.number,
-          actionKey: "comment:triage:summary",
+          actionKey: `triage:comment:issue:${issue.number}`,
         });
         await approve(commentAction.id, { auto_comment: true });
         await execute(commentAction.id);
-        await succeed(commentAction.id, { githubId: comment.id });
+        await succeed(commentAction.id, { githubId: result.comment_id, action: result.action });
       }
     }
 
@@ -328,7 +433,7 @@ async function triageIssue({ payload }) {
 }
 
 // ── PR triage ────────────────────────────────────────────────────────────────
-async function triagePR({ payload }) {
+async function triagePR({ payload }, job = null) {
   const { pull_request: pr, repository, installation } = payload;
   if (!pr || !installation) return;
 
@@ -442,31 +547,58 @@ async function triagePR({ payload }) {
 
     logger.info({ pr: pr.number, classification }, "PR classified");
 
-    // Apply size label with full lifecycle
+    // Apply size label with full lifecycle + dedup guard
     const triageOpts = repoConfig.pillars?.triage || {};
     if (classification.size_label && triageOpts.auto_label !== false) {
       if (isDryRun(repoConfig)) {
         logger.info({ pr: pr.number, label: classification.size_label }, "DRY RUN: would apply size label");
       } else {
-        const sizeAction = await propose({
-          repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
-          source: "ai_triage", evidence: { size_label: classification.size_label, classification, principalId, surfaceId: "worker:triage" },
-          repoId: repository.id, targetType: "pr", targetNumber: pr.number,
-          actionKey: "label:" + classification.size_label,
+        // Deterministic action key scoped by repo + PR + label
+        const sizeActionKey = `triage:label:pr:${pr.number}:${classification.size_label}`;
+        const priorCompleted = await findCompletedTriageAction({
+          repoFullName: repository.full_name,
+          targetType: "pr",
+          targetNumber: pr.number,
+          actionKey: sizeActionKey,
+        }).catch((err) => {
+          logger.warn({ err: err.message || err, pr: pr.number }, "PR label dedup check failed — proceeding");
+          return null;
         });
-        await approve(sizeAction.id, { auto_label: true });
-        await execute(sizeAction.id);
-        try {
-          await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
-            owner: repository.owner.login,
-            repo: repository.name,
-            issue_number: pr.number,
-            labels: [classification.size_label],
+
+        if (priorCompleted) {
+          logger.info(
+            { pr: pr.number, actionId: priorCompleted.id, label: classification.size_label },
+            "PR label action already succeeded on prior attempt — recovering as no-op",
+          );
+          await logDecision({
+            repoId: repository.id, source: "triage-recovery", triggerEvent: "pull_request." + payload.action,
+            targetType: "pr", targetNumber: pr.number, pillar: "triage",
+            decision: "succeeded",
+            reason: "PR label mutation recovered as no-op after prior completed action",
+            conditions: [{ check: "completed_action_found(" + priorCompleted.id + ")", result: true }],
+            principalId,
+          }).catch(() => {});
+        } else {
+          const sizeAction = await propose({
+            repoFullName: repository.full_name, pillar: "triage", actionType: "add-label",
+            source: "ai_triage", evidence: { size_label: classification.size_label, classification, principalId, surfaceId: "worker:triage" },
+            repoId: repository.id, targetType: "pr", targetNumber: pr.number,
+            actionKey: sizeActionKey,
           });
-          await succeed(sizeAction.id, { label: classification.size_label });
-        } catch (err) {
-          await fail(sizeAction.id, err.message).catch(() => {});
-        }
+          await approve(sizeAction.id, { auto_label: true });
+          await execute(sizeAction.id);
+          try {
+            await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
+              owner: repository.owner.login,
+              repo: repository.name,
+              issue_number: pr.number,
+              labels: [classification.size_label],
+            });
+            await succeed(sizeAction.id, { label: classification.size_label });
+          } catch (err) {
+            await fail(sizeAction.id, err.message).catch(() => {});
+          }
+        } // end else (no prior completed action)
       }
     }
 
