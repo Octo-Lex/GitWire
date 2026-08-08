@@ -1,7 +1,13 @@
 // src/workers/issueFix/context.js
-// Stage 1: Initialize fix context — idempotency, config, rate limit, DB lookup.
+// Stage 1: Initialize fix context — config, rate limit, DB lookup.
+//
+// NOTE: The issue_fix idempotency guard (checkAndMark) was previously here,
+// but it ran before pillar/scope/analysis/generation/validation stages. Any
+// pre-submission failure left the marker set, blocking retries until the
+// Redis key expired (1 hour) or was manually cleared. The guard now lives
+// in pipeline.js, immediately before submitFix(), so only a successful
+// submission path is guarded.
 
-import { checkAndMark } from "../../services/idempotencyService.js";
 import { getConfigForRepo } from "../../services/configService.js";
 import { isPillarEnabled } from "@gitwire/rules";
 import { getInstallationClient } from "../../lib/github.js";
@@ -15,11 +21,6 @@ import { logger } from "../../lib/logger.js";
  */
 export async function initFixContext({ repo, issueNumber, installationId, triggeredBy }) {
   logger.info({ repo, issueNumber, triggeredBy }, "Issue fix pipeline started");
-
-  // ── Idempotency ──────────────────────────────────────────────────────────
-  if (!(await checkAndMark("issue_fix", "issue-" + issueNumber))) {
-    return null;
-  }
 
   // ── Pillar config ────────────────────────────────────────────────────────
   const repoConfig = await getConfigForRepo(repo);
