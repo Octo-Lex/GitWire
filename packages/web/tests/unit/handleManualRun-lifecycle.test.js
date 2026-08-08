@@ -203,6 +203,27 @@ describe("PR /gitwire run triage", () => {
     // fullPR.id is 7777
     expect(mockClearTriageOperation).toHaveBeenCalledWith("triage", "repo:999:pr:7777:manual-run");
   });
+
+  it("fails closed when PR fetch fails — does not enqueue triage-pr or clear lifecycle key", async () => {
+    mockOctokitRequest.mockRejectedValue(new Error("Not Found"));
+    const payload = makePRPayload();
+    const parsed = { issueNumber: 16, authorLogin: "maintainer" };
+    const action = { action: "manual_run", pillar: "triage" };
+
+    await handleManualRun(payload, parsed, action, makeCtx());
+
+    // Must NOT enqueue a malformed triage-pr job
+    expect(mockTriageQueueAdd).not.toHaveBeenCalled();
+    // Must NOT clear the lifecycle key (nothing was dispatched)
+    expect(mockClearTriageOperation).not.toHaveBeenCalled();
+    // Acknowledgment must NOT claim successful triage dispatch
+    const commentCalls = mockOctokitRequest.mock.calls.filter(
+      ([method]) => method === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+    );
+    expect(commentCalls).toHaveLength(1);
+    expect(commentCalls[0][1].body).not.toContain("Re-evaluation triggered");
+    expect(commentCalls[0][1].body).toContain("No workers could be dispatched");
+  });
 });
 
 // ── PR /gitwire run review ───────────────────────────────────────────────────

@@ -18,7 +18,7 @@ export async function handleManualRun(payload, parsed, action, ctx) {
 
   const { clearIdempotencyKey, clearTriageOperation } = await import("../../../services/idempotencyService.js");
 
-  // For PRs, we need the full PR object (with head.sha, base.ref, etc.)
+  // For PRs, we need the full PR object (with head.sha, base.ref, id, etc.)
   // that the issue_comment webhook payload does not carry.
   let fullPR = null;
   if (isPR && installationId) {
@@ -110,28 +110,33 @@ async function handlePRManualRun(payload, parsed, pillar, issueNumber, installat
   }
 
   if (pillar === "all" || pillar === "triage") {
-    // Construct a worker-native pull_request payload with the full PR object.
-    // Queue triage-pr (not triage-issue) so triagePR() handles it.
-    const normalizedPayload = {
-      ...payload,
-      action: "manual-run",
-      pull_request: fullPR || payload.issue?.pull_request || { number: issueNumber },
-    };
-    const opKey = buildTriageOperationKey({
-      targetType: "pr",
-      repoId: payload.repository?.id ?? payload.repository?.full_name ?? "unknown",
-      targetId: fullPR?.id ?? issueNumber,
-      action: "manual-run",
-    });
-    await idem.clearTriageOperation("triage", opKey);
-    await idem.clearIdempotencyKey("triage", "issue-" + issueNumber + "-reopened");
-    await ctx.triageQueue.add("triage-pr", { payload: normalizedPayload }, { priority: 1 });
-    dispatched.push("triage");
+    if (!fullPR?.id) {
+      // Fail closed: without the real PR we cannot build a correct lifecycle key
+      // or provide a worker-native pull_request payload. Do not enqueue a malformed job.
+      ctx.logger.warn({ repo: payload.repository?.full_name, pr: issueNumber }, "/gitwire run triage: could not resolve full PR — skipping PR triage");
+    } else {
+      // Construct a worker-native pull_request payload with the full PR object.
+      // Queue triage-pr (not triage-issue) so triagePR() handles it.
+      const normalizedPayload = {
+        ...payload,
+        action: "manual-run",
+        pull_request: fullPR,
+      };
+      const opKey = buildTriageOperationKey({
+        targetType: "pr",
+        repoId: payload.repository?.id ?? payload.repository?.full_name ?? "unknown",
+        targetId: fullPR.id,
+        action: "manual-run",
+      });
+      await idem.clearTriageOperation("triage", opKey);
+      await idem.clearIdempotencyKey("triage", "issue-" + issueNumber + "-reopened");
+      await ctx.triageQueue.add("triage-pr", { payload: normalizedPayload }, { priority: 1 });
+      dispatched.push("triage");
+    }
   }
 
   if (pillar === "heal") {
     // CI heal requires a workflow_run event — cannot be manually triggered.
-    // Record as dispatched with a truthful "unsupported" flag for the acknowledgment.
     dispatched.push("heal-unsupported");
   }
 
@@ -142,21 +147,16 @@ async function handlePRManualRun(payload, parsed, pillar, issueNumber, installat
 
 async function postAcknowledgment(payload, parsed, action, dispatched, ctx) {
   try {
-    const pillar = action.pillar || "all";
     let body;
 
     if (dispatched.includes("heal-unsupported") && dispatched.length === 1) {
       // Only heal was requested
       body = "ℹ️ **GitWire:** CI healing requires a failed workflow run event and cannot be manually triggered through this command.";
     } else if (dispatched.length === 0) {
-      body = "⚠️ **GitWire:** No workers could be dispatched. Check that GitWire is properly configured for this repository.";
+      body = "⚠️ **GitWire:** No workers could be dispatched. The repository or PR data could not be resolved. Check that GitWire is properly configured.";
     } else {
-      const parts = [];
-      if (dispatched.includes("triage")) parts.push("triage");
-      if (dispatched.includes("review")) parts.push("AI review");
-      if (dispatched.includes("fix")) parts.push("issue fix");
-      const pillarLabel = pillar === "all" ? parts.join(", ") : "**" + pillar + "**";
-      body = "▶️ **GitWire:** Re-evaluation triggered for " + pillarLabel + ". Results will appear shortly.";
+      // Use the existing buildCommandResponse for the standard acknowledgment
+      body = buildCommandResponse("manual_run", { pillar: action.pillar || "all" });
       if (dispatched.includes("heal-unsupported")) {
         body += "\n\nℹ️ CI healing requires a failed workflow run event and was not triggered.";
       }
