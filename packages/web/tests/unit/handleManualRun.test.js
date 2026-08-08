@@ -43,6 +43,8 @@ function makeCtx() {
     triageQueue: { add: jest.fn().mockResolvedValue({ id: "job-1" }) },
     issueFixQueue: { add: jest.fn().mockResolvedValue({ id: "job-2" }) },
     phase4Queue: { add: jest.fn().mockResolvedValue({ id: "job-3" }) },
+    getInstallationClient: jest.fn().mockResolvedValue({ request: jest.fn() }),
+    wrapOctokit: jest.fn((client) => client),
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
   };
 }
@@ -105,7 +107,7 @@ describe("/gitwire run triage — issue path (P1 regression)", () => {
     expect(ctx.triageQueue.add).toHaveBeenCalledTimes(1);
     expect(ctx.triageQueue.add).toHaveBeenCalledWith(
       "triage-issue",
-      { payload },
+      { payload: expect.objectContaining({ action: "manual-run" }) },
       { priority: 1 },
     );
   });

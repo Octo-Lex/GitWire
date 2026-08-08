@@ -52,10 +52,11 @@ describe("Non-triage checkAndMark callers remain untouched (case 12)", () => {
 
   it("handleManualRun still clears legacy keys for non-triage pillars", () => {
     const src = readSource("packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js");
-    // ai_review, ci_heal, issue_fix still use legacy clearIdempotencyKey
+    // ai_review and issue_fix still use legacy clearIdempotencyKey
     expect(src).toMatch(/clearIdempotencyKey.*ai_review/);
-    expect(src).toMatch(/clearIdempotencyKey.*ci_heal/);
     expect(src).toMatch(/clearIdempotencyKey.*issue_fix/);
+    // ci_heal is documented as unsupported (no enqueue, truthful message)
+    expect(src).toMatch(/heal-unsupported/);
     // triage uses the new clearTriageOperation
     expect(src).toMatch(/clearTriageOperation/);
   });

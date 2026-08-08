@@ -1,7 +1,13 @@
 // src/lib/webhookHandlers/commentCommands/handleManualRun.js
 // /gitwire run [pillar] — manual re-evaluation of one or more pillars.
+//
+// This handler resolves the full target object (issue or PR) from GitHub,
+// constructs worker-native payloads with a stable "manual-run" action,
+// clears the exact lifecycle keys the workers will check, enqueues the
+// correct job per target type, and posts a GitHub-visible acknowledgment.
 
 import { buildTriageOperationKey } from "../../../services/idempotencyService.js";
+import { buildCommandResponse } from "../../../lib/commentRouter.js";
 
 export async function handleManualRun(payload, parsed, action, ctx) {
   const isPR = !!payload.issue?.pull_request;
@@ -12,72 +18,156 @@ export async function handleManualRun(payload, parsed, action, ctx) {
 
   const { clearIdempotencyKey, clearTriageOperation } = await import("../../../services/idempotencyService.js");
 
+  // For PRs, we need the full PR object (with head.sha, base.ref, etc.)
+  // that the issue_comment webhook payload does not carry.
+  let fullPR = null;
+  if (isPR && installationId) {
+    try {
+      const octokit = ctx.wrapOctokit(await ctx.getInstallationClient(installationId));
+      const [owner, repo] = repoFullName.split("/");
+      const { data: prData } = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner, repo, pull_number: issueNumber,
+      });
+      fullPR = prData;
+    } catch (err) {
+      ctx.logger.warn({ err: err.message, repo: repoFullName, pr: issueNumber }, "Failed to fetch full PR for manual-run");
+    }
+  }
+
+  let dispatched = [];
+
   if (isPR) {
-    await handlePRManualRun(payload, parsed, pillar, issueNumber, installationId, ctx, { clearIdempotencyKey, clearTriageOperation, buildTriageOperationKey });
+    dispatched = await handlePRManualRun(payload, parsed, pillar, issueNumber, installationId, ctx, {
+      clearIdempotencyKey, clearTriageOperation, fullPR,
+    });
   } else {
-    await handleIssueManualRun(payload, parsed, pillar, repoFullName, issueNumber, installationId, ctx, { clearIdempotencyKey, clearTriageOperation, buildTriageOperationKey });
+    dispatched = await handleIssueManualRun(payload, parsed, pillar, repoFullName, issueNumber, installationId, ctx, {
+      clearIdempotencyKey, clearTriageOperation,
+    });
   }
 
-  ctx.logger.info({ command: "run", pillar, repo: repoFullName, issue: issueNumber, isPR }, "/gitwire run queued");
+  // Post GitHub-visible acknowledgment
+  await postAcknowledgment(payload, parsed, action, dispatched, ctx);
+
+  ctx.logger.info({ command: "run", pillar, repo: repoFullName, issue: issueNumber, isPR, dispatched }, "/gitwire run processed");
 }
 
-// Build the repository-scoped triage operation key for manual-run re-clearing.
-// The webhook payload may not carry the GitHub-internal repository/issue ids in
-// every shape; we fall back to the numbers so the key remains stable across
-// the manual-run path and the worker path (which uses the same builder).
-function manualTriageOperationKey(payload, issueNumber, isPR) {
-  const repoId = payload.repository?.id ?? payload.repository?.full_name ?? "unknown";
-  const targetId = payload.issue?.id ?? issueNumber;
-  return buildTriageOperationKey({
-    targetType: isPR ? "pr" : "issue",
-    repoId,
-    targetId,
-    action: "manual-run",
-  });
-}
-
-async function handlePRManualRun(payload, parsed, pillar, issueNumber, installationId, ctx, idem) {
-  if (pillar === "all" || pillar === "review") {
-    // AI review is not migrated to the new lifecycle — legacy key retained.
-    await idem.clearIdempotencyKey("ai_review", "pr-" + issueNumber + "-" + (payload.issue?.pull_request?.url || "unknown"));
-    await ctx.phase4Queue.add("ai-review", {
-      pr: { number: issueNumber, base: { ref: payload.issue?.pull_request?.base?.ref }, user: payload.issue?.user },
-      repository: payload.repository,
-      installation: payload.installation,
-    }, { priority: 1 });
-  }
-  if (pillar === "all" || pillar === "triage") {
-    // Triage uses the success-bound lifecycle. Clear both the active lease and
-    // the complete marker so the queued job can re-acquire the lease and run.
-    // Also clear the legacy key to cover jobs enqueued before this change.
-    const opKey = manualTriageOperationKey(payload, issueNumber, true);
-    await idem.clearTriageOperation("triage", opKey);
-    await idem.clearIdempotencyKey("triage", "issue-" + issueNumber + "-reopened");
-    await ctx.triageQueue.add("triage-issue", { payload }, { priority: 1 });
-  }
-  if (pillar === "heal") {
-    // CI heal is not migrated to the new lifecycle — legacy key retained.
-    await idem.clearIdempotencyKey("ci_heal", "heal-pr-" + issueNumber);
-    ctx.logger.info({ repo: payload.repository?.full_name, pr: issueNumber }, "/gitwire run heal — CI heal requires a failed workflow_run event");
-  }
-}
+// ── Issue manual run ─────────────────────────────────────────────────────────
 
 async function handleIssueManualRun(payload, parsed, pillar, repoFullName, issueNumber, installationId, ctx, idem) {
+  const dispatched = [];
+
   if (pillar === "all" || pillar === "triage") {
-    // Triage uses the success-bound lifecycle. Clear the new operation keys.
-    const opKey = manualTriageOperationKey(payload, issueNumber, false);
+    // Normalize the payload so the worker builds the same lifecycle key we clear.
+    // The worker uses payload.action for the operation key; we set it to "manual-run"
+    // so beginOperation checks repo:...:issue:...:manual-run — the exact key we clear.
+    const normalizedPayload = { ...payload, action: "manual-run" };
+    const opKey = buildTriageOperationKey({
+      targetType: "issue",
+      repoId: payload.repository?.id ?? payload.repository?.full_name ?? "unknown",
+      targetId: payload.issue?.id ?? issueNumber,
+      action: "manual-run",
+    });
     await idem.clearTriageOperation("triage", opKey);
+    // Legacy key clear for backward compat with pre-lifecycle jobs
     await idem.clearIdempotencyKey("triage", "issue-" + issueNumber + "-reopened");
-    await ctx.triageQueue.add("triage-issue", { payload }, { priority: 1 });
+    await ctx.triageQueue.add("triage-issue", { payload: normalizedPayload }, { priority: 1 });
+    dispatched.push("triage");
   }
+
   if (pillar === "all" || pillar === "fix") {
-    // Issue fix is not migrated to the new lifecycle — legacy key retained.
     await idem.clearIdempotencyKey("issue_fix", "issue-" + issueNumber);
     await ctx.issueFixQueue.add("fix-issue", {
-      repo: repoFullName,
-      issueNumber,
-      installationId,
-      triggeredBy: parsed.authorLogin,
+      repo: repoFullName, issueNumber, installationId, triggeredBy: parsed.authorLogin,
     }, { priority: 1 });
+    dispatched.push("fix");
+  }
+
+  return dispatched;
+}
+
+// ── PR manual run ────────────────────────────────────────────────────────────
+
+async function handlePRManualRun(payload, parsed, pillar, issueNumber, installationId, ctx, idem) {
+  const { fullPR } = idem;
+  const dispatched = [];
+
+  if (pillar === "all" || pillar === "review") {
+    if (!fullPR?.head?.sha) {
+      ctx.logger.warn({ repo: payload.repository?.full_name, pr: issueNumber }, "/gitwire run review: could not resolve PR head SHA — skipping review");
+    } else {
+      // Clear the exact key the phase4 worker checks: pr-{number}-{head.sha}
+      const reviewKey = "pr-" + issueNumber + "-" + fullPR.head.sha;
+      await idem.clearIdempotencyKey("ai_review", reviewKey);
+      // Queue with the full PR object so head.sha, base.ref, changed_files, etc. are available
+      await ctx.phase4Queue.add("ai-review", {
+        pr: fullPR,
+        repository: payload.repository,
+        installation: payload.installation,
+      }, { priority: 1 });
+      dispatched.push("review");
+    }
+  }
+
+  if (pillar === "all" || pillar === "triage") {
+    // Construct a worker-native pull_request payload with the full PR object.
+    // Queue triage-pr (not triage-issue) so triagePR() handles it.
+    const normalizedPayload = {
+      ...payload,
+      action: "manual-run",
+      pull_request: fullPR || payload.issue?.pull_request || { number: issueNumber },
+    };
+    const opKey = buildTriageOperationKey({
+      targetType: "pr",
+      repoId: payload.repository?.id ?? payload.repository?.full_name ?? "unknown",
+      targetId: fullPR?.id ?? issueNumber,
+      action: "manual-run",
+    });
+    await idem.clearTriageOperation("triage", opKey);
+    await idem.clearIdempotencyKey("triage", "issue-" + issueNumber + "-reopened");
+    await ctx.triageQueue.add("triage-pr", { payload: normalizedPayload }, { priority: 1 });
+    dispatched.push("triage");
+  }
+
+  if (pillar === "heal") {
+    // CI heal requires a workflow_run event — cannot be manually triggered.
+    // Record as dispatched with a truthful "unsupported" flag for the acknowledgment.
+    dispatched.push("heal-unsupported");
+  }
+
+  return dispatched;
+}
+
+// ── Acknowledgment ───────────────────────────────────────────────────────────
+
+async function postAcknowledgment(payload, parsed, action, dispatched, ctx) {
+  try {
+    const pillar = action.pillar || "all";
+    let body;
+
+    if (dispatched.includes("heal-unsupported") && dispatched.length === 1) {
+      // Only heal was requested
+      body = "ℹ️ **GitWire:** CI healing requires a failed workflow run event and cannot be manually triggered through this command.";
+    } else if (dispatched.length === 0) {
+      body = "⚠️ **GitWire:** No workers could be dispatched. Check that GitWire is properly configured for this repository.";
+    } else {
+      const parts = [];
+      if (dispatched.includes("triage")) parts.push("triage");
+      if (dispatched.includes("review")) parts.push("AI review");
+      if (dispatched.includes("fix")) parts.push("issue fix");
+      const pillarLabel = pillar === "all" ? parts.join(", ") : "**" + pillar + "**";
+      body = "▶️ **GitWire:** Re-evaluation triggered for " + pillarLabel + ". Results will appear shortly.";
+      if (dispatched.includes("heal-unsupported")) {
+        body += "\n\nℹ️ CI healing requires a failed workflow run event and was not triggered.";
+      }
+    }
+
+    const octokit = ctx.wrapOctokit(await ctx.getInstallationClient(payload.installation?.id));
+    const [owner, repo] = payload.repository.full_name.split("/");
+    await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+      owner, repo, issue_number: parsed.issueNumber, body,
+    });
+  } catch (err) {
+    ctx.logger.warn({ err: err.message }, "Failed to post /gitwire run acknowledgment comment");
   }
 }
