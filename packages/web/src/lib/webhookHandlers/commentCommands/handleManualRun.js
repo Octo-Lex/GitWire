@@ -1,6 +1,8 @@
 // src/lib/webhookHandlers/commentCommands/handleManualRun.js
 // /gitwire run [pillar] — manual re-evaluation of one or more pillars.
 
+import { buildTriageOperationKey } from "../../../services/idempotencyService.js";
+
 export async function handleManualRun(payload, parsed, action, ctx) {
   const isPR = !!payload.issue?.pull_request;
   const pillar = action.pillar;
@@ -8,7 +10,7 @@ export async function handleManualRun(payload, parsed, action, ctx) {
   const issueNumber = parsed.issueNumber;
   const installationId = payload.installation?.id;
 
-  const { clearIdempotencyKey, clearTriageOperation, buildTriageOperationKey } = await import("../../../services/idempotencyService.js");
+  const { clearIdempotencyKey, clearTriageOperation } = await import("../../../services/idempotencyService.js");
 
   if (isPR) {
     await handlePRManualRun(payload, parsed, pillar, issueNumber, installationId, ctx, { clearIdempotencyKey, clearTriageOperation, buildTriageOperationKey });
