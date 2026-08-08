@@ -49,12 +49,31 @@ jest.unstable_mockModule("../../src/services/issueService.js", () => ({ issueSer
 jest.unstable_mockModule("../../src/services/duplicateDetectionService.js", () => ({
   detectDuplicates: jest.fn(), backfillEmbeddings: jest.fn(),
 }));
-jest.unstable_mockModule("../../src/services/idempotencyService.js", () => ({ checkAndMark: jest.fn().mockResolvedValue(true) }));
+jest.unstable_mockModule("../../src/services/idempotencyService.js", () => ({
+  checkAndMark: jest.fn().mockResolvedValue(true),
+  beginOperation: jest.fn().mockResolvedValue({ acquired: true, alreadyComplete: false, token: "test-token" }),
+  completeOperation: jest.fn().mockResolvedValue(true),
+  abandonOperation: jest.fn().mockResolvedValue(true),
+  buildTriageOperationKey: jest.fn(({ targetType, repoId, targetId, action }) =>
+    `repo:${repoId}:${targetType}:${targetId}:${action}`),
+}));
 jest.unstable_mockModule("../../src/services/waiverService.js", () => ({ isWaived: jest.fn().mockResolvedValue(null) }));
 jest.unstable_mockModule("../../src/services/telegramNotifyService.js", () => ({ notifyTriage: jest.fn().mockResolvedValue(null) }));
 jest.unstable_mockModule("../../src/services/actionStateMachine.js", () => ({
   propose: jest.fn().mockResolvedValue({ id: "a1" }), approve: jest.fn(), execute: jest.fn(),
   succeed: jest.fn(), fail: jest.fn(), cancel: jest.fn(),
+  findCompletedTriageAction: jest.fn().mockResolvedValue(null),
+}));
+jest.unstable_mockModule("../../src/services/triageFailureService.js", () => ({
+  classifyTriageFailure: jest.fn((e) => ({ failureClass: "unknown", retryable: true, statusCode: null, safeMessage: "test", failedAt: "2026-01-01T00:00:00Z" })),
+  isPermanentFailure: jest.fn(() => false),
+  sanitizeForRetention: jest.fn((c) => ({ ...c, attempts: 1, firstFailedAt: c.failedAt, latestFailedAt: c.failedAt })),
+}));
+jest.unstable_mockModule("../../src/lib/commentMarkers.js", () => ({
+  postMarkedComment: jest.fn().mockResolvedValue({ action: "created", comment_id: 1 }),
+  buildMarker: jest.fn((t, id) => `<!-- gitwire:${t}:${id} -->`),
+  buildMarkedComment: jest.fn((t, id, b) => `<!-- gitwire:${t}:${id} -->\n${b}`),
+  findCommentByMarker: jest.fn(),
 }));
 jest.unstable_mockModule("@gitwire/rules", () => ({
   isPillarEnabled: jest.fn(() => false), isDryRun: jest.fn(() => false), shouldTrigger: jest.fn(() => true),
