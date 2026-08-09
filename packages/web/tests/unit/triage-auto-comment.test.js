@@ -337,4 +337,28 @@ describe("PF-A1-01: triage auto_comment semantics", () => {
     const commentBody = mockPostMarkedComment.mock.calls[0][6];
     expect(commentBody).not.toContain("Labels applied");
   });
+
+  // 7. duplicate_hint case → comment includes the duplicate section
+  it("includes duplicate_hint section in the comment when applicable", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{
+        text: JSON.stringify({
+          type: "bug",
+          priority: "medium",
+          triage_summary: "This looks similar to an existing issue.",
+          labels: ["bug"],
+          needs_more_info: false,
+          duplicate_hint: "#5 — similar crash on startup",
+        }),
+      }],
+      usage: { input_tokens: 100, output_tokens: 50 },
+    });
+
+    await triageIssue(makeIssuePayload());
+
+    expect(mockPostMarkedComment).toHaveBeenCalledTimes(1);
+    const commentBody = mockPostMarkedComment.mock.calls[0][6];
+    expect(commentBody).toContain("Possible duplicate");
+    expect(commentBody).toContain("#5");
+  });
 });

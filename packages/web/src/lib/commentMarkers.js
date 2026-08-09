@@ -38,6 +38,13 @@ export function buildMarkedComment(type, id, body) {
 /**
  * Find an existing GitWire comment by its marker on an issue or PR.
  *
+ * Paginates through ALL issue comments until either:
+ *   - all pages have been searched (no more matches possible), or
+ *   - at least two matching markers have been found (ambiguity proven).
+ *
+ * This prevents duplicate comments when the marker is on a page beyond
+ * the first 100 comments returned by the GitHub API.
+ *
  * @param {object} octokit — the GitHub client
  * @param {string} owner
  * @param {string} repo
@@ -47,19 +54,42 @@ export function buildMarkedComment(type, id, body) {
  *   Returns { ambiguous: true, comments: [] } if multiple matches found.
  */
 export async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {
-  // List comments — we'll search for the marker in the body
-  const { data: comments } = await octokit.request(
-    "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
-    {
-      owner,
-      repo,
-      issue_number: issueNumber,
-      per_page: 100,
-    }
-  );
+  const matches = [];
+  let page = 1;
+  const PER_PAGE = 100;
 
-  // Filter to comments that contain our exact marker
-  const matches = comments.filter((c) => c.body && c.body.includes(marker));
+  // Paginate until we run out of pages or find ambiguity
+  while (true) {
+    const { data: comments } = await octokit.request(
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        per_page: PER_PAGE,
+        page,
+      }
+    );
+
+    // Search this page for our marker
+    for (const c of comments) {
+      if (c.body && c.body.includes(marker)) {
+        matches.push(c);
+      }
+    }
+
+    // Early exit: ambiguity already proven — no need to fetch more pages
+    if (matches.length >= 2) {
+      return { ambiguous: true, comments: matches };
+    }
+
+    // If this page had fewer than PER_PAGE comments, there are no more pages
+    if (comments.length < PER_PAGE) {
+      break;
+    }
+
+    page++;
+  }
 
   if (matches.length === 0) {
     return null; // No existing comment — create new
