@@ -1,0 +1,28 @@
+{
+  "caseId": "RI-02",
+  "variant": "fixed",
+  "source": {
+    "repo": "AgentGears/AlCode",
+    "pr": 2,
+    "base": "0181b19f00dc",
+    "head": "20219bd384"
+  },
+  "prMetadata": {
+    "title": "docs: roadmap refresh — Host architecture orientation + stale status fix",
+    "body": "Post Phase 0.2 roadmap refresh.\n\nCreates `docs/roadmap.md` as the architecture orientation document encoding the refreshed target: Host authority, replaceable Agent, mediated capabilities, durable scheduling, continuous input semantics, workspace abstraction. The phase sequence stays the same; what changes is what each phase builds toward.\n\nAlso fixes stale Phase 0.0 'REOPENED' status text and marks 0.1A/0.2 as CLOSED to match the actual executable state. `phase-0-spec.md` remains the authoritative executable specification; `roadmap.md` is the orientation document that cross-references it.\n\nNo code changes, no gate changes.",
+    "head": "20219bd384",
+    "base": "0181b19f00dc",
+    "author": "Alajmah"
+  },
+  "changedFiles": [
+    {
+      "filename": "docs/phase-0-spec.md",
+      "status": "modified",
+      "additions": 8,
+      "deletions": 4,
+      "patch": "@@ -541,7 +541,11 @@ cancelled request, concurrent reinforcement).\n \n **Exit gate:** `pnpm gate:0.5` emits `status: \"passed\"` — the Ouroboros 0.20\n continuity proof reproduced in ALCODE: kill process mid-task, reopen,\n-`resume → orient → act` with state intact; all crash/concurrency tests pass.\n+`resume → orient → act` with state intact; **Agent replacement/restart does\n+not invalidate Host-owned execution identity or durable state** — the Host\n+supervises the Agent, so replacing or restarting the Agent process preserves\n+operation identity, session state, and canonical events; all\n+crash/concurrency tests pass.\n \n **Failure/rollback rule:** if cognition semantics leak into the extension,\n refactor — the boundary is a hard rule.\n@@ -737,9 +741,9 @@ migration receipt. **Never point the new runtime at old live databases.**\n ## Phase 0 estimated total range\n \n ```\n-0.0  Architecture foundation (REOPENED):        2–4 days\n-0.1A Minimal agent loop + offline provider:    2–4 days\n-0.2  Minimal durable vertical slice:           1–2 weeks   (load-bearing)\n+0.0  Architecture foundation (CLOSED):          2–4 days\n+0.1A Minimal agent loop + offline provider:    2–4 days    [CLOSED]\n+0.2  Minimal durable vertical slice:           1–2 weeks   [CLOSED]\n 0.1B Remaining tools, live providers, repro:   3–7 days\n 0.3  Memory semantic core (Ola):               3–7 days\n 0.4  Reasoning semantic core (Ouroboros):      1–2 weeks",
+      "sha": "3b293c94bb4114c0b8a49e81b18f8600a052d4b4"
+    }
+  ],
+  "contextFiles": []
+}

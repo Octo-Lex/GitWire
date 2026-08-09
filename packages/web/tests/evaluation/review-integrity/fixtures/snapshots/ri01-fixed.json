@@ -1,0 +1,44 @@
+{
+  "caseId": "RI-01",
+  "variant": "fixed",
+  "source": {
+    "repo": "AgentGears/AlCode",
+    "pr": 2,
+    "base": "0181b19f00dc",
+    "head": "20219bd384"
+  },
+  "prMetadata": {
+    "title": "docs: roadmap refresh — Host architecture orientation + stale status fix",
+    "body": "Post Phase 0.2 roadmap refresh.\n\nCreates `docs/roadmap.md` as the architecture orientation document encoding the refreshed target: Host authority, replaceable Agent, mediated capabilities, durable scheduling, continuous input semantics, workspace abstraction. The phase sequence stays the same; what changes is what each phase builds toward.\n\nAlso fixes stale Phase 0.0 'REOPENED' status text and marks 0.1A/0.2 as CLOSED to match the actual executable state. `phase-0-spec.md` remains the authoritative executable specification; `roadmap.md` is the orientation document that cross-references it.\n\nNo code changes, no gate changes.",
+    "head": "20219bd384",
+    "base": "0181b19f00dc",
+    "author": "Alajmah"
+  },
+  "changedFiles": [
+    {
+      "filename": "README.md",
+      "status": "modified",
+      "additions": 15,
+      "deletions": 16,
+      "patch": "@@ -8,16 +8,17 @@ reasoning, tools, model access, persistence, and UI are governed by one\n codebase. The append-only event log is the source of truth; reasoning, memory,\n the transcript, the UI, and the LLM context window are all projections of it.\n \n-**Status:** Phase 0.0 (architecture foundation) — **reopened**. Documentation\n-is complete; the executable scaffold (workspace, `events` package, gate runner,\n-ADRs, threat model, recovery model, licensing, minimal CI) is pending.\n+**Status:** Phases 0.0, 0.1A, 0.2 — **closed**. The durable event/recovery\n+spine is proven (gate:0.2 green on `main`). See\n+[`docs/roadmap.md`](docs/roadmap.md) for architecture orientation.\n \n `ref/` (gitignored) holds studied reference codebases — not part of this repo.\n \n ## Read first\n \n 1. [`docs/constitution.md`](docs/constitution.md) — the 10 frozen principles.\n-2. [`docs/phase-0-spec.md`](docs/phase-0-spec.md) — the executable build order,\n+2. [`docs/roadmap.md`](docs/roadmap.md) — architecture orientation and sequencing.\n+3. [`docs/phase-0-spec.md`](docs/phase-0-spec.md) — the executable build order,\n    with gate-receipt schema and per-phase `pnpm gate:X.Y` exit gates.\n 3. [`docs/event-contract.md`](docs/event-contract.md) — the domain event\n    envelope, producer, identity, versioning semantics, and ownership rules.\n@@ -58,9 +59,9 @@ accidental distribution by owning the whole cognitive loop. See\n ## Phase 0 at a glance\n \n ```\n-0.0  Architecture foundation (REOPENED):        2–4 days      [docs done; scaffold pending]\n-0.1A Minimal agent loop + offline provider:    2–4 days      [next]\n-0.2  Minimal durable vertical slice:           1–2 weeks     (load-bearing)\n+0.0  Architecture foundation (CLOSED):          2–4 days\n+0.1A Minimal agent loop + offline provider:    2–4 days      [CLOSED]\n+0.2  Minimal durable vertical slice:           1–2 weeks     [CLOSED]\n 0.1B Remaining tools, live providers, repro:   3–7 days\n 0.3  Memory semantic core (Ola):               3–7 days\n 0.4  Reasoning semantic core (Ouroboros):      1–2 weeks\n@@ -77,14 +78,12 @@ Every phase ends with an **executable gate** (`pnpm gate:X.Y`) that emits a\n machine-readable `GateReceipt` — see `docs/phase-0-spec.md` for the schema.\n Gates drive sequencing, not calendars.\n \n-## The next action\n+## The next phases\n \n-Phase 0.0's documentation is complete; the executable scaffold is pending. The\n-next action is to **finish Phase 0.0**: create the `packages/` workspace,\n-implement the `events` scaffold, add the `test-provider`, set up the gate\n-runner harness with the `GateReceipt` schema, add minimal CI on one platform,\n-write `LICENSE`/`THIRD_PARTY_NOTICES.md`, and make `pnpm gate:0.0` emit\n-`status: \"passed\"`.\n+Phases 0.0, 0.1A, and 0.2 are closed — the durable event/recovery spine is\n+proven. The next phases are 0.1B (capability foundation), 0.3 (memory\n+semantics), and 0.4 (reasoning semantics), which can proceed in parallel.\n \n-See [`docs/phase-0-spec.md`](docs/phase-0-spec.md) §0.0 for the exact scope,\n-exclusions, deliverables, tests, and exit gate.\n+See [`docs/roadmap.md`](docs/roadmap.md) for architecture orientation and\n+[`docs/phase-0-spec.md`](docs/phase-0-spec.md) for the executable\n+specification with per-phase exit gates.",
+      "sha": "51d2a1de32ce3fea2f6439332121acc4364de021"
+    },
+    {
+      "filename": "docs/constitution.md",
+      "status": "modified",
+      "additions": 3,
+      "deletions": 4,
+      "patch": "@@ -67,10 +67,9 @@ governed by one codebase.\n \n ## Status\n \n-Phase 0.0 is **reopened** — documentation was complete but the executable\n-scaffold (workspace, `events` package, gate runner, ADRs, threat model,\n-recovery model, licensing, minimal CI) was not. See `docs/phase-0-spec.md` §0.0\n-for the corrected, executable scope.\n+Phases 0.0, 0.1A, and 0.2 are **closed** — the durable event/recovery spine\n+is proven (`gate:0.2` green on `main`). See `docs/roadmap.md` for architecture\n+orientation and `docs/phase-0-spec.md` for the executable specification.\n \n ## Relationship to the prior work\n ",
+      "sha": "43c995678a72bb6b8527ba50629131f943ccaac1"
+    },
+    {
+      "filename": "docs/phase-0-spec.md",
+      "status": "modified",
+      "additions": 8,
+      "deletions": 4,
+      "patch": "@@ -541,7 +541,11 @@ cancelled request, concurrent reinforcement).\n \n **Exit gate:** `pnpm gate:0.5` emits `status: \"passed\"` — the Ouroboros 0.20\n continuity proof reproduced in ALCODE: kill process mid-task, reopen,\n-`resume → orient → act` with state intact; all crash/concurrency tests pass.\n+`resume → orient → act` with state intact; **Agent replacement/restart does\n+not invalidate Host-owned execution identity or durable state** — the Host\n+supervises the Agent, so replacing or restarting the Agent process preserves\n+operation identity, session state, and canonical events; all\n+crash/concurrency tests pass.\n \n **Failure/rollback rule:** if cognition semantics leak into the extension,\n refactor — the boundary is a hard rule.\n@@ -737,9 +741,9 @@ migration receipt. **Never point the new runtime at old live databases.**\n ## Phase 0 estimated total range\n \n ```\n-0.0  Architecture foundation (REOPENED):        2–4 days\n-0.1A Minimal agent loop + offline provider:    2–4 days\n-0.2  Minimal durable vertical slice:           1–2 weeks   (load-bearing)\n+0.0  Architecture foundation (CLOSED):          2–4 days\n+0.1A Minimal agent loop + offline provider:    2–4 days    [CLOSED]\n+0.2  Minimal durable vertical slice:           1–2 weeks   [CLOSED]\n 0.1B Remaining tools, live providers, repro:   3–7 days\n 0.3  Memory semantic core (Ola):               3–7 days\n 0.4  Reasoning semantic core (Ouroboros):      1–2 weeks",
+      "sha": "3b293c94bb4114c0b8a49e81b18f8600a052d4b4"
+    }
+  ],
+  "contextFiles": []
+}
