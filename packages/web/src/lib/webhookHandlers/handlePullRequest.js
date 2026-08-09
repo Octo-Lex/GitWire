@@ -11,6 +11,16 @@ export async function handlePullRequest(payload, deliveryId, ctx, meta = {}) {
     const spamResult = await checkSpamGate(ctx, payload, "pull_request");
     if (spamResult.blocked) {
       ctx.logger.info({ pr: payload.pull_request?.number, reason: spamResult.reason }, "PR blocked by spam gate");
+      // Terminalize the GitWire check that was created by the webhook route.
+      // Enqueue a Phase 4 job with the checkRunId and a skipReason so the
+      // worker finalizes it neutral without running reviewPR.
+      await ctx.phase4Queue.add("ai-review", {
+        pr:           payload.pull_request,
+        repository:   payload.repository,
+        installation: payload.installation,
+        checkRunId:   meta.checkRunId || null,
+        skipReason:   "spam_gate",
+      }, { priority: 1 });
       return; // Don't triage spam
     }
   }

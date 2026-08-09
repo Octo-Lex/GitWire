@@ -410,4 +410,20 @@ describe("Phase 4 worker check ownership lifecycle", () => {
       { attemptsMade: 0, attemptsStarted: 2 },
     )).rejects.toThrow("PATCH failed");
   });
+
+  it("11. skipReason=spam_gate → reviewPR not called, owned check finalized neutral", async () => {
+    await processReviewJob({
+      ...baseJobData,
+      checkRunId: 5000,
+      skipReason: "spam_gate",
+    });
+
+    // finalizeGitwireCheck should have been called with reviewResult=null (neutral)
+    expect(mockFinalizeGitwireCheck).toHaveBeenCalledWith(expect.objectContaining({
+      checkRunId: 5000,
+      reviewResult: null,
+    }));
+    // reviewPR should NOT have been called
+    expect(mockReviewPR).not.toHaveBeenCalled();
+  });
 });

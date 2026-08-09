@@ -25,7 +25,7 @@ export function startPhase4Worker() {
     switch (job.name) {
 
       case "ai-review": {
-        const { pr, repository, installation, checkRunId } = job.data;
+        const { pr, repository, installation, checkRunId, skipReason } = job.data;
         if (!pr || !repository || !installation) return;
 
         const ownedCheckRunId = checkRunId || null;
@@ -105,6 +105,16 @@ export function startPhase4Worker() {
               patchRetryPending = true;
               throw new Error("GitWire check finalization PATCH failed on retry — will retry again");
             }
+          }
+
+          // ── Skip-reason terminalization (e.g. spam-gate blocked PR) ────────
+          // The webhook route created a GitWire check before the spam gate ran.
+          // The handler enqueued this job with skipReason so the check reaches
+          // a terminal state without running reviewPR.
+          if (skipReason) {
+            logger.info({ pr: pr.number, skipReason }, "AI review skipped — terminalizing owned check");
+            await finalizeOwn(null);
+            return;
           }
 
           // ── Check .gitwire.yml pillar config ──────────────────────────────
