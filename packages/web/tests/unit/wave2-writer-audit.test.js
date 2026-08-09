@@ -46,11 +46,11 @@ const AUDIT = {
     { file: "workers/triageWorker.js", line: 177, func: "triageIssue", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "issue.user.login", classification: "worker_auth_context" },
     { file: "workers/triageWorker.js", line: 269, func: "triageIssue label recovery", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "issue.user.login", classification: "worker_auth_context" },
     { file: "workers/triageWorker.js", line: 332, func: "triageIssue", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "issue.user.login", classification: "worker_auth_context" },
-    { file: "workers/triageWorker.js", line: 476, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
-    { file: "workers/triageWorker.js", line: 490, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
-    { file: "workers/triageWorker.js", line: 505, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
-    { file: "workers/triageWorker.js", line: 573, func: "triagePR label recovery", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
-    { file: "workers/triageWorker.js", line: 606, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
+    { file: "workers/triageWorker.js", line: 480, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
+    { file: "workers/triageWorker.js", line: 494, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
+    { file: "workers/triageWorker.js", line: 509, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
+    { file: "workers/triageWorker.js", line: 577, func: "triagePR label recovery", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
+    { file: "workers/triageWorker.js", line: 610, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
     // triageOperations.js — retry route decision log; http_auth_context (req.auth)
     { file: "routes/triageOperations.js", line: 159, func: "retry route", principalIdExpr: "req.auth.principalId", contextSource: "req.auth (authContext)", legacyActor: "n/a", classification: "http_auth_context" },
   ],
@@ -83,8 +83,8 @@ const AUDIT = {
     { file: "workers/ciHealWorker.js", line: 823, func: "ciHealWorker healAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/issueFix/validate.js", line: 92, func: "validate", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/triageWorker.js", line: 279, func: "triageIssue labelAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
-    { file: "workers/triageWorker.js", line: 380, func: "triageIssue commentAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
-    { file: "workers/triageWorker.js", line: 582, func: "triagePR sizeAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/triageWorker.js", line: 384, func: "triageIssue commentAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "workers/triageWorker.js", line: 586, func: "triagePR sizeAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
   ],
 };
 
