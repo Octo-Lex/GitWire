@@ -1,458 +1,586 @@
 // tests/evaluation/review-integrity/fixtures/registry.js
 // Regression corpus for Review Integrity (RI-01 through RI-04).
 //
-// Each regression case has a broken and fixed variant. The broken variant
-// contains a material defect that GitWire's review must detect (P0/P1/P2)
-// or must not APPROVE. The fixed variant is the same PR with the defect
-// corrected, which should be eligible for APPROVE under the v2 policy.
+// Each case is reconstructed from the EXACT pre-correction reviewed head
+// (the broken state that was falsely approved) and the EXACT correction
+// that resolved the finding thread (the fixed state). No synthetic or
+// illustrative scenarios.
 //
 // The corpus is a SEED CORPUS — every new material production review miss
-// becomes a new case. These four are the known historical failures.
+// becomes a new case.
+
+// ── RI-01: Stale Phase 0 status declarations (AlCode PR #2) ─────────────────
+//
+// Broken head: 0181b19f00 — phase-0-spec.md status changed to CLOSED,
+// but README.md and constitution.md still say Phase 0.0 is REOPENED.
+// Codex P2: "Synchronize all Phase 0 status declarations."
+//
+// Fixed head: 20219bd384 — README.md, constitution.md, and phase-0-spec.md
+// all consistently say CLOSED.
+
+const RI01_BROKEN = {
+  caseId: "RI-01",
+  variant: "broken",
+  source: "AgentGears/AlCode PR #2 (commit 0181b19f00)",
+  title: "docs: roadmap refresh — Host architecture orientation + stale status fix",
+
+  prMetadata: {
+    title: "docs: roadmap refresh — Host architecture orientation + stale status fix",
+    body:
+      "Post Phase 0.2 roadmap refresh.\n\n" +
+      "Creates `docs/roadmap.md` as the architecture orientation document encoding the refreshed target: Host authority, replaceable Agent, mediated capabilities, durable scheduling, continuous input semantics, workspace abstraction. The phase sequence stays the same; what changes is what each phase builds toward.\n\n" +
+      "Also fixes stale Phase 0.0 'REOPENED' status text and marks 0.1A/0.2 as CLOSED to match the actual executable state. `phase-0-spec.md` remains the authoritative executable specification; `roadmap.md` is the orientation document that cross-references it.\n\n" +
+      "No code changes, no gate changes.",
+    head: "0181b19f00",
+    base: "main",
+    author: "alajmah",
+  },
+
+  changedFiles: [
+    {
+      filename: "docs/phase-0-spec.md",
+      status: "modified",
+      additions: 8,
+      deletions: 4,
+      patch:
+        "--- a/docs/phase-0-spec.md\n" +
+        "+++ b/docs/phase-0-spec.md\n" +
+        "@@ -1,4 +1,4 @@\n" +
+        " # ALCODE — Phase 0 Specification (executable)\n" +
+        "-Status: **active; Phase 0.0 reopened** (documentation complete, scaffold pending).\n" +
+        "+Status: **active; Phases 0.0, 0.1A, 0.2 closed** — gate:0.2 green on `main` (`dd07fb2`). See `docs/roadmap.md` for architecture orientation.\n",
+      headContent:
+        "# ALCODE — Phase 0 Specification (executable)\n\n" +
+        "Status: **active; Phases 0.0, 0.1A, 0.2 closed** — gate:0.2 green on `main` (`dd07fb2`). See `docs/roadmap.md` for architecture orientation.\n",
+      baseContent:
+        "# ALCODE — Phase 0 Specification (executable)\n\n" +
+        "Status: **active; Phase 0.0 reopened** (documentation complete, scaffold pending).\n",
+    },
+  ],
+
+  // Unchanged files in the repository at this commit — these contain the
+  // stale declarations that contradict the changed file. A reviewer reading
+  // only the diff would need to cross-reference these to find the contradiction.
+  contextFiles: [
+    {
+      path: "README.md",
+      sha: "readme_0181b19",
+      // At the broken commit, README still says REOPENED
+      content:
+        "# ALCODE\n\n" +
+        "One codebase, one reasoning loop. Reasoning, tools, model access,\n" +
+        "persistence, and UI are governed by one codebase.\n\n" +
+        "**Status:** Phase 0.0 (architecture foundation) — **reopened**. Documentation\n" +
+        "is complete; the executable scaffold (workspace, `events` package, gate runner,\n" +
+        "ADRs, threat model, recovery model, licensing, minimal CI) is pending.\n",
+    },
+    {
+      path: "docs/constitution.md",
+      sha: "constitution_0181b19",
+      content:
+        "## Status\n\n" +
+        "Phase 0.0 is **reopened** — documentation was complete but the executable\n" +
+        "scaffold (workspace, `events` package, gate runner, ADRs, threat model,\n" +
+        "recovery model, licensing, minimal CI) was not. See `docs/phase-0-spec.md` §0.0\n" +
+        "for the corrected, executable scope.\n",
+    },
+  ],
+
+  // The exact Codex finding
+  expectedFinding: {
+    severity: "P2",
+    title: "Synchronize all Phase 0 status declarations",
+    description:
+      "This new status says Phase 0.0 is closed, but the primary README.md:11-13, " +
+      "the frozen constitution at docs/constitution.md:68-73, and this specification's " +
+      "own summary at docs/phase-0-spec.md:737-742 still say it is reopened with the " +
+      "scaffold pending. Readers therefore receive contradictory build state depending " +
+      "on their entry point.",
+    evidencePaths: ["README.md", "docs/constitution.md", "docs/phase-0-spec.md"],
+  },
+  expectedVerdict: "never APPROVE",
+};
+
+const RI01_FIXED = {
+  caseId: "RI-01",
+  variant: "fixed",
+  source: "AgentGears/AlCode PR #2 (commit 20219bd384)",
+  title: RI01_BROKEN.title,
+  prMetadata: RI01_BROKEN.prMetadata,
+
+  changedFiles: [
+    {
+      filename: "docs/phase-0-spec.md",
+      status: "modified",
+      additions: 8,
+      deletions: 4,
+      patch: RI01_BROKEN.changedFiles[0].patch,
+      headContent: RI01_BROKEN.changedFiles[0].headContent,
+      baseContent: RI01_BROKEN.changedFiles[0].baseContent,
+    },
+    {
+      filename: "README.md",
+      status: "modified",
+      additions: 15,
+      deletions: 16,
+      patch:
+        "--- a/README.md\n" +
+        "+++ b/README.md\n" +
+        "@@ -8,16 +8,17 @@\n" +
+        "-**Status:** Phase 0.0 (architecture foundation) — **reopened**. Documentation\n" +
+        "-is complete; the executable scaffold (workspace, `events` package, gate runner,\n" +
+        "-ADRs, threat model, recovery model, licensing, minimal CI) is pending.\n" +
+        "+**Status:** Phases 0.0, 0.1A, 0.2 — **closed**. The durable event/recovery\n" +
+        "+spine is proven (gate:0.2 green on `main`). See\n" +
+        "+[`docs/roadmap.md`](docs/roadmap.md) for architecture orientation.\n",
+      headContent:
+        "**Status:** Phases 0.0, 0.1A, 0.2 — **closed**. The durable event/recovery\n" +
+        "spine is proven (gate:0.2 green on `main`). See\n" +
+        "[`docs/roadmap.md`](docs/roadmap.md) for architecture orientation.\n",
+      baseContent: RI01_BROKEN.contextFiles[0].content,
+    },
+    {
+      filename: "docs/constitution.md",
+      status: "modified",
+      additions: 3,
+      deletions: 4,
+      patch:
+        "--- a/docs/constitution.md\n" +
+        "+++ b/docs/constitution.md\n" +
+        "@@ -67,10 +67,9 @@\n" +
+        "-Phase 0.0 is **reopened** — documentation was complete but the executable\n" +
+        "-scaffold (workspace, `events` package, gate runner, ADRs, threat model,\n" +
+        "-recovery model, licensing, minimal CI) was not. See `docs/phase-0-spec.md` §0.0\n" +
+        "-for the corrected, executable scope.\n" +
+        "+Phases 0.0, 0.1A, and 0.2 are **closed** — the durable event/recovery spine\n" +
+        "+is proven (`gate:0.2` green on `main`). See `docs/roadmap.md` for architecture\n" +
+        "+orientation and `docs/phase-0-spec.md` for the executable specification.\n",
+      headContent:
+        "Phases 0.0, 0.1A, and 0.2 are **closed** — the durable event/recovery spine\n" +
+        "is proven (`gate:0.2` green on `main`). See `docs/roadmap.md` for architecture\n" +
+        "orientation and `docs/phase-0-spec.md` for the executable specification.\n",
+      baseContent: RI01_BROKEN.contextFiles[1].content,
+    },
+  ],
+
+  contextFiles: [],
+
+  expectedFinding: null,
+  expectedVerdict: "eligible for APPROVE",
+};
+
+// ── RI-02: Gate/contract mismatch — Agent replacement (AlCode PR #2) ────────
+//
+// Broken head: 0181b19f00 — roadmap.md (new file) declares Agent replacement
+// as part of Phase 0.5 architecture, but phase-0-spec.md gate 0.5 definition
+// only checks kill/reopen — no Agent-replacement assertion.
+// Codex P2: "Add agent-replacement assertions to gate 0.5."
+//
+// Fixed head: 20219bd384 — phase-0-spec.md gate 0.5 definition updated to
+// include the Agent replacement/restart assertion.
+
+const RI02_BROKEN = {
+  caseId: "RI-02",
+  variant: "broken",
+  source: "AgentGears/AlCode PR #2 (commit 0181b19f00)",
+  title: RI01_BROKEN.title,
+  prMetadata: RI01_BROKEN.prMetadata,
+
+  changedFiles: [
+    {
+      filename: "docs/roadmap.md",
+      status: "added",
+      additions: 385,
+      deletions: 0,
+      patch: "--- /dev/null\n+++ b/docs/roadmap.md\n",
+      headContent:
+        "# ALCODE Roadmap — Architecture Orientation\n\n" +
+        "The key shift: build semantic engines on the proven durable spine while\n" +
+        "progressively extracting a Host control plane, so that by Phase 0.5 the\n" +
+        "Agent is replaceable, capabilities are mediated, and durable execution —\n" +
+        "not the reasoning process — is the product authority.\n\n" +
+        "## Replaceable Agent\n\n" +
+        "The Agent is replaceable because the Host can reconstruct what the new\n" +
+        "Agent needs after restart. Agent replacement/restart does not invalidate\n" +
+        "Host-owned execution identity or durable state.\n",
+      baseContent: null,
+    },
+  ],
+
+  // The unchanged authoritative gate definition that lacks the assertion
+  contextFiles: [
+    {
+      path: "docs/phase-0-spec.md",
+      sha: "spec_0181b19",
+      content:
+        "**Exit gate:** `pnpm gate:0.5` emits `status: \"passed\"` — the Ouroboros 0.20\n" +
+        "continuity proof reproduced in ALCODE: kill process mid-task, reopen,\n" +
+        "`resume → orient → act` with state intact; all crash/concurrency tests pass.\n",
+    },
+  ],
+
+  expectedFinding: {
+    severity: "P2",
+    title: "Add agent-replacement assertions to gate 0.5",
+    description:
+      "When gate 0.5 is implemented from the document declared authoritative above, " +
+      "this new exit requirement will not be enforced: docs/phase-0-spec.md:542-544 " +
+      "checks killing and reopening the whole process with intact state, but never " +
+      "replaces or restarts an Agent independently or verifies preservation of " +
+      "Host-owned execution identity. The gate can therefore pass without proving " +
+      "the replaceable-Agent property that this roadmap explicitly makes part of " +
+      "the 0.5 exit proof.",
+    evidencePaths: ["docs/roadmap.md", "docs/phase-0-spec.md"],
+  },
+  expectedVerdict: "never APPROVE",
+};
+
+const RI02_FIXED = {
+  caseId: "RI-02",
+  variant: "fixed",
+  source: "AgentGears/AlCode PR #2 (commit 20219bd384)",
+  title: RI01_BROKEN.title,
+  prMetadata: RI01_BROKEN.prMetadata,
+
+  changedFiles: [
+    {
+      filename: "docs/phase-0-spec.md",
+      status: "modified",
+      additions: 8,
+      deletions: 4,
+      patch:
+        "--- a/docs/phase-0-spec.md\n" +
+        "+++ b/docs/phase-0-spec.md\n" +
+        "@@ -541,7 +541,11 @@\n" +
+        " **Exit gate:** `pnpm gate:0.5` emits `status: \"passed\"` — the Ouroboros 0.20\n" +
+        " continuity proof reproduced in ALCODE: kill process mid-task, reopen,\n" +
+        "-`resume → orient → act` with state intact; all crash/concurrency tests pass.\n" +
+        "+`resume → orient → act` with state intact; **Agent replacement/restart does\n" +
+        "+not invalidate Host-owned execution identity or durable state** — the Host\n" +
+        "+supervises the Agent, so replacing or restarting the Agent process preserves\n" +
+        "+operation identity, session state, and canonical events; all\n" +
+        "+crash/concurrency tests pass.\n",
+      headContent:
+        "**Exit gate:** `pnpm gate:0.5` emits `status: \"passed\"` — the Ouroboros 0.20\n" +
+        "continuity proof reproduced in ALCODE: kill process mid-task, reopen,\n" +
+        "`resume → orient → act` with state intact; **Agent replacement/restart does\n" +
+        "not invalidate Host-owned execution identity or durable state** — the Host\n" +
+        "supervises the Agent, so replacing or restarting the Agent process preserves\n" +
+        "operation identity, session state, and canonical events; all\n" +
+        "crash/concurrency tests pass.\n",
+      baseContent: RI02_BROKEN.contextFiles[0].content,
+    },
+  ],
+
+  contextFiles: [],
+
+  expectedFinding: null,
+  expectedVerdict: "eligible for APPROVE",
+};
+
+// ── RI-03: basePath omitted from activation URL (GitWire PR #123) ───────────
+//
+// Broken head: ef071ff — activation URL uses config.server.baseUrl + "/intelligence"
+// but the Next.js dashboard uses basePath: '/dashboard'. The correct URL should be
+// baseUrl + "/dashboard/intelligence".
+//
+// Fixed head: 67908f7 — extracted reviewActivationUrl() helper that includes /dashboard.
+
+const RI03_BROKEN = {
+  caseId: "RI-03",
+  variant: "broken",
+  source: "Octo-Lex/GitWire PR #123 (commit ef071ff)",
+  title: "fix(product): AI review dual-gate activation — actionable skip, truthful ack",
+
+  prMetadata: {
+    title: "fix(product): AI review dual-gate activation — actionable skip, truthful ack (PF-B1-01)",
+    body:
+      "When .gitwire.yml has ai_review.enabled: true but the ai_review_config DB\n" +
+      "row is missing or disabled, reviewPR() silently returned null. The check\n" +
+      "finalized neutral with a message that contradicted the committed config.\n\n" +
+      "Fix preserves the DB cost-control gate while making the skip explicit.",
+    head: "ef071ff",
+    base: "5f48600",
+    author: "alajmah",
+  },
+
+  changedFiles: [
+    {
+      filename: "packages/web/src/services/aiReviewService.js",
+      status: "modified",
+      additions: 5,
+      deletions: 1,
+      patch:
+        "--- a/packages/web/src/services/aiReviewService.js\n" +
+        "+++ b/packages/web/src/services/aiReviewService.js\n" +
+        "@@ -82,3 +82,7 @@\n" +
+        "   if (!cfg?.enabled) {\n" +
+        "-    return null;\n" +
+        "+    return {\n" +
+        "+      skipped: true,\n" +
+        "+      reason: \"not_activated\",\n" +
+        "+      activationUrl: config.server.baseUrl + \"/intelligence\"\n" +
+        "+    };\n" +
+        "   }\n",
+      headContent:
+        '  if (!cfg?.enabled) {\n' +
+        '    return {\n' +
+        '      skipped: true,\n' +
+        '      reason: "not_activated",\n' +
+        '      activationUrl: config.server.baseUrl + "/intelligence"\n' +
+        '    };\n' +
+        '  }\n',
+      baseContent: "  if (!cfg?.enabled) {\n    return null;\n  }\n",
+    },
+  ],
+
+  // The unchanged next.config.ts that declares basePath: '/dashboard'
+  contextFiles: [
+    {
+      path: "packages/web-dashboard/next.config.ts",
+      sha: "nextconfig_ts",
+      content:
+        'import type { NextConfig } from "next";\n\n' +
+        "const nextConfig: NextConfig = {\n" +
+        "  basePath: '/dashboard',\n" +
+        "};\n\n" +
+        "export default nextConfig;\n",
+    },
+  ],
+
+  expectedFinding: {
+    severity: "P1",
+    title: "Activation URL missing /dashboard basePath",
+    description:
+      "The URL is constructed as baseUrl + '/intelligence' but next.config.ts sets " +
+      "basePath: '/dashboard'. The correct URL is baseUrl + '/dashboard/intelligence'. " +
+      "The current URL will produce a 404 in production.",
+    evidencePaths: ["packages/web/src/services/aiReviewService.js", "packages/web-dashboard/next.config.ts"],
+  },
+  expectedVerdict: "never APPROVE",
+};
+
+const RI03_FIXED = {
+  caseId: "RI-03",
+  variant: "fixed",
+  source: "Octo-Lex/GitWire PR #123 (commit 67908f7)",
+  title: RI03_BROKEN.title,
+  prMetadata: RI03_BROKEN.prMetadata,
+
+  changedFiles: [
+    {
+      filename: "packages/web/src/services/aiReviewService.js",
+      status: "modified",
+      additions: 8,
+      deletions: 2,
+      patch:
+        "--- a/packages/web/src/services/aiReviewService.js\n" +
+        "+++ b/packages/web/src/services/aiReviewService.js\n" +
+        "@@ -82,3 +82,7 @@\n" +
+        "   if (!cfg?.enabled) {\n" +
+        "-    return null;\n" +
+        "+    return {\n" +
+        "+      skipped: true,\n" +
+        '+      reason: "not_activated",\n' +
+        "+      activationUrl: reviewActivationUrl()\n" +
+        "+    };\n" +
+        "   }\n" +
+        "@@ -805,0 +809,3 @@\n" +
+        "+function reviewActivationUrl() {\n" +
+        '+  return (config.server.baseUrl || "").replace(/\\/$/, "") + "/dashboard/intelligence";\n' +
+        "+}\n",
+      headContent:
+        '  if (!cfg?.enabled) {\n' +
+        '    return {\n' +
+        '      skipped: true,\n' +
+        '      reason: "not_activated",\n' +
+        '      activationUrl: reviewActivationUrl()\n' +
+        '    };\n' +
+        '  }\n',
+      baseContent: RI03_BROKEN.changedFiles[0].baseContent,
+    },
+  ],
+
+  contextFiles: RI03_BROKEN.contextFiles,
+
+  expectedFinding: null,
+  expectedVerdict: "eligible for APPROVE",
+};
+
+// ── RI-04: Unpaginated marker lookup (GitWire PR #124) ──────────────────────
+//
+// Broken head: 624732c — triage comment gate broadened from exception-only to
+// every issue, but findCommentByMarker() still fetches only one page of 100
+// comments. The commentMarkers.js file is UNCHANGED in the broken diff —
+// it's repository context that a reviewer would need to cross-reference.
+//
+// Fixed head: a32a07e — findCommentByMarker() paginates all comment pages.
+
+const RI04_BROKEN = {
+  caseId: "RI-04",
+  variant: "broken",
+  source: "Octo-Lex/GitWire PR #124 (commit 624732c)",
+  title: "fix(product): triage auto_comment posts summary for every issue (PF-A1-01)",
+
+  prMetadata: {
+    title: "fix(product): triage auto_comment posts summary for every issue (PF-A1-01)",
+    body:
+      "Remove the needs_more_info/duplicate_hint trigger from the comment gate.\n" +
+      "When auto_comment is enabled, every triaged issue receives one comment.\n",
+    head: "624732c",
+    base: "b8ccfb8",
+    author: "alajmah",
+  },
+
+  // The broken diff changes ONLY triageWorker.js — NOT commentMarkers.js
+  changedFiles: [
+    {
+      filename: "packages/web/src/workers/triageWorker.js",
+      status: "modified",
+      additions: 2,
+      deletions: 2,
+      patch:
+        "--- a/packages/web/src/workers/triageWorker.js\n" +
+        "+++ b/packages/web/src/workers/triageWorker.js\n" +
+        "@@ -354,2 +354,2 @@\n" +
+        "-    if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {\n" +
+        "+    if (triageOpts.auto_comment !== false) {\n",
+      headContent:
+        "    // PF-A1-01: comment gate is now just auto_comment\n" +
+        "    if (triageOpts.auto_comment !== false) {\n",
+      baseContent:
+        "    if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {\n",
+    },
+  ],
+
+  // commentMarkers.js is UNCHANGED — it's the repository context file that
+  // contains the unpaginated findCommentByMarker. This is the exact retrieval
+  // challenge: the reviewer must discover that the broadened comment path
+  // now calls a function with a pagination defect.
+  contextFiles: [
+    {
+      path: "packages/web/src/lib/commentMarkers.js",
+      sha: "commentmarkers_624732c",
+      content:
+        "export async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {\n" +
+        "  // List comments — we'll search for the marker in the body\n" +
+        "  const { data: comments } = await octokit.request(\n" +
+        '    "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",\n' +
+        "    {\n" +
+        "      owner,\n" +
+        "      repo,\n" +
+        "      issue_number: issueNumber,\n" +
+        "      per_page: 100,\n" +
+        "    }\n" +
+        "  );\n\n" +
+        "  // Filter to comments that contain our exact marker\n" +
+        "  const matches = comments.filter((c) => c.body && c.body.includes(marker));\n\n" +
+        "  if (matches.length === 0) {\n" +
+        "    return null; // No existing comment — create new\n" +
+        "  }\n" +
+        "  if (matches.length === 1) {\n" +
+        "    return matches[0]; // Exactly one — update it\n" +
+        "  }\n" +
+        "  // Multiple matches — ambiguous state, should be blocked\n" +
+        "  return { ambiguous: true, comments: matches };\n" +
+        "}\n",
+    },
+  ],
+
+  expectedFinding: {
+    severity: "P2",
+    title: "Unpaginated findCommentByMarker will duplicate comments on high-volume issues",
+    description:
+      "The broadened comment path now calls findCommentByMarker() for every triaged " +
+      "issue, but that function fetches only one page of 100 comments with no pagination. " +
+      "If the marker comment is beyond page 1, it returns null and postMarkedComment " +
+      "creates a duplicate comment.",
+    evidencePaths: ["packages/web/src/workers/triageWorker.js", "packages/web/src/lib/commentMarkers.js"],
+  },
+  expectedVerdict: "never APPROVE",
+};
+
+const RI04_FIXED = {
+  caseId: "RI-04",
+  variant: "fixed",
+  source: "Octo-Lex/GitWire PR #124 (commit a32a07e)",
+  title: RI04_BROKEN.title,
+  prMetadata: RI04_BROKEN.prMetadata,
+
+  changedFiles: [
+    {
+      filename: "packages/web/src/workers/triageWorker.js",
+      status: "modified",
+      additions: 2,
+      deletions: 2,
+      patch: RI04_BROKEN.changedFiles[0].patch,
+      headContent: RI04_BROKEN.changedFiles[0].headContent,
+      baseContent: RI04_BROKEN.changedFiles[0].baseContent,
+    },
+    {
+      filename: "packages/web/src/lib/commentMarkers.js",
+      status: "modified",
+      additions: 25,
+      deletions: 1,
+      patch:
+        "--- a/packages/web/src/lib/commentMarkers.js\n" +
+        "+++ b/packages/web/src/lib/commentMarkers.js\n" +
+        "@@ -49,1 +49,25 @@\n" +
+        "-export async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {\n" +
+        "-  const { data: comments } = await octokit.request(\n" +
+        '-    "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",\n' +
+        "-    { owner, repo, issue_number: issueNumber, per_page: 100 }\n" +
+        "-  );\n" +
+        "+export async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {\n" +
+        "+  const matches = [];\n" +
+        "+  let page = 1;\n" +
+        "+  const PER_PAGE = 100;\n" +
+        "+  while (true) {\n" +
+        "+    const { data: comments } = await octokit.request(...);\n" +
+        "+    for (const c of comments) { if (c.body && c.body.includes(marker)) matches.push(c); }\n" +
+        "+    if (matches.length >= 2) return { ambiguous: true, comments: matches };\n" +
+        "+    if (comments.length < PER_PAGE) break;\n" +
+        "+    page++;\n" +
+        "+  }\n",
+      headContent:
+        "export async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {\n" +
+        "  const matches = [];\n" +
+        "  let page = 1;\n" +
+        "  const PER_PAGE = 100;\n" +
+        "  while (true) {\n" +
+        '    const { data: comments } = await octokit.request("GET /repos/...", { ... per_page: PER_PAGE, page });\n' +
+        "    for (const c of comments) { if (c.body && c.body.includes(marker)) matches.push(c); }\n" +
+        "    if (matches.length >= 2) return { ambiguous: true, comments: matches };\n" +
+        "    if (comments.length < PER_PAGE) break;\n" +
+        "    page++;\n" +
+        "  }\n",
+      baseContent: RI04_BROKEN.contextFiles[0].content,
+    },
+  ],
+
+  contextFiles: [],
+
+  expectedFinding: null,
+  expectedVerdict: "eligible for APPROVE",
+};
+
+// ── Exports ─────────────────────────────────────────────────────────────────
 
 export const REGISTRY = Object.freeze([
-  {
-    id: "RI-01",
-    title: "Stale Phase 0 status contradiction (AlCode PR #2)",
-    source: "AgentGears/AlCode PR #2",
-
-    broken: {
-      description:
-        "A PR claims Phase 0 is complete, but the repository's own " +
-        "status document (a non-changed file) still declares Phase 0 " +
-        "as 'not started'. The diff only modifies implementation files, " +
-        "not the status document. A reviewer reading only the diff sees " +
-        "a clean feature implementation and misses the contradiction.",
-      defectCategory: "cross_file_contradiction",
-      expectedMinimumSeverity: "P2",
-      expectedVerdict: "REQUEST_CHANGES or COMMENT — never APPROVE",
-      changedFiles: [
-        {
-          filename: "src/phase0/initialization.js",
-          status: "modified",
-          additions: 15,
-          removed: 3,
-          patch: `--- a/src/phase0/initialization.js
-+++ b/src/phase0/initialization.js
-@@ -1,8 +1,20 @@
-+// Phase 0 initialization — now complete
- export function initPhase0(config) {
--  return { status: "pending", config };
-+  if (!config.endpoint) {
-+    throw new Error("Endpoint required for Phase 0");
-+  }
-+  return {
-+    status: "complete",
-+    config,
-+    initializedAt: Date.now(),
-+    endpoint: config.endpoint,
-+  };
- }`,
-        },
-        {
-          filename: "src/phase0/router.js",
-          status: "modified",
-          additions: 8,
-          removed: 2,
-          patch: `--- a/src/phase0/router.js
-+++ b/src/phase0/router.js
-@@ -1,5 +1,11 @@
- export function createRouter(phase0Result) {
--  return { routes: [] };
-+  if (phase0Result.status !== "complete") {
-+    throw new Error("Phase 0 must be complete before routing");
-+  }
-+  return {
-+    routes: [{ path: "/", handler: phase0Result.endpoint }],
-+  };
- }`,
-        },
-      ],
-      // The repository context that the reviewer needs to discover
-      // (this file is NOT in the diff — it's a supporting file)
-      contextFiles: [
-        {
-          path: "docs/status.md",
-          sha: "abc123",
-          content: `# Project Status
-
-## Phase 0: Not Started
-
-Phase 0 initialization has not been started yet.
-The endpoint configuration is still pending.
-
-_Do not deploy until Phase 0 is complete._`,
-        },
-      ],
-    },
-
-    fixed: {
-      description:
-        "Same PR but the status document is also updated to reflect " +
-        "Phase 0 completion. No contradiction remains.",
-      defectCategory: "none",
-      expectedVerdict: "eligible for APPROVE (if coverage is complete)",
-      changedFiles: [
-        {
-          filename: "src/phase0/initialization.js",
-          status: "modified",
-          additions: 15,
-          removed: 3,
-          patch: `--- a/src/phase0/initialization.js
-+++ b/src/phase0/initialization.js
-@@ -1,8 +1,20 @@
-+// Phase 0 initialization — now complete
- export function initPhase0(config) {
--  return { status: "pending", config };
-+  if (!config.endpoint) {
-+    throw new Error("Endpoint required for Phase 0");
-+  }
-+  return {
-+    status: "complete",
-+    config,
-+    initializedAt: Date.now(),
-+    endpoint: config.endpoint,
-+  };
- }`,
-        },
-        {
-          filename: "docs/status.md",
-          status: "modified",
-          additions: 3,
-          removed: 3,
-          patch: `--- a/docs/status.md
-+++ b/docs/status.md
-@@ -1,6 +1,6 @@
- # Project Status
-
--## Phase 0: Not Started
-+## Phase 0: Complete
-
--Phase 0 initialization has not been started yet.
-+Phase 0 initialization is complete and the endpoint is configured.
-
- _Do not deploy until Phase 0 is complete._`,
-        },
-      ],
-      contextFiles: [],
-    },
-  },
-
-  {
-    id: "RI-02",
-    title: "Roadmap claim not proven by code (AlCode PR #2)",
-    source: "AgentGears/AlCode PR #2",
-
-    broken: {
-      description:
-        "The PR description claims 'Agent replacement is fully proven' " +
-        "but the code only adds a basic mock-based test, not a replacement " +
-        "proof. The diff looks clean — it adds tests and a mock — but " +
-        "the claim overstates what the code actually proves.",
-      defectCategory: "overstated_claim",
-      expectedMinimumSeverity: "P2",
-      expectedVerdict: "COMMENT — the claim is not substantiated by the code",
-      changedFiles: [
-        {
-          filename: "tests/agent-replacement.test.js",
-          status: "added",
-          additions: 20,
-          removed: 0,
-          patch: `--- /dev/null
-+++ b/tests/agent-replacement.test.js
-@@ -0,0 +1,20 @@
-+import { mockAgent } from "../src/mock-agent.js";
-+
-+describe("Agent replacement", () => {
-+  it("mock agent returns expected response", () => {
-+    const agent = mockAgent({ model: "test" });
-+    const result = agent.run("hello");
-+    expect(result).toBe("mocked: hello");
-+  });
-+
-+  it("mock agent handles empty input", () => {
-+    const agent = mockAgent({ model: "test" });
-+    const result = agent.run("");
-+    expect(result).toBe("mocked: ");
-+  });
-+});`,
-        },
-        {
-          filename: "src/mock-agent.js",
-          status: "added",
-          additions: 10,
-          removed: 0,
-          patch: `--- /dev/null
-+++ b/src/mock-agent.js
-@@ -0,0 +1,10 @@
-+export function mockAgent(config) {
-+  return {
-+    run(input) {
-+      return "mocked: " + input;
-+    },
-+    config,
-+  };
-+}`,
-        },
-      ],
-      contextFiles: [],
-    },
-
-    fixed: {
-      description:
-        "Same code but the PR description is corrected to accurately " +
-        "describe what the tests prove (mock interaction, not agent replacement).",
-      defectCategory: "none",
-      expectedVerdict: "eligible for APPROVE",
-      changedFiles: [
-        {
-          filename: "tests/agent-replacement.test.js",
-          status: "added",
-          additions: 20,
-          removed: 0,
-          patch: `--- /dev/null
-+++ b/tests/agent-replacement.test.js
-@@ -0,0 +1,20 @@
-+import { mockAgent } from "../src/mock-agent.js";
-+
-+describe("Mock agent interaction", () => {
-+  it("mock agent returns expected response", () => {
-+    const agent = mockAgent({ model: "test" });
-+    const result = agent.run("hello");
-+    expect(result).toBe("mocked: hello");
-+  });
-+
-+  it("mock agent handles empty input", () => {
-+    const agent = mockAgent({ model: "test" });
-+    const result = agent.run("");
-+    expect(result).toBe("mocked: ");
-+  });
-+});`,
-        },
-        {
-          filename: "src/mock-agent.js",
-          status: "added",
-          additions: 10,
-          removed: 0,
-          patch: `--- /dev/null
-+++ b/src/mock-agent.js
-@@ -0,0 +1,10 @@
-+export function mockAgent(config) {
-+  return {
-+    run(input) {
-+      return "mocked: " + input;
-+    },
-+    config,
-+  };
-+}`,
-        },
-      ],
-      contextFiles: [],
-    },
-  },
-
-  {
-    id: "RI-03",
-    title: "Dashboard basePath omitted from activation URL (GitWire PR #123)",
-    source: "Octo-Lex/GitWire PR #123",
-
-    broken: {
-      description:
-        "The activation URL is constructed as baseUrl + '/intelligence' " +
-        "but the Next.js dashboard uses basePath: '/dashboard'. The correct " +
-        "URL should be baseUrl + '/dashboard/intelligence'. A reviewer " +
-        "reading the diff needs to cross-reference the next.config.ts file " +
-        "to catch this.",
-      defectCategory: "cross_file_config_contradiction",
-      expectedMinimumSeverity: "P1",
-      expectedVerdict: "REQUEST_CHANGES — the URL is wrong in production",
-      changedFiles: [
-        {
-          filename: "packages/web/src/services/aiReviewService.js",
-          status: "modified",
-          additions: 5,
-          removed: 1,
-          patch: `--- a/packages/web/src/services/aiReviewService.js
-+++ b/packages/web/src/services/aiReviewService.js
-@@ -82,3 +82,7 @@ const cfg = await loadReviewConfig(repoId);
-   if (!cfg?.enabled) {
--    return null;
-+    return {
-+      skipped: true,
-+      reason: "not_activated",
-+      activationUrl: config.server.baseUrl + "/intelligence"
-+    };
-   }`,
-        },
-      ],
-      contextFiles: [
-        {
-          path: "packages/web-dashboard/next.config.ts",
-          sha: "def456",
-          content: `import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
-  basePath: '/dashboard',
-};
-
-export default nextConfig;`,
-        },
-      ],
-    },
-
-    fixed: {
-      description:
-        "Same change but the URL correctly includes '/dashboard/intelligence'.",
-      defectCategory: "none",
-      expectedVerdict: "eligible for APPROVE",
-      changedFiles: [
-        {
-          filename: "packages/web/src/services/aiReviewService.js",
-          status: "modified",
-          additions: 5,
-          removed: 1,
-          patch: `--- a/packages/web/src/services/aiReviewService.js
-+++ b/packages/web/src/services/aiReviewService.js
-@@ -82,3 +82,7 @@ const cfg = await loadReviewConfig(repoId);
-   if (!cfg?.enabled) {
--    return null;
-+    return {
-+      skipped: true,
-+      reason: "not_activated",
-+      activationUrl: config.server.baseUrl + "/dashboard/intelligence"
-+    };
-   }`,
-        },
-      ],
-      contextFiles: [
-        {
-          path: "packages/web-dashboard/next.config.ts",
-          sha: "def456",
-          content: `import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
-  basePath: '/dashboard',
-};
-
-export default nextConfig;`,
-        },
-      ],
-    },
-  },
-
-  {
-    id: "RI-04",
-    title: "Unpaginated marker lookup exposed by broadened comment path (GitWire PR #124)",
-    source: "Octo-Lex/GitWire PR #124",
-
-    broken: {
-      description:
-        "findCommentByMarker() fetches only one page of 100 comments. " +
-        "If the marker comment is on page 2+, it returns null and a " +
-        "duplicate comment is created. The diff broadens the comment " +
-        "path (from exception-only to every issue) without adding pagination.",
-      defectCategory: "missing_pagination",
-      expectedMinimumSeverity: "P2",
-      expectedVerdict: "REQUEST_CHANGES — duplicate comments possible",
-      changedFiles: [
-        {
-          filename: "packages/web/src/workers/triageWorker.js",
-          status: "modified",
-          additions: 2,
-          removed: 2,
-          patch: `--- a/packages/web/src/workers/triageWorker.js
-+++ b/packages/web/src/workers/triageWorker.js
-@@ -354,2 +354,2 @@
--    if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
-+    if (triageOpts.auto_comment !== false) {`,
-        },
-        {
-          filename: "packages/web/src/lib/commentMarkers.js",
-          status: "modified",
-          additions: 1,
-          removed: 1,
-          patch: `--- a/packages/web/src/lib/commentMarkers.js
-+++ b/packages/web/src/lib/commentMarkers.js
-@@ -57,1 +57,1 @@
--      per_page: 100,
-+      per_page: 100,  // still single page — no pagination loop`,
-        },
-      ],
-      contextFiles: [],
-    },
-
-    fixed: {
-      description:
-        "Same broadened comment path but findCommentByMarker now " +
-        "paginates all pages.",
-      defectCategory: "none",
-      expectedVerdict: "eligible for APPROVE",
-      changedFiles: [
-        {
-          filename: "packages/web/src/workers/triageWorker.js",
-          status: "modified",
-          additions: 2,
-          removed: 2,
-          patch: `--- a/packages/web/src/workers/triageWorker.js
-+++ b/packages/web/src/workers/triageWorker.js
-@@ -354,2 +354,2 @@
--    if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
-+    if (triageOpts.auto_comment !== false) {`,
-        },
-        {
-          filename: "packages/web/src/lib/commentMarkers.js",
-          status: "modified",
-          additions: 25,
-          removed: 1,
-          patch: `--- a/packages/web/src/lib/commentMarkers.js
-+++ b/packages/web/src/lib/commentMarkers.js
-@@ -49,1 +49,25 @@
--export async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {
-+export async function findCommentByMarker(octokit, owner, repo, issueNumber, marker) {
-+  const matches = [];
-+  let page = 1;
-+  const PER_PAGE = 100;
-+  while (true) {
-+    const { data: comments } = await octokit.request(
-+      "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
-+      { owner, repo, issue_number: issueNumber, per_page: PER_PAGE, page }
-+    );
-+    for (const c of comments) {
-+      if (c.body && c.body.includes(marker)) matches.push(c);
-+    }
-+    if (matches.length >= 2) return { ambiguous: true, comments: matches };
-+    if (comments.length < PER_PAGE) break;
-+    page++;
-+  }`,
-        },
-      ],
-      contextFiles: [],
-    },
-  },
+  RI01_BROKEN, RI01_FIXED,
+  RI02_BROKEN, RI02_FIXED,
+  RI03_BROKEN, RI03_FIXED,
+  RI04_BROKEN, RI04_FIXED,
 ]);
 
-/**
- * Get all fixtures in flat array form for the baseline runner.
- * Each entry: { caseId, variant ("broken"|"fixed"), fixture, expected }
- */
 export function getAllFixtures() {
-  const result = [];
-  for (const c of REGISTRY) {
-    result.push({
-      caseId: c.id,
-      variant: "broken",
-      title: c.title,
-      fixture: c.broken,
-      expectedVerdict: c.broken.expectedVerdict,
-      expectedMinSeverity: c.broken.expectedMinimumSeverity,
-    });
-    result.push({
-      caseId: c.id,
-      variant: "fixed",
-      title: c.title,
-      fixture: c.fixed,
-      expectedVerdict: c.fixed.expectedVerdict,
-      expectedMinSeverity: null,
-    });
-  }
-  return result;
+  return REGISTRY;
+}
+
+export function getBrokenFixtures() {
+  return REGISTRY.filter((f) => f.variant === "broken");
+}
+
+export function getFixedFixtures() {
+  return REGISTRY.filter((f) => f.variant === "fixed");
 }
