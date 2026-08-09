@@ -70,7 +70,7 @@ export async function createGitwireCheck({ octokit, owner, repo, headSha, status
  * @param {Array}  [params.actions] - GitHub check actions (buttons)
  */
 export async function updateGitwireCheck({ octokit, owner, repo, checkRunId, status, conclusion, title, summary, actions }) {
-  if (!checkRunId) return;
+  if (!checkRunId) return false;
 
   try {
     await octokit.request("PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}", {
@@ -89,8 +89,10 @@ export async function updateGitwireCheck({ octokit, owner, repo, checkRunId, sta
     });
 
     logger.debug({ owner, repo, checkRunId, conclusion }, "GitWire check updated");
+    return true;
   } catch (err) {
     logger.warn({ err: err.message, checkRunId }, "Failed to update GitWire check (non-fatal)");
+    return false;
   }
 }
 
