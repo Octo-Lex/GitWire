@@ -47,6 +47,7 @@ jest.unstable_mockModule("../../src/services/checkRunFinalizer.js", () => ({
   finalizeGitwireCheck: mockFinalizeGitwireCheck,
   getRetryOutcome: jest.fn().mockResolvedValue(null),
   clearRetryOutcome: jest.fn().mockResolvedValue(undefined),
+  replayCheckConclusion: jest.fn().mockResolvedValue(true),
 }));
 
 jest.unstable_mockModule("../../src/services/aiReviewService.js", () => ({
@@ -274,30 +275,65 @@ describe("Phase 4 worker check ownership lifecycle", () => {
   });
 
   it("7. PATCH failure on first attempt → BullMQ retry replays stored outcome without re-calling reviewPR", async () => {
-    // First attempt: review succeeds, but finalizeGitwireCheck returns false (PATCH failed).
-    // The worker should throw, causing BullMQ to retry.
-    // Second attempt: getRetryOutcome finds the stored outcome and replays it
-    // WITHOUT calling reviewPR again.
+    const { getRetryOutcome, replayCheckConclusion, clearRetryOutcome } =
+      await import("../../src/services/checkRunFinalizer.js");
 
-    // We need to simulate two invocations with state between them.
-    // Mock getRetryOutcome to return a stored outcome on the second call.
-    let getRetryCallCount = 0;
-    const { getRetryOutcome: mockGetRetry } = await import("../../src/services/checkRunFinalizer.js").catch(() => ({}));
+    const storedOutcome = {
+      checkRunId: 5000,
+      conclusion: "success",
+      title: "GitWire \u2014 review passed",
+      summary: "AI review completed. Verdict: approved, 0 finding(s).",
+    };
 
-    // First attempt: PATCH fails
+    // First attempt: review succeeds, PATCH fails
     mockReviewPR.mockResolvedValue({ verdict: "approved", blocked: false, findings: [] });
-    mockFinalizeGitwireCheck.mockResolvedValueOnce(false); // PATCH fails on first attempt
+    mockFinalizeGitwireCheck.mockResolvedValueOnce(false); // PATCH fails
 
-    // The worker should throw because finalizeOwn throws on false return
-    await expect(processReviewJob({ ...baseJobData, checkRunId: 5000 })).rejects.toThrow("PATCH failed");
+    await expect(processReviewJob({ ...baseJobData, checkRunId: 5000 }, { attemptsMade: 0 }))
+      .rejects.toThrow("PATCH failed");
 
-    // Verify reviewPR WAS called on the first attempt
+    // reviewPR was called exactly once on the first attempt
     expect(mockReviewPR).toHaveBeenCalledTimes(1);
 
-    // Verify finalizeGitwireCheck was called with the correct result
+    // finalizeGitwireCheck was called with the correct result
     const successCall = mockFinalizeGitwireCheck.mock.calls.find(
       ([args]) => args.reviewResult && args.reviewResult.verdict === "approved",
     );
     expect(successCall).toBeTruthy();
+    expect(successCall[0].checkRunId).toBe(5000);
+
+    // Now simulate the BullMQ retry: getRetryOutcome returns the stored outcome,
+    // replayCheckConclusion succeeds
+    getRetryOutcome.mockResolvedValueOnce(storedOutcome);
+    replayCheckConclusion.mockResolvedValueOnce(true);
+
+    jest.clearAllMocks();
+    mockGetConfigForRepo.mockResolvedValue({});
+    mockIsPillarEnabled.mockReturnValue(true);
+    mockShouldTrigger.mockReturnValue(true);
+    mockIsWaived.mockResolvedValue(null);
+    mockCheckAndMark.mockResolvedValue(true);
+    mockGetInstallationClient.mockResolvedValue({ request: jest.fn() });
+    mockAdoptWorker.mockResolvedValue({ context: { principalId: "p1" } });
+
+    // Second attempt: attemptsMade > 0, stored outcome found → replay
+    await processReviewJob({ ...baseJobData, checkRunId: 5000 }, { attemptsMade: 1 });
+
+    // reviewPR must NOT be called on the retry (replay path)
+    expect(mockReviewPR).not.toHaveBeenCalled();
+
+    // getRetryOutcome was called with the correct checkRunId
+    expect(getRetryOutcome).toHaveBeenCalledWith(999, 16, "abc123", 5000);
+
+    // replayCheckConclusion was called with the stored verbatim outcome
+    expect(replayCheckConclusion).toHaveBeenCalledWith(expect.objectContaining({
+      checkRunId: 5000,
+      conclusion: "success",
+      title: storedOutcome.title,
+      summary: storedOutcome.summary,
+    }));
+
+    // clearRetryOutcome was called to clean up
+    expect(clearRetryOutcome).toHaveBeenCalledWith(999, 16, "abc123", 5000);
   });
 });
