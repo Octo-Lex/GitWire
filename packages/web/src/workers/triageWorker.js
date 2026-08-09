@@ -346,12 +346,16 @@ async function triageIssue({ payload }, job = null) {
       principalId,
     });
 
-    // ── Post triage comment if needed (marker-backed) ──────────────────────────
-    // Uses the existing commentMarkers machinery so a retry after a partial
-    // failure finds and UPDATES the existing comment instead of creating a
-    // duplicate. An ambiguous marker (multiple matches) is treated as a
-    // blocking processing error rather than creating another comment.
-    if ((classification.needs_more_info || classification.duplicate_hint) && triageOpts.auto_comment !== false) {
+    // ── Post triage comment if enabled (marker-backed) ────────────────────────
+    // When auto_comment is enabled (the default), every successfully triaged
+    // issue receives exactly one summary comment. The comment is marker-backed
+    // so a retry after a partial failure finds and UPDATES the existing comment
+    // instead of creating a duplicate. An ambiguous marker (multiple matches)
+    // is treated as a blocking processing error rather than creating another.
+    //
+    // The needs_more_info and duplicate_hint fields add extra sections to the
+    // comment body; they no longer gate whether the comment is posted.
+    if (triageOpts.auto_comment !== false) {
       if (isDryRun(repoConfig)) {
         logger.info({ issue: issue.number }, "DRY RUN: would post triage comment");
       } else {
@@ -701,6 +705,6 @@ function buildTriageComment(classification) {
     lines.push(`🔍 **Possible duplicate:** ${classification.duplicate_hint}`, "");
   }
 
-  lines.push("_Labels applied automatically. A maintainer will review shortly._");
+  lines.push("_A maintainer will review shortly._");
   return lines.join("\n");
 }
