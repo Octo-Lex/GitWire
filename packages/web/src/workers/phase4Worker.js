@@ -14,7 +14,7 @@ import { checkAndMark } from "../services/idempotencyService.js";
 import { emitWorkerEvent } from "../services/workerEvents.js";
 import { isWaived } from "../services/waiverService.js";
 import { QUEUES } from "@gitwire/core";
-import { finalizeGitwireCheck } from "../services/checkRunFinalizer.js";
+import { finalizeGitwireCheck, getRetryOutcome, clearRetryOutcome } from "../services/checkRunFinalizer.js";
 import { logger } from "../lib/logger.js";
 
 export const phase4Queue = createQueue(QUEUES.PHASE4);
@@ -28,12 +28,7 @@ export function startPhase4Worker() {
         const { pr, repository, installation, checkRunId } = job.data;
         if (!pr || !repository || !installation) return;
 
-        // The checkRunId is owned by THIS job. It was created by the webhook
-        // route and threaded through the dispatch chain. Every exit path must
-        // finalize this specific check so it never stays queued.
         const ownedCheckRunId = checkRunId || null;
-
-        // Helper to finalize this job's own check on any exit path
         const octokitLazy = () => wrapOctokit(getInstallationClient(installation.id));
 
         // Track whether the check has already been finalized with a real
@@ -41,20 +36,25 @@ export function startPhase4Worker() {
         let checkFinalized = false;
 
         async function finalizeOwn(reviewResult, opts = {}) {
-          if (checkFinalized && !opts.force) return; // already done — don't overwrite
+          if (checkFinalized && !opts.force) return;
           const octokit = await octokitLazy();
-          await finalizeGitwireCheck({
+          const ok = await finalizeGitwireCheck({
             octokit, owner: repository.owner.login, repo: repository.name,
             repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
             reviewResult,
             checkRunId: ownedCheckRunId,
           });
+          if (!ok) {
+            // GitHub PATCH failed. The finalizer stored the intended outcome
+            // for replay. Throw so BullMQ retries this job — on retry,
+            // the stored outcome will be replayed without rerunning reviewPR.
+            throw new Error("GitWire check finalization PATCH failed — will retry");
+          }
           checkFinalized = true;
         }
 
-        // Helper for the error path: finalize as FAILURE (not neutral)
         async function finalizeOwnFailure(err) {
-          if (checkFinalized) return; // already finalized with correct result
+          if (checkFinalized) return;
           const octokit = await octokitLazy();
           await finalizeGitwireCheck({
             octokit, owner: repository.owner.login, repo: repository.name,
@@ -67,6 +67,34 @@ export function startPhase4Worker() {
         }
 
         try {
+          // ── BullMQ retry replay: if a prior attempt stored a terminal
+          // outcome because its GitHub PATCH failed, replay it now without
+          // rerunning reviewPR. This is safe because the review already
+          // completed on the prior attempt.
+          const storedOutcome = await getRetryOutcome(repository.id, pr.number, pr.head.sha);
+          if (storedOutcome && storedOutcome.checkRunId === ownedCheckRunId) {
+            logger.info({ pr: pr.number, checkRunId: ownedCheckRunId }, "Replaying stored check finalization from prior attempt");
+            const octokit = await octokitLazy();
+            const patched = await finalizeGitwireCheck({
+              octokit, owner: repository.owner.login, repo: repository.name,
+              repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
+              checkRunId: ownedCheckRunId,
+              reviewResult: storedOutcome.conclusion === "neutral" ? null : {
+                blocked: storedOutcome.conclusion === "failure",
+                verdict: storedOutcome.conclusion === "failure" ? "blocked" : "approved",
+                findings: [],
+              },
+            });
+            if (patched) {
+              await clearRetryOutcome(repository.id, pr.number, pr.head.sha);
+              checkFinalized = true;
+              logger.info({ pr: pr.number }, "Stored check finalization replayed successfully");
+              return;
+            }
+            // PATCH failed again — BullMQ will retry again
+            throw new Error("GitWire check finalization PATCH failed on retry — will retry again");
+          }
+
           // ── Check .gitwire.yml pillar config ──────────────────────────────
           const repoConfig = await getConfigForRepo(repository.full_name);
           if (!isPillarEnabled("ai_review", repoConfig)) {
@@ -87,13 +115,22 @@ export function startPhase4Worker() {
             await finalizeOwn(null);
             return;
           }
-          // ── Idempotency: skip duplicate reviews ───────────────────────────
-          // When a duplicate is detected, finalize THIS job's own check as
-          // neutral (duplicate suppressed), without touching the original
-          // invocation's check. The original job has its own checkRunId and
-          // will finalize it with the actual review result.
+          // ── Idempotency: distinguish fresh duplicate from BullMQ retry ────
+          // A BullMQ retry of the same job carries the same checkRunId and
+          // is NOT a fresh delivery. It must not neutralize its own check.
+          // A fresh duplicate (different webhook event) owns a different
+          // checkRunId and should finalize its own check neutral.
           if (!(await checkAndMark("ai_review", "pr-" + pr.number + "-" + (pr.head?.sha || "unknown")))) {
-            logger.info({ pr: pr.number }, "AI review duplicate — finalizing this job's check as suppressed");
+            // This is either a BullMQ retry or a fresh duplicate.
+            // If this job has a checkRunId and it's a retry (attemptsMade > 0),
+            // the review already ran on a prior attempt. Do NOT neutralize.
+            const isRetry = (job.attemptsMade || 0) > 0;
+            if (isRetry && ownedCheckRunId) {
+              logger.info({ pr: pr.number, attemptsMade: job.attemptsMade }, "AI review duplicate on retry — not neutralizing owned check");
+              return;
+            }
+            // Fresh duplicate with its own checkRunId: finalize it neutral.
+            logger.info({ pr: pr.number }, "AI review fresh duplicate — finalizing this job's check as suppressed");
             await finalizeOwn(null, { force: true });
             return;
           }
@@ -125,14 +162,12 @@ export function startPhase4Worker() {
             surfaceId: "audit_trail:ai_decision",
           });
 
-          // Finalize the top-level "GitWire" check run (created in webhook route)
-          // This marks the check as finalized — downstream errors cannot overwrite.
+          // Finalize the top-level "GitWire" check run.
+          // If PATCH fails, finalizeOwn throws → BullMQ retries →
+          // retry replays the stored outcome without rerunning reviewPR.
           await finalizeOwn(result);
 
           // Emit worker event for merge queue to pick up
-          // This is OUTSIDE the finalizeOwn protection — if it throws, the
-          // catch block calls finalizeOwnFailure which sees checkFinalized=true
-          // and does NOT overwrite the correct result.
           await emitWorkerEvent("review_completed", {
             repo: repository.full_name,
             repoId: repository.id,
