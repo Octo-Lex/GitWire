@@ -36,7 +36,12 @@ export function startPhase4Worker() {
         // Helper to finalize this job's own check on any exit path
         const octokitLazy = () => wrapOctokit(getInstallationClient(installation.id));
 
-        async function finalizeOwn(reviewResult) {
+        // Track whether the check has already been finalized with a real
+        // result. Once finalized, downstream errors must not overwrite it.
+        let checkFinalized = false;
+
+        async function finalizeOwn(reviewResult, opts = {}) {
+          if (checkFinalized && !opts.force) return; // already done — don't overwrite
           const octokit = await octokitLazy();
           await finalizeGitwireCheck({
             octokit, owner: repository.owner.login, repo: repository.name,
@@ -44,6 +49,21 @@ export function startPhase4Worker() {
             reviewResult,
             checkRunId: ownedCheckRunId,
           });
+          checkFinalized = true;
+        }
+
+        // Helper for the error path: finalize as FAILURE (not neutral)
+        async function finalizeOwnFailure(err) {
+          if (checkFinalized) return; // already finalized with correct result
+          const octokit = await octokitLazy();
+          await finalizeGitwireCheck({
+            octokit, owner: repository.owner.login, repo: repository.name,
+            repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
+            reviewResult: { blocked: false, verdict: "error", findings: [] },
+            checkRunId: ownedCheckRunId,
+            errorContext: err?.message || "unknown error",
+          });
+          checkFinalized = true;
         }
 
         try {
@@ -74,7 +94,7 @@ export function startPhase4Worker() {
           // will finalize it with the actual review result.
           if (!(await checkAndMark("ai_review", "pr-" + pr.number + "-" + (pr.head?.sha || "unknown")))) {
             logger.info({ pr: pr.number }, "AI review duplicate — finalizing this job's check as suppressed");
-            await finalizeOwn(null);
+            await finalizeOwn(null, { force: true });
             return;
           }
           if (isDryRun(repoConfig)) {
@@ -106,9 +126,13 @@ export function startPhase4Worker() {
           });
 
           // Finalize the top-level "GitWire" check run (created in webhook route)
+          // This marks the check as finalized — downstream errors cannot overwrite.
           await finalizeOwn(result);
 
           // Emit worker event for merge queue to pick up
+          // This is OUTSIDE the finalizeOwn protection — if it throws, the
+          // catch block calls finalizeOwnFailure which sees checkFinalized=true
+          // and does NOT overwrite the correct result.
           await emitWorkerEvent("review_completed", {
             repo: repository.full_name,
             repoId: repository.id,
@@ -116,12 +140,12 @@ export function startPhase4Worker() {
             installationId: installation.id,
           });
         } catch (err) {
-          // Attempt to finalize this job's own check as failure before
-          // rethrowing to BullMQ for retry visibility. If GitHub is
-          // unreachable, the check remains queued but the pointer is
-          // preserved by finalizeGitwireCheck's PATCH-failure handling.
+          // Attempt to finalize this job's own check as FAILURE before
+          // rethrowing to BullMQ. If the review already completed and
+          // finalized with the correct result, finalizeOwnFailure is a
+          // no-op (checkFinalized guard prevents overwriting).
           try {
-            await finalizeOwn(null);
+            await finalizeOwnFailure(err);
           } catch (finalizeErr) {
             logger.warn({ err: finalizeErr.message || finalizeErr, pr: pr.number }, "Failed to finalize check on error path");
           }

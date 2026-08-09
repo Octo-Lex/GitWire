@@ -7,15 +7,20 @@
 //
 // Before the fix, the check run ID was discarded and the check stayed in
 // "queued" status forever, showing "GitWire — evaluating…" indefinitely.
+//
+// Updated for the boolean success contract: updateGitwireCheck returns
+// true/false, and the finalizer uses atomic compare-and-delete (Lua eval).
 
 import { jest } from "@jest/globals";
 
-const mockRedisGet = jest.fn();
-const mockRedisDel = jest.fn();
-const mockUpdateCheck = jest.fn();
+const mockRedisGet = jest.fn().mockResolvedValue(null);
+const mockRedisDel = jest.fn().mockResolvedValue(1);
+const mockRedisSetex = jest.fn().mockResolvedValue("OK");
+const mockRedisEval = jest.fn().mockResolvedValue(1);
+const mockUpdateCheck = jest.fn().mockResolvedValue(true);
 
 await jest.unstable_mockModule("../../src/lib/queue.js", () => ({
-  redis: { get: mockRedisGet, del: mockRedisDel, setex: jest.fn() },
+  redis: { get: mockRedisGet, del: mockRedisDel, setex: mockRedisSetex, eval: mockRedisEval },
 }));
 
 await jest.unstable_mockModule("../../src/lib/checkStatus.js", () => ({
@@ -41,6 +46,9 @@ describe("finalizeGitwireCheck", function () {
 
   beforeEach(function () {
     jest.clearAllMocks();
+    // Default: PATCH succeeds, Lua eval succeeds (simulates pointer matched)
+    mockUpdateCheck.mockResolvedValue(true);
+    mockRedisEval.mockResolvedValue(1);
   });
 
   // ── Redis key format ─────────────────────────────────────────────────────
@@ -72,7 +80,6 @@ describe("finalizeGitwireCheck", function () {
     expect(mockUpdateCheck).toHaveBeenCalledWith(
       expect.objectContaining({ checkRunId: 99999, conclusion: "neutral" })
     );
-    expect(mockRedisDel).toHaveBeenCalledWith("gitwire:check:123:42:abc123");
   });
 
   // ── Review passed ────────────────────────────────────────────────────────
@@ -86,7 +93,6 @@ describe("finalizeGitwireCheck", function () {
     expect(mockUpdateCheck).toHaveBeenCalledWith(
       expect.objectContaining({ checkRunId: 99999, conclusion: "success" })
     );
-    expect(mockRedisDel).toHaveBeenCalled();
   });
 
   // ── Review blocked merge ─────────────────────────────────────────────────
@@ -121,12 +127,18 @@ describe("finalizeGitwireCheck", function () {
     );
   });
 
-  // ── Cleanup ──────────────────────────────────────────────────────────────
+  // ── Cleanup (via atomic Lua compare-and-delete) ──────────────────────────
 
-  it("deletes Redis key after finalization", async function () {
+  it("uses atomic compare-and-delete to clean up Redis pointer", async function () {
     mockRedisGet.mockResolvedValue("88888");
     await finalizeGitwireCheck({ ...baseArgs, reviewResult: null });
-    expect(mockRedisDel).toHaveBeenCalledTimes(1);
-    expect(mockRedisDel).toHaveBeenCalledWith("gitwire:check:123:42:abc123");
+    // Lua eval should be called for atomic compare-and-delete
+    expect(mockRedisEval).toHaveBeenCalledTimes(1);
+    expect(mockRedisEval).toHaveBeenCalledWith(
+      expect.any(String),    // script
+      1,                     // numkeys
+      "gitwire:check:123:42:abc123",  // key
+      "88888",               // expected value (String(resolvedCheckRunId))
+    );
   });
 });

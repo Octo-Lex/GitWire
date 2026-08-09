@@ -21,6 +21,15 @@ const mockRedis = {
   get: jest.fn(async (k) => mockRedisStore.get(k) ?? null),
   setex: jest.fn(async (k, ttl, v) => { mockRedisStore.set(k, v); }),
   del: jest.fn(async (k) => { mockRedisStore.delete(k); }),
+  eval: jest.fn(async (script, numkeys, key, expected) => {
+    // Simulate atomic compare-and-delete
+    const current = mockRedisStore.get(key);
+    if (current === expected) {
+      mockRedisStore.delete(key);
+      return 1;
+    }
+    return 0;
+  }),
 };
 const mockUpdateGitwireCheck = jest.fn();
 
@@ -89,7 +98,7 @@ describe("finalizeGitwireCheck with explicit checkRunId", () => {
     }));
   });
 
-  it("3. Does not read Redis when explicit checkRunId is provided", async () => {
+  it("3. Does not read Redis for ID resolution when explicit checkRunId is provided", async () => {
     // Even with Redis empty, explicit ID should work
     await finalizeGitwireCheck({
       ...baseParams,
@@ -100,8 +109,10 @@ describe("finalizeGitwireCheck with explicit checkRunId", () => {
     expect(mockUpdateGitwireCheck).toHaveBeenCalledWith(expect.objectContaining({
       checkRunId: 5002,
     }));
-    // Redis should only be READ for the conditional cleanup check, not for ID resolution
-    expect(mockRedis.get).toHaveBeenCalled();
+    // PATCH succeeded, so the atomic compare-and-delete runs.
+    // That calls redis.eval (not redis.get) for the compare-and-delete.
+    // The retry-key cleanup calls redis.del. Both are expected.
+    expect(mockRedis.eval).toHaveBeenCalled();
   });
 
   it("4. Falls back to Redis when no explicit checkRunId", async () => {
@@ -118,7 +129,7 @@ describe("finalizeGitwireCheck with explicit checkRunId", () => {
     }));
   });
 
-  it("5. Deletes Redis pointer only if it still matches this checkRunId", async () => {
+  it("5. Deletes Redis pointer via atomic eval when it matches this checkRunId", async () => {
     const key = checkRunKey(999, 16, "abc123");
     mockRedisStore.set(key, "5003");
 
@@ -128,11 +139,15 @@ describe("finalizeGitwireCheck with explicit checkRunId", () => {
       checkRunId: 5003,
     });
 
-    // Pointer matched → should be deleted
-    expect(mockRedis.del).toHaveBeenCalledWith(key);
+    // Atomic eval should have been called with the check key and the matching ID
+    expect(mockRedis.eval).toHaveBeenCalledWith(
+      expect.any(String), 1, key, "5003",
+    );
+    // Store should no longer have the key (eval mock deletes on match)
+    expect(mockRedisStore.has(key)).toBe(false);
   });
 
-  it("6. Does NOT delete Redis pointer if it now refers to a different checkRunId", async () => {
+  it("6. Does NOT delete Redis pointer via eval if it refers to a different checkRunId", async () => {
     const key = checkRunKey(999, 16, "abc123");
     // Pointer was overwritten by a newer job with checkRunId 7000
     mockRedisStore.set(key, "7000");
@@ -147,8 +162,9 @@ describe("finalizeGitwireCheck with explicit checkRunId", () => {
     expect(mockUpdateGitwireCheck).toHaveBeenCalledWith(expect.objectContaining({
       checkRunId: 5004,
     }));
-    // But Redis should NOT be deleted (it holds a different ID)
-    expect(mockRedis.del).not.toHaveBeenCalled();
+    // The eval mock returns 0 (no match) — pointer should NOT be deleted
+    expect(mockRedisStore.has(key)).toBe(true);
+    expect(mockRedisStore.get(key)).toBe("7000");
   });
 
   it("7. Does NOT delete Redis pointer when GitHub PATCH fails", async () => {
@@ -199,7 +215,7 @@ describe("updateGitwireCheck return semantics (via finalizer)", () => {
     expect(mockRedis.del).not.toHaveBeenCalled();
   });
 
-  it("10. PATCH success deletes Redis pointer", async () => {
+  it("10. PATCH success deletes Redis pointer via atomic eval", async () => {
     mockUpdateGitwireCheck.mockResolvedValue(true);
 
     const key = checkRunKey(999, 16, "abc123");
@@ -212,8 +228,10 @@ describe("updateGitwireCheck return semantics (via finalizer)", () => {
       checkRunId: 5007,
     });
 
-    // Pointer deleted because PATCH succeeded
-    expect(mockRedisStore.get(key)).toBeUndefined();
-    expect(mockRedis.del).toHaveBeenCalledWith(key);
+    // PATCH succeeded, eval should have been called and deleted the key
+    expect(mockRedis.eval).toHaveBeenCalledWith(
+      expect.any(String), 1, key, "5007",
+    );
+    expect(mockRedisStore.has(key)).toBe(false);
   });
 });
