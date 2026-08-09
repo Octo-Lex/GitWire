@@ -81,7 +81,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
   // Other null-return paths (bot author, no files, validation) stay bare null.
   const cfg = await loadReviewConfig(repoId);
   if (!cfg?.enabled) {
-    return { skipped: true, reason: "not_activated", activationUrl: config.server.baseUrl + "/intelligence" };
+    return { skipped: true, reason: "not_activated", activationUrl: reviewActivationUrl() };
   }
 
   logger.info({ repo: repository.full_name, pr: pr.number }, "AI review: starting (bundle-driven v2)");
@@ -802,6 +802,15 @@ async function loadReviewConfig(repoId) {
 }
 
 /**
+ * Build the activation URL for the Intelligence dashboard page.
+ * The dashboard uses basePath: "/dashboard", so the public URL is
+ * APP_BASE_URL + "/dashboard/intelligence".
+ */
+function reviewActivationUrl() {
+  return (config.server.baseUrl || "").replace(/\/$/, "") + "/dashboard/intelligence";
+}
+
+/**
  * Resolve the effective AI review state for a repository.
  *
  * AI review requires two independent gates:
@@ -823,7 +832,7 @@ export async function getEffectiveReviewState(repoId, repoFullName) {
   const cfg = await loadReviewConfig(repoId);
   const pillarEnabled = isPillarEnabled("ai_review", repoConfig);
   const dbActivated = cfg?.enabled === true;
-  const activationUrl = config.server.baseUrl + "/intelligence";
+  const activationUrl = reviewActivationUrl();
 
   if (!pillarEnabled) {
     return { runnable: false, reason: "pillar_disabled", pillarEnabled, dbActivated, activationUrl };

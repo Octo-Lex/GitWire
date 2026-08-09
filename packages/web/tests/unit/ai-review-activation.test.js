@@ -95,7 +95,7 @@ describe("PF-B1-01: AI review activation gate", function () {
     expect(result).toEqual({
       skipped: true,
       reason: "not_activated",
-      activationUrl: TEST_BASE_URL + "/intelligence",
+      activationUrl: TEST_BASE_URL + "/dashboard/intelligence",
     });
   });
 
@@ -107,7 +107,7 @@ describe("PF-B1-01: AI review activation gate", function () {
     expect(result).toEqual({
       skipped: true,
       reason: "not_activated",
-      activationUrl: TEST_BASE_URL + "/intelligence",
+      activationUrl: TEST_BASE_URL + "/dashboard/intelligence",
     });
   });
 
@@ -135,7 +135,7 @@ describe("PF-B1-01: AI review activation gate", function () {
     expect(state.reason).toBe("not_activated");
     expect(state.pillarEnabled).toBe(true);
     expect(state.dbActivated).toBe(false);
-    expect(state.activationUrl).toBe(TEST_BASE_URL + "/intelligence");
+    expect(state.activationUrl).toBe(TEST_BASE_URL + "/dashboard/intelligence");
   });
 
   it("effective state: Gate1 disabled → pillar_disabled", async function () {

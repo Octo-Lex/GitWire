@@ -30,7 +30,7 @@ const { handleManualRun } = await import("../../src/lib/webhookHandlers/commentC
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-const ACTIVATION_URL = "https://gitwire.erlab.uk/intelligence";
+const ACTIVATION_URL = "https://gitwire.erlab.uk/dashboard/intelligence";
 
 function makePRPayload(overrides = {}) {
   return {
@@ -46,15 +46,28 @@ function makePRPayload(overrides = {}) {
   };
 }
 
+// Shared mockRequest so we can assert the actual GitHub comment POST
+// unconditionally — the previous version's conditional checks could silently
+// skip assertions when the mock chain didn't resolve as expected.
+const mockRequest = jest.fn();
+
 function makeCtx() {
-  return {
+  // The handler calls ctx.getInstallationClient() twice:
+  //   1. To fetch the full PR (returns { data: FULL_PR })
+  //   2. To post the acknowledgment comment (uses .request)
+  // We use mockImplementationOnce so each call gets the right shape.
+  const client = { request: mockRequest };
+  const ctx = {
     triageQueue: { add: jest.fn().mockResolvedValue({ id: "job-1" }) },
     issueFixQueue: { add: jest.fn().mockResolvedValue({ id: "job-2" }) },
     phase4Queue: { add: jest.fn().mockResolvedValue({ id: "job-3" }) },
-    getInstallationClient: jest.fn().mockResolvedValue({ request: jest.fn() }),
+    getInstallationClient: jest.fn(),
     wrapOctokit: jest.fn((client) => client),
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
   };
+  // Call 1: PR fetch. Call 2+: same client (acknowledgment uses .request).
+  ctx.getInstallationClient.mockResolvedValue(client);
+  return ctx;
 }
 
 // A minimal "full PR" that the handler fetches
@@ -65,6 +78,16 @@ const FULL_PR = {
   base: { ref: "main" },
   user: { login: "maintainer" },
 };
+
+// Override the PR fetch to return FULL_PR
+function setupPRFetch(ctx) {
+  ctx.getInstallationClient.mockReset();
+  const client = { request: mockRequest };
+  // First call: PR fetch returns { data: FULL_PR }
+  ctx.getInstallationClient.mockResolvedValueOnce({ request: jest.fn().mockResolvedValue({ data: FULL_PR }) });
+  // Second call: ack comment client
+  ctx.getInstallationClient.mockResolvedValue(client);
+}
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -87,11 +110,7 @@ describe("PF-B1-01: /gitwire run review preflight", function () {
     const parsed = { issueNumber: 42, authorLogin: "maintainer" };
     const action = { pillar: "review" };
     const ctx = makeCtx();
-
-    // Stub the PR fetch
-    ctx.getInstallationClient = jest.fn().mockResolvedValue({
-      request: jest.fn().mockResolvedValue({ data: FULL_PR }),
-    });
+    setupPRFetch(ctx);
 
     await handleManualRun(payload, parsed, action, ctx);
 
@@ -99,16 +118,16 @@ describe("PF-B1-01: /gitwire run review preflight", function () {
     expect(ctx.phase4Queue.add).not.toHaveBeenCalled();
     // Idempotency key must NOT be cleared (no enqueue to protect)
     expect(mockClearIdempotencyKey).not.toHaveBeenCalledWith("ai_review", expect.any(String));
-    // Acknowledgment comment must mention activation
-    const commentCall = ctx.wrapOctokit.mock.results[0]?.value?.request?.mock?.calls
-      || ctx.getInstallationClient.mock.results[0]?.value?.request?.mock?.calls;
-    // The ack was posted — verify via the octokit request mock
-    const ackRequest = ctx.getInstallationClient.mock.results[0]?.value;
-    if (ackRequest && ackRequest.request && ackRequest.request.mock) {
-      const ackBody = ackRequest.request.mock.calls[0]?.[1]?.body || "";
-      expect(ackBody).toContain("not been activated");
-      expect(ackBody).toContain(ACTIVATION_URL);
-    }
+    // Exactly one acknowledgment comment posted
+    const commentCalls = mockRequest.mock.calls.filter(c => c[0]?.includes?.("/comments") || (typeof c[0] === "string" && c[0].includes("/comments")));
+    expect(commentCalls).toHaveLength(1);
+    const ackBody = commentCalls[0][1].body;
+    // Must say activation required
+    expect(ackBody).toContain("not been activated");
+    // Must link to the correct Intelligence dashboard URL
+    expect(ackBody).toContain(ACTIVATION_URL);
+    // Must NOT promise results
+    expect(ackBody).not.toContain("Results will appear shortly");
   });
 
   // ── Test 10: run review + runnable → enqueue + standard ack ──────────────
@@ -126,10 +145,7 @@ describe("PF-B1-01: /gitwire run review preflight", function () {
     const parsed = { issueNumber: 42, authorLogin: "maintainer" };
     const action = { pillar: "review" };
     const ctx = makeCtx();
-
-    ctx.getInstallationClient = jest.fn().mockResolvedValue({
-      request: jest.fn().mockResolvedValue({ data: FULL_PR }),
-    });
+    setupPRFetch(ctx);
 
     await handleManualRun(payload, parsed, action, ctx);
 
@@ -140,6 +156,12 @@ describe("PF-B1-01: /gitwire run review preflight", function () {
     }), { priority: 1 });
     // Idempotency key MUST be cleared
     expect(mockClearIdempotencyKey).toHaveBeenCalledWith("ai_review", "pr-42-abc123def");
+    // Acknowledgment must be the standard result-promise (not activation message)
+    const commentCalls = mockRequest.mock.calls.filter(c => typeof c[0] === "string" && c[0].includes("/comments"));
+    expect(commentCalls).toHaveLength(1);
+    const ackBody = commentCalls[0][1].body;
+    expect(ackBody).toContain("Re-evaluation triggered");
+    expect(ackBody).not.toContain("not been activated");
   });
 
   // ── Test 11: run all + review not activated → triage dispatches, review blocked ─
@@ -157,10 +179,7 @@ describe("PF-B1-01: /gitwire run review preflight", function () {
     const parsed = { issueNumber: 42, authorLogin: "maintainer" };
     const action = { pillar: "all" };
     const ctx = makeCtx();
-
-    ctx.getInstallationClient = jest.fn().mockResolvedValue({
-      request: jest.fn().mockResolvedValue({ data: FULL_PR }),
-    });
+    setupPRFetch(ctx);
 
     await handleManualRun(payload, parsed, action, ctx);
 
@@ -168,14 +187,16 @@ describe("PF-B1-01: /gitwire run review preflight", function () {
     expect(ctx.triageQueue.add).toHaveBeenCalledTimes(1);
     // Phase4 MUST NOT be enqueued
     expect(ctx.phase4Queue.add).not.toHaveBeenCalled();
-    // The acknowledgment must mention triage AND the review activation gap
-    const ackClient = ctx.getInstallationClient.mock.results[0]?.value;
-    if (ackClient && ackClient.request && ackClient.request.mock) {
-      const ackBody = ackClient.request.mock.calls[0]?.[1]?.body || "";
-      // Should mention the standard "re-evaluation triggered" for triage
-      // AND the review not-activated note
-      expect(ackBody).toMatch(/Re-evaluation triggered|all applicable/);
-      expect(ackBody).toContain("not activated");
-    }
+    // One mixed acknowledgment comment
+    const commentCalls = mockRequest.mock.calls.filter(c => typeof c[0] === "string" && c[0].includes("/comments"));
+    expect(commentCalls).toHaveLength(1);
+    const ackBody = commentCalls[0][1].body;
+    // Must acknowledge the dispatched work
+    expect(ackBody).toMatch(/Re-evaluation triggered|all applicable/);
+    // Must explicitly say review was not triggered
+    expect(ackBody).toContain("not triggered");
+    expect(ackBody).toContain("not activated");
+    // Must include the correct activation link
+    expect(ackBody).toContain(ACTIVATION_URL);
   });
 });
