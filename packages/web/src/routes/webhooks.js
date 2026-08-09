@@ -92,6 +92,7 @@ webhookRouter.post(
     // Only create on open/reopen/ready — NOT on every pull_request event.
     // Labels, edits, syncs etc. will trigger pull_request webhooks that would
     // create duplicate orphaned check runs.
+    let checkRunId = null;
     if (
       eventName === "pull_request" &&
       ["opened", "reopened", "ready_for_review"].includes(payload.action) &&
@@ -100,7 +101,7 @@ webhookRouter.post(
       try {
         const octokit = wrapOctokit(await getInstallationClient(payload.installation?.id));
         if (octokit) {
-          const checkRunId = await createGitwireCheck({
+          checkRunId = await createGitwireCheck({
             octokit,
             owner: payload.repository.owner.login,
             repo: payload.repository.name,
@@ -121,7 +122,7 @@ webhookRouter.post(
     }
 
     // ── 4. Enqueue based on event type ────────────────────────────────────
-    await routeWebhookToQueue(eventName, payload, deliveryId);
+    await routeWebhookToQueue(eventName, payload, deliveryId, { checkRunId });
 
     // ── 4a. Evaluate custom rules ────────────────────────────────────────────
     if (["issues", "pull_request", "issue_comment"].includes(eventName)) {

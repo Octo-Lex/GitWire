@@ -57,8 +57,13 @@ const handlers = {
 /**
  * Thin dispatcher — routes webhook events to the appropriate handler.
  * CC target: ~3 (just a lookup + try/catch)
+ *
+ * @param {string} eventName
+ * @param {object} payload
+ * @param {string} deliveryId
+ * @param {object} [meta] - per-delivery metadata (e.g. checkRunId from the webhook route)
  */
-export async function routeWebhookToQueue(eventName, payload, deliveryId) {
+export async function routeWebhookToQueue(eventName, payload, deliveryId, meta = {}) {
   // PR #33: Reconcile repository identity on EVERY webhook event that carries
   // payload.repository. This ensures the DB row is updated on rename/transfer
   // before any handler runs, so downstream lookups find the repo by its CURRENT
@@ -75,7 +80,7 @@ export async function routeWebhookToQueue(eventName, payload, deliveryId) {
   const handler = handlers[eventName];
 
   if (handler) {
-    await handler(payload, deliveryId, ctx);
+    await handler(payload, deliveryId, ctx, meta);
   } else {
     const jobData = { eventName, payload, deliveryId, receivedAt: Date.now() };
     await ctx.webhookQueue.add("generic-event", jobData, { priority: 10 });

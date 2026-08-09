@@ -3,7 +3,7 @@
 
 import { checkSpamGate } from "./handleSpamGate.js";
 
-export async function handlePullRequest(payload, deliveryId, ctx) {
+export async function handlePullRequest(payload, deliveryId, ctx, meta = {}) {
   const jobData = { eventName: "pull_request", payload, deliveryId, receivedAt: Date.now() };
 
   // Spam gate check on opened PRs (before triage)
@@ -25,6 +25,7 @@ export async function handlePullRequest(payload, deliveryId, ctx) {
       pr:           payload.pull_request,
       repository:   payload.repository,
       installation: payload.installation,
+      checkRunId:   meta.checkRunId || null,
     }, { priority: 1 });
   }
 
