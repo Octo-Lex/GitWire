@@ -82,6 +82,24 @@ describe("finalizeGitwireCheck", function () {
     );
   });
 
+  // ── Structured skip: not_activated (PF-B1-01) ─────────────────────────────
+
+  it("finalizes with actionable activation message when review skipped due to not_activated", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: { skipped: true, reason: "not_activated", activationUrl: "https://gitwire.erlab.uk/intelligence" },
+    });
+    expect(mockUpdateCheck).toHaveBeenCalledWith(
+      expect.objectContaining({ checkRunId: 99999, conclusion: "neutral" })
+    );
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.title).toContain("not activated");
+    expect(call.summary).toContain("Intelligence dashboard");
+    expect(call.summary).toContain("https://gitwire.erlab.uk/intelligence");
+    expect(call.summary).not.toContain("not configured for this repository");
+  });
+
   // ── Review passed ────────────────────────────────────────────────────────
 
   it("finalizes as success when review passed", async function () {

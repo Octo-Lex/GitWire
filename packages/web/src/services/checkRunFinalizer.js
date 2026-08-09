@@ -89,6 +89,15 @@ export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNum
     conclusion = "failure";
     title = "GitWire \u2014 review error";
     summary = "AI review encountered an error: " + errorContext;
+  } else if (reviewResult && reviewResult.skipped && reviewResult.reason === "not_activated") {
+    // Structured skip: .gitwire.yml has ai_review enabled but the DB-level
+    // ai_review_config row is missing or disabled. Give the maintainer an
+    // actionable activation path instead of the generic "not configured" text.
+    conclusion = "neutral";
+    title = "GitWire \u2014 AI review not activated";
+    summary = "AI Review is enabled by repository policy but has not been activated in GitWire. "
+            + "Activate it in the [GitWire Intelligence dashboard](" + (reviewResult.activationUrl || "")
+            + ") to start receiving AI code reviews.";
   } else if (!reviewResult) {
     conclusion = "neutral";
     title = "GitWire \u2014 no review needed";

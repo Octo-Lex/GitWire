@@ -75,8 +75,14 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
   }
 
   // ── 1. Load config ─────────────────────────────────────────────────────────
+  // The DB-level ai_review_config row is the cost-control gate. When it is
+  // missing or disabled, return a structured skip object so the finalizer
+  // can render an actionable message (not the generic "not configured").
+  // Other null-return paths (bot author, no files, validation) stay bare null.
   const cfg = await loadReviewConfig(repoId);
-  if (!cfg?.enabled) return null;
+  if (!cfg?.enabled) {
+    return { skipped: true, reason: "not_activated", activationUrl: config.server.baseUrl + "/intelligence" };
+  }
 
   logger.info({ repo: repository.full_name, pr: pr.number }, "AI review: starting (bundle-driven v2)");
 
@@ -793,6 +799,39 @@ async function loadReviewConfig(repoId) {
     "SELECT * FROM ai_review_config WHERE repo_id = $1", [repoId]
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Resolve the effective AI review state for a repository.
+ *
+ * AI review requires two independent gates:
+ *   Gate 1: .gitwire.yml pillar enabled (isPillarEnabled)
+ *   Gate 2: ai_review_config DB row with enabled = true (loadReviewConfig)
+ *
+ * This function is the single source of truth for "is AI review effectively
+ * runnable for this repo." Used by the manual-run handler to preflight before
+ * promising results, and by the worker skip logic to distinguish reasons.
+ *
+ * @param {number} repoId - GitHub repository ID (repositories.github_id)
+ * @param {string} repoFullName - Full repo name (owner/repo) for config lookup
+ * @returns {Promise<{runnable: boolean, reason: string|null, pillarEnabled: boolean, dbActivated: boolean, activationUrl: string}>}
+ */
+export async function getEffectiveReviewState(repoId, repoFullName) {
+  const { getConfigForRepo } = await import("./configService.js");
+  const { isPillarEnabled } = await import("@gitwire/rules");
+  const repoConfig = await getConfigForRepo(repoFullName);
+  const cfg = await loadReviewConfig(repoId);
+  const pillarEnabled = isPillarEnabled("ai_review", repoConfig);
+  const dbActivated = cfg?.enabled === true;
+  const activationUrl = config.server.baseUrl + "/intelligence";
+
+  if (!pillarEnabled) {
+    return { runnable: false, reason: "pillar_disabled", pillarEnabled, dbActivated, activationUrl };
+  }
+  if (!dbActivated) {
+    return { runnable: false, reason: "not_activated", pillarEnabled, dbActivated, activationUrl };
+  }
+  return { runnable: true, reason: null, pillarEnabled, dbActivated, activationUrl };
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

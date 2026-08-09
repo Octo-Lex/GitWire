@@ -35,11 +35,14 @@ export async function handleManualRun(payload, parsed, action, ctx) {
   }
 
   let dispatched = [];
+  let blocked = [];
 
   if (isPR) {
-    dispatched = await handlePRManualRun(payload, parsed, pillar, issueNumber, installationId, ctx, {
+    const result = await handlePRManualRun(payload, parsed, pillar, issueNumber, installationId, ctx, {
       clearIdempotencyKey, clearTriageOperation, fullPR,
     });
+    dispatched = result.dispatched;
+    blocked = result.blocked || [];
   } else {
     dispatched = await handleIssueManualRun(payload, parsed, pillar, repoFullName, issueNumber, installationId, ctx, {
       clearIdempotencyKey, clearTriageOperation,
@@ -47,7 +50,7 @@ export async function handleManualRun(payload, parsed, action, ctx) {
   }
 
   // Post GitHub-visible acknowledgment
-  await postAcknowledgment(payload, parsed, action, dispatched, ctx);
+  await postAcknowledgment(payload, parsed, action, dispatched, blocked, ctx);
 
   ctx.logger.info({ command: "run", pillar, repo: repoFullName, issue: issueNumber, isPR, dispatched }, "/gitwire run processed");
 }
@@ -91,21 +94,36 @@ async function handleIssueManualRun(payload, parsed, pillar, repoFullName, issue
 async function handlePRManualRun(payload, parsed, pillar, issueNumber, installationId, ctx, idem) {
   const { fullPR } = idem;
   const dispatched = [];
+  const blocked = [];
 
   if (pillar === "all" || pillar === "review") {
     if (!fullPR?.head?.sha) {
       ctx.logger.warn({ repo: payload.repository?.full_name, pr: issueNumber }, "/gitwire run review: could not resolve PR head SHA — skipping review");
     } else {
-      // Clear the exact key the phase4 worker checks: pr-{number}-{head.sha}
-      const reviewKey = "pr-" + issueNumber + "-" + fullPR.head.sha;
-      await idem.clearIdempotencyKey("ai_review", reviewKey);
-      // Queue with the full PR object so head.sha, base.ref, changed_files, etc. are available
-      await ctx.phase4Queue.add("ai-review", {
-        pr: fullPR,
-        repository: payload.repository,
-        installation: payload.installation,
-      }, { priority: 1 });
-      dispatched.push("review");
+      // Preflight: is AI review effectively activated? Check BEFORE clearing
+      // the idempotency key so we don't poison the key for a future activation.
+      const { getEffectiveReviewState } = await import("../../../services/aiReviewService.js");
+      const repoId = payload.repository?.id;
+      const repoFullName = payload.repository?.full_name;
+      const state = await getEffectiveReviewState(repoId, repoFullName);
+
+      if (!state.runnable) {
+        // Do not enqueue a knowingly silent review. Record the block so the
+        // acknowledgment can tell the maintainer exactly what happened.
+        blocked.push({ pillar: "review", reason: state.reason, activationUrl: state.activationUrl });
+        ctx.logger.info({ repo: repoFullName, pr: issueNumber, reason: state.reason }, "/gitwire run review: AI review not runnable — blocked preflight");
+      } else {
+        // Clear the exact key the phase4 worker checks: pr-{number}-{head.sha}
+        const reviewKey = "pr-" + issueNumber + "-" + fullPR.head.sha;
+        await idem.clearIdempotencyKey("ai_review", reviewKey);
+        // Queue with the full PR object so head.sha, base.ref, changed_files, etc. are available
+        await ctx.phase4Queue.add("ai-review", {
+          pr: fullPR,
+          repository: payload.repository,
+          installation: payload.installation,
+        }, { priority: 1 });
+        dispatched.push("review");
+      }
     }
   }
 
@@ -140,18 +158,30 @@ async function handlePRManualRun(payload, parsed, pillar, issueNumber, installat
     dispatched.push("heal-unsupported");
   }
 
-  return dispatched;
+  return { dispatched, blocked };
 }
 
 // ── Acknowledgment ───────────────────────────────────────────────────────────
 
-async function postAcknowledgment(payload, parsed, action, dispatched, ctx) {
+async function postAcknowledgment(payload, parsed, action, dispatched, blocked, ctx) {
   try {
     let body;
 
-    if (dispatched.includes("heal-unsupported") && dispatched.length === 1) {
+    if (dispatched.includes("heal-unsupported") && dispatched.length === 1 && blocked.length === 0) {
       // Only heal was requested
       body = "ℹ️ **GitWire:** CI healing requires a failed workflow run event and cannot be manually triggered through this command.";
+    } else if (dispatched.length === 0 && blocked.length > 0) {
+      // Nothing dispatched, but we have a specific block reason.
+      // This is the /gitwire run review + not activated case.
+      const reviewBlock = blocked.find(b => b.pillar === "review");
+      if (reviewBlock && reviewBlock.reason === "not_activated") {
+        body = "ℹ️ **GitWire:** AI Review is enabled by repository policy but has not been activated in GitWire. "
+             + "Activate it in the [Intelligence dashboard](" + reviewBlock.activationUrl + ") to enable AI code reviews.";
+      } else if (reviewBlock && reviewBlock.reason === "pillar_disabled") {
+        body = "ℹ️ **GitWire:** AI Review is disabled by repository policy.";
+      } else {
+        body = "⚠️ **GitWire:** No workers could be dispatched. The repository or PR data could not be resolved. Check that GitWire is properly configured.";
+      }
     } else if (dispatched.length === 0) {
       body = "⚠️ **GitWire:** No workers could be dispatched. The repository or PR data could not be resolved. Check that GitWire is properly configured.";
     } else {
@@ -159,6 +189,14 @@ async function postAcknowledgment(payload, parsed, action, dispatched, ctx) {
       body = buildCommandResponse("manual_run", { pillar: action.pillar || "all" });
       if (dispatched.includes("heal-unsupported")) {
         body += "\n\nℹ️ CI healing requires a failed workflow run event and was not triggered.";
+      }
+      // If some pillars were blocked, append a truthful note
+      const reviewBlock = blocked.find(b => b.pillar === "review");
+      if (reviewBlock && reviewBlock.reason === "not_activated") {
+        body += "\n\nℹ️ AI Review was not triggered — it is enabled by policy but not activated in GitWire. "
+              + "Activate it in the [Intelligence dashboard](" + reviewBlock.activationUrl + ").";
+      } else if (reviewBlock && reviewBlock.reason === "pillar_disabled") {
+        body += "\n\nℹ️ AI Review was not triggered — it is disabled by repository policy.";
       }
     }
 
