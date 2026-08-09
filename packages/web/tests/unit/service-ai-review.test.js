@@ -132,7 +132,8 @@ describe('aiReviewService (bundle-driven v2)', () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const oct = mockOctokit();
     const r = await reviewPR({ pr: { number: 5 }, repository: REPO, octokit: oct });
-    expect(r).toBeNull();
+    // PF-B1-01: config-gate skip returns structured object, not bare null
+    expect(r).toEqual({ skipped: true, reason: "not_activated", activationUrl: expect.any(String) });
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
@@ -140,7 +141,8 @@ describe('aiReviewService (bundle-driven v2)', () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ id: 1, enabled: false }] });
     const oct = mockOctokit();
     const r = await reviewPR({ pr: { number: 5 }, repository: REPO, octokit: oct });
-    expect(r).toBeNull();
+    // PF-B1-01: same structured skip for explicit disabled
+    expect(r).toEqual({ skipped: true, reason: "not_activated", activationUrl: expect.any(String) });
     expect(mockCreate).not.toHaveBeenCalled();
   });
 

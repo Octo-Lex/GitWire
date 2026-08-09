@@ -37,6 +37,18 @@ jest.unstable_mockModule("../../src/lib/commentRouter.js", () => ({
   resolveCommandAction: jest.fn(),
 }));
 
+// Mock aiReviewService so handleManualRun's preflight check works without
+// importing config (which validates env vars at load time). Default: runnable.
+jest.unstable_mockModule("../../src/services/aiReviewService.js", () => ({
+  getEffectiveReviewState: jest.fn().mockResolvedValue({
+    runnable: true,
+    reason: null,
+    pillarEnabled: true,
+    dbActivated: true,
+    activationUrl: "https://gitwire.test/intelligence",
+  }),
+}));
+
 // Import after mocks
 const { handleManualRun } = await import("../../src/lib/webhookHandlers/commentCommands/handleManualRun.js");
 
