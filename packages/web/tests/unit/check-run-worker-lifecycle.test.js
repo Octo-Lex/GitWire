@@ -151,6 +151,7 @@ async function processReviewJob(jobData, jobOpts = {}) {
     name: "ai-review",
     data: jobData,
     attemptsMade: jobOpts.attemptsMade || 0,
+    attemptsStarted: jobOpts.attemptsStarted || 0,
   };
   return processorArg(job);
 }
@@ -335,5 +336,78 @@ describe("Phase 4 worker check ownership lifecycle", () => {
 
     // clearRetryOutcome was called to clean up
     expect(clearRetryOutcome).toHaveBeenCalledWith(999, 16, "abc123", 5000);
+  });
+
+  it("8. replay PATCH fails again → original stored outcome preserved, no finalizeOwnFailure", async () => {
+    const { getRetryOutcome, replayCheckConclusion } =
+      await import("../../src/services/checkRunFinalizer.js");
+
+    const storedOutcome = {
+      checkRunId: 5000,
+      conclusion: "success",
+      title: "GitWire \u2014 review passed",
+      summary: "AI review completed. Verdict: approved, 0 finding(s).",
+    };
+
+    getRetryOutcome.mockResolvedValueOnce(storedOutcome);
+    replayCheckConclusion.mockResolvedValueOnce(false); // PATCH fails again
+
+    // Worker should throw (transport error) without calling finalizeOwnFailure
+    await expect(processReviewJob({ ...baseJobData, checkRunId: 5000 }, { attemptsMade: 1 }))
+      .rejects.toThrow("PATCH failed on retry");
+
+    // finalizeGitwireCheck should NOT have been called (no error-context path)
+    const errorFinalizeCalls = mockFinalizeGitwireCheck.mock.calls.filter(
+      ([args]) => args.errorContext,
+    );
+    expect(errorFinalizeCalls.length).toBe(0);
+  });
+
+  it("9. stalled activation (attemptsMade=0, attemptsStarted=2) with queued check → interrupted failure, not neutral", async () => {
+    mockCheckAndMark.mockResolvedValue(false); // duplicate
+    // Mock octokit that returns a queued check for GET check-runs
+    const mockRequest = jest.fn().mockImplementation(async (method) => {
+      if (typeof method === "string" && method.includes("check-runs")) {
+        return { data: { status: "queued" } };
+      }
+      return { data: {} };
+    });
+    mockGetInstallationClient.mockResolvedValue({ request: mockRequest });
+
+    await processReviewJob(
+      { ...baseJobData, checkRunId: 5000 },
+      { attemptsMade: 0, attemptsStarted: 2 },
+    );
+
+    // finalizeGitwireCheck should have been called with errorContext (failure path)
+    const errorCalls = mockFinalizeGitwireCheck.mock.calls.filter(
+      ([args]) => args.errorContext,
+    );
+    expect(errorCalls.length).toBe(1);
+    expect(errorCalls[0][0].errorContext).toContain("interrupted");
+    expect(errorCalls[0][0].checkRunId).toBe(5000);
+
+    // Should NOT have been called with reviewResult: null (neutral)
+    const neutralCalls = mockFinalizeGitwireCheck.mock.calls.filter(
+      ([args]) => args.reviewResult === null && !args.errorContext,
+    );
+    expect(neutralCalls.length).toBe(0);
+  });
+
+  it("10. interrupted-failure PATCH fails → worker throws/retries, does not complete successfully", async () => {
+    mockCheckAndMark.mockResolvedValue(false); // duplicate
+    const mockRequest = jest.fn().mockImplementation(async (method) => {
+      if (typeof method === "string" && method.includes("check-runs")) {
+        return { data: { status: "queued" } };
+      }
+      return { data: {} };
+    });
+    mockGetInstallationClient.mockResolvedValue({ request: mockRequest });
+    mockFinalizeGitwireCheck.mockResolvedValue(false); // PATCH fails
+
+    await expect(processReviewJob(
+      { ...baseJobData, checkRunId: 5000 },
+      { attemptsMade: 0, attemptsStarted: 2 },
+    )).rejects.toThrow("PATCH failed");
   });
 });
