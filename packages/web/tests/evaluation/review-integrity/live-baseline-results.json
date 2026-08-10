@@ -1,0 +1,494 @@
+[
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 1,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:28:34.745Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P3"
+    ],
+    "findingTitles": [
+      "Broken sentence in roadmap.md due to truncation"
+    ],
+    "expectedDefectDetected": true,
+    "falseApprove": false,
+    "falsePositive": null,
+    "tokensUsed": 387,
+    "latencyMs": 7507,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 2,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:28:42.252Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": false,
+    "falseApprove": true,
+    "falsePositive": null,
+    "tokensUsed": 344,
+    "latencyMs": 4854,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 3,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:28:47.106Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": false,
+    "falseApprove": true,
+    "falsePositive": null,
+    "tokensUsed": 210,
+    "latencyMs": 9611,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 1,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:28:56.718Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 4526,
+    "latencyMs": 4613,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 2,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:01.331Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 194,
+    "latencyMs": 3581,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 3,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:04.913Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P3"
+    ],
+    "findingTitles": [
+      "Phase list numbering inconsistency in README.md"
+    ],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 351,
+    "latencyMs": 4426,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 1,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:09.339Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P3"
+    ],
+    "findingTitles": [
+      "Broken reference link in roadmap.md"
+    ],
+    "expectedDefectDetected": false,
+    "falseApprove": false,
+    "falsePositive": null,
+    "tokensUsed": 1959,
+    "latencyMs": 4492,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 2,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:13.831Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P2"
+    ],
+    "findingTitles": [
+      "Cross-reference link verification"
+    ],
+    "expectedDefectDetected": false,
+    "falseApprove": false,
+    "falsePositive": null,
+    "tokensUsed": 443,
+    "latencyMs": 5675,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 3,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:19.507Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": false,
+    "falseApprove": true,
+    "falsePositive": null,
+    "tokensUsed": 195,
+    "latencyMs": 3066,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 1,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:22.573Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 181,
+    "latencyMs": 3678,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 2,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:26.252Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P3"
+    ],
+    "findingTitles": [
+      "Broken number sequence in README.md table of contents"
+    ],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 302,
+    "latencyMs": 3952,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 3,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:30.203Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P3"
+    ],
+    "findingTitles": [
+      "Bulleted list numbering inconsistency in README.md"
+    ],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 486,
+    "latencyMs": 6053,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 1,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:36.256Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": false,
+    "falseApprove": true,
+    "falsePositive": null,
+    "tokensUsed": 6251,
+    "latencyMs": 4046,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 2,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:40.303Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": false,
+    "falseApprove": true,
+    "falsePositive": null,
+    "tokensUsed": 392,
+    "latencyMs": 4254,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 3,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:44.558Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P1"
+    ],
+    "findingTitles": [
+      "Missing null check on payload.repository"
+    ],
+    "expectedDefectDetected": true,
+    "falseApprove": false,
+    "falsePositive": null,
+    "tokensUsed": 659,
+    "latencyMs": 6363,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 1,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:50.921Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 2,
+    "findingSeverities": [
+      "P1",
+      "P2"
+    ],
+    "findingTitles": [
+      "Potential uncaught rejection in async handler",
+      "Inconsistent return signature handling"
+    ],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": true,
+    "tokensUsed": 6389,
+    "latencyMs": 5689,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 2,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:29:56.610Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 2,
+    "findingSeverities": [
+      "P2",
+      "P3"
+    ],
+    "findingTitles": [
+      "Missing unblocking of ACK tests in wave2-writer-audit.test.js",
+      "Inconsistent URL construction between service and test"
+    ],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": true,
+    "tokensUsed": 763,
+    "latencyMs": 9225,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 3,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:30:05.835Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 392,
+    "latencyMs": 3834,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 1,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:30:09.669Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": false,
+    "falseApprove": true,
+    "falsePositive": null,
+    "tokensUsed": 3099,
+    "latencyMs": 3552,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 2,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:30:13.220Z",
+    "verdict": "approved",
+    "correctness": "patch is correct",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "expectedDefectDetected": false,
+    "falseApprove": true,
+    "falsePositive": null,
+    "tokensUsed": 385,
+    "latencyMs": 4651,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 3,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:30:17.872Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 2,
+    "findingSeverities": [
+      "P1",
+      "P3"
+    ],
+    "findingTitles": [
+      "Logic Inversion: Auto-comment fails on explicit false",
+      "Redundant Logic in buildTriageComment"
+    ],
+    "expectedDefectDetected": true,
+    "falseApprove": false,
+    "falsePositive": null,
+    "tokensUsed": 792,
+    "latencyMs": 9912,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 1,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:30:27.785Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 2,
+    "findingSeverities": [
+      "P2",
+      "P2"
+    ],
+    "findingTitles": [
+      "findCommentByMarker returns partial matches on ambiguity",
+      "Ambiguity check allows duplicates if comments are on different pages"
+    ],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": true,
+    "tokensUsed": 5755,
+    "latencyMs": 14919,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 2,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:30:42.704Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P3"
+    ],
+    "findingTitles": [
+      "Missing return after early ambiguity check"
+    ],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 615,
+    "latencyMs": 17081,
+    "extractionStrategy": "fenced"
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 3,
+    "model": "claude-sonnet-4-20250514",
+    "timestamp": "2026-08-10T06:30:59.785Z",
+    "verdict": "needs_discussion",
+    "correctness": "patch is correct",
+    "findingCount": 1,
+    "findingSeverities": [
+      "P3"
+    ],
+    "findingTitles": [
+      "findCommentByMarker pagination loop can run indefinitely on API race conditions"
+    ],
+    "expectedDefectDetected": null,
+    "falseApprove": null,
+    "falsePositive": false,
+    "tokensUsed": 385,
+    "latencyMs": 5032,
+    "extractionStrategy": "fenced"
+  }
+]

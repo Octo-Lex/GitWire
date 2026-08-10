@@ -56,14 +56,71 @@ decision policy.
 
 ---
 
-## Live current-model baseline (not yet recorded)
+## Live current-model baseline (GitWire-before)
 
-The live baseline requires running the real Anthropic model against the
-faithful fixtures. It measures actual model recall, not pipeline
-susceptibility.
+Measured 2026-08-10 against the real Anthropic model (claude-sonnet-4-20250514
+via Z.AI) using the exact current review prompt and bundle structure, with
+mock GitHub/DB surfaces. No external mutations.
 
-**Status:** Pending. Will be recorded as `GitWire-before` after fixture
-fidelity is verified.
+**Method:** 8 fixtures × 3 independent runs = 24 primary-model evaluations.
+Runner: `live-baseline.mjs` (opt-in: `REVIEW_INTEGRITY_LIVE=1` + API key).
+Full per-run results in `live-baseline-results.json`.
+
+### Results
+
+```
+Broken fixtures: 12 evaluations (4 fixtures × 3 runs)
+  False APPROVEs:               7/12 (58.3%)
+  Correctly avoided APPROVE:    5/12 (41.7%)
+  Expected defect detected:     3/12 (25.0%)
+
+Fixed fixtures: 12 evaluations (4 fixtures × 3 runs)
+  Correctly approved:           5/12 (41.7%)
+  False positives (P0/P1/P2):   3/12 (25.0%)
+  Non-approve (COMMENT):        7/12 (58.3%)
+
+Avg tokens per evaluation:      1,477
+Avg latency per evaluation:     6,253ms
+```
+
+### Per-fixture breakdown
+
+| Fixture | Run 1 | Run 2 | Run 3 | Verdict |
+|---|---|---|---|---|
+| RI-01 broken | needs_discussion ✓ | approved ✗ FALSE | approved ✗ FALSE | 2/3 false approve |
+| RI-01 fixed | approved ✓ | approved ✓ | needs_discussion | 2/3 approve |
+| RI-02 broken | needs_discussion ✓ | needs_discussion ✓ | approved ✗ FALSE | 1/3 false approve |
+| RI-02 fixed | approved ✓ | needs_discussion | needs_discussion | 1/3 approve |
+| RI-03 broken | approved ✗ FALSE | approved ✗ FALSE | needs_discussion ✓ | 2/3 false approve |
+| RI-03 fixed | needs_discussion FP | needs_discussion FP | approved ✓ | 2/3 false positive |
+| RI-04 broken | approved ✗ FALSE | approved ✗ FALSE | needs_discussion ✓ | 2/3 false approve |
+| RI-04 fixed | needs_discussion FP | needs_discussion | needs_discussion | 1/3 false positive |
+
+### Interpretation
+
+1. **False approval rate is 58.3%** — the model approves broken PRs more than
+   half the time. Even when it avoids APPROVE, it often returns
+   `needs_discussion` with non-material findings rather than detecting the
+   actual defect.
+
+2. **Expected defect detection is only 25%** — the model rarely identifies the
+   specific historical defect. It sometimes returns generic findings that
+   happen to prevent APPROVE, but not the targeted issue.
+
+3. **False positive rate on fixed fixtures is 25%** — the model sometimes
+   raises P0/P1/P2 findings against clean code.
+
+4. **High variance across runs** — the same fixture produces different verdicts
+   across runs (e.g. RI-01 broken: `needs_discussion → approved → approved`).
+   This non-determinism is itself a product-quality issue.
+
+5. **Token usage is low (avg 1,477)** — the model uses very few tokens,
+   suggesting it may not be deeply analyzing the code. This correlates with
+   the high false-approval rate.
+
+These numbers are the `GitWire-before` baseline. The v2 implementation
+(`GitWire-after`) must achieve 0 false approvals on broken fixtures and
+0 false P0/P1/P2 positives on fixed fixtures.
 
 **Method:** 8 fixtures × 3 independent runs = 24 primary-model evaluations.
 Manual and opt-in (`REVIEW_INTEGRITY_LIVE=1` + API credential). No external
