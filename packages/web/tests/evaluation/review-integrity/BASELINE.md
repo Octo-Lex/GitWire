@@ -59,68 +59,69 @@ decision policy.
 ## Live current-model baseline (GitWire-before)
 
 Measured 2026-08-10 against the real Anthropic model (claude-sonnet-4-20250514
-via Z.AI) using the exact current review prompt and bundle structure, with
-mock GitHub/DB surfaces. No external mutations.
+via Z.AI) running through the ACTUAL production `reviewPR()` pipeline — real
+bundle building, real prompt, real extraction, real validation, real
+`reportToLegacy` verdict mapping. Mock GitHub/DB/check surfaces only. No
+external mutations.
 
 **Method:** 8 fixtures × 3 independent runs = 24 primary-model evaluations.
-Runner: `live-baseline.mjs` (opt-in: `REVIEW_INTEGRITY_LIVE=1` + API key).
+Runner: `live-baseline.test.js` (opt-in: `REVIEW_INTEGRITY_LIVE=1` + API key).
 Full per-run results in `live-baseline-results.json`.
+Config: `adversarial_review: false` (primary-only baseline).
 
 ### Results
 
 ```
 Broken fixtures: 12 evaluations (4 fixtures × 3 runs)
-  False APPROVEs:               7/12 (58.3%)
-  Correctly avoided APPROVE:    5/12 (41.7%)
-  Expected defect detected:     3/12 (25.0%)
+  False APPROVEs:               12/12 (100%)
+  Correctly avoided APPROVE:    0/12 (0%)
 
 Fixed fixtures: 12 evaluations (4 fixtures × 3 runs)
-  Correctly approved:           5/12 (41.7%)
-  False positives (P0/P1/P2):   3/12 (25.0%)
-  Non-approve (COMMENT):        7/12 (58.3%)
+  Correctly approved:           9/12 (75%)
+  False positives (P0/P1/P2):   3/12 (25%)
 
-Avg tokens per evaluation:      1,477
-Avg latency per evaluation:     6,253ms
+Avg tokens per evaluation:      447
+Avg latency per evaluation:     10,669ms
 ```
 
 ### Per-fixture breakdown
 
 | Fixture | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|
-| RI-01 broken | needs_discussion ✓ | approved ✗ FALSE | approved ✗ FALSE | 2/3 false approve |
-| RI-01 fixed | approved ✓ | approved ✓ | needs_discussion | 2/3 approve |
-| RI-02 broken | needs_discussion ✓ | needs_discussion ✓ | approved ✗ FALSE | 1/3 false approve |
-| RI-02 fixed | approved ✓ | needs_discussion | needs_discussion | 1/3 approve |
-| RI-03 broken | approved ✗ FALSE | approved ✗ FALSE | needs_discussion ✓ | 2/3 false approve |
-| RI-03 fixed | needs_discussion FP | needs_discussion FP | approved ✓ | 2/3 false positive |
-| RI-04 broken | approved ✗ FALSE | approved ✗ FALSE | needs_discussion ✓ | 2/3 false approve |
-| RI-04 fixed | needs_discussion FP | needs_discussion | needs_discussion | 1/3 false positive |
+| RI-01 broken | approved ✗ FALSE | approved ✗ FALSE | approved ✗ FALSE | 3/3 false approve |
+| RI-01 fixed | approved ✓ | approved ✓ | approved ✓ | 3/3 correct |
+| RI-02 broken | approved ✗ FALSE | approved ✗ FALSE | approved ✗ FALSE | 3/3 false approve |
+| RI-02 fixed | approved ✓ | approved ✓ | approved ✓ | 3/3 correct |
+| RI-03 broken | approved ✗ FALSE | approved ✗ FALSE | approved ✗ FALSE | 3/3 false approve |
+| RI-03 fixed | approved ✓ FP | approved ✓ | needs_discussion FP | 2/3 false positive |
+| RI-04 broken | approved ✗ FALSE | approved ✗ FALSE | approved ✗ FALSE | 3/3 false approve |
+| RI-04 fixed | approved ✓ | approved ✓ FP | approved ✓ | 1/3 false positive |
 
 ### Interpretation
 
-1. **False approval rate is 58.3%** — the model approves broken PRs more than
-   half the time. Even when it avoids APPROVE, it often returns
-   `needs_discussion` with non-material findings rather than detecting the
-   actual defect.
+1. **False approval rate is 100% on broken fixtures.** The production
+   `reportToLegacy()` verdict mapping approves whenever the model returns
+   `overall_correctness: "patch is correct"`, regardless of whether P3
+   findings exist. The model returns "patch is correct" on every broken
+   fixture — the architectural defect is total, not probabilistic.
 
-2. **Expected defect detection is only 25%** — the model rarely identifies the
-   specific historical defect. It sometimes returns generic findings that
-   happen to prevent APPROVE, but not the targeted issue.
+2. **Token usage is very low (avg 447).** The model produces minimal output,
+   suggesting it is not deeply analyzing the diffs. This correlates with the
+   universal false-approval rate.
 
-3. **False positive rate on fixed fixtures is 25%** — the model sometimes
-   raises P0/P1/P2 findings against clean code.
+3. **Fixed fixtures have a 25% false-positive rate.** The model sometimes
+   raises P0/P1/P2 findings against clean code, though the production verdict
+   mapping still marks these as `approved` when `overall_correctness` is
+   `"patch is correct"`.
 
-4. **High variance across runs** — the same fixture produces different verdicts
-   across runs (e.g. RI-01 broken: `needs_discussion → approved → approved`).
-   This non-determinism is itself a product-quality issue.
+4. **The production verdict mapping is the primary defect.** The model's
+   output often contains useful signals, but `reportToLegacy` discards them
+   when `overall_correctness` is "patch is correct." This is the exact gap
+   the v2 deterministic decision policy and independent verifier must close.
 
-5. **Token usage is low (avg 1,477)** — the model uses very few tokens,
-   suggesting it may not be deeply analyzing the code. This correlates with
-   the high false-approval rate.
-
-These numbers are the `GitWire-before` baseline. The v2 implementation
-(`GitWire-after`) must achieve 0 false approvals on broken fixtures and
-0 false P0/P1/P2 positives on fixed fixtures.
+These numbers are the authoritative `GitWire-before` baseline. The v2
+implementation (`GitWire-after`) must achieve 0 false approvals on broken
+fixtures and 0 false P0/P1/P2 positives on fixed fixtures.
 
 **Method:** 8 fixtures × 3 independent runs = 24 primary-model evaluations.
 Manual and opt-in (`REVIEW_INTEGRITY_LIVE=1` + API credential). No external
