@@ -203,21 +203,54 @@ describeOrSkip("RI live baseline — production reviewPR() pipeline", () => {
           }
         }
 
-        // Expected defect detection: check if any finding matches the
-        // expected historical finding by keyword overlap
+        // Expected defect detection: case-specific semantic adjudication.
+        // A finding must describe the actual historical defect, not just
+        // share a generic keyword. Each case has its own detection criteria.
         let expectedDefectDetected = null;
         if (fixture.expectedFinding) {
-          const ef = fixture.expectedFinding;
-          // Use significant keywords from the expected finding title
-          const expectedKeywords = ef.title.toLowerCase()
-            .split(/\s+/)
-            .filter(w => w.length > 4)
-            .map(w => w.replace(/[^a-z]/g, ""))
-            .filter(Boolean);
-          expectedDefectDetected = (result?.findings || []).some(f => {
-            const findingText = ((f.title || "") + " " + (f.description || f.body || "")).toLowerCase();
-            return expectedKeywords.some(kw => findingText.includes(kw));
-          });
+          const findings = result?.findings || [];
+          const allFindingText = findings
+            .map(f => ((f.title || "") + " " + (f.description || f.body || "")).toLowerCase())
+            .join(" ");
+
+          switch (fixture.caseId) {
+            case "RI-01":
+              // Expected: stale Phase 0 status declarations not synchronized
+              // Must mention status synchronization or contradictory declarations
+              expectedDefectDetected =
+                (allFindingText.includes("synchron") || allFindingText.includes("stale") ||
+                 allFindingText.includes("contradict") || allFindingText.includes("inconsisten")) &&
+                (allFindingText.includes("status") || allFindingText.includes("phase") ||
+                 allFindingText.includes("declaration") || allFindingText.includes("readme") ||
+                 allFindingText.includes("constitution"));
+              break;
+            case "RI-02":
+              // Expected: gate 0.5 definition lacks Agent-replacement assertion
+              // Must mention gate, agent replacement/restart, or the contract mismatch
+              expectedDefectDetected =
+                (allFindingText.includes("gate") || allFindingText.includes("exit")) &&
+                (allFindingText.includes("agent") || allFindingText.includes("replace") ||
+                 allFindingText.includes("restart"));
+              break;
+            case "RI-03":
+              // Expected: activation URL missing /dashboard basePath
+              // Must mention basePath, dashboard, or URL construction error
+              expectedDefectDetected =
+                allFindingText.includes("basepath") || allFindingText.includes("base path") ||
+                allFindingText.includes("/dashboard") || allFindingText.includes("url") &&
+                (allFindingText.includes("path") || allFindingText.includes("config"));
+              break;
+            case "RI-04":
+              // Expected: unpaginated findCommentByMarker causing duplicate comments
+              // Must mention pagination, duplicate comments, or the page boundary
+              expectedDefectDetected =
+                allFindingText.includes("paginat") || allFindingText.includes("pagination") ||
+                allFindingText.includes("duplicate comment") ||
+                (allFindingText.includes("page") && allFindingText.includes("comment"));
+              break;
+            default:
+              expectedDefectDetected = false;
+          }
         }
 
         const record = {

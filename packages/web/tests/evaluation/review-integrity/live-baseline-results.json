@@ -357,11 +357,12 @@
     "findingTitles": [
       "Function call outside conditional block after logic change"
     ],
-    "expectedDefectDetected": true,
+    "expectedDefectDetected": false,
     "tokensUsed": 663,
     "latencyMs": 6110,
     "falseApprove": true,
-    "falsePositive": null
+    "falsePositive": null,
+    "adjudicationNote": "Finding \"Function call outside conditional block after logic change\" does not describe the unpaginated findCommentByMarker defect. Adjudicated as not detected."
   },
   {
     "fixture": "RI-04",

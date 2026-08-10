@@ -75,7 +75,7 @@ Config: `adversarial_review: false` (primary-only baseline).
 Broken fixtures: 12 evaluations (4 fixtures × 3 runs)
   False APPROVEs:               11/12 (91.7%)
   Null (error path):            1/12 (8.3%)
-  Expected defect detected:     1/12 (8.3%)
+  Expected defect detected:     0/12 (0%)
 
 Fixed fixtures: 12 evaluations (4 fixtures × 3 runs)
   Correctly approved:           8/12 (66.7%)
@@ -107,9 +107,12 @@ Avg latency per evaluation:     5,235ms
    the model output was unparseable, hitting the error path rather than
    a correct rejection.
 
-2. **Expected defect detection is only 8.3%** (1/12). The model rarely
-   identifies the specific historical defect. It almost always returns
-   `"patch is correct"` with zero or non-material findings.
+2. **Expected defect detection is 0%** (0/12). The model never identifies
+   the specific historical defect. It almost always returns
+   `"patch is correct"` with zero findings. The one broken run with a
+   finding (RI-04 run 2: "Function call outside conditional block after
+   logic change") is a generic observation that does not describe the
+   unpaginated `findCommentByMarker` defect — adjudicated as not detected.
 
 3. **Token usage varies widely** (144–6,494, avg 1,585). Low-token runs
    correlate with shallow analysis and false approvals.
