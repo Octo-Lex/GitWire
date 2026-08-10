@@ -158,39 +158,85 @@ function contentDigest(text) {
 }
 
 /**
- * Build side-specific Git identity for a changed file.
+ * Fetch file content at a specific ref and return its content digest.
+ * Uses the GitHub contents API to get actual file content (not the diff patch).
+ *
+ * @param {object} octokit - GitHub client
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} path - file path
+ * @param {string} ref - commit SHA or ref
+ * @returns {Promise<{ sha: string|null, contentDigest: string|null }>}
+ */
+async function fetchFileIdentity(octokit, owner, repo, path, ref) {
+  try {
+    const { data } = await octokit.request(
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      { owner, repo, path, ref }
+    );
+    if (data && data.type === "file") {
+      const content = data.encoding === "base64"
+        ? Buffer.from(data.content, "base64").toString("utf-8")
+        : (data.content || "");
+      return {
+        sha: data.sha || null,
+        contentDigest: contentDigest(content),
+      };
+    }
+  } catch (_e) {
+    // File doesn't exist at this ref, or API error — identity unavailable
+  }
+  return { sha: null, contentDigest: null };
+}
+
+/**
+ * Build side-specific Git identity for a changed file by fetching
+ * actual base and head file content from the repository.
  *
  * A file's HEAD identity exists unless the file was removed.
  * A file's BASE identity exists unless the file was added.
  *
+ * The content digest is computed from the actual file content at that ref,
+ * NOT from the diff patch. This provides commit-bound integrity.
+ *
+ * @param {object} octokit - GitHub client
+ * @param {string} owner
+ * @param {string} repo
  * @param {object} file - PR file from GitHub API
  * @param {object} reviewRoot - { baseSha, headSha }
- * @returns {object} { base, head } — each is { sha, blobSha, contentDigest } or null
+ * @returns {Promise<object>} { base, head } — each is { sha, blobSha, contentDigest } or null
  */
-function buildSideIdentity(file, reviewRoot) {
+async function buildSideIdentity(octokit, owner, repo, file, reviewRoot) {
   const status = file.status || "modified";
-  const patch = file.patch ?? null;
+  const filename = file.filename || "";
+  const previousFilename = file.previous_filename || filename;
+
+  const baseRef = reviewRoot?.baseSha || null;
+  const headRef = reviewRoot?.headSha || null;
 
   // HEAD identity: exists for all statuses except "removed"
-  const head = (status !== "removed")
-    ? {
-        sha: reviewRoot?.headSha || null,
-        blobSha: file.sha || null,
-        contentDigest: contentDigest(patch),
-      }
-    : null;
+  let head = null;
+  if (status !== "removed" && headRef) {
+    const headIdentity = await fetchFileIdentity(octokit, owner, repo, filename, headRef);
+    head = {
+      sha: headRef,
+      blobSha: headIdentity.sha || file.sha || null,
+      contentDigest: headIdentity.contentDigest,
+    };
+  }
 
   // BASE identity: exists for all statuses except "added"
-  // GitHub's PR-files API does not return the base blob SHA directly,
-  // but the base commit SHA is known from the review root.
-  // For removed files, the HEAD sha IS the old blob that no longer exists.
-  const base = (status !== "added")
-    ? {
-        sha: reviewRoot?.baseSha || null,
-        blobSha: (status === "removed" ? file.sha : null), // removed file's sha is the old blob
-        contentDigest: null, // base content not available from PR-files API; RI-3 context broker can fetch it
-      }
-    : null;
+  let base = null;
+  if (status !== "added" && baseRef) {
+    // For renamed files, the base content is at the OLD path
+    const basePath = (status === "renamed") ? previousFilename : filename;
+    const baseIdentity = await fetchFileIdentity(octokit, owner, repo, basePath, baseRef);
+    base = {
+      sha: baseRef,
+      blobSha: baseIdentity.sha || (status === "removed" ? file.sha : null),
+      contentDigest: baseIdentity.contentDigest,
+    };
+  }
 
   return { base, head };
 }
@@ -213,10 +259,13 @@ function buildSideIdentity(file, reviewRoot) {
  * @param {string} owner
  * @param {string} repo
  * @param {number} prNumber
- * @param {number} expectedFileCount - authoritative changed_files from PR metadata
+ * @param {number} expectedFileCount - MANDATORY: authoritative changed_files from PR metadata
  * @returns {Promise<object>} { allFiles, paginatedFully }
  */
 export async function acquireChangedFiles(octokit, owner, repo, prNumber, expectedFileCount) {
+  if (typeof expectedFileCount !== "number") {
+    throw new Error("acquireChangedFiles requires expectedFileCount (the PR's authoritative changed_files count). Without it, acquisition cannot prove completeness.");
+  }
   const allFiles = [];
   let page = 1;
   let paginatedFully = true;
@@ -240,10 +289,10 @@ export async function acquireChangedFiles(octokit, owner, repo, prNumber, expect
     page++;
   }
 
-  // Reconcile against the PR's authoritative changed_files count.
+  // Reconcile against the PR's authoritative changed_files count (mandatory).
   // GitHub's PR-files API returns at most 3000 files; if the PR has more,
   // or if any files were lost in transit, the counts will differ.
-  if (typeof expectedFileCount === "number" && allFiles.length !== expectedFileCount) {
+  if (allFiles.length !== expectedFileCount) {
     paginatedFully = false;
     try {
       logger.warn({
@@ -279,15 +328,21 @@ export async function acquireChangedFiles(octokit, owner, repo, prNumber, expect
  * @param {number} params.maxFiles - max files to review
  * @param {number} params.maxLines - max changed lines to review
  * @param {object} params.review - immutable review root { repoId, repoFullName, prNumber, baseSha, headSha, invocationId }
- * @returns {object} ReviewEvidence with review root, changedFiles, coverage manifest
+ * @param {object} params.octokit - GitHub client (for fetching base/head content)
+ * @param {string} params.owner
+ * @param {string} params.repo
+ * @returns {Promise<object>} ReviewEvidence with review root, changedFiles, coverage manifest
  */
-export function buildReviewEvidence({
+export async function buildReviewEvidence({
   allFiles,
   paginatedFully = true,
   ignorePatterns = [],
   maxFiles = 30,
   maxLines = 2000,
   review: reviewRoot,
+  octokit,
+  owner,
+  repo,
 }) {
   const changedFiles = [];
   let totalAdded = 0;
@@ -303,8 +358,8 @@ export function buildReviewEvidence({
     totalAdded += additions;
     totalRemoved += deletions;
 
-    // Build side-specific Git identity once for this file
-    const { base, head } = buildSideIdentity(file, reviewRoot);
+    // Build side-specific Git identity by fetching actual base/head content
+    const { base, head } = await buildSideIdentity(octokit, owner, repo, file, reviewRoot);
 
     // Check policy exemption FIRST — exempt files are accounted but don't consume budget
     const exemption = classifyExemption(file, ignorePatterns);
@@ -371,8 +426,9 @@ export function buildReviewEvidence({
       const representedLines = remainingBudget;
       const truncatedPatch = truncatePatchToLines(file.patch, representedLines);
 
-      // Rebuild head identity with the truncated patch digest
-      const partialHead = head ? { ...head, contentDigest: contentDigest(truncatedPatch) } : null;
+      // For partial coverage, the head identity's contentDigest reflects the
+      // full file content (fetched above), but the represented patch is truncated.
+      // The contentDigest stays as the full-file digest for integrity.
 
       changedFiles.push({
         path: filename,
@@ -384,7 +440,7 @@ export function buildReviewEvidence({
         coverageReason: "Line limit exceeded — only " + representedLines + " of " + fileLines + " lines represented",
         policyExemption: null,
         patch: truncatedPatch,
-        base, head: partialHead,
+        base, head,
         representedLines,
       });
       changedLinesConsumed += representedLines;

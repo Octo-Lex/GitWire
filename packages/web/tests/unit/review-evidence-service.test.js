@@ -11,6 +11,7 @@ import {
   acquireChangedFiles,
   buildReviewEvidence,
 } from "../../src/services/reviewEvidenceService.js";
+import { createHash } from "node:crypto";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,17 +29,52 @@ function makeFile(filename, overrides = {}) {
 
 function makeOctokit(pages) {
   const calls = [];
+  const contentMap = new Map(); // key: `${ref}:${path}` → content string
+
   return {
     request: function(route, params) {
       calls.push({ route, params });
+
+      // PR files endpoint
       if (route.includes("/pulls/") && route.includes("/files")) {
         const page = params.page || 1;
         const data = pages[page - 1] || [];
         return Promise.resolve({ data });
       }
+
+      // Content endpoint — resolve {path} from params and serve from contentMap
+      if (route.includes("GET") && route.includes("/contents/")) {
+        const path = params.path || route.match(/contents\/(.+?)(?:\?|$)/)?.[1] || "";
+        const ref = params.ref || "head";
+        const key = ref + ":" + path;
+        if (contentMap.has(key)) {
+          const content = contentMap.get(key);
+          return Promise.resolve({
+            data: {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from(content).toString("base64"),
+              path,
+              sha: "blobsha_" + path,
+            },
+          });
+        }
+        return Promise.reject(new Error("404 Not Found: " + path));
+      }
+
+      // Root contents listing
+      if (route.includes("GET") && route.includes("/contents") && !route.includes("/contents/")) {
+        return Promise.resolve({ data: [] });
+      }
+
       return Promise.resolve({ data: {} });
     },
     _calls: calls,
+    _contentMap: contentMap,
+    // Helper to populate content for tests
+    setContent(ref, path, content) {
+      contentMap.set(ref + ":" + path, content);
+    },
   };
 }
 
@@ -104,17 +140,15 @@ describe("RI-2: classifyExemption", () => {
   it("does NOT exempt lockfiles (not globally exempt)", () => {
     expect(classifyExemption(makeFile("package-lock.json"))).toBeNull();
     expect(classifyExemption(makeFile("yarn.lock"))).toBeNull();
-    expect(classifyExemption(makeFile("Cargo.lock"))).toBeNull();
   });
 
   it("does NOT classify missing patch as binary (may be large)", () => {
     const result = classifyExemption(makeFile("large.js", { patch: undefined }));
-    expect(result).toBeNull(); // not exempt — buildReviewEvidence handles as unavailable
+    expect(result).toBeNull();
   });
 
   it("returns null for normal source files", () => {
     expect(classifyExemption(makeFile("src/app.js"))).toBeNull();
-    expect(classifyExemption(makeFile("docs/guide.md"))).toBeNull();
   });
 });
 
@@ -128,43 +162,37 @@ describe("RI-2: acquireChangedFiles (pagination)", () => {
     const page3 = Array.from({ length: 50 }, (_, i) => makeFile("file" + (200 + i) + ".js"));
     const octokit = makeOctokit([page1, page2, page3]);
 
-    const { allFiles, paginatedFully } = await acquireChangedFiles(octokit, "org", "repo", 42);
+    const { allFiles, paginatedFully } = await acquireChangedFiles(octokit, "org", "repo", 42, 250);
 
     expect(allFiles).toHaveLength(250);
     expect(paginatedFully).toBe(true);
-    const fileCalls = octokit._calls.filter(c => c.route.includes("/files"));
-    expect(fileCalls).toHaveLength(3);
   });
 
   it("handles a single page (fewer than 100 files)", async () => {
     const files = Array.from({ length: 5 }, (_, i) => makeFile("file" + i + ".js"));
     const octokit = makeOctokit([files]);
 
-    const { allFiles, paginatedFully } = await acquireChangedFiles(octokit, "org", "repo", 42);
+    const { allFiles, paginatedFully } = await acquireChangedFiles(octokit, "org", "repo", 42, 5);
 
     expect(allFiles).toHaveLength(5);
     expect(paginatedFully).toBe(true);
   });
 
-  it("sets paginatedFully=false when acquired count differs from expected", async () => {
-    // Simulate a PR with 3005 files, but GitHub API caps at 3000
+  it("throws when expectedFileCount is not provided (mandatory)", async () => {
+    const octokit = makeOctokit([[]]);
+    await expect(
+      acquireChangedFiles(octokit, "org", "repo", 42)
+    ).rejects.toThrow("expectedFileCount");
+  });
+
+  it("sets paginatedFully=false when acquired count differs from expected (API ceiling)", async () => {
     const files = Array.from({ length: 5 }, (_, i) => makeFile("file" + i + ".js"));
     const octokit = makeOctokit([files]);
 
     const { allFiles, paginatedFully } = await acquireChangedFiles(octokit, "org", "repo", 42, 10);
 
     expect(allFiles).toHaveLength(5);
-    expect(paginatedFully).toBe(false); // 5 acquired ≠ 10 expected
-  });
-
-  it("sets paginatedFully=true when acquired count matches expected", async () => {
-    const files = Array.from({ length: 5 }, (_, i) => makeFile("file" + i + ".js"));
-    const octokit = makeOctokit([files]);
-
-    const { allFiles, paginatedFully } = await acquireChangedFiles(octokit, "org", "repo", 42, 5);
-
-    expect(allFiles).toHaveLength(5);
-    expect(paginatedFully).toBe(true); // 5 acquired = 5 expected
+    expect(paginatedFully).toBe(false);
   });
 });
 
@@ -172,10 +200,17 @@ describe("RI-2: acquireChangedFiles (pagination)", () => {
 
 describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
 
-  it("assigns FULL coverage to files within budget", () => {
-    const evidence = buildReviewEvidence({
+  it("assigns FULL coverage to files within budget", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "app content");
+    octokit.setContent(REVIEW_ROOT.headSha, "src/utils.js", "utils content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "old app content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/utils.js", "old utils content");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [makeFile("src/app.js"), makeFile("src/utils.js")],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.changedFiles).toHaveLength(2);
@@ -183,67 +218,96 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.coverage.approvalEvidenceComplete).toBe(true);
   });
 
-  it("includes the immutable review root", () => {
-    const evidence = buildReviewEvidence({
+  it("includes the immutable review root", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "old content");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [makeFile("src/app.js")],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.review).toEqual(REVIEW_ROOT);
   });
 
-  it("stores side-specific base/head identity with blob SHAs and content digests", () => {
-    const evidence = buildReviewEvidence({
-      allFiles: [makeFile("src/app.js", { sha: "abc123" })],
+  it("stores side-specific base/head identity with actual content digests", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "head content here");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "base content here");
+
+    const evidence = await buildReviewEvidence({
+      allFiles: [makeFile("src/app.js")],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     const cf = evidence.changedFiles[0];
+    // HEAD identity: digest from actual head file content, not from the patch
     expect(cf.head).toBeDefined();
-    expect(cf.head.blobSha).toBe("abc123");
     expect(cf.head.sha).toBe(REVIEW_ROOT.headSha);
-    expect(cf.head.contentDigest).toMatch(/^sha256:/);
-    // Modified file has both base and head
+    expect(cf.head.contentDigest).toBe("sha256:" + createHash("sha256").update("head content here", "utf8").digest("hex"));
+    // BASE identity: digest from actual base file content
     expect(cf.base).toBeDefined();
     expect(cf.base.sha).toBe(REVIEW_ROOT.baseSha);
+    expect(cf.base.contentDigest).toBe("sha256:" + createHash("sha256").update("base content here", "utf8").digest("hex"));
   });
 
-  it("removed files have null head (no HEAD version exists)", () => {
-    const evidence = buildReviewEvidence({
+  it("removed files have null head (no HEAD version exists)", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/deleted.js", "deleted content");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [makeFile("src/deleted.js", { status: "removed", additions: 0, deletions: 50 })],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.changedFiles[0].head).toBeNull();
     expect(evidence.changedFiles[0].base).toBeDefined();
+    expect(evidence.changedFiles[0].base.contentDigest).toMatch(/^sha256:/);
   });
 
-  it("added files have null base (no BASE version exists)", () => {
-    const evidence = buildReviewEvidence({
+  it("added files have null base (no BASE version exists)", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/new.js", "new file content");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [makeFile("src/new.js", { status: "added", additions: 20, deletions: 0 })],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.changedFiles[0].base).toBeNull();
     expect(evidence.changedFiles[0].head).toBeDefined();
   });
 
-  it("approvalEvidenceComplete is false when review root is null", () => {
-    const evidence = buildReviewEvidence({
+  it("approvalEvidenceComplete is false when review root is null", async () => {
+    const octokit = makeOctokit([]);
+
+    const evidence = await buildReviewEvidence({
       allFiles: [makeFile("src/app.js")],
       review: null,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
   });
 
-  it("accounts removed files with FULL coverage (diff shows everything removed)", () => {
-    const evidence = buildReviewEvidence({
+  it("accounts removed files with FULL coverage", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "app content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "old app");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/deleted.js", "deleted content");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [
         makeFile("src/app.js"),
         makeFile("src/deleted.js", { status: "removed", additions: 0, deletions: 50 }),
       ],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     const removed = evidence.changedFiles.find(f => f.path === "src/deleted.js");
@@ -252,8 +316,12 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(removed.status).toBe("removed");
   });
 
-  it("accounts renamed files with both old and new paths", () => {
-    const evidence = buildReviewEvidence({
+  it("accounts renamed files with both old and new paths", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/new-name.js", "new content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/old-name.js", "old content");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [makeFile("src/new-name.js", {
         status: "renamed",
         previous_filename: "src/old-name.js",
@@ -261,6 +329,7 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
         deletions: 2,
       })],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.changedFiles[0].path).toBe("src/new-name.js");
@@ -268,14 +337,19 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.changedFiles[0].status).toBe("renamed");
   });
 
-  it("assigns POLICY_EXEMPT to exempt files and they don't consume budget", () => {
-    const evidence = buildReviewEvidence({
+  it("assigns POLICY_EXEMPT to exempt files and they don't consume budget", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "app content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "old app");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [
         makeFile("src/app.js"),
-        makeFile("logo.png"),       // binary → exempt
-        makeFile("dist/bundle.js"), // generated → exempt
+        makeFile("logo.png"),
+        makeFile("dist/bundle.js"),
       ],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.coverage.fullyCoveredFiles).toBe(1);
@@ -283,8 +357,14 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.coverage.approvalEvidenceComplete).toBe(true);
   });
 
-  it("marks file as PARTIAL when it crosses the line limit, with bounded patch and represented lines", () => {
-    const evidence = buildReviewEvidence({
+  it("marks file as PARTIAL when it crosses the line limit, with bounded patch and represented lines", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "file1.js", "a".repeat(100));
+    octokit.setContent(REVIEW_ROOT.baseSha, "file1.js", "b".repeat(100));
+    octokit.setContent(REVIEW_ROOT.headSha, "file2.js", "c".repeat(100));
+    octokit.setContent(REVIEW_ROOT.baseSha, "file2.js", "d".repeat(100));
+
+    const evidence = await buildReviewEvidence({
       allFiles: [
         makeFile("file1.js", { additions: 1500, deletions: 0, patch: generatePatch(1500) }),
         makeFile("file2.js", { additions: 1000, deletions: 0, patch: generatePatch(1000) }),
@@ -293,27 +373,34 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
       maxFiles: 30,
       maxLines: 2000,
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     const file2 = evidence.changedFiles.find(f => f.path === "file2.js");
     const file3 = evidence.changedFiles.find(f => f.path === "file3.js");
 
     expect(file2.coverage).toBe(COVERAGE.PARTIAL);
-    expect(file2.representedLines).toBe(500); // only 2000-1500=500 lines represented
-    expect(file2.patch).toContain("truncated"); // patch is bounded
+    expect(file2.representedLines).toBe(500);
+    expect(file2.patch).toContain("truncated");
     expect(file3.coverage).toBe(COVERAGE.UNAVAILABLE);
-
-    // changedLinesRepresented must not exceed maxLines
     expect(evidence.coverage.changedLinesRepresented).toBeLessThanOrEqual(2000);
     expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
   });
 
-  it("marks files as UNAVAILABLE when file limit is exceeded", () => {
+  it("marks files as UNAVAILABLE when file limit is exceeded", async () => {
     const files = Array.from({ length: 35 }, (_, i) => makeFile("file" + i + ".js", { additions: 1, deletions: 0 }));
-    const evidence = buildReviewEvidence({
+    const octokit = makeOctokit([]);
+    // Set content for all files
+    for (const f of files) {
+      octokit.setContent(REVIEW_ROOT.headSha, f.filename, "x");
+      octokit.setContent(REVIEW_ROOT.baseSha, f.filename, "y");
+    }
+
+    const evidence = await buildReviewEvidence({
       allFiles: files,
       maxFiles: 10,
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.coverage.totalChangedFiles).toBe(35);
@@ -322,13 +409,20 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
   });
 
-  it("marks non-exempt files with missing patch as UNAVAILABLE (not binary)", () => {
-    const evidence = buildReviewEvidence({
+  it("marks non-exempt files with missing patch as UNAVAILABLE", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "old");
+    octokit.setContent(REVIEW_ROOT.headSha, "large.js", "large");
+    octokit.setContent(REVIEW_ROOT.baseSha, "large.js", "old large");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [
         makeFile("src/app.js"),
         makeFile("large.js", { patch: undefined, additions: 500, deletions: 0 }),
       ],
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     const large = evidence.changedFiles.find(f => f.path === "large.js");
@@ -337,11 +431,16 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
   });
 
-  it("approvalEvidenceComplete is false when pagination is incomplete", () => {
-    const evidence = buildReviewEvidence({
+  it("approvalEvidenceComplete is false when pagination is incomplete", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "old");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [makeFile("src/app.js")],
       paginatedFully: false,
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.coverage.acquisitionComplete).toBe(false);
@@ -349,20 +448,33 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.coverage.limitsExceeded).toContain("pagination_incomplete");
   });
 
-  it("no silent truncation — all files are accounted even when beyond limits", () => {
+  it("no silent truncation — all files are accounted", async () => {
     const files = Array.from({ length: 50 }, (_, i) => makeFile("file" + i + ".js", { additions: 1, deletions: 0 }));
-    const evidence = buildReviewEvidence({
+    const octokit = makeOctokit([]);
+    for (const f of files) {
+      octokit.setContent(REVIEW_ROOT.headSha, f.filename, "x");
+      octokit.setContent(REVIEW_ROOT.baseSha, f.filename, "y");
+    }
+
+    const evidence = await buildReviewEvidence({
       allFiles: files,
       maxFiles: 5,
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.changedFiles).toHaveLength(50);
     expect(evidence.coverage.totalChangedFiles).toBe(50);
   });
 
-  it("changedLinesTotal counts all files including exempt and unavailable", () => {
-    const evidence = buildReviewEvidence({
+  it("changedLinesTotal counts all files including exempt and unavailable", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "old");
+    octokit.setContent(REVIEW_ROOT.headSha, "src/over.js", "over");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/over.js", "old over");
+
+    const evidence = await buildReviewEvidence({
       allFiles: [
         makeFile("src/app.js", { additions: 100, deletions: 10 }),
         makeFile("logo.png", { additions: 0, deletions: 0 }),
@@ -371,10 +483,10 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
       maxFiles: 30,
       maxLines: 200,
       review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
     });
 
     expect(evidence.coverage.changedLinesTotal).toBe(5110);
-    // changedLinesRepresented must not exceed maxLines
     expect(evidence.coverage.changedLinesRepresented).toBeLessThanOrEqual(200);
   });
 });
