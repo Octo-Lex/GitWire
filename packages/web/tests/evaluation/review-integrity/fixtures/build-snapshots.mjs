@@ -132,6 +132,19 @@ function parseGitNumstat(text) {
   return map;
 }
 
+/**
+ * Strip git diff headers to match GitHub's PR-file patch representation.
+ * GitHub's GET /pulls/{n}/files[].patch starts at the @@ hunk header,
+ * not at the `diff --git` line. This makes the stored patch byte-equivalent
+ * to what the real fetchDiff() would receive from the GitHub API.
+ */
+function toGitHubPatch(rawDiff) {
+  const lines = rawDiff.split("\n");
+  const hunkStart = lines.findIndex((l) => l.startsWith("@@"));
+  if (hunkStart === -1) return rawDiff; // no hunks (binary, etc.)
+  return lines.slice(hunkStart).join("\n");
+}
+
 /** Build changedFiles[] from a local git diff range, with real blob SHAs and head/base content. */
 function gitChangedFiles(base, head) {
   const nameStatus = run(
@@ -144,10 +157,11 @@ function gitChangedFiles(base, head) {
   const entries = parseGitNameStatus(nameStatus);
 
   return entries.map(({ status, filename }) => {
-    const patch = run(
+    const rawPatch = run(
       `git -C "${GITWIRE_REPO_ROOT}" diff ${base}..${head} -- "${filename}"`,
       { maxBuffer: 1024 * 1024 * 64 }
     );
+    const patch = toGitHubPatch(rawPatch);
     const counts = stats.get(filename) || { additions: 0, deletions: 0 };
     // Get real blob SHAs and file contents at base and head
     const headBlobSha = gitBlobSha(head, filename);
@@ -224,18 +238,22 @@ function normalizeGhFile(f, base, head) {
     patch: typeof f.patch === "string" ? f.patch : "",
     sha: sha || "unknown",
     headBlobSha: sha,
-    baseBlobSha: f.previous_file_sha || null,
-    headContent: null, // populated below
+    baseBlobSha: null, // populated by enrichGhFiles
+    headContent: null, // populated by enrichGhFiles
     baseContent: null,
   };
 }
 
-/** Enrich normalized GitHub files with head/base content from the API. */
+/** Enrich normalized GitHub files with head/base content and blob SHAs from the API. */
 function enrichGhFiles(files, base, head, repo) {
   for (const f of files) {
     try { f.headContent = ghContents(repo, f.filename, head); } catch (_e) { /* new file */ }
+    try { f.headBlobSha = ghBlobSha(repo, f.filename, head); } catch (_e) { /* keep existing */ }
     if (f.status !== "added") {
-      try { f.baseContent = ghContents(repo, f.filename, base); } catch (_e) { /* removed */ }
+      try {
+        f.baseContent = ghContents(repo, f.filename, base);
+        f.baseBlobSha = ghBlobSha(repo, f.filename, base);
+      } catch (_e) { /* removed */ }
     }
   }
   return files;
@@ -276,13 +294,10 @@ function have(name) {
  * RI-01 / RI-02 — AgentGears/AlCode PR #2.
  *
  * RI-01 and RI-02 are two expected findings against the SAME historical PR state.
- * They must share identical review bundles:
- *
- *   broken = dd07fb2 → 0181b19, full 2-file bundle (phase-0-spec.md + roadmap.md)
- *   fixed  = dd07fb2 → 20219bd, full 4-file bundle (README + constitution + spec + roadmap)
- *
- * Each case adds its own context files for the specific finding, but the
- * changedFiles (the review bundle) are identical.
+ * Both broken fixtures use dd07fb2 → 0181b19 (the PR's first commit).
+ * Both fixed fixtures use dd07fb2 → 20219bd (the PR's final merged state).
+ * The changedFiles bundle is identical within each variant.
+ * Context files differ per finding but do not change the review bundle.
  */
 
 function buildAlcodeBroken() {

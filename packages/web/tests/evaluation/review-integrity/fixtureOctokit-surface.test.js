@@ -224,5 +224,55 @@ describe("fixtureOctokit surface — historical fixtures", () => {
       const decoded = Buffer.from(res.data.content, "base64").toString("utf-8");
       expect(decoded).toBe(ctxFile.content);
     });
+
+    // SHA identity: PR-files and contents must return the real blob SHA
+    it(`${f.caseId} ${f.variant}: PR-files sha matches stored headBlobSha`, async () => {
+      const octokit = buildFixtureOctokit(f);
+      const res = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+        { owner: "org", repo: "repo", pull_number: 42, per_page: 100 },
+      );
+
+      for (let i = 0; i < f.changedFiles.length; i++) {
+        const expected = f.changedFiles[i].headBlobSha || f.changedFiles[i].sha;
+        if (expected && expected !== "unknown") {
+          expect(res.data[i].sha).toBe(expected);
+        }
+      }
+    });
+
+    it(`${f.caseId} ${f.variant}: content response sha matches stored blob SHA for the requested ref`, async () => {
+      const octokit = buildFixtureOctokit(f);
+      const cf = f.changedFiles[0];
+      const expectedSha = cf.headBlobSha || cf.sha;
+
+      const res = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        { owner: "org", repo: "repo", path: cf.filename, ref: f.prMetadata.head },
+      );
+
+      if (expectedSha && expectedSha !== "unknown") {
+        expect(res.data.sha).toBe(expectedSha);
+      }
+    });
   }
+
+  // RI-02 specific: HEAD content must not be overwritten by context entry
+  it("RI-02 broken: HEAD content of phase-0-spec.md equals headContent (not context base content)", async () => {
+    const ri02Broken = fixtures.find(f => f.caseId === "RI-02" && f.variant === "broken");
+    const octokit = buildFixtureOctokit(ri02Broken);
+
+    // phase-0-spec.md is both a changed file AND a context file in RI-02
+    // The HEAD content must be the changed-file version, not the base context
+    const changedSpec = ri02Broken.changedFiles.find(f => f.filename === "docs/phase-0-spec.md");
+
+    const res = await octokit.request(
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      { owner: "org", repo: "repo", path: "docs/phase-0-spec.md", ref: ri02Broken.prMetadata.head },
+    );
+
+    const decoded = Buffer.from(res.data.content, "base64").toString("utf-8");
+    expect(decoded).toBe(changedSpec.headContent);
+    expect(decoded).not.toBe(ri02Broken.contextFiles[0].content);
+  });
 });

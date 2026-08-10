@@ -52,7 +52,14 @@ export function buildFixtureOctokit(fixture, opts = {}) {
   for (const cf of (fixture.contextFiles || [])) {
     const refs = cf.refs || [headSha, baseSha];
     for (const ref of refs) {
-      contentIndex.set(ref + ":" + cf.path, cf.content);
+      const key = ref + ":" + cf.path;
+      // Changed-file content takes precedence — a context entry must NOT
+      // overwrite a changed file's content at the same ref. This prevents
+      // RI-02's phase-0-spec.md context (at base) from overwriting the
+      // changed file's head content.
+      if (!contentIndex.has(key)) {
+        contentIndex.set(key, cf.content);
+      }
     }
   }
 
@@ -189,7 +196,7 @@ export function buildFixtureOctokit(fixture, opts = {}) {
           additions: f.additions || 0,
           deletions: f.deletions || 0,
           patch: f.patch || "",
-          sha: "blob_" + f.filename,
+          sha: f.headBlobSha || f.sha || null,
         }));
         const start = (page - 1) * perPage;
         const pageData = allFiles.slice(start, start + perPage);
@@ -201,13 +208,26 @@ export function buildFixtureOctokit(fixture, opts = {}) {
         const ref = params.ref || headSha;
         const key = ref + ":" + filePath;
         if (contentIndex.has(key)) {
+          // Look up the real blob SHA for this ref+path
+          let blobSha = null;
+          for (const cf of (fixture.changedFiles || [])) {
+            if (cf.filename === filePath) {
+              blobSha = (ref === headSha) ? (cf.headBlobSha || cf.sha) : (cf.baseBlobSha || cf.sha);
+              break;
+            }
+          }
+          if (!blobSha) {
+            for (const cf of (fixture.contextFiles || [])) {
+              if (cf.path === filePath) { blobSha = cf.sha; break; }
+            }
+          }
           return Promise.resolve({
             data: {
               type: "file",
               encoding: "base64",
               content: Buffer.from(contentIndex.get(key)).toString("base64"),
               path: filePath,
-              sha: "blob_" + filePath,
+              sha: blobSha,
             },
           });
         }
