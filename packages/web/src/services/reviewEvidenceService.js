@@ -157,12 +157,54 @@ function contentDigest(text) {
   return "sha256:" + createHash("sha256").update(text, "utf8").digest("hex");
 }
 
+/**
+ * Build side-specific Git identity for a changed file.
+ *
+ * A file's HEAD identity exists unless the file was removed.
+ * A file's BASE identity exists unless the file was added.
+ *
+ * @param {object} file - PR file from GitHub API
+ * @param {object} reviewRoot - { baseSha, headSha }
+ * @returns {object} { base, head } — each is { sha, blobSha, contentDigest } or null
+ */
+function buildSideIdentity(file, reviewRoot) {
+  const status = file.status || "modified";
+  const patch = file.patch ?? null;
+
+  // HEAD identity: exists for all statuses except "removed"
+  const head = (status !== "removed")
+    ? {
+        sha: reviewRoot?.headSha || null,
+        blobSha: file.sha || null,
+        contentDigest: contentDigest(patch),
+      }
+    : null;
+
+  // BASE identity: exists for all statuses except "added"
+  // GitHub's PR-files API does not return the base blob SHA directly,
+  // but the base commit SHA is known from the review root.
+  // For removed files, the HEAD sha IS the old blob that no longer exists.
+  const base = (status !== "added")
+    ? {
+        sha: reviewRoot?.baseSha || null,
+        blobSha: (status === "removed" ? file.sha : null), // removed file's sha is the old blob
+        contentDigest: null, // base content not available from PR-files API; RI-3 context broker can fetch it
+      }
+    : null;
+
+  return { base, head };
+}
+
 // ── Changed-file acquisition ─────────────────────────────────────────────────
 
 /**
  * Acquire ALL changed files from a PR, paginating through the GitHub API.
  * No files are silently dropped. Removed files are included with explicit
  * accounting. Renamed files include both old and new paths.
+ *
+ * GitHub's PR-files API returns at most 3000 files. If the PR's
+ * changed_files count exceeds the number we acquired, paginatedFully
+ * is set to false and the coverage preflight will forbid approval.
  *
  * This replaces the current fetchDiff() which fetches only one page and
  * silently filters out removed/ignored files.
@@ -171,9 +213,10 @@ function contentDigest(text) {
  * @param {string} owner
  * @param {string} repo
  * @param {number} prNumber
+ * @param {number} expectedFileCount - authoritative changed_files from PR metadata
  * @returns {Promise<object>} { allFiles, paginatedFully }
  */
-export async function acquireChangedFiles(octokit, owner, repo, prNumber) {
+export async function acquireChangedFiles(octokit, owner, repo, prNumber, expectedFileCount) {
   const allFiles = [];
   let page = 1;
   let paginatedFully = true;
@@ -195,6 +238,22 @@ export async function acquireChangedFiles(octokit, owner, repo, prNumber) {
     }
 
     page++;
+  }
+
+  // Reconcile against the PR's authoritative changed_files count.
+  // GitHub's PR-files API returns at most 3000 files; if the PR has more,
+  // or if any files were lost in transit, the counts will differ.
+  if (typeof expectedFileCount === "number" && allFiles.length !== expectedFileCount) {
+    paginatedFully = false;
+    try {
+      logger.warn({
+        prNumber,
+        acquired: allFiles.length,
+        expected: expectedFileCount,
+      }, "PR file acquisition incomplete — acquired count differs from authoritative changed_files");
+    } catch (_e) {
+      // Logger may not be initialized in test environments without runtime init
+    }
   }
 
   return { allFiles, paginatedFully };
@@ -244,6 +303,9 @@ export function buildReviewEvidence({
     totalAdded += additions;
     totalRemoved += deletions;
 
+    // Build side-specific Git identity once for this file
+    const { base, head } = buildSideIdentity(file, reviewRoot);
+
     // Check policy exemption FIRST — exempt files are accounted but don't consume budget
     const exemption = classifyExemption(file, ignorePatterns);
 
@@ -258,8 +320,7 @@ export function buildReviewEvidence({
         coverageReason: "Exempt: " + exemption.reason,
         policyExemption: exemption,
         patch: file.patch ?? null,
-        headBlobSha: file.sha || null,
-        contentDigest: contentDigest(file.patch),
+        base, head,
         representedLines: 0,
       });
       continue;
@@ -267,7 +328,6 @@ export function buildReviewEvidence({
 
     // Non-exempt file — check if we've exhausted the file or line budget
     if (lineLimitExceeded || changedFiles.filter(f => f.coverage !== COVERAGE.POLICY_EXEMPT).length >= maxFiles) {
-      // Beyond limits — accounted but unavailable
       changedFiles.push({
         path: filename,
         previousPath: file.previous_filename || null,
@@ -280,8 +340,7 @@ export function buildReviewEvidence({
           : "File limit exceeded (" + maxFiles + " files)",
         policyExemption: null,
         patch: null,
-        headBlobSha: file.sha || null,
-        contentDigest: null,
+        base, head,
         representedLines: 0,
       });
       continue;
@@ -299,8 +358,7 @@ export function buildReviewEvidence({
         coverageReason: "No text diff available (binary or large file) — cannot verify content",
         policyExemption: null,
         patch: null,
-        headBlobSha: file.sha || null,
-        contentDigest: null,
+        base, head,
         representedLines: 0,
       });
       continue;
@@ -310,10 +368,11 @@ export function buildReviewEvidence({
     const remainingBudget = maxLines - changedLinesConsumed;
 
     if (fileLines > remainingBudget && remainingBudget > 0) {
-      // Partial coverage — include only the portion that fits the budget
-      // Truncate the patch to the represented line count and count only that portion
       const representedLines = remainingBudget;
       const truncatedPatch = truncatePatchToLines(file.patch, representedLines);
+
+      // Rebuild head identity with the truncated patch digest
+      const partialHead = head ? { ...head, contentDigest: contentDigest(truncatedPatch) } : null;
 
       changedFiles.push({
         path: filename,
@@ -325,8 +384,7 @@ export function buildReviewEvidence({
         coverageReason: "Line limit exceeded — only " + representedLines + " of " + fileLines + " lines represented",
         policyExemption: null,
         patch: truncatedPatch,
-        headBlobSha: file.sha || null,
-        contentDigest: contentDigest(truncatedPatch),
+        base, head: partialHead,
         representedLines,
       });
       changedLinesConsumed += representedLines;
@@ -346,8 +404,7 @@ export function buildReviewEvidence({
         coverageReason: "Line budget exhausted",
         policyExemption: null,
         patch: null,
-        headBlobSha: file.sha || null,
-        contentDigest: null,
+        base, head,
         representedLines: 0,
       });
       lineLimitExceeded = true;
@@ -365,8 +422,7 @@ export function buildReviewEvidence({
       coverageReason: null,
       policyExemption: null,
       patch: file.patch ?? null,
-      headBlobSha: file.sha || null,
-      contentDigest: contentDigest(file.patch),
+      base, head,
       representedLines: fileLines,
     });
     changedLinesConsumed += fileLines;
@@ -395,11 +451,13 @@ export function buildReviewEvidence({
   if (!paginatedFully) coverage.limitsExceeded.push("pagination_incomplete");
 
   // approvalEvidenceComplete requires:
-  //   1. pagination completed (all files accounted for)
-  //   2. all non-exempt files have FULL coverage
-  //   3. at least one non-exempt file exists
+  //   1. immutable review root is present (commit-bound identity)
+  //   2. pagination completed (all files accounted for)
+  //   3. all non-exempt files have FULL coverage
+  //   4. at least one non-exempt file exists
   const nonExemptFiles = changedFiles.filter(f => f.coverage !== COVERAGE.POLICY_EXEMPT);
   coverage.approvalEvidenceComplete =
+    !!reviewRoot &&
     paginatedFully &&
     nonExemptFiles.length > 0 &&
     nonExemptFiles.every(f => f.coverage === COVERAGE.FULL);

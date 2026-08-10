@@ -145,6 +145,27 @@ describe("RI-2: acquireChangedFiles (pagination)", () => {
     expect(allFiles).toHaveLength(5);
     expect(paginatedFully).toBe(true);
   });
+
+  it("sets paginatedFully=false when acquired count differs from expected", async () => {
+    // Simulate a PR with 3005 files, but GitHub API caps at 3000
+    const files = Array.from({ length: 5 }, (_, i) => makeFile("file" + i + ".js"));
+    const octokit = makeOctokit([files]);
+
+    const { allFiles, paginatedFully } = await acquireChangedFiles(octokit, "org", "repo", 42, 10);
+
+    expect(allFiles).toHaveLength(5);
+    expect(paginatedFully).toBe(false); // 5 acquired ≠ 10 expected
+  });
+
+  it("sets paginatedFully=true when acquired count matches expected", async () => {
+    const files = Array.from({ length: 5 }, (_, i) => makeFile("file" + i + ".js"));
+    const octokit = makeOctokit([files]);
+
+    const { allFiles, paginatedFully } = await acquireChangedFiles(octokit, "org", "repo", 42, 5);
+
+    expect(allFiles).toHaveLength(5);
+    expect(paginatedFully).toBe(true); // 5 acquired = 5 expected
+  });
 });
 
 // ── Coverage preflight ───────────────────────────────────────────────────────
@@ -171,14 +192,49 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.review).toEqual(REVIEW_ROOT);
   });
 
-  it("stores headBlobSha and contentDigest on changed files", () => {
+  it("stores side-specific base/head identity with blob SHAs and content digests", () => {
     const evidence = buildReviewEvidence({
       allFiles: [makeFile("src/app.js", { sha: "abc123" })],
       review: REVIEW_ROOT,
     });
 
-    expect(evidence.changedFiles[0].headBlobSha).toBe("abc123");
-    expect(evidence.changedFiles[0].contentDigest).toMatch(/^sha256:/);
+    const cf = evidence.changedFiles[0];
+    expect(cf.head).toBeDefined();
+    expect(cf.head.blobSha).toBe("abc123");
+    expect(cf.head.sha).toBe(REVIEW_ROOT.headSha);
+    expect(cf.head.contentDigest).toMatch(/^sha256:/);
+    // Modified file has both base and head
+    expect(cf.base).toBeDefined();
+    expect(cf.base.sha).toBe(REVIEW_ROOT.baseSha);
+  });
+
+  it("removed files have null head (no HEAD version exists)", () => {
+    const evidence = buildReviewEvidence({
+      allFiles: [makeFile("src/deleted.js", { status: "removed", additions: 0, deletions: 50 })],
+      review: REVIEW_ROOT,
+    });
+
+    expect(evidence.changedFiles[0].head).toBeNull();
+    expect(evidence.changedFiles[0].base).toBeDefined();
+  });
+
+  it("added files have null base (no BASE version exists)", () => {
+    const evidence = buildReviewEvidence({
+      allFiles: [makeFile("src/new.js", { status: "added", additions: 20, deletions: 0 })],
+      review: REVIEW_ROOT,
+    });
+
+    expect(evidence.changedFiles[0].base).toBeNull();
+    expect(evidence.changedFiles[0].head).toBeDefined();
+  });
+
+  it("approvalEvidenceComplete is false when review root is null", () => {
+    const evidence = buildReviewEvidence({
+      allFiles: [makeFile("src/app.js")],
+      review: null,
+    });
+
+    expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
   });
 
   it("accounts removed files with FULL coverage (diff shows everything removed)", () => {
