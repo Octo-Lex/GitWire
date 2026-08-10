@@ -229,7 +229,8 @@ function validateReviewRoot(reviewRoot) {
     !!reviewRoot.repoFullName &&
     typeof reviewRoot.prNumber === "number" &&
     !!reviewRoot.baseSha &&
-    !!reviewRoot.headSha;
+    !!reviewRoot.headSha &&
+    !!reviewRoot.invocationId;
 }
 
 /**

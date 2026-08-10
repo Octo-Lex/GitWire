@@ -309,6 +309,20 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
   });
 
+  it("approvalEvidenceComplete is false when review root is missing invocationId", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "content");
+    octokit.setContent(REVIEW_ROOT.baseSha, "src/app.js", "old");
+
+    const evidence = await buildReviewEvidence({
+      allFiles: [makeFile("src/app.js")],
+      review: { repoId: 999, repoFullName: "org/repo", prNumber: 42, baseSha: REVIEW_ROOT.baseSha, headSha: REVIEW_ROOT.headSha }, // missing invocationId
+      octokit, owner: "org", repo: "repo",
+    });
+
+    expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
+  });
+
   it("identity-fetch failure forces file to unavailable — never full and approval-eligible", async () => {
     // Don't set any content — the fetchFileIdentity will return null sha/digest
     const octokit = makeOctokit([]);
