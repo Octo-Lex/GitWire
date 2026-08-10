@@ -10,14 +10,16 @@
 // review_integrity_v2 feature flag.
 
 import { logger } from "../lib/logger.js";
+import { minimatch } from "minimatch";
+import { createHash } from "node:crypto";
 
 // ── Coverage states ──────────────────────────────────────────────────────────
 
 export const COVERAGE = Object.freeze({
   FULL:           "full",            // entire file content represented in evidence
   POLICY_EXEMPT:  "policy_exempt",   // deterministically exempted from review
-  PARTIAL:        "partial",         // only part of the file is in evidence (e.g. truncated diff)
-  UNAVAILABLE:    "unavailable",     // file exists but could not be acquired (limit exceeded before reaching it)
+  PARTIAL:        "partial",         // only part of the file is in evidence (bounded portion)
+  UNAVAILABLE:    "unavailable",     // file exists but could not be acquired (limit exceeded, no patch, etc.)
 });
 
 // ── Policy exemption categories ──────────────────────────────────────────────
@@ -28,7 +30,6 @@ export const EXEMPTION_RULES = Object.freeze({
   VENDORED_SOURCE:    "vendored_source",
   CONFIGURED_IGNORE:  "configured_ignore",
   PURE_RENAME:        "pure_rename",
-  GENERATED_LOCKFILE: "generated_lockfile",
 });
 
 // ── Deterministic exemption classification ──────────────────────────────────
@@ -42,7 +43,6 @@ const BINARY_EXTENSIONS = new Set([
   ".exe", ".dll", ".so", ".dylib", ".a", ".lib",
   ".class", ".jar", ".war",
   ".pyc", ".pyd", ".wasm",
-  ".dat", ".bin",
 ]);
 
 // Patterns indicating generated artifacts
@@ -67,26 +67,21 @@ const VENDORED_PATTERNS = [
   /^deps\//i,
 ];
 
-// Lockfile patterns (require care — not globally exempt)
-const LOCKFILE_PATTERNS = [
-  /^package-lock\.json$/i,
-  /^yarn\.lock$/i,
-  /^pnpm-lock\.yaml$/i,
-  /^Cargo\.lock$/i,
-  /^go\.sum$/i,
-  /^composer\.lock$/i,
-  /^Gemfile\.lock$/i,
-  /\.lock$/i,
-];
-
 /**
  * Determine the deterministic policy exemption for a file, if any.
  *
  * The model never decides exemption status — this function is purely
  * deterministic and auditable.
  *
+ * Lockfiles are NOT globally exempt — a dependency-change PR can materially
+ * change application behavior through its lockfile. Lockfiles remain
+ * reviewable unless explicit repository policy exempts them.
+ *
+ * Files with a missing patch are NOT classified as binary — they may simply
+ * be large. They are handled as unavailable by buildReviewEvidence.
+ *
  * @param {object} file - PR file from GitHub API
- * @param {string[]} configuredIgnorePatterns - from ai_review_config.ignore_patterns
+ * @param {string[]} configuredIgnorePatterns - glob patterns from ai_review_config.ignore_patterns
  * @returns {object|null} { rule, reason, source } or null if not exempt
  */
 export function classifyExemption(file, configuredIgnorePatterns = []) {
@@ -102,7 +97,7 @@ export function classifyExemption(file, configuredIgnorePatterns = []) {
     };
   }
 
-  // 2. Binary file (by extension)
+  // 2. Binary file (by extension only — deterministic)
   if (BINARY_EXTENSIONS.has(ext)) {
     return {
       rule: EXEMPTION_RULES.BINARY,
@@ -111,16 +106,7 @@ export function classifyExemption(file, configuredIgnorePatterns = []) {
     };
   }
 
-  // 3. No patch (binary or large file with no text diff)
-  if (!file.patch && file.status !== "removed") {
-    return {
-      rule: EXEMPTION_RULES.BINARY,
-      reason: "No text diff available (binary or large file)",
-      source: "built_in",
-    };
-  }
-
-  // 4. Generated artifact
+  // 3. Generated artifact
   for (const pattern of GENERATED_PATTERNS) {
     if (pattern.test(filename)) {
       return {
@@ -131,7 +117,7 @@ export function classifyExemption(file, configuredIgnorePatterns = []) {
     }
   }
 
-  // 5. Vendored source
+  // 4. Vendored source
   for (const pattern of VENDORED_PATTERNS) {
     if (pattern.test(filename)) {
       return {
@@ -142,41 +128,33 @@ export function classifyExemption(file, configuredIgnorePatterns = []) {
     }
   }
 
-  // 6. Configured ignore patterns (from ai_review_config)
+  // 5. Configured ignore patterns (from ai_review_config) — using minimatch
+  // to match the production review path's glob semantics.
   for (const pat of configuredIgnorePatterns) {
-    try {
-      const re = new RegExp(pat);
-      if (re.test(filename)) {
-        return {
-          rule: EXEMPTION_RULES.CONFIGURED_IGNORE,
-          reason: "Matches configured ignore pattern: " + pat,
-          source: "repository_policy",
-        };
-      }
-    } catch (_e) {
-      // Invalid regex — try string match
-      if (filename.includes(pat)) {
-        return {
-          rule: EXEMPTION_RULES.CONFIGURED_IGNORE,
-          reason: "Matches configured ignore pattern: " + pat,
-          source: "repository_policy",
-        };
-      }
-    }
-  }
-
-  // 7. Lockfile (generated-lockfile — requires care, not globally exempt)
-  for (const pattern of LOCKFILE_PATTERNS) {
-    if (pattern.test(filename)) {
+    if (minimatch(filename, pat)) {
       return {
-        rule: EXEMPTION_RULES.GENERATED_LOCKFILE,
-        reason: "Lockfile (generated): " + filename,
-        source: "built_in",
+        rule: EXEMPTION_RULES.CONFIGURED_IGNORE,
+        reason: "Matches configured ignore pattern: " + pat,
+        source: "repository_policy",
       };
     }
   }
 
+  // Note: lockfiles are NOT exempt by default. A dependency-change PR can
+  // materially change behavior through its lockfile. Repository policy may
+  // exempt specific lockfiles via configured ignore patterns if desired.
+
+  // Note: files with a missing patch are NOT classified as binary here.
+  // They may be large files. buildReviewEvidence handles them as unavailable.
+
   return null;
+}
+
+// ── Content digest helper ────────────────────────────────────────────────────
+
+function contentDigest(text) {
+  if (!text) return null;
+  return "sha256:" + createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 // ── Changed-file acquisition ─────────────────────────────────────────────────
@@ -193,16 +171,17 @@ export function classifyExemption(file, configuredIgnorePatterns = []) {
  * @param {string} owner
  * @param {string} repo
  * @param {number} prNumber
- * @param {number} maxFiles - max files to review (from config, default 30)
- * @param {number} maxLines - max changed lines to review (from config, default 2000)
  * @returns {Promise<object>} { allFiles, paginatedFully }
  */
-export async function acquireChangedFiles(octokit, owner, repo, prNumber, maxFiles = 30, maxLines = 2000) {
+export async function acquireChangedFiles(octokit, owner, repo, prNumber) {
   const allFiles = [];
   let page = 1;
   let paginatedFully = true;
 
-  // Paginate through ALL PR files
+  // Paginate through ALL PR files — no cap. A PR with thousands of files
+  // requires thousands of API calls, but correctness demands complete
+  // accounting. The coverage preflight will mark files beyond review limits
+  // as unavailable rather than silently dropping them.
   while (true) {
     const { data: files } = await octokit.request(
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
@@ -216,14 +195,6 @@ export async function acquireChangedFiles(octokit, owner, repo, prNumber, maxFil
     }
 
     page++;
-
-    // Safety: GitHub PRs can have thousands of files. Cap at 1000 to avoid
-    // unbounded API calls. If we hit this, paginatedFully = false.
-    if (page > 10) {
-      paginatedFully = false;
-      logger.warn({ prNumber, filesFetched: allFiles.length }, "PR file pagination capped at 1000 files");
-      break;
-    }
   }
 
   return { allFiles, paginatedFully };
@@ -237,19 +208,28 @@ export async function acquireChangedFiles(octokit, owner, repo, prNumber, maxFil
  *
  * Coverage assignment rules:
  *   - Policy-exempt files → coverage = "policy_exempt"
- *   - Removed files → coverage = "full" (the diff shows everything that was removed)
- *   - Files within limits → coverage = "full"
- *   - File that crosses the line limit → coverage = "partial" (included but truncated)
- *   - Files beyond the file/line limit → coverage = "unavailable" (accounted but not in evidence)
+ *   - Non-exempt files with no patch → coverage = "unavailable" (large/binary, fail-closed)
+ *   - Files within limits with a patch → coverage = "full"
+ *   - File that crosses the line limit → coverage = "partial" (patch truncated, only represented lines counted)
+ *   - Files beyond the file/line limit → coverage = "unavailable"
  *
  * @param {object} params
  * @param {object[]} params.allFiles - all PR files from acquireChangedFiles
- * @param {string[]} params.ignorePatterns - configured ignore patterns
+ * @param {boolean} params.paginatedFully - whether acquisition fetched all pages
+ * @param {string[]} params.ignorePatterns - configured ignore patterns (glob)
  * @param {number} params.maxFiles - max files to review
  * @param {number} params.maxLines - max changed lines to review
- * @returns {object} ReviewEvidence with changedFiles, coverage manifest
+ * @param {object} params.review - immutable review root { repoId, repoFullName, prNumber, baseSha, headSha, invocationId }
+ * @returns {object} ReviewEvidence with review root, changedFiles, coverage manifest
  */
-export function buildReviewEvidence({ allFiles, ignorePatterns = [], maxFiles = 30, maxLines = 2000 }) {
+export function buildReviewEvidence({
+  allFiles,
+  paginatedFully = true,
+  ignorePatterns = [],
+  maxFiles = 30,
+  maxLines = 2000,
+  review: reviewRoot,
+}) {
   const changedFiles = [];
   let totalAdded = 0;
   let totalRemoved = 0;
@@ -278,6 +258,9 @@ export function buildReviewEvidence({ allFiles, ignorePatterns = [], maxFiles = 
         coverageReason: "Exempt: " + exemption.reason,
         policyExemption: exemption,
         patch: file.patch ?? null,
+        headBlobSha: file.sha || null,
+        contentDigest: contentDigest(file.patch),
+        representedLines: 0,
       });
       continue;
     }
@@ -297,13 +280,41 @@ export function buildReviewEvidence({ allFiles, ignorePatterns = [], maxFiles = 
           : "File limit exceeded (" + maxFiles + " files)",
         policyExemption: null,
         patch: null,
+        headBlobSha: file.sha || null,
+        contentDigest: null,
+        representedLines: 0,
       });
       continue;
     }
 
-    // Check if including this file would exceed the line limit
-    if (changedLinesConsumed + fileLines > maxLines) {
-      // This file crosses the line boundary — partial coverage
+    // No patch on a non-exempt, non-removed file — fail-closed as unavailable
+    if (!file.patch && file.status !== "removed") {
+      changedFiles.push({
+        path: filename,
+        previousPath: file.previous_filename || null,
+        status: file.status,
+        additions,
+        deletions,
+        coverage: COVERAGE.UNAVAILABLE,
+        coverageReason: "No text diff available (binary or large file) — cannot verify content",
+        policyExemption: null,
+        patch: null,
+        headBlobSha: file.sha || null,
+        contentDigest: null,
+        representedLines: 0,
+      });
+      continue;
+    }
+
+    // Check if including this file will exceed the line limit
+    const remainingBudget = maxLines - changedLinesConsumed;
+
+    if (fileLines > remainingBudget && remainingBudget > 0) {
+      // Partial coverage — include only the portion that fits the budget
+      // Truncate the patch to the represented line count and count only that portion
+      const representedLines = remainingBudget;
+      const truncatedPatch = truncatePatchToLines(file.patch, representedLines);
+
       changedFiles.push({
         path: filename,
         previousPath: file.previous_filename || null,
@@ -311,11 +322,34 @@ export function buildReviewEvidence({ allFiles, ignorePatterns = [], maxFiles = 
         additions,
         deletions,
         coverage: COVERAGE.PARTIAL,
-        coverageReason: "Line limit exceeded while including this file (" + (changedLinesConsumed + fileLines) + " > " + maxLines + ")",
+        coverageReason: "Line limit exceeded — only " + representedLines + " of " + fileLines + " lines represented",
         policyExemption: null,
-        patch: file.patch ?? null,
+        patch: truncatedPatch,
+        headBlobSha: file.sha || null,
+        contentDigest: contentDigest(truncatedPatch),
+        representedLines,
       });
-      changedLinesConsumed += fileLines;
+      changedLinesConsumed += representedLines;
+      lineLimitExceeded = true;
+      continue;
+    }
+
+    // If remaining budget is 0 or negative, file is unavailable
+    if (remainingBudget <= 0) {
+      changedFiles.push({
+        path: filename,
+        previousPath: file.previous_filename || null,
+        status: file.status,
+        additions,
+        deletions,
+        coverage: COVERAGE.UNAVAILABLE,
+        coverageReason: "Line budget exhausted",
+        policyExemption: null,
+        patch: null,
+        headBlobSha: file.sha || null,
+        contentDigest: null,
+        representedLines: 0,
+      });
       lineLimitExceeded = true;
       continue;
     }
@@ -331,6 +365,9 @@ export function buildReviewEvidence({ allFiles, ignorePatterns = [], maxFiles = 
       coverageReason: null,
       policyExemption: null,
       patch: file.patch ?? null,
+      headBlobSha: file.sha || null,
+      contentDigest: contentDigest(file.patch),
+      representedLines: fileLines,
     });
     changedLinesConsumed += fileLines;
   }
@@ -347,21 +384,71 @@ export function buildReviewEvidence({ allFiles, ignorePatterns = [], maxFiles = 
     changedLinesRepresented: changedLinesConsumed,
 
     limitsExceeded: [],
+    acquisitionComplete: paginatedFully,
     approvalEvidenceComplete: false, // computed below
   };
 
   if (coverage.partialFiles > 0) coverage.limitsExceeded.push("line_limit_partial");
-  if (coverage.unavailableFiles > 0) coverage.limitsExceeded.push(lineLimitExceeded ? "line_limit_unavailable" : "file_limit_unavailable");
+  if (coverage.unavailableFiles > 0) {
+    coverage.limitsExceeded.push(lineLimitExceeded ? "line_limit_unavailable" : "file_limit_unavailable");
+  }
+  if (!paginatedFully) coverage.limitsExceeded.push("pagination_incomplete");
 
-  // approvalEvidenceComplete: all non-exempt files must be FULL coverage
+  // approvalEvidenceComplete requires:
+  //   1. pagination completed (all files accounted for)
+  //   2. all non-exempt files have FULL coverage
+  //   3. at least one non-exempt file exists
   const nonExemptFiles = changedFiles.filter(f => f.coverage !== COVERAGE.POLICY_EXEMPT);
   coverage.approvalEvidenceComplete =
+    paginatedFully &&
     nonExemptFiles.length > 0 &&
     nonExemptFiles.every(f => f.coverage === COVERAGE.FULL);
 
   return {
     version: 1,
+    review: reviewRoot || null,
     changedFiles,
+    contextItems: [],   // RI-3 will populate
+    retrievalTrace: [], // RI-3 will populate
     coverage,
   };
+}
+
+// ── Patch truncation helper ──────────────────────────────────────────────────
+
+/**
+ * Truncate a unified diff patch to approximately N changed lines.
+ * Counts lines starting with + or - (excluding +++ and --- headers).
+ * Preserves hunk headers (@@) and context lines.
+ *
+ * @param {string} patch - unified diff patch
+ * @param {number} maxChangedLines - maximum changed lines to retain
+ * @returns {string} truncated patch with marker
+ */
+function truncatePatchToLines(patch, maxChangedLines) {
+  if (!patch || typeof patch !== "string") return patch || "";
+  const lines = patch.split("\n");
+  const kept = [];
+  let changedCount = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      kept.push(line);
+      continue;
+    }
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      kept.push(line);
+      continue;
+    }
+    if (line.startsWith("+") || line.startsWith("-")) {
+      if (changedCount >= maxChangedLines) {
+        kept.push("... (truncated at " + maxChangedLines + " changed lines)");
+        return kept.join("\n");
+      }
+      changedCount++;
+    }
+    kept.push(line);
+  }
+
+  return kept.join("\n");
 }
