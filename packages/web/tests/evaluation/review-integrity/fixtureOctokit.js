@@ -14,8 +14,8 @@
 //   GET .../contents/{path}    — file read at a ref (ref-bound context)
 //   GET .../contents           — repo root listing
 //   GET .../git/blobs/{sha}    — blob retrieval by SHA
-//   GET .../git/trees/{sha}    — tree listing (recursive option)
-//   GET .../search/code        — repository code search (RI-3+)
+//   GET .../git/trees/{sha}    — tree listing (recursive option, ref-sensitive)
+//   GET .../search/code        — repository code search (DEFERRED to RI-3, returns empty)
 //   POST .../check-runs        — check run create
 //   PATCH .../check-runs/{id}  — check run update
 //   POST .../reviews           — review mutation
@@ -57,21 +57,36 @@ export function buildFixtureOctokit(fixture, opts = {}) {
   }
 
   // Build blob index (for git/blobs/{sha} — returns raw base64 content)
+  // Include both context files AND changed files (head/base blobs)
   const blobIndex = new Map(); // key = sha → { content, encoding }
   for (const cf of (fixture.contextFiles || [])) {
     if (cf.sha) {
       blobIndex.set(cf.sha, { content: Buffer.from(cf.content).toString("base64"), encoding: "base64" });
     }
   }
+  for (const cf of (fixture.changedFiles || [])) {
+    if (cf.headBlobSha && cf.headContent) {
+      blobIndex.set(cf.headBlobSha, { content: Buffer.from(cf.headContent).toString("base64"), encoding: "base64" });
+    }
+    if (cf.baseBlobSha && cf.baseContent) {
+      blobIndex.set(cf.baseBlobSha, { content: Buffer.from(cf.baseContent).toString("base64"), encoding: "base64" });
+    }
+  }
 
   // Build tree index (for git/trees/{sha} — returns file list)
+  // Trees are ref-sensitive: the head tree includes head-version files,
+  // the base tree includes base-version files.
   const treeIndex = new Map(); // key = sha → tree array
-  const allFiles = [
-    ...(fixture.changedFiles || []).map(f => ({ path: f.filename, type: "blob", mode: "100644" })),
-    ...(fixture.contextFiles || []).map(f => ({ path: f.path, type: "blob", mode: "100644" })),
+  const headTree = [
+    ...(fixture.changedFiles || []).filter(f => f.headContent !== null).map(f => ({ path: f.filename, type: "blob", sha: f.headBlobSha, mode: "100644" })),
+    ...(fixture.contextFiles || []).filter(f => (f.refs || [headSha, baseSha]).includes(headSha)).map(f => ({ path: f.path, type: "blob", sha: f.sha, mode: "100644" })),
   ];
-  treeIndex.set(headSha, allFiles);
-  treeIndex.set(baseSha, allFiles);
+  const baseTree = [
+    ...(fixture.changedFiles || []).filter(f => f.baseContent !== null && f.status !== "added").map(f => ({ path: f.filename, type: "blob", sha: f.baseBlobSha, mode: "100644" })),
+    ...(fixture.contextFiles || []).filter(f => (f.refs || [headSha, baseSha]).includes(baseSha)).map(f => ({ path: f.path, type: "blob", sha: f.sha, mode: "100644" })),
+  ];
+  treeIndex.set(headSha, headTree);
+  treeIndex.set(baseSha, baseTree);
 
   /**
    * Resolve a route template by substituting {param} placeholders from params.
@@ -238,7 +253,7 @@ export function buildFixtureOctokit(fixture, opts = {}) {
       }
 
       case "searchCode": {
-        // RI-3+ will add real search. For now, return empty.
+        // Deferred to RI-3 (Context Broker). Returns empty until implemented.
         return Promise.resolve({ data: { total_count: 0, items: [] } });
       }
 

@@ -72,6 +72,24 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     }));
     await jest.unstable_mockModule("../../../src/lib/github.js", () => ({ getInstallationClient: jest.fn() }));
     await jest.unstable_mockModule("../../../src/lib/githubWrapper.js", () => ({ wrapOctokit: (c) => c }));
+
+    // Mock the Anthropic SDK so the suite is hermetic — fails on verdict
+    // mismatch, not on networking/SDK configuration.
+    const mockAnthropicCreate = jest.fn().mockResolvedValue({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation: "The changes look clean and correct.",
+          overall_confidence: 0.9,
+        }),
+      }],
+      usage: { input_tokens: 5000, output_tokens: 200 },
+    });
+    await jest.unstable_mockModule("@anthropic-ai/sdk", () => ({
+      default: class { messages = { create: mockAnthropicCreate }; },
+    }));
     await jest.unstable_mockModule("../../../src/services/auditTrailService.js", () => ({
       Trail: { aiDecision: jest.fn(), reviewGateBlock: jest.fn() },
     }));

@@ -7,6 +7,7 @@
 // GitHub API surface.
 
 import { buildFixtureOctokit } from "./fixtureOctokit.js";
+import { getAllFixtures } from "./fixtures/registry.js";
 
 // Minimal fixture for surface testing
 const TEST_FIXTURE = {
@@ -167,4 +168,61 @@ describe("fixtureOctokit surface", () => {
     expect(octokit.request.mock.calls).toHaveLength(1);
     expect(octokit.request.mock.calls[0].matchType).toBe("prFiles");
   });
+});
+
+// 10. Surface test against REAL historical fixtures (not synthetic)
+describe("fixtureOctokit surface — historical fixtures", () => {
+  const fixtures = getAllFixtures();
+
+  for (const f of fixtures) {
+    it(`${f.caseId} ${f.variant}: serves PR files via template route`, async () => {
+      const octokit = buildFixtureOctokit(f);
+      const res = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+        { owner: "org", repo: "repo", pull_number: 42, per_page: 100 },
+      );
+
+      // Must return the exact number of changed files from the snapshot
+      expect(res.data).toHaveLength(f.changedFiles.length);
+      // Each file must have a filename and patch
+      for (const file of res.data) {
+        expect(file.filename).toBeDefined();
+        expect(typeof file.patch).toBe("string");
+      }
+    });
+
+    it(`${f.caseId} ${f.variant}: serves changed-file content at head via template route`, async () => {
+      const octokit = buildFixtureOctokit(f);
+      const firstFile = f.changedFiles[0];
+
+      const res = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        { owner: "org", repo: "repo", path: firstFile.filename, ref: f.prMetadata.head },
+      );
+
+      expect(res.data.type).toBe("file");
+      expect(res.data.encoding).toBe("base64");
+      // Content should be decodable
+      const decoded = Buffer.from(res.data.content, "base64").toString("utf-8");
+      expect(decoded.length).toBeGreaterThan(0);
+    });
+
+    it(`${f.caseId} ${f.variant}: serves context files at the correct ref`, async () => {
+      if (!f.contextFiles || f.contextFiles.length === 0) {
+        // No context files in this fixture — skip the content check
+        return;
+      }
+      const octokit = buildFixtureOctokit(f);
+      const ctxFile = f.contextFiles[0];
+      const ref = (ctxFile.refs || [f.prMetadata.base])[0];
+
+      const res = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        { owner: "org", repo: "repo", path: ctxFile.path, ref },
+      );
+
+      const decoded = Buffer.from(res.data.content, "base64").toString("utf-8");
+      expect(decoded).toBe(ctxFile.content);
+    });
+  }
 });

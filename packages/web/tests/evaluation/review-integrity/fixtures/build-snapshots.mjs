@@ -55,9 +55,23 @@ function run(cmd, opts = {}) {
   }).toString("utf8");
 }
 
-/** Synthetic stable hash for a changed-file entry (deterministic, content-derived). */
-function syntheticSha(text) {
-  return createHash("sha256").update(text, "utf8").digest("hex").slice(0, 40);
+/** Get the real Git blob SHA for a file at a given revision. */
+function gitBlobSha(rev, path) {
+  try {
+    return run(`git -C "${GITWIRE_REPO_ROOT}" rev-parse "${rev}:${path}"`).trim();
+  } catch (_e) {
+    return null; // file doesn't exist at this revision
+  }
+}
+
+/** Get the real GitHub blob SHA for an AlCode file via gh api. */
+function ghBlobSha(repo, path, ref) {
+  try {
+    const sha = run(`gh api "repos/${repo}/contents/${path}?ref=${ref}" --jq ".sha"`).trim();
+    return sha || null;
+  } catch (_e) {
+    return null;
+  }
 }
 
 /** Map a git `--name-status` letter to a GitHub-style status word. */
@@ -118,7 +132,7 @@ function parseGitNumstat(text) {
   return map;
 }
 
-/** Build changedFiles[] from a local git diff range. */
+/** Build changedFiles[] from a local git diff range, with real blob SHAs and head/base content. */
 function gitChangedFiles(base, head) {
   const nameStatus = run(
     `git -C "${GITWIRE_REPO_ROOT}" diff --name-status ${base}..${head}`
@@ -135,13 +149,24 @@ function gitChangedFiles(base, head) {
       { maxBuffer: 1024 * 1024 * 64 }
     );
     const counts = stats.get(filename) || { additions: 0, deletions: 0 };
+    // Get real blob SHAs and file contents at base and head
+    const headBlobSha = gitBlobSha(head, filename);
+    const baseBlobSha = gitBlobSha(base, filename);
+    let headContent = null;
+    let baseContent = null;
+    try { headContent = gitShow(head, filename); } catch (_e) { /* new file */ }
+    try { baseContent = gitShow(base, filename); } catch (_e) { /* deleted file */ }
     return {
       filename,
       status,
       additions: counts.additions,
       deletions: counts.deletions,
       patch,
-      sha: syntheticSha(`${base}..${head}:${filename}:${patch}`),
+      sha: headBlobSha || baseBlobSha || "unknown",
+      headBlobSha,
+      baseBlobSha,
+      headContent,
+      baseContent,
     };
   });
 }
@@ -186,17 +211,34 @@ function ghPrMeta(repo, prNumber) {
 
 /**
  * Build a "normalised" changedFiles[] entry from a raw GitHub compare `files[]`
- * item. We only keep the fields we need and synthesise a stable sha.
+ * item. Preserves the real GitHub blob SHA and fetches head/base content.
  */
-function normalizeGhFile(f) {
+function normalizeGhFile(f, base, head) {
+  // GitHub compare gives us the blob sha of the file at the head commit
+  const sha = f.sha || null;
   return {
     filename: f.filename,
     status: f.status,
     additions: typeof f.additions === "number" ? f.additions : 0,
     deletions: typeof f.deletions === "number" ? f.deletions : 0,
     patch: typeof f.patch === "string" ? f.patch : "",
-    sha: syntheticSha(`${f.filename}:${f.sha || ""}:${f.patch || ""}`),
+    sha: sha || "unknown",
+    headBlobSha: sha,
+    baseBlobSha: f.previous_file_sha || null,
+    headContent: null, // populated below
+    baseContent: null,
   };
+}
+
+/** Enrich normalized GitHub files with head/base content from the API. */
+function enrichGhFiles(files, base, head, repo) {
+  for (const f of files) {
+    try { f.headContent = ghContents(repo, f.filename, head); } catch (_e) { /* new file */ }
+    if (f.status !== "added") {
+      try { f.baseContent = ghContents(repo, f.filename, base); } catch (_e) { /* removed */ }
+    }
+  }
+  return files;
 }
 
 /** Write a snapshot file (idempotent: caller checks existence first). */
@@ -230,108 +272,99 @@ function have(name) {
  * RI-01 is the "whole PR" view; RI-02 is a single-file slice.
  */
 
+/**
+ * RI-01 / RI-02 — AgentGears/AlCode PR #2.
+ *
+ * RI-01 and RI-02 are two expected findings against the SAME historical PR state.
+ * They must share identical review bundles:
+ *
+ *   broken = dd07fb2 → 0181b19, full 2-file bundle (phase-0-spec.md + roadmap.md)
+ *   fixed  = dd07fb2 → 20219bd, full 4-file bundle (README + constitution + spec + roadmap)
+ *
+ * Each case adds its own context files for the specific finding, but the
+ * changedFiles (the review bundle) are identical.
+ */
+
 function buildAlcodeBroken() {
   const base = "dd07fb2";
   const head = "0181b19f00dc";
-  const name = "alcode-broken.json";
-  if (have(name)) return;
 
-  console.log("  fetching PR #2 metadata, compare, and context files...");
+  if (have("ri01-broken.json") && have("ri02-broken.json")) return;
+
+  console.log("  fetching PR #2 metadata, compare dd07fb2...0181b19, and context files...");
   const pr = ghPrMeta(ALCODE_REPO, 2);
-  const files = ghCompareFiles(base, head).map(normalizeGhFile);
+  const rawFiles = ghCompareFiles(base, head);
+  const files = enrichGhFiles(
+    rawFiles.map((f) => normalizeGhFile(f, base, head)),
+    base, head, ALCODE_REPO
+  );
 
-  const ri01 = {
-    caseId: "RI-01",
-    variant: "broken",
-    source: { repo: ALCODE_REPO, pr: 2, base, head },
-    prMetadata: {
-      title: pr.title,
-      body: pr.body,
-      head,
-      base,
-      author: pr.author,
-    },
-    changedFiles: files,
-    contextFiles: [
-      {
-        path: "README.md",
-        sha: base,
-        content: ghContents(ALCODE_REPO, "README.md", base),
-      },
-      {
-        path: "docs/constitution.md",
-        sha: base,
-        content: ghContents(ALCODE_REPO, "docs/constitution.md", base),
-      },
-    ],
-  };
-  writeSnapshot("ri01-broken.json", ri01);
+  // RI-01 and RI-02 share the SAME changedFiles bundle.
+  // Context files differ per finding.
 
-  // RI-02 broken = single-file slice: the NEW docs/roadmap.md from this compare.
-  const roadmap = files.find((f) => f.filename === "docs/roadmap.md");
-  const ri02 = {
-    caseId: "RI-02",
-    variant: "broken",
-    source: { repo: ALCODE_REPO, pr: 2, base, head },
-    prMetadata: {
-      title: pr.title,
-      body: pr.body,
-      head,
-      base,
-      author: pr.author,
-    },
-    changedFiles: roadmap ? [roadmap] : [],
-    contextFiles: [
-      {
-        path: "docs/phase-0-spec.md",
-        sha: base,
-        content: ghContents(ALCODE_REPO, "docs/phase-0-spec.md", base),
-      },
-    ],
-  };
-  writeSnapshot("ri02-broken.json", ri02);
+  // RI-01 context: README.md + constitution.md at base (the stale declarations)
+  const ri01Context = [
+    { path: "README.md", sha: ghBlobSha(ALCODE_REPO, "README.md", base) || base, content: ghContents(ALCODE_REPO, "README.md", base), refs: [base, head] },
+    { path: "docs/constitution.md", sha: ghBlobSha(ALCODE_REPO, "docs/constitution.md", base) || base, content: ghContents(ALCODE_REPO, "docs/constitution.md", base), refs: [base, head] },
+  ];
+
+  // RI-02 context: phase-0-spec.md at base (the gate 0.5 definition lacking Agent-replacement assertion)
+  const ri02Context = [
+    { path: "docs/phase-0-spec.md", sha: ghBlobSha(ALCODE_REPO, "docs/phase-0-spec.md", base) || base, content: ghContents(ALCODE_REPO, "docs/phase-0-spec.md", base), refs: [base, head] },
+  ];
+
+  if (!have("ri01-broken.json")) {
+    writeSnapshot("ri01-broken.json", {
+      caseId: "RI-01", variant: "broken",
+      source: { repo: ALCODE_REPO, pr: 2, base, head },
+      prMetadata: { title: pr.title, body: pr.body, head, base, author: pr.author },
+      changedFiles: files,
+      contextFiles: ri01Context,
+    });
+  }
+
+  if (!have("ri02-broken.json")) {
+    writeSnapshot("ri02-broken.json", {
+      caseId: "RI-02", variant: "broken",
+      source: { repo: ALCODE_REPO, pr: 2, base, head },
+      prMetadata: { title: pr.title, body: pr.body, head, base, author: pr.author },
+      changedFiles: files, // SAME bundle as RI-01
+      contextFiles: ri02Context,
+    });
+  }
 }
 
 function buildAlcodeFixed() {
-  const base = "0181b19f00dc";
+  const base = "dd07fb2";
   const head = "20219bd384";
+
   if (have("ri01-fixed.json") && have("ri02-fixed.json")) return;
 
-  console.log("  fetching PR #2 fixed compare (0181b19...20219bd384)...");
+  console.log("  fetching PR #2 fixed compare dd07fb2...20219bd384...");
   const pr = ghPrMeta(ALCODE_REPO, 2);
-  const files = ghCompareFiles(base, head).map(normalizeGhFile);
+  const rawFiles = ghCompareFiles(base, head);
+  const files = enrichGhFiles(
+    rawFiles.map((f) => normalizeGhFile(f, base, head)),
+    base, head, ALCODE_REPO
+  );
 
+  // RI-01 and RI-02 fixed share the SAME full 4-file bundle.
   if (!have("ri01-fixed.json")) {
     writeSnapshot("ri01-fixed.json", {
-      caseId: "RI-01",
-      variant: "fixed",
+      caseId: "RI-01", variant: "fixed",
       source: { repo: ALCODE_REPO, pr: 2, base, head },
-      prMetadata: {
-        title: pr.title,
-        body: pr.body,
-        head,
-        base,
-        author: pr.author,
-      },
+      prMetadata: { title: pr.title, body: pr.body, head, base, author: pr.author },
       changedFiles: files,
       contextFiles: [],
     });
   }
 
   if (!have("ri02-fixed.json")) {
-    const spec = files.find((f) => f.filename === "docs/phase-0-spec.md");
     writeSnapshot("ri02-fixed.json", {
-      caseId: "RI-02",
-      variant: "fixed",
+      caseId: "RI-02", variant: "fixed",
       source: { repo: ALCODE_REPO, pr: 2, base, head },
-      prMetadata: {
-        title: pr.title,
-        body: pr.body,
-        head,
-        base,
-        author: pr.author,
-      },
-      changedFiles: spec ? [spec] : [],
+      prMetadata: { title: pr.title, body: pr.body, head, base, author: pr.author },
+      changedFiles: files, // SAME bundle as RI-01
       contextFiles: [],
     });
   }
@@ -371,14 +404,14 @@ function buildRi03() {
     const head = "ef071ff";
     console.log(`  RI-03 broken: git diff ${base}..${head}`);
     const files = gitChangedFiles(base, head);
+    const ctxSha = gitBlobSha(base, ctxPath);
     const ctx = gitShow(base, ctxPath);
     writeSnapshot("ri03-broken.json", {
-      caseId: "RI-03",
-      variant: "broken",
+      caseId: "RI-03", variant: "broken",
       source: { repo: "local/GitWire", pr: 123, base, head },
       prMetadata: gitwirePrMeta(base, head, 123),
       changedFiles: files,
-      contextFiles: [{ path: ctxPath, sha: base, content: ctx }],
+      contextFiles: [{ path: ctxPath, sha: ctxSha || base, content: ctx, refs: [base, head] }],
     });
   }
 
@@ -387,14 +420,14 @@ function buildRi03() {
     const head = "67908f7";
     console.log(`  RI-03 fixed:  git diff ${base}..${head}`);
     const files = gitChangedFiles(base, head);
+    const ctxSha = gitBlobSha(base, ctxPath);
     const ctx = gitShow(base, ctxPath);
     writeSnapshot("ri03-fixed.json", {
-      caseId: "RI-03",
-      variant: "fixed",
+      caseId: "RI-03", variant: "fixed",
       source: { repo: "local/GitWire", pr: 123, base, head },
       prMetadata: gitwirePrMeta(base, head, 123),
       changedFiles: files,
-      contextFiles: [{ path: ctxPath, sha: base, content: ctx }],
+      contextFiles: [{ path: ctxPath, sha: ctxSha || base, content: ctx, refs: [base, head] }],
     });
   }
 }
@@ -416,14 +449,14 @@ function buildRi04() {
     const head = "624732c";
     console.log(`  RI-04 broken: git diff ${base}..${head}`);
     const files = gitChangedFiles(base, head);
+    const ctxSha = gitBlobSha(head, ctxPath);
     const ctx = gitShow(head, ctxPath); // unpaginated version at broken head
     writeSnapshot("ri04-broken.json", {
-      caseId: "RI-04",
-      variant: "broken",
+      caseId: "RI-04", variant: "broken",
       source: { repo: "local/GitWire", pr: 124, base, head },
       prMetadata: gitwirePrMeta(base, head, 124),
       changedFiles: files,
-      contextFiles: [{ path: ctxPath, sha: head, content: ctx }],
+      contextFiles: [{ path: ctxPath, sha: ctxSha || head, content: ctx, refs: [base, head] }],
     });
   }
 
@@ -433,8 +466,7 @@ function buildRi04() {
     console.log(`  RI-04 fixed:  git diff ${base}..${head}`);
     const files = gitChangedFiles(base, head);
     writeSnapshot("ri04-fixed.json", {
-      caseId: "RI-04",
-      variant: "fixed",
+      caseId: "RI-04", variant: "fixed",
       source: { repo: "local/GitWire", pr: 124, base, head },
       prMetadata: gitwirePrMeta(base, head, 124),
       changedFiles: files,
