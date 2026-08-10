@@ -190,6 +190,49 @@ async function fetchFileIdentity(octokit, owner, repo, path, ref) {
 }
 
 /**
+ * Check whether a side identity object is complete.
+ * Complete means blobSha and contentDigest are both non-null.
+ */
+function isSideComplete(side) {
+  return !!side && !!side.blobSha && !!side.contentDigest;
+}
+
+/**
+ * Validate that the required side identities are complete for a file's status.
+ *
+ *   added    → HEAD complete
+ *   removed  → BASE complete
+ *   modified → BASE and HEAD complete
+ *   renamed  → BASE and HEAD complete
+ *
+ * @returns {boolean} true if all required sides are complete
+ */
+function validateSideIdentity(status, base, head) {
+  switch (status) {
+    case "added":
+      return isSideComplete(head);
+    case "removed":
+      return isSideComplete(base);
+    case "modified":
+    case "renamed":
+    default:
+      return isSideComplete(base) && isSideComplete(head);
+  }
+}
+
+/**
+ * Check that the review root has all required immutable fields.
+ */
+function validateReviewRoot(reviewRoot) {
+  if (!reviewRoot) return false;
+  return !!reviewRoot.repoId &&
+    !!reviewRoot.repoFullName &&
+    typeof reviewRoot.prNumber === "number" &&
+    !!reviewRoot.baseSha &&
+    !!reviewRoot.headSha;
+}
+
+/**
  * Build side-specific Git identity for a changed file by fetching
  * actual base and head file content from the repository.
  *
@@ -361,8 +404,33 @@ export async function buildReviewEvidence({
     // Build side-specific Git identity by fetching actual base/head content
     const { base, head } = await buildSideIdentity(octokit, owner, repo, file, reviewRoot);
 
+    // Validate that required side identities are complete for this file's status.
+    // If the identity fetch failed (returned null blobSha/contentDigest), the file
+    // cannot be trusted for review — force it to unavailable regardless of other factors.
+    const identityComplete = validateSideIdentity(file.status || "modified", base, head);
+
     // Check policy exemption FIRST — exempt files are accounted but don't consume budget
     const exemption = classifyExemption(file, ignorePatterns);
+
+    // If identity is incomplete and the file is not exempt, force unavailable.
+    // Exempt files (binary, generated, etc.) don't need complete content identity.
+    if (!identityComplete && !exemption) {
+      changedFiles.push({
+        path: filename,
+        previousPath: file.previous_filename || null,
+        status: file.status,
+        additions,
+        deletions,
+        coverage: COVERAGE.UNAVAILABLE,
+        coverageReason: "Side identity incomplete — required blob SHA or content digest missing for " +
+          (file.status === "added" ? "HEAD" : file.status === "removed" ? "BASE" : "BASE and HEAD"),
+        policyExemption: null,
+        patch: null,
+        base, head,
+        representedLines: 0,
+      });
+      continue;
+    }
 
     if (exemption) {
       changedFiles.push({
@@ -507,13 +575,13 @@ export async function buildReviewEvidence({
   if (!paginatedFully) coverage.limitsExceeded.push("pagination_incomplete");
 
   // approvalEvidenceComplete requires:
-  //   1. immutable review root is present (commit-bound identity)
+  //   1. immutable review root has all required fields (repoId, repoFullName, prNumber, baseSha, headSha)
   //   2. pagination completed (all files accounted for)
   //   3. all non-exempt files have FULL coverage
   //   4. at least one non-exempt file exists
   const nonExemptFiles = changedFiles.filter(f => f.coverage !== COVERAGE.POLICY_EXEMPT);
   coverage.approvalEvidenceComplete =
-    !!reviewRoot &&
+    validateReviewRoot(reviewRoot) &&
     paginatedFully &&
     nonExemptFiles.length > 0 &&
     nonExemptFiles.every(f => f.coverage === COVERAGE.FULL);

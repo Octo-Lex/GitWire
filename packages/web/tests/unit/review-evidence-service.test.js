@@ -295,6 +295,36 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
   });
 
+  it("approvalEvidenceComplete is false when review root is missing required fields", async () => {
+    const octokit = makeOctokit([]);
+    octokit.setContent("head456", "src/app.js", "content");
+    octokit.setContent("base123", "src/app.js", "old");
+
+    const evidence = await buildReviewEvidence({
+      allFiles: [makeFile("src/app.js")],
+      review: { repoId: 999, repoFullName: "org/repo", prNumber: 42, baseSha: "base123" }, // missing headSha
+      octokit, owner: "org", repo: "repo",
+    });
+
+    expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
+  });
+
+  it("identity-fetch failure forces file to unavailable — never full and approval-eligible", async () => {
+    // Don't set any content — the fetchFileIdentity will return null sha/digest
+    const octokit = makeOctokit([]);
+
+    const evidence = await buildReviewEvidence({
+      allFiles: [makeFile("src/app.js")], // modified — needs both BASE and HEAD identity
+      review: REVIEW_ROOT,
+      octokit, owner: "org", repo: "repo",
+    });
+
+    const cf = evidence.changedFiles[0];
+    expect(cf.coverage).toBe(COVERAGE.UNAVAILABLE);
+    expect(cf.coverageReason).toContain("Side identity incomplete");
+    expect(evidence.coverage.approvalEvidenceComplete).toBe(false);
+  });
+
   it("accounts removed files with FULL coverage", async () => {
     const octokit = makeOctokit([]);
     octokit.setContent(REVIEW_ROOT.headSha, "src/app.js", "app content");
