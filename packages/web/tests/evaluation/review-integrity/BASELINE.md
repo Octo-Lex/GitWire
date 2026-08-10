@@ -73,51 +73,55 @@ Config: `adversarial_review: false` (primary-only baseline).
 
 ```
 Broken fixtures: 12 evaluations (4 fixtures × 3 runs)
-  False APPROVEs:               12/12 (100%)
-  Correctly avoided APPROVE:    0/12 (0%)
+  False APPROVEs:               11/12 (91.7%)
+  Null (error path):            1/12 (8.3%)
+  Expected defect detected:     1/12 (8.3%)
 
 Fixed fixtures: 12 evaluations (4 fixtures × 3 runs)
-  Correctly approved:           9/12 (75%)
-  False positives (P0/P1/P2):   3/12 (25%)
+  Correctly approved:           8/12 (66.7%)
+  False positives (P0/P1/P2):   4/12 (33.3%)
 
-Avg tokens per evaluation:      447
-Avg latency per evaluation:     10,669ms
+Avg tokens per evaluation:      1,585
+Avg latency per evaluation:     5,235ms
 ```
 
 ### Per-fixture breakdown
 
 | Fixture | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|
-| RI-01 broken | approved ✗ FALSE | approved ✗ FALSE | approved ✗ FALSE | 3/3 false approve |
-| RI-01 fixed | approved ✓ | approved ✓ | approved ✓ | 3/3 correct |
-| RI-02 broken | approved ✗ FALSE | approved ✗ FALSE | approved ✗ FALSE | 3/3 false approve |
-| RI-02 fixed | approved ✓ | approved ✓ | approved ✓ | 3/3 correct |
-| RI-03 broken | approved ✗ FALSE | approved ✗ FALSE | approved ✗ FALSE | 3/3 false approve |
-| RI-03 fixed | approved ✓ FP | approved ✓ | needs_discussion FP | 2/3 false positive |
-| RI-04 broken | approved ✗ FALSE | approved ✗ FALSE | approved ✗ FALSE | 3/3 false approve |
-| RI-04 fixed | approved ✓ | approved ✓ FP | approved ✓ | 1/3 false positive |
+| RI-01 broken | approved ✗ (2850 tok) | approved ✗ (144 tok) | approved ✗ (210 tok) | 3/3 false approve |
+| RI-01 fixed | approved ✓ (3516 tok) | approved ✓ (229 tok) | approved ✓ (186 tok) | 3/3 clean |
+| RI-02 broken | approved ✗ (221 tok) | approved ✗ (151 tok) | approved ✗ (2817 tok) | 3/3 false approve |
+| RI-02 fixed | approved ✓ (269 tok) | approved ✓ (223 tok) | approved ✓ FP (510 tok) | 1/3 false positive |
+| RI-03 broken | approved ✗ (6338 tok) | null/err (737 tok) | approved ✗ (283 tok) | 2/3 false approve |
+| RI-03 fixed | approved ✓ (6494 tok) | approved ✓ FP (627 tok) | approved ✓ FP (518 tok) | 2/3 false positive |
+| RI-04 broken | approved ✗ (3110 tok) | approved ✗ (663 tok) | approved ✗ (228 tok) | 3/3 false approve |
+| RI-04 fixed | null/err (6450 tok) | approved ✓ (444 tok) | approved ✓ FP (827 tok) | 1/3 false positive |
 
 ### Interpretation
 
-1. **False approval rate is 100% on broken fixtures.** The production
-   `reportToLegacy()` verdict mapping approves whenever the model returns
-   `overall_correctness: "patch is correct"`, regardless of whether P3
-   findings exist. The model returns "patch is correct" on every broken
-   fixture — the architectural defect is total, not probabilistic.
+1. **False approval rate is 91.7% on broken fixtures** (11/12 approved).
+   The production `reportToLegacy()` verdict mapping approves whenever the
+   model returns `overall_correctness: "patch is correct"`, regardless of
+   whether findings exist. One run (RI-03 broken run 2) returned null —
+   the model output was unparseable, hitting the error path rather than
+   a correct rejection.
 
-2. **Token usage is very low (avg 447).** The model produces minimal output,
-   suggesting it is not deeply analyzing the diffs. This correlates with the
-   universal false-approval rate.
+2. **Expected defect detection is only 8.3%** (1/12). The model rarely
+   identifies the specific historical defect. It almost always returns
+   `"patch is correct"` with zero or non-material findings.
 
-3. **Fixed fixtures have a 25% false-positive rate.** The model sometimes
-   raises P0/P1/P2 findings against clean code, though the production verdict
-   mapping still marks these as `approved` when `overall_correctness` is
-   `"patch is correct"`.
+3. **Token usage varies widely** (144–6,494, avg 1,585). Low-token runs
+   correlate with shallow analysis and false approvals.
 
-4. **The production verdict mapping is the primary defect.** The model's
-   output often contains useful signals, but `reportToLegacy` discards them
-   when `overall_correctness` is "patch is correct." This is the exact gap
-   the v2 deterministic decision policy and independent verifier must close.
+4. **Fixed fixtures have a 33.3% false-positive rate** (4/12). The model
+   sometimes raises P0/P1/P2 findings against clean code.
+
+5. **The production verdict mapping is the primary defect.** The model's
+   output sometimes contains useful signals, but `reportToLegacy` discards
+   them when `overall_correctness` is "patch is correct." This is the exact
+   gap the v2 deterministic decision policy and independent verifier must
+   close.
 
 These numbers are the authoritative `GitWire-before` baseline. The v2
 implementation (`GitWire-after`) must achieve 0 false approvals on broken

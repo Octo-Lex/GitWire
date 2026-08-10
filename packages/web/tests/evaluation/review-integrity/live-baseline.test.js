@@ -181,18 +181,43 @@ describeOrSkip("RI live baseline — production reviewPR() pipeline", () => {
 
         const elapsedMs = Date.now() - startTime;
 
-        // Extract tokens from the mock DB UPDATE call
+        // Extract tokens from the mock DB UPDATE call.
+        // Success path: tokens_used = $8 → params[7] (totalTokens)
+        // Error path: tokens_used = $2 → params[1]
         let tokensUsed = 0;
         const updateCalls = mockDbQuery.mock.calls.filter(
           ([sql]) => typeof sql === "string" && sql.includes("UPDATE ai_reviews")
         );
         if (updateCalls.length > 0) {
-          // The params for UPDATE include tokens_used at a known position
-          const params = updateCalls[updateCalls.length - 1][1];
+          const lastCall = updateCalls[updateCalls.length - 1];
+          const sql = lastCall[0];
+          const params = lastCall[1];
           if (Array.isArray(params)) {
-            // Find the numeric token param (varies by column ordering)
-            tokensUsed = params.find(p => typeof p === "number" && p > 100 && p < 1000000) || 0;
+            if (sql.includes("tokens_used = $8")) {
+              // Success path: totalTokens is at index 7
+              tokensUsed = params[7] || 0;
+            } else if (sql.includes("tokens_used = $2")) {
+              // Error path: tokensUsed is at index 1
+              tokensUsed = params[1] || 0;
+            }
           }
+        }
+
+        // Expected defect detection: check if any finding matches the
+        // expected historical finding by keyword overlap
+        let expectedDefectDetected = null;
+        if (fixture.expectedFinding) {
+          const ef = fixture.expectedFinding;
+          // Use significant keywords from the expected finding title
+          const expectedKeywords = ef.title.toLowerCase()
+            .split(/\s+/)
+            .filter(w => w.length > 4)
+            .map(w => w.replace(/[^a-z]/g, ""))
+            .filter(Boolean);
+          expectedDefectDetected = (result?.findings || []).some(f => {
+            const findingText = ((f.title || "") + " " + (f.description || f.body || "")).toLowerCase();
+            return expectedKeywords.some(kw => findingText.includes(kw));
+          });
         }
 
         const record = {
@@ -206,6 +231,7 @@ describeOrSkip("RI live baseline — production reviewPR() pipeline", () => {
           findingCount: result?.findings?.length || 0,
           findingSeverities: (result?.findings || []).map(f => f.severity || "unknown"),
           findingTitles: (result?.findings || []).map(f => (f.title || "").slice(0, 100)),
+          expectedDefectDetected,
           tokensUsed,
           latencyMs: elapsedMs,
           // For broken fixtures: was this a false approval?
@@ -246,6 +272,7 @@ describeOrSkip("RI live baseline — production reviewPR() pipeline", () => {
 
     console.log("\n=== GitWire-before Live Baseline Summary ===");
     console.log(`Broken: ${falseApproves.length}/${broken.length} false APPROVEs`);
+    console.log(`Broken: ${broken.filter(r => r.expectedDefectDetected === true).length}/${broken.length} expected defect detected`);
     console.log(`Fixed: ${falsePositives.length}/${fixed.length} false positives`);
     console.log(`Avg tokens: ${Math.round(allResults.reduce((s, r) => s + r.tokensUsed, 0) / allResults.length)}`);
     console.log(`Avg latency: ${Math.round(allResults.reduce((s, r) => s + r.latencyMs, 0) / allResults.length)}ms`);
