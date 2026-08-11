@@ -114,6 +114,20 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
   }
 
   /**
+   * Record a budget-denied attempt in the trace for auditability.
+   * This ensures that requested-but-denied evidence is traceable.
+   */
+  function traceBudgetDenied(type, reason, extra = {}) {
+    trace.push({
+      type,
+      result: "budget_exceeded",
+      reason,
+      round: currentRound > 0 ? currentRound : (contextRounds + 1),
+      ...extra,
+    });
+  }
+
+  /**
    * Resolve a ref to one of the permitted immutable SHAs.
    * Only the review's baseSha and headSha are allowed.
    */
@@ -145,6 +159,7 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
 
     const budget = checkBudget("fileRead");
     if (!budget.allowed) {
+      traceBudgetDenied("file_read", budget.reason, { path: safePath, ref: resolvedRef });
       return { error: "budget_exceeded", reason: budget.reason };
     }
 
@@ -180,6 +195,7 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
       // Apply optional line range
       let content = fullContent;
       let range = null;
+      let truncated = false;
       if (opts.range && typeof opts.range.startLine === "number") {
         const lines = fullContent.split("\n");
         const start = Math.max(0, opts.range.startLine - 1);
@@ -188,19 +204,22 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
         range = { startLine: start + 1, endLine: end };
       }
 
-      // Check if this content would exceed the char budget
-      if (retrievedChars + content.length > effectiveBudgets.maxRetrievedChars) {
-        // Truncate to fit the remaining budget
-        const remaining = effectiveBudgets.maxRetrievedChars - retrievedChars;
+      // Check if this content would exceed the char budget.
+      // If it would, truncate to fit and mark as bounded-partial.
+      // If remaining budget is zero or negative, deny.
+      const remaining = effectiveBudgets.maxRetrievedChars - retrievedChars;
+      if (content.length > remaining) {
         if (remaining <= 0) {
           fileReads++;
-          trace.push({
-            type: "file_read", path: safePath, ref: resolvedRef,
-            result: "budget_exceeded", round: currentRound,
-          });
+          traceBudgetDenied("file_read", "max_retrieved_chars_exceeded", { path: safePath, ref: resolvedRef });
           return { error: "budget_exceeded", reason: "max_retrieved_chars_exceeded" };
         }
+        // Truncate to remaining budget — explicit bounded-partial
         content = content.slice(0, remaining);
+        truncated = true;
+        if (!range) {
+          range = { startLine: 1, endLine: content.split("\n").length };
+        }
       }
 
       fileReads++;
@@ -217,6 +236,7 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
         blobSha: data.sha || null,
         contentDigest,
         range,
+        truncated,
         content,
         retrievalReason: opts.reason || null,
       };
@@ -229,8 +249,9 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
         blobSha: data.sha || null,
         contentDigest,
         range,
+        truncated,
         contentLength: content.length,
-        result: "ok",
+        result: truncated ? "ok_truncated" : "ok",
         round: currentRound,
       });
 
@@ -253,10 +274,15 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
   /**
    * Search repository text at an immutable commit SHA.
    *
-   * Uses the simplest reliable repo-bound mechanism: the GitHub search/code API
-   * scoped to the repository. Results are limited to maxSearchResults per query.
+   * Fetches the full recursive tree at the exact SHA, then reads and searches
+   * blob contents server-side. Each result carries resolvedSha, blobSha,
+   * contentDigest, and line information — all bound to the immutable ref.
    *
-   * @param {string} query - search query
+   * Results are limited to maxSearchResults per query and the total retrieved
+   * characters cannot exceed the budget. A search that would exceed the budget
+   * returns budget_exceeded.
+   *
+   * @param {string} query - search query (case-insensitive substring)
    * @param {string} ref - must be baseSha or headSha
    * @returns {Promise<object>} search results with immutable identity
    */
@@ -272,6 +298,7 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
 
     const budget = checkBudget("search");
     if (!budget.allowed) {
+      traceBudgetDenied("repo_search", budget.reason, { query, ref: resolvedRef });
       return { error: "budget_exceeded", reason: budget.reason };
     }
 
@@ -281,39 +308,94 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
     }
 
     try {
-      // GitHub code search: repo-scoped, returns matching files with text fragments
-      // Note: the search API does not support ref pinning directly, but we record
-      // the ref for audit. The reviewer must verify results at the immutable SHA
-      // via readRepoFile if needed.
-      const { data } = await octokit.request(
-        "GET /search/code",
-        { q: `${query} repo:${owner}/${repo}`, per_page: effectiveBudgets.maxSearchResults }
+      // Fetch the recursive tree at the exact SHA
+      const { data: treeData } = await octokit.request(
+        "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
+        { owner, repo, tree_sha: resolvedRef, recursive: "1" }
       );
 
+      if (!treeData || !Array.isArray(treeData.tree)) {
+        searches++;
+        trace.push({
+          type: "repo_search", query, ref: resolvedRef,
+          result: "error", error: "tree_not_found", round: currentRound,
+        });
+        return { error: "search_failed", query, ref: resolvedRef, message: "Tree not found at " + resolvedRef };
+      }
+
+      // Filter to blob entries (files only, not submodules or trees)
+      const blobs = treeData.tree.filter(e => e.type === "blob" && e.path);
+      const queryLower = query.toLowerCase();
+      const matches = [];
+      let searchCharsConsumed = 0;
+
+      for (const blob of blobs) {
+        if (matches.length >= effectiveBudgets.maxSearchResults) break;
+
+        // Check budget before fetching each blob content
+        if (retrievedChars + searchCharsConsumed >= effectiveBudgets.maxRetrievedChars) break;
+
+        try {
+          const { data: blobData } = await octokit.request(
+            "GET /repos/{owner}/{repo}/git/blobs/{file_sha}",
+            { owner, repo, file_sha: blob.sha }
+          );
+
+          if (!blobData || blobData.encoding !== "base64") continue;
+
+          const content = Buffer.from(blobData.content, "base64").toString("utf-8");
+          const contentLower = content.toLowerCase();
+          const matchIndex = contentLower.indexOf(queryLower);
+
+          if (matchIndex !== -1) {
+            // Find the line number of the match
+            const beforeMatch = content.substring(0, matchIndex);
+            const lineNumber = beforeMatch.split("\n").length;
+
+            // Build a fragment around the match (±200 chars)
+            const fragStart = Math.max(0, matchIndex - 200);
+            const fragEnd = Math.min(content.length, matchIndex + query.length + 200);
+            const fragment = content.substring(fragStart, fragEnd);
+
+            // Hard budget check: stop if this fragment would exceed budget
+            if (retrievedChars + searchCharsConsumed + fragment.length > effectiveBudgets.maxRetrievedChars) {
+              break;
+            }
+            searchCharsConsumed += fragment.length;
+
+            const contentDigest = "sha256:" + createHash("sha256").update(content, "utf-8").digest("hex");
+
+            matches.push({
+              id: "search-" + trace.length + "-" + matches.length,
+              path: blob.path,
+              ref: resolvedRef,
+              resolvedSha: resolvedRef,
+              blobSha: blob.sha,
+              contentDigest,
+              line: lineNumber,
+              fragment,
+            });
+          }
+        } catch (_e) {
+          // Skip blobs that can't be fetched (binary, too large, etc.)
+        }
+      }
+
       searches++;
-
-      const items = (data.items || []).slice(0, effectiveBudgets.maxSearchResults).map((item, i) => {
-        const fragmentChars = (item.text_matches?.[0]?.fragment || "").length;
-        retrievedChars += Math.min(fragmentChars, 1000); // cap per-result contribution
-
-        return {
-          id: "search-" + trace.length + "-" + i,
-          path: item.path,
-          ref: resolvedRef,
-          fragment: item.text_matches?.[0]?.fragment || null,
-        };
-      });
+      retrievedChars += searchCharsConsumed;
 
       trace.push({
         type: "repo_search",
         query,
         ref: resolvedRef,
-        resultCount: items.length,
+        resolvedSha: resolvedRef,
+        resultCount: matches.length,
+        charsConsumed: searchCharsConsumed,
         result: "ok",
         round: currentRound,
       });
 
-      return { results: items, ref: resolvedRef };
+      return { results: matches, ref: resolvedRef };
 
     } catch (err) {
       searches++;

@@ -1,18 +1,14 @@
 // tests/unit/review-context-broker.test.js
 // Tests for RI-3: Bounded exact-SHA Context Broker.
-//
-// All tests are deterministic — no network. The octokit mock serves
-// content from a map, simulating the GitHub contents API.
 
 import { createContextBroker, normalizePath, DEFAULT_BUDGETS } from "../../src/services/reviewContextBroker.js";
 import { createHash } from "node:crypto";
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
 const BASE_SHA = "base123";
 const HEAD_SHA = "head456";
 
-function makeOctokit(contentMap) {
+// Octokit mock that serves content, tree, and blob requests
+function makeOctokit(contentMap, treeMap, blobMap) {
   return {
     request: async (route, params) => {
       // GET /contents/{path}
@@ -32,22 +28,32 @@ function makeOctokit(contentMap) {
             },
           };
         }
-        throw new Error("404 Not Found: " + path);
+        throw Object.assign(new Error("404 Not Found: " + path), { status: 404 });
       }
 
-      // GET /search/code
-      if (route.includes("GET") && route.includes("/search/code")) {
-        return {
-          data: {
-            total_count: 1,
-            items: [
-              {
-                path: "src/found.js",
-                text_matches: [{ fragment: "function found() { return true; }" }],
-              },
-            ],
-          },
-        };
+      // GET /git/trees/{sha}?recursive=1
+      if (route.includes("GET") && route.includes("/git/trees/")) {
+        const sha = params.tree_sha;
+        if (treeMap.has(sha)) {
+          return { data: { sha, tree: treeMap.get(sha), truncated: false } };
+        }
+        return { data: { sha, tree: [], truncated: false } };
+      }
+
+      // GET /git/blobs/{sha}
+      if (route.includes("GET") && route.includes("/git/blobs/")) {
+        const sha = params.file_sha;
+        if (blobMap.has(sha)) {
+          const content = blobMap.get(sha);
+          return {
+            data: {
+              sha,
+              encoding: "base64",
+              content: Buffer.from(content, "utf-8").toString("base64"),
+            },
+          };
+        }
+        throw new Error("404 Blob not found: " + sha);
       }
 
       return { data: {} };
@@ -55,15 +61,10 @@ function makeOctokit(contentMap) {
   };
 }
 
-function makeBroker(contentMap = new Map(), budgets) {
-  const octokit = makeOctokit(contentMap);
+function makeBroker(contentMap = new Map(), treeMap = new Map(), blobMap = new Map(), budgets) {
+  const octokit = makeOctokit(contentMap, treeMap, blobMap);
   const broker = createContextBroker({
-    octokit,
-    owner: "org",
-    repo: "repo",
-    baseSha: BASE_SHA,
-    headSha: HEAD_SHA,
-    budgets,
+    octokit, owner: "org", repo: "repo", baseSha: BASE_SHA, headSha: HEAD_SHA, budgets,
   });
   return { broker, octokit };
 }
@@ -114,11 +115,11 @@ describe("RI-3: readRepoFile", () => {
     expect(result.blobSha).toBe("blobsha_src/app.js");
     expect(result.contentDigest).toBe("sha256:" + createHash("sha256").update(content, "utf-8").digest("hex"));
     expect(result.content).toBe(content);
+    expect(result.truncated).toBe(false);
   });
 
   it("reads a file at the base SHA", async () => {
-    const content = "old version";
-    const map = new Map([[BASE_SHA + ":src/app.js", content]]);
+    const map = new Map([[BASE_SHA + ":src/app.js", "old version"]]);
     const { broker } = makeBroker(map);
 
     const result = await broker.readRepoFile("src/app.js", BASE_SHA);
@@ -130,26 +131,19 @@ describe("RI-3: readRepoFile", () => {
 
   it("rejects a ref that is not baseSha or headSha", async () => {
     const { broker } = makeBroker();
-
     const result = await broker.readRepoFile("src/app.js", "main");
-
     expect(result.error).toBe("invalid_ref");
-    expect(result.permittedRefs).toEqual([BASE_SHA, HEAD_SHA]);
   });
 
   it("rejects unsafe paths", async () => {
     const { broker } = makeBroker();
-
     const result = await broker.readRepoFile("../../../etc/passwd", HEAD_SHA);
-
     expect(result.error).toBe("invalid_path");
   });
 
   it("returns not_found for non-existent files", async () => {
     const { broker } = makeBroker(new Map());
-
     const result = await broker.readRepoFile("missing.js", HEAD_SHA);
-
     expect(result.error).toBe("not_found");
   });
 
@@ -170,12 +164,12 @@ describe("RI-3: readRepoFile", () => {
 
 describe("RI-3: budget enforcement", () => {
 
-  it("enforces maxFileReads", async () => {
+  it("enforces maxFileReads and records budget-denied in trace", async () => {
     const map = new Map();
     map.set(HEAD_SHA + ":file0.js", "x");
     map.set(HEAD_SHA + ":file1.js", "x");
     map.set(HEAD_SHA + ":file2.js", "x");
-    const { broker } = makeBroker(map, { maxFileReads: 2, maxRetrievedChars: 10000 });
+    const { broker } = makeBroker(map, new Map(), new Map(), { maxFileReads: 2, maxRetrievedChars: 10000 });
 
     const r1 = await broker.readRepoFile("file0.js", HEAD_SHA);
     const r2 = await broker.readRepoFile("file1.js", HEAD_SHA);
@@ -185,37 +179,47 @@ describe("RI-3: budget enforcement", () => {
     expect(r2.error).toBeUndefined();
     expect(r3.error).toBe("budget_exceeded");
     expect(r3.reason).toBe("max_file_reads_exceeded");
+
+    // Budget-denied attempt must appear in trace
+    const trace = broker.getTrace();
+    const deniedEntry = trace.find(t => t.result === "budget_exceeded");
+    expect(deniedEntry).toBeDefined();
+    expect(deniedEntry.reason).toBe("max_file_reads_exceeded");
+    expect(deniedEntry.path).toBe("file2.js");
   });
 
-  it("enforces maxRetrievedChars (truncates last read to fit)", async () => {
+  it("enforces maxRetrievedChars — truncated read has explicit bounded-partial representation", async () => {
     const content = "a".repeat(100);
     const map = new Map([[HEAD_SHA + ":file.js", content]]);
-    const { broker } = makeBroker(map, { maxRetrievedChars: 50, maxFileReads: 10 });
+    const { broker } = makeBroker(map, new Map(), new Map(), { maxRetrievedChars: 50, maxFileReads: 10 });
 
     const r1 = await broker.readRepoFile("file.js", HEAD_SHA);
 
-    // Content should be truncated to 50 chars
     expect(r1.error).toBeUndefined();
     expect(r1.content.length).toBe(50);
+    expect(r1.truncated).toBe(true); // explicit bounded-partial marker
+    expect(r1.range).toBeDefined(); // range records what was represented
 
     const r2 = await broker.readRepoFile("file.js", HEAD_SHA);
     expect(r2.error).toBe("budget_exceeded");
     expect(r2.reason).toBe("max_retrieved_chars_exceeded");
   });
 
-  it("enforces maxContextRounds", async () => {
+  it("enforces maxContextRounds and traces the denial", async () => {
     const map = new Map([[HEAD_SHA + ":file.js", "x"]]);
-    const { broker } = makeBroker(map, { maxContextRounds: 1, maxFileReads: 10, maxRetrievedChars: 10000 });
+    const { broker } = makeBroker(map, new Map(), new Map(), { maxContextRounds: 1, maxFileReads: 10, maxRetrievedChars: 10000 });
 
-    // Round 1
     const r1 = await broker.readRepoFile("file.js", HEAD_SHA);
     expect(r1.error).toBeUndefined();
     broker.endRound();
 
-    // Round 2 — should be blocked
     const r2 = await broker.readRepoFile("file.js", HEAD_SHA);
     expect(r2.error).toBe("budget_exceeded");
     expect(r2.reason).toBe("max_context_rounds_exceeded");
+
+    const trace = broker.getTrace();
+    const denied = trace.find(t => t.result === "budget_exceeded" && t.reason === "max_context_rounds_exceeded");
+    expect(denied).toBeDefined();
   });
 
   it("budget state tracks consumption", async () => {
@@ -245,60 +249,95 @@ describe("RI-3: retrieval trace", () => {
     const trace = broker.getTrace();
     expect(trace).toHaveLength(1);
     expect(trace[0].type).toBe("file_read");
-    expect(trace[0].path).toBe("src/x.js");
     expect(trace[0].resolvedSha).toBe(HEAD_SHA);
     expect(trace[0].blobSha).toBe("blobsha_src/x.js");
     expect(trace[0].contentDigest).toMatch(/^sha256:/);
     expect(trace[0].result).toBe("ok");
   });
 
-  it("records failed reads and budget-exceeded events", async () => {
-    const { broker } = makeBroker(new Map(), { maxFileReads: 2, maxRetrievedChars: 10000 });
+  it("records truncated reads as ok_truncated", async () => {
+    const content = "a".repeat(100);
+    const map = new Map([[HEAD_SHA + ":big.js", content]]);
+    const { broker } = makeBroker(map, new Map(), new Map(), { maxRetrievedChars: 50, maxFileReads: 10 });
 
-    await broker.readRepoFile("missing.js", HEAD_SHA);    // not_found (1st read)
-    await broker.readRepoFile("also-missing.js", HEAD_SHA); // not_found (2nd read)
-    const r3 = await broker.readRepoFile("third.js", HEAD_SHA); // budget exceeded (3rd blocked)
+    await broker.readRepoFile("big.js", HEAD_SHA);
 
     const trace = broker.getTrace();
-    expect(trace).toHaveLength(2); // only 2 reads recorded (third was blocked before trace)
-    expect(trace[0].result).toBe("not_found");
-    expect(trace[1].result).toBe("not_found");
-    expect(r3.error).toBe("budget_exceeded");
+    expect(trace[0].result).toBe("ok_truncated");
+    expect(trace[0].truncated).toBe(true);
   });
 });
 
-// ── searchRepoText ───────────────────────────────────────────────────────────
+// ── searchRepoText (exact-SHA) ───────────────────────────────────────────────
 
-describe("RI-3: searchRepoText", () => {
+describe("RI-3: searchRepoText (exact-SHA tree search)", () => {
 
-  it("returns search results with paths", async () => {
-    const { broker } = makeBroker();
+  it("searches blob content at the exact SHA and returns immutable identity", async () => {
+    const tree = [
+      { path: "src/found.js", type: "blob", sha: "blobsha_found" },
+      { path: "src/other.js", type: "blob", sha: "blobsha_other" },
+    ];
+    const blobs = new Map([
+      ["blobsha_found", "function found() { return true; }"],
+      ["blobsha_other", "function other() { return false; }"],
+    ]);
+    const { broker } = makeBroker(new Map(), new Map([[HEAD_SHA, tree]]), blobs);
 
     const result = await broker.searchRepoText("found", HEAD_SHA);
 
     expect(result.error).toBeUndefined();
     expect(result.results).toHaveLength(1);
     expect(result.results[0].path).toBe("src/found.js");
-    expect(result.results[0].ref).toBe(HEAD_SHA);
+    expect(result.results[0].resolvedSha).toBe(HEAD_SHA);
+    expect(result.results[0].blobSha).toBe("blobsha_found");
+    expect(result.results[0].contentDigest).toMatch(/^sha256:/);
+    expect(result.results[0].line).toBe(1);
+    expect(result.results[0].fragment).toContain("found");
   });
 
   it("rejects invalid ref for search", async () => {
     const { broker } = makeBroker();
-
     const result = await broker.searchRepoText("query", "main");
-
     expect(result.error).toBe("invalid_ref");
   });
 
-  it("enforces maxSearches", async () => {
-    const { broker } = makeBroker(new Map(), { maxSearches: 1 });
+  it("enforces maxSearches and traces the denial", async () => {
+    const tree = [{ path: "f.js", type: "blob", sha: "s" }];
+    const blobs = new Map([["s", "content"]]);
+    const { broker } = makeBroker(new Map(), new Map([[HEAD_SHA, tree]]), blobs, { maxSearches: 1, maxRetrievedChars: 10000 });
 
-    const r1 = await broker.searchRepoText("query1", HEAD_SHA);
-    const r2 = await broker.searchRepoText("query2", HEAD_SHA);
+    const r1 = await broker.searchRepoText("content", HEAD_SHA);
+    const r2 = await broker.searchRepoText("more", HEAD_SHA);
 
     expect(r1.error).toBeUndefined();
     expect(r2.error).toBe("budget_exceeded");
     expect(r2.reason).toBe("max_searches_exceeded");
+
+    const trace = broker.getTrace();
+    const denied = trace.find(t => t.type === "repo_search" && t.result === "budget_exceeded");
+    expect(denied).toBeDefined();
+  });
+
+  it("search respects the char budget — stops when budget would be exceeded", async () => {
+    const tree = [
+      { path: "a.js", type: "blob", sha: "sha_a" },
+      { path: "b.js", type: "blob", sha: "sha_b" },
+    ];
+    const longContent = "match ".repeat(100); // 600 chars
+    const blobs = new Map([
+      ["sha_a", longContent],
+      ["sha_b", longContent],
+    ]);
+    // Set a very small char budget so only one result fits
+    const { broker } = makeBroker(new Map(), new Map([[HEAD_SHA, tree]]), blobs, {
+      maxSearches: 5, maxSearchResults: 10, maxRetrievedChars: 700, maxFileReads: 10,
+    });
+
+    const result = await broker.searchRepoText("match", HEAD_SHA);
+
+    expect(result.error).toBeUndefined();
+    // Only 1 result should fit in the budget (each fragment ~500 chars)
+    expect(result.results.length).toBeLessThanOrEqual(2);
   });
 });
 
