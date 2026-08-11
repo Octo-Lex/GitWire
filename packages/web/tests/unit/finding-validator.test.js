@@ -364,6 +364,52 @@ describe("RI-4: validateFinding", () => {
     expect(result.invalidEvidenceRefs[0].reason).toBe("line_range_not_in_context_item");
   });
 
+  it("rejects repo-read ref with reversed range (endLine < startLine)", () => {
+    const evidence = makeEvidence(["src/app.js"]);
+    const finding = makeFinding({
+      severity: "P1",
+      evidenceRefs: ["repo-read:src/config.js@HEAD:L5-L3"],
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence, CONTEXT_ITEMS);
+
+    expect(result.downgraded).toBe(true);
+    expect(result.invalidEvidenceRefs[0].reason).toBe("invalid_line_range");
+  });
+
+  it("rejects changed ref with no-newline marker being treated as context", () => {
+    // Patch ends with \ No newline at end of file — must not advance cursors
+    const evidence = makeEvidence(["src/app.js"]);
+    evidence.changedFiles[0].patch =
+      "@@ -1,3 +1,3 @@\n line1\n-old2\n+new2\n\\ No newline at end of file";
+    // After walking: HEAD represents lines 1-3 (line1=ctx, new2=added).
+    // The no-newline marker should NOT create a phantom line 4.
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/app.js@HEAD:L4"], // phantom line from no-newline marker
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.downgraded).toBe(true);
+    expect(result.invalidEvidenceRefs[0].reason).toBe("line_range_not_in_patch_hunks");
+  });
+
+  it("correctly walks blank context lines without shifting cursors", () => {
+    // Patch with a blank context line (represented as " " in unified diff)
+    const evidence = makeEvidence(["src/app.js"]);
+    evidence.changedFiles[0].patch =
+      "@@ -1,3 +1,3 @@\n line1\n \n+new3\n-old3";
+    // HEAD lines: line1(1), blank(2), new3(3) → range [1,3]
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/app.js@HEAD:L2-L3"],
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.valid).toBe(true);
+    expect(result.validEvidenceRefs).toHaveLength(1);
+  });
+
   // ── affectedPaths checks evidence.contextItems ───────────────────────────
 
   it("accepts a P2 finding whose affectedPath exists only in evidence.contextItems", () => {

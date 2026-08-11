@@ -308,6 +308,9 @@ function extractPatchLineRanges(patch, side) {
 
       if (rawLine.startsWith("@@")) break; // next hunk
 
+      // Ignore the no-newline-at-end-of-file metadata marker
+      if (rawLine.startsWith("\\ No newline at end of file")) continue;
+
       if (rawLine.startsWith("+")) {
         // Added line — advances new cursor
         if (side === "HEAD") {
@@ -322,8 +325,11 @@ function extractPatchLineRanges(patch, side) {
           intervalEnd = oldLine;
         }
         oldLine++;
-      } else if (rawLine.trim()) {
-        // Context line — advances both cursors
+      } else if (rawLine.startsWith(" ")) {
+        // Context line (starts with a single space) — advances both cursors.
+        // A blank context line is represented as " " (single space), so
+        // checking startsWith(" ") correctly includes it while excluding
+        // empty lines and metadata markers.
         if (side === "HEAD") {
           if (intervalStart === null) intervalStart = newLine;
           intervalEnd = newLine;
@@ -334,6 +340,7 @@ function extractPatchLineRanges(patch, side) {
         oldLine++;
         newLine++;
       }
+      // Any other line (empty, metadata) is ignored — does not advance cursors
     }
 
     if (intervalStart !== null && intervalEnd !== null) {
@@ -360,6 +367,11 @@ function validateEvidenceRef(parsed, evidence, contextItems = []) {
   const evidenceContextItems = evidence?.contextItems || [];
   const allContextItems = [...evidenceContextItems, ...contextItems];
 
+  // Generic line-range sanity check applies to all evidence types
+  if (parsed.startLine < 1 || parsed.endLine < parsed.startLine) {
+    return { valid: false, reason: "invalid_line_range" };
+  }
+
   if (parsed.type === "changed") {
     const cf = changedFiles.find(f => f.path === path || f.previousPath === path);
     if (!cf) {
@@ -372,11 +384,6 @@ function validateEvidenceRef(parsed, evidence, contextItems = []) {
     }
     if (parsed.side === "BASE" && !cf.base) {
       return { valid: false, reason: "base_side_not_available (file may be added)" };
-    }
-
-    // Validate line range against the represented patch hunks
-    if (parsed.startLine < 1 || parsed.endLine < parsed.startLine) {
-      return { valid: false, reason: "invalid_line_range" };
     }
 
     const patchRanges = extractPatchLineRanges(cf.patch, parsed.side);
