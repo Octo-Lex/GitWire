@@ -161,6 +161,18 @@ export function computeReviewDecision(inputs) {
     };
   }
 
+  // ── Verifier must be exactly "verified" for APPROVE ──────────────────────
+  // Any other status (missing, unknown, bogus) fails closed.
+
+  if (verifierReceipt.status !== "verified") {
+    return {
+      event: REVIEW_EVENT.COMMENT,
+      checkState: CHECK_STATE.REVIEW_INCOMPLETE,
+      decisionReason: "Verifier status is '" + verifierReceipt.status + "' — only 'verified' allows approval",
+      approvalEligible: false,
+    };
+  }
+
   // ── Only P3 or zero material findings + complete evidence + clean verifier ─
   // → APPROVE
 

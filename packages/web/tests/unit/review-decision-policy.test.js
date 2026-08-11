@@ -204,8 +204,28 @@ describe("RI-6: computeReviewDecision — frozen state table", () => {
       evidence: makeEvidence(true),
       verifierReceipt: null,
     });
-    // Without a verifier, we cannot confirm approval safety → COMMENT
-    // (the verifier must run for APPROVE under the v2 policy)
+    expect(decision.event).toBe(REVIEW_EVENT.COMMENT);
+    expect(decision.approvalEligible).toBe(false);
+  });
+
+  // ── Verifier must be exactly "verified" for APPROVE ──────────────────────
+
+  it("Verifier with missing status → COMMENT (never APPROVE)", () => {
+    const decision = computeReviewDecision({
+      primaryFindings: [],
+      evidence: makeEvidence(true),
+      verifierReceipt: { findings: [], approvalSafe: true }, // no status field
+    });
+    expect(decision.event).toBe(REVIEW_EVENT.COMMENT);
+    expect(decision.approvalEligible).toBe(false);
+  });
+
+  it("Verifier with unknown status → COMMENT (never APPROVE)", () => {
+    const decision = computeReviewDecision({
+      primaryFindings: [],
+      evidence: makeEvidence(true),
+      verifierReceipt: { status: "bogus", findings: [], approvalSafe: true },
+    });
     expect(decision.event).toBe(REVIEW_EVENT.COMMENT);
     expect(decision.approvalEligible).toBe(false);
   });
