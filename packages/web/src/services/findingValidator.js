@@ -158,9 +158,11 @@ export function validateFinding(finding, evidence, contextItems = []) {
   // ── Cross-file claim validation ──────────────────────────────────────────
 
   if (result.affectedPaths && Array.isArray(result.affectedPaths)) {
+    const evidenceContextItems = evidence?.contextItems || [];
+    const allContextItems = [...evidenceContextItems, ...contextItems];
     for (const p of result.affectedPaths) {
       const inChanged = (evidence?.changedFiles || []).some(cf => cf.path === p || cf.previousPath === p);
-      const inContext = contextItems.some(ci => ci.path === p);
+      const inContext = allContextItems.some(ci => ci.path === p);
       if (!inChanged && !inContext) {
         if (MATERIAL_SEVERITIES.has(result.severity)) {
           // Material finding claims a file not in evidence → reject
@@ -261,6 +263,48 @@ export function validateFindings(findings, evidence, contextItems = []) {
  * @param {object[]} contextItems - externally passed context items
  * @returns {object} { valid: boolean, reason?: string }
  */
+/**
+ * Extract the represented line ranges from a unified diff patch.
+ * Parses @@ hunk headers and returns the set of line intervals that
+ * the patch actually covers.
+ *
+ * For HEAD side, returns the "new" line ranges (after +).
+ * For BASE side, returns the "old" line ranges (before -).
+ *
+ * @param {string} patch - unified diff patch
+ * @param {string} side - "HEAD" or "BASE"
+ * @returns {number[][]} array of [startLine, endLine] intervals
+ */
+function extractPatchLineRanges(patch, side) {
+  if (!patch || typeof patch !== "string") return [];
+  const ranges = [];
+  // Parse hunk headers: @@ -oldStart,oldCount +newStart,newCount @@
+  // Trust the header counts rather than counting body lines.
+  const hunkRegex = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm;
+  let match;
+  while ((match = hunkRegex.exec(patch)) !== null) {
+    const oldStart = parseInt(match[1], 10);
+    const oldCount = match[2] ? parseInt(match[2], 10) : 1;
+    const newStart = parseInt(match[3], 10);
+    const newCount = match[4] ? parseInt(match[4], 10) : 1;
+
+    if (side === "HEAD") {
+      ranges.push([newStart, newStart + Math.max(newCount - 1, 0)]);
+    } else {
+      ranges.push([oldStart, oldStart + Math.max(oldCount - 1, 0)]);
+    }
+  }
+  return ranges;
+}
+
+/**
+ * Check if a line range falls within any of the represented intervals.
+ */
+function isLineInRange(startLine, endLine, ranges) {
+  if (ranges.length === 0) return true; // no ranges extracted — can't validate, allow
+  return ranges.some(([rStart, rEnd]) => startLine >= rStart && endLine <= rEnd);
+}
+
 function validateEvidenceRef(parsed, evidence, contextItems = []) {
   const path = parsed.path;
   const changedFiles = evidence?.changedFiles || [];
@@ -281,31 +325,38 @@ function validateEvidenceRef(parsed, evidence, contextItems = []) {
       return { valid: false, reason: "base_side_not_available (file may be added)" };
     }
 
-    // Validate line range is within represented lines
-    // For removed files, the patch contains deletion lines; for others, the diff.
-    // We check that startLine > 0 and endLine >= startLine (basic sanity).
-    // A full line-range validation against the diff content would require parsing
-    // the patch, which is out of scope for this deterministic check.
+    // Validate line range against the represented patch hunks
     if (parsed.startLine < 1 || parsed.endLine < parsed.startLine) {
       return { valid: false, reason: "invalid_line_range" };
+    }
+
+    const patchRanges = extractPatchLineRanges(cf.patch, parsed.side);
+    if (patchRanges.length > 0 && !isLineInRange(parsed.startLine, parsed.endLine, patchRanges)) {
+      return { valid: false, reason: "line_range_not_in_patch_hunks" };
     }
 
     return { valid: true };
   }
 
   if (parsed.type === "repo-read") {
-    // Must exist in contextItems with matching ref
     const reviewRoot = evidence?.review;
     const expectedSha = parsed.side === "HEAD" ? reviewRoot?.headSha : reviewRoot?.baseSha;
 
-    const ci = allContextItems.find(item => item.path === path);
+    // Match path + requested SHA (not just first path match)
+    const ci = allContextItems.find(item =>
+      item.path === path &&
+      (item.ref === expectedSha || item.resolvedSha === expectedSha)
+    );
     if (!ci) {
-      return { valid: false, reason: "path_not_in_context" };
+      return { valid: false, reason: "path_not_in_context_or_ref_mismatch" };
     }
 
-    // The context item's ref must match the requested side's SHA
-    if (expectedSha && ci.ref !== expectedSha && ci.resolvedSha !== expectedSha) {
-      return { valid: false, reason: "ref_mismatch: context item ref does not match requested " + parsed.side + " SHA" };
+    // Validate cited lines fall within the context item's represented range
+    if (ci.range && typeof ci.range.startLine === "number") {
+      if (parsed.startLine < ci.range.startLine ||
+          parsed.endLine > (ci.range.endLine || ci.range.startLine)) {
+        return { valid: false, reason: "line_range_not_in_context_item" };
+      }
     }
 
     return { valid: true };

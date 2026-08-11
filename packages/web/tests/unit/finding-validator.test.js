@@ -25,6 +25,8 @@ function makeEvidence(changedPaths = ["src/app.js", "src/utils.js"]) {
       representedLines: 100,
       base: { sha: BASE_SHA, blobSha: "b_" + p, contentDigest: "sha256:base_" + p },
       head: { sha: HEAD_SHA, blobSha: "h_" + p, contentDigest: "sha256:head_" + p },
+      // Patch with hunks at lines 1-10 (HEAD side) and 1-10 (BASE side)
+      patch: "@@ -1,5 +1,7 @@\n old line 1\n-old line 2\n+new line 2\n+new line 2b\n context line\n-old line 4\n+new line 4\n context line 5",
     })),
     contextItems: [],
     coverage: { approvalEvidenceComplete: true },
@@ -306,6 +308,47 @@ describe("RI-4: validateFinding", () => {
     const result = validateFinding(finding, evidence);
 
     expect(result.valid).toBe(true);
+  });
+
+  // ── Range-bound evidence validation ──────────────────────────────────────
+
+  it("rejects evidence ref citing a line outside the patch hunks", () => {
+    const evidence = makeEvidence(["src/app.js"]); // patch hunks cover lines 1-7
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/app.js@HEAD:L999-L1000"], // way outside
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.downgraded).toBe(true); // ref invalid → downgraded
+    expect(result.invalidEvidenceRefs[0].reason).toBe("line_range_not_in_patch_hunks");
+  });
+
+  it("accepts evidence ref citing a line within the patch hunks", () => {
+    const evidence = makeEvidence(["src/app.js"]); // patch hunks at lines 1-7
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/app.js@HEAD:L2-L4"], // within range
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.valid).toBe(true);
+    expect(result.validEvidenceRefs).toHaveLength(1);
+  });
+
+  // ── affectedPaths checks evidence.contextItems ───────────────────────────
+
+  it("accepts a P2 finding whose affectedPath exists only in evidence.contextItems", () => {
+    const evidence = makeEvidence(["src/app.js"]);
+    evidence.contextItems = [{ path: "src/config.js", type: "file_read", ref: HEAD_SHA }];
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/app.js@HEAD:L1-L5"],
+      affectedPaths: ["src/config.js"], // in evidence.contextItems, not changedFiles
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
   });
 
   // ── Basic field validation ───────────────────────────────────────────────
