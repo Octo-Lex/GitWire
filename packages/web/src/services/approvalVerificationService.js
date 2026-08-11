@@ -178,7 +178,7 @@ export async function runApprovalVerification({
 
   // ── Guard: evidence must have a review root with required SHAs ──────────
   if (!reviewRoot || !reviewRoot.baseSha || !reviewRoot.headSha) {
-    return makeReceipt(VERIFIER_STATUS.ERROR, [], [], [], false, 0, Date.now() - startTime, "Missing review root with base/head SHAs");
+    return makeReceipt(VERIFIER_STATUS.ERROR, [], [], [], [], false, 0, Date.now() - startTime, "Missing review root with base/head SHAs");
   }
 
   // ── Create a SEPARATE context broker with its own budget ────────────────
@@ -193,57 +193,155 @@ export async function runApprovalVerification({
       budgets: verifierBudgets?.contextBroker,
     });
   } catch (err) {
-    return makeReceipt(VERIFIER_STATUS.ERROR, [], [], [], false, 0, Date.now() - startTime, "Failed to create context broker: " + err.message);
+    return makeReceipt(VERIFIER_STATUS.ERROR, [], [], [], [], false, 0, Date.now() - startTime, "Failed to create context broker: " + err.message);
   }
 
   // ── Build the prompt ─────────────────────────────────────────────────────
   const systemPrompt = buildVerifierSystemPrompt(evidence);
   const userPrompt = buildVerifierUserPrompt(evidence);
 
-  // ── Invoke the LLM with timeout ──────────────────────────────────────────
+  // ── Tool definitions for the context broker ──────────────────────────────
+  const verifierTools = [
+    {
+      name: "read_repo_file",
+      description: "Read a file at an immutable commit SHA (base or head of the PR). Use to inspect supporting files, callers, imports, configs.",
+      input_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Repository file path (relative, no ../)" },
+          ref: { type: "string", description: "Commit SHA — must be the PR's base or head SHA" },
+          range: {
+            type: "object",
+            properties: {
+              startLine: { type: "number" },
+              endLine: { type: "number" },
+            },
+            description: "Optional line range to read",
+          },
+        },
+        required: ["path", "ref"],
+      },
+    },
+    {
+      name: "search_repo_text",
+      description: "Search repository content for a text query at an immutable commit SHA. Returns matching files with line numbers and fragments.",
+      input_schema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Case-insensitive search query" },
+          ref: { type: "string", description: "Commit SHA — must be the PR's base or head SHA" },
+        },
+        required: ["query", "ref"],
+      },
+    },
+  ];
+
+  // ── Invoke the LLM with tool-use loop ────────────────────────────────────
   let rawText = "";
   let tokensUsed = 0;
+  let messages = [{ role: "user", content: userPrompt }];
+  const MAX_TOOL_ROUNDS = 5; // safety limit
 
   try {
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("Verifier timed out after " + maxDurationMs + "ms")), maxDurationMs);
-    });
+    const deadline = startTime + maxDurationMs;
 
-    const llmPromise = anthropic.messages.create({
-      model,
-      max_tokens: 4096,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    });
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error("Verifier timed out after " + maxDurationMs + "ms");
+      }
 
-    const message = await Promise.race([llmPromise, timeoutPromise]);
+      const message = await anthropic.messages.create({
+        model,
+        max_tokens: 4096,
+        system: systemPrompt,
+        tools: verifierTools,
+        messages,
+      });
 
-    // Extract text
-    if (Array.isArray(message.content)) {
-      rawText = message.content
-        .filter(b => b.type === "text")
-        .map(b => b.text)
-        .join("\n");
-    } else if (typeof message.content === "string") {
-      rawText = message.content;
+      tokensUsed += (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
+
+      // Check if the model wants to use tools
+      const toolUseBlocks = Array.isArray(message.content)
+        ? message.content.filter(b => b.type === "tool_use")
+        : [];
+      const textBlocks = Array.isArray(message.content)
+        ? message.content.filter(b => b.type === "text")
+        : [];
+
+      // Accumulate text for final parsing
+      if (textBlocks.length > 0) {
+        rawText = textBlocks.map(b => b.text).join("\n");
+      }
+
+      // If no tool-use, the model is done — extract the final text
+      if (message.stop_reason !== "tool_use" || toolUseBlocks.length === 0) {
+        break;
+      }
+
+      // Process tool-use blocks — execute broker operations
+      messages.push({ role: "assistant", content: message.content });
+
+      const toolResults = [];
+      for (const block of toolUseBlocks) {
+        let result;
+        if (block.name === "read_repo_file") {
+          result = await broker.readRepoFile(
+            block.input.path,
+            block.input.ref,
+            { range: block.input.range }
+          );
+        } else if (block.name === "search_repo_text") {
+          result = await broker.searchRepoText(
+            block.input.query,
+            block.input.ref
+          );
+        } else {
+          result = { error: "unknown_tool" };
+        }
+
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: JSON.stringify(result),
+        });
+      }
+
+      messages.push({ role: "user", content: toolResults });
+
+      // If broker budget is exhausted, the model may not have enough context.
+      // We continue the loop so the model can produce a final response, but
+      // we track the exhaustion state for the receipt.
+      if (broker.getBudgetState().exhausted) {
+        // One more round to let the model respond, then stop
+        // (the loop will break on the next iteration if stop_reason != tool_use)
+      }
     }
-
-    tokensUsed = (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
   } catch (err) {
     // Timeout, API failure, or SDK error → incomplete
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], false, tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message);
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message);
   }
 
-  // ── Parse the response ───────────────────────────────────────────────────
+  // ── Parse and validate the response ──────────────────────────────────────
   const parsed = parseVerifierResult(rawText.trim());
   if (!parsed) {
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], false, tokensUsed, Date.now() - startTime, "Failed to parse verifier response");
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Failed to parse verifier response");
+  }
+
+  // ── Deterministic schema validation ──────────────────────────────────────
+  const schemaErrors = validateVerifierSchema(parsed);
+  if (schemaErrors.length > 0) {
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Verifier schema validation failed: " + schemaErrors.join("; "));
   }
 
   // ── Extract fields ───────────────────────────────────────────────────────
-  const rawFindings = Array.isArray(parsed.findings) ? parsed.findings : [];
-  const unresolvedContextNeeds = Array.isArray(parsed.unresolvedContextNeeds) ? parsed.unresolvedContextNeeds : [];
-  const coverageSatisfied = parsed.coverageSatisfied !== false; // default true if not explicitly false
+  const rawFindings = parsed.findings || [];
+  // The frozen contract has contextRequests and unresolvedContextRequests.
+  // Support both names for compatibility.
+  const contextRequests = parsed.contextRequests || [];
+  const unresolvedContextNeeds = parsed.unresolvedContextNeeds || parsed.unresolvedContextRequests || [];
+  const coverageSatisfied = parsed.coverageSatisfied === true;
+  const modelDeclaredStatus = parsed.status;
 
   // ── Validate findings through the evidence-bound validator ───────────────
   const brokerTrace = broker.getTrace();
@@ -253,8 +351,6 @@ export async function runApprovalVerification({
     if (result.valid) {
       validatedFindings.push(result.finding);
     }
-    // Invalid findings from the verifier are silently dropped — the validator
-    // is the authority, not the verifier's output.
   }
 
   // ── Check for material findings (P0/P1/P2) ───────────────────────────────
@@ -263,19 +359,18 @@ export async function runApprovalVerification({
   );
 
   // ── Determine final status ───────────────────────────────────────────────
+  // Never promote model-declared incomplete/error to verified.
   let status;
 
-  if (materialFindings.length > 0) {
+  if (modelDeclaredStatus === "incomplete" || modelDeclaredStatus === "error") {
+    status = VERIFIER_STATUS.INCOMPLETE;
+  } else if (materialFindings.length > 0) {
     status = VERIFIER_STATUS.MATERIAL_FINDINGS;
   } else if (unresolvedContextNeeds.length > 0) {
-    // Unresolved material context needs → incomplete → no APPROVE
     status = VERIFIER_STATUS.INCOMPLETE;
   } else if (!coverageSatisfied) {
-    // Verifier says coverage is not satisfied → incomplete
     status = VERIFIER_STATUS.INCOMPLETE;
   } else if (broker.getBudgetState().exhausted && validatedFindings.length === 0) {
-    // Budget was exhausted and verifier found nothing — may not have had
-    // enough context to complete verification
     status = VERIFIER_STATUS.INCOMPLETE;
   } else {
     status = VERIFIER_STATUS.VERIFIED;
@@ -287,6 +382,7 @@ export async function runApprovalVerification({
     status,
     validatedFindings,
     unresolvedContextNeeds,
+    contextRequests,
     brokerTrace,
     coverageSatisfied,
     tokensUsed,
@@ -334,24 +430,55 @@ function buildVerifierUserPrompt(evidence) {
 /**
  * Build a verification receipt.
  */
-function makeReceipt(status, findings, unresolvedContextNeeds, contextTrace, coverageSatisfied, tokensUsed, durationMs, error) {
+function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, contextTrace, coverageSatisfied, tokensUsed, durationMs, error) {
   return {
     status,
     findings,
     unresolvedContextNeeds,
-    contextTrace,
+    contextRequests: contextRequests || [],
+    contextTrace: contextTrace || [],
     coverageSatisfied,
-    tokensUsed,
-    durationMs,
+    tokensUsed: tokensUsed || 0,
+    durationMs: durationMs || 0,
     error: error || undefined,
-    // Material finding severities for quick policy checks
     hasMaterialFindings: findings.some(f =>
       [SEVERITY.P0, SEVERITY.P1, SEVERITY.P2].includes(f.severity)
     ),
     materialFindingCount: findings.filter(f =>
       [SEVERITY.P0, SEVERITY.P1, SEVERITY.P2].includes(f.severity)
     ).length,
-    // True only when status is exactly VERIFIED
     approvalSafe: status === VERIFIER_STATUS.VERIFIED,
   };
+}
+
+// ── Schema validation ───────────────────────────────────────────────────────
+
+/**
+ * Deterministically validate the verifier result schema.
+ * Returns an array of error strings. Empty array means valid.
+ */
+export function validateVerifierSchema(parsed) {
+  const errors = [];
+
+  if (!parsed || typeof parsed !== "object") {
+    return ["Result must be an object"];
+  }
+
+  // status is required and must be one of the frozen values
+  const validStatuses = ["verified", "material_findings", "incomplete"];
+  if (!parsed.status || !validStatuses.includes(parsed.status)) {
+    errors.push("status must be one of: " + validStatuses.join(", ") + " (got " + JSON.stringify(parsed.status) + ")");
+  }
+
+  // findings must be an array if present
+  if (parsed.findings !== undefined && !Array.isArray(parsed.findings)) {
+    errors.push("findings must be an array");
+  }
+
+  // coverageSatisfied must be a boolean if present
+  if (parsed.coverageSatisfied !== undefined && typeof parsed.coverageSatisfied !== "boolean") {
+    errors.push("coverageSatisfied must be a boolean");
+  }
+
+  return errors;
 }

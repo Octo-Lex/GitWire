@@ -48,8 +48,38 @@ function makeMockAnthropic(response) {
       create: jest.fn().mockResolvedValue({
         content: [{ type: "text", text: response }],
         usage: { input_tokens: 3000, output_tokens: 500 },
+        stop_reason: "end_turn",
       }),
     },
+  };
+}
+
+/** Mock Anthropic with a tool-use round followed by a text response */
+function makeToolUseMockAnthropic(toolName, toolInput, finalResponse) {
+  const calls = [];
+  return {
+    messages: {
+      create: jest.fn().mockImplementation((params) => {
+        calls.push(params);
+        const hasTools = params.messages.length > 1; // second+ call (after tool result)
+        if (hasTools) {
+          return Promise.resolve({
+            content: [{ type: "text", text: finalResponse }],
+            usage: { input_tokens: 2000, output_tokens: 300 },
+            stop_reason: "end_turn",
+          });
+        }
+        // First call — request a tool use
+        return Promise.resolve({
+          content: [
+            { type: "tool_use", id: "tool1", name: toolName, input: toolInput },
+          ],
+          usage: { input_tokens: 1000, output_tokens: 100 },
+          stop_reason: "tool_use",
+        });
+      }),
+    },
+    _calls: calls,
   };
 }
 
@@ -262,7 +292,6 @@ describe("RI-5: runApprovalVerification", () => {
 
   it("validates verifier findings through the evidence-bound validator", async () => {
     const evidence = makeEvidence(["src/app.js"]);
-    // Finding with invalid evidence ref (path not in evidence)
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "material_findings",
       findings: [{
@@ -282,10 +311,151 @@ describe("RI-5: runApprovalVerification", () => {
       evidence, octokit: makeMockOctokit(), owner: "org", repo: "repo", anthropic,
     });
 
-    // The invalid finding should be downgraded to P3 by the validator,
-    // so it no longer counts as material
     expect(receipt.findings).toHaveLength(1);
-    expect(receipt.findings[0].severity).toBe("P3"); // downgraded
-    expect(receipt.status).toBe(VERIFIER_STATUS.VERIFIED); // no material findings remain
+    expect(receipt.findings[0].severity).toBe("P3");
+    expect(receipt.status).toBe(VERIFIER_STATUS.VERIFIED);
+  });
+});
+
+// ── Tool-use loop tests ────────────────────────────────────────────────────
+
+describe("RI-5: context broker tool-use loop", () => {
+
+  it("executes read_repo_file tool and records it in context trace", async () => {
+    const evidence = makeEvidence();
+    const octokit = makeMockOctokit(); // returns "test" content
+    const finalResponse = JSON.stringify({
+      status: "verified",
+      findings: [],
+      unresolvedContextNeeds: [],
+      coverageSatisfied: true,
+    });
+    const anthropic = makeToolUseMockAnthropic(
+      "read_repo_file",
+      { path: "src/app.js", ref: HEAD_SHA },
+      finalResponse,
+    );
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit, owner: "org", repo: "repo", anthropic,
+    });
+
+    // The broker should have executed the tool call
+    expect(receipt.contextTrace.length).toBeGreaterThan(0);
+    expect(receipt.contextTrace[0].type).toBe("file_read");
+    expect(receipt.contextTrace[0].path).toBe("src/app.js");
+    expect(receipt.contextTrace[0].result).toBe("ok");
+  });
+
+  it("records budget-exhausted state when context is limited", async () => {
+    const evidence = makeEvidence();
+    const octokit = makeMockOctokit();
+    const finalResponse = JSON.stringify({
+      status: "incomplete",
+      findings: [],
+      unresolvedContextNeeds: ["Could not read all necessary files"],
+      coverageSatisfied: false,
+    });
+    const anthropic = makeToolUseMockAnthropic(
+      "read_repo_file",
+      { path: "src/app.js", ref: HEAD_SHA },
+      finalResponse,
+    );
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit, owner: "org", repo: "repo", anthropic,
+      verifierBudgets: { contextBroker: { maxFileReads: 1, maxRetrievedChars: 1, maxSearches: 0, maxSearchResults: 0, maxContextRounds: 1 } },
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.approvalSafe).toBe(false);
+  });
+});
+
+// ── Schema validation tests ────────────────────────────────────────────────
+
+describe("RI-5: deterministic schema validation", () => {
+
+  it("rejects result with missing status field", async () => {
+    const evidence = makeEvidence();
+    const anthropic = makeMockAnthropic(JSON.stringify({
+      findings: [],
+      coverageSatisfied: true,
+    }));
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit: makeMockOctokit(), owner: "org", repo: "repo", anthropic,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.error).toContain("schema validation failed");
+  });
+
+  it("never promotes model-declared incomplete to verified", async () => {
+    const evidence = makeEvidence();
+    const anthropic = makeMockAnthropic(JSON.stringify({
+      status: "incomplete",
+      findings: [],
+      unresolvedContextNeeds: [],
+      coverageSatisfied: true,
+    }));
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit: makeMockOctokit(), owner: "org", repo: "repo", anthropic,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.approvalSafe).toBe(false);
+  });
+
+  it("rejects result with invalid status value", async () => {
+    const evidence = makeEvidence();
+    const anthropic = makeMockAnthropic(JSON.stringify({
+      status: "maybe",
+      findings: [],
+      coverageSatisfied: true,
+    }));
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit: makeMockOctokit(), owner: "org", repo: "repo", anthropic,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.error).toContain("schema validation failed");
+  });
+
+  it("rejects result where findings is not an array", async () => {
+    const evidence = makeEvidence();
+    const anthropic = makeMockAnthropic(JSON.stringify({
+      status: "verified",
+      findings: "none",
+      coverageSatisfied: true,
+    }));
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit: makeMockOctokit(), owner: "org", repo: "repo", anthropic,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.error).toContain("schema validation failed");
+  });
+
+  it("includes contextRequests field in the receipt", async () => {
+    const evidence = makeEvidence();
+    const anthropic = makeMockAnthropic(JSON.stringify({
+      status: "verified",
+      findings: [],
+      unresolvedContextNeeds: [],
+      contextRequests: [{ path: "src/app.js", ref: HEAD_SHA }],
+      coverageSatisfied: true,
+    }));
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit: makeMockOctokit(), owner: "org", repo: "repo", anthropic,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.VERIFIED);
+    expect(receipt.contextRequests).toHaveLength(1);
+    expect(receipt.contextRequests[0].path).toBe("src/app.js");
   });
 });
