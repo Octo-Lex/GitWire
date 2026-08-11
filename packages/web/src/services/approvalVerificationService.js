@@ -236,28 +236,38 @@ export async function runApprovalVerification({
     },
   ];
 
+  // ── Helper: race a promise against a deadline ────────────────────────────
+  const deadline = startTime + maxDurationMs;
+  function withDeadline(promise, label) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return Promise.reject(new Error("Verifier timed out: " + label + " exceeded deadline after " + maxDurationMs + "ms"));
+    }
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Verifier timed out: " + label + " after " + maxDurationMs + "ms")), remaining)),
+    ]);
+  }
+
   // ── Invoke the LLM with tool-use loop ────────────────────────────────────
   let rawText = "";
   let tokensUsed = 0;
   let messages = [{ role: "user", content: userPrompt }];
   const MAX_TOOL_ROUNDS = 5; // safety limit
+  const verifierContextItems = []; // successful broker results for finding validation
 
   try {
-    const deadline = startTime + maxDurationMs;
-
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        throw new Error("Verifier timed out after " + maxDurationMs + "ms");
-      }
-
-      const message = await anthropic.messages.create({
-        model,
-        max_tokens: 4096,
-        system: systemPrompt,
-        tools: verifierTools,
-        messages,
-      });
+      const message = await withDeadline(
+        anthropic.messages.create({
+          model,
+          max_tokens: 4096,
+          system: systemPrompt,
+          tools: verifierTools,
+          messages,
+        }),
+        "LLM call (round " + round + ")",
+      );
 
       tokensUsed += (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
 
@@ -286,16 +296,25 @@ export async function runApprovalVerification({
       for (const block of toolUseBlocks) {
         let result;
         if (block.name === "read_repo_file") {
-          result = await broker.readRepoFile(
-            block.input.path,
-            block.input.ref,
-            { range: block.input.range }
+          result = await withDeadline(
+            broker.readRepoFile(block.input.path, block.input.ref, { range: block.input.range }),
+            "read_repo_file",
           );
+          // Collect successful results for finding validation
+          if (result && !result.error) {
+            verifierContextItems.push(result);
+          }
         } else if (block.name === "search_repo_text") {
-          result = await broker.searchRepoText(
-            block.input.query,
-            block.input.ref
+          result = await withDeadline(
+            broker.searchRepoText(block.input.query, block.input.ref),
+            "search_repo_text",
           );
+          // Collect search result items for finding validation
+          if (result && result.results) {
+            for (const r of result.results) {
+              verifierContextItems.push({ path: r.path, type: "search_result", ref: r.ref || r.resolvedSha, resolvedSha: r.resolvedSha, content: r.fragment });
+            }
+          }
         } else {
           result = { error: "unknown_tool" };
         }
@@ -308,14 +327,6 @@ export async function runApprovalVerification({
       }
 
       messages.push({ role: "user", content: toolResults });
-
-      // If broker budget is exhausted, the model may not have enough context.
-      // We continue the loop so the model can produce a final response, but
-      // we track the exhaustion state for the receipt.
-      if (broker.getBudgetState().exhausted) {
-        // One more round to let the model respond, then stop
-        // (the loop will break on the next iteration if stop_reason != tool_use)
-      }
     }
   } catch (err) {
     // Timeout, API failure, or SDK error → incomplete
@@ -344,10 +355,11 @@ export async function runApprovalVerification({
   const modelDeclaredStatus = parsed.status;
 
   // ── Validate findings through the evidence-bound validator ───────────────
-  const brokerTrace = broker.getTrace();
+  // Use the successful broker context items (which carry content for range
+  // derivation), not just the trace (which only has contentLength).
   const validatedFindings = [];
   for (const finding of rawFindings) {
-    const result = validateFinding(finding, evidence, brokerTrace);
+    const result = validateFinding(finding, evidence, verifierContextItems);
     if (result.valid) {
       validatedFindings.push(result.finding);
     }
@@ -383,7 +395,7 @@ export async function runApprovalVerification({
     validatedFindings,
     unresolvedContextNeeds,
     contextRequests,
-    brokerTrace,
+    broker.getTrace(),
     coverageSatisfied,
     tokensUsed,
     durationMs,
@@ -435,6 +447,7 @@ function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, 
     status,
     findings,
     unresolvedContextNeeds,
+    unresolvedContextRequests: unresolvedContextNeeds, // frozen contract field name
     contextRequests: contextRequests || [],
     contextTrace: contextTrace || [],
     coverageSatisfied,

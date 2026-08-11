@@ -458,4 +458,107 @@ describe("RI-5: deterministic schema validation", () => {
     expect(receipt.contextRequests).toHaveLength(1);
     expect(receipt.contextRequests[0].path).toBe("src/app.js");
   });
+
+  it("includes unresolvedContextRequests (frozen field name) in the receipt", async () => {
+    const evidence = makeEvidence();
+    const anthropic = makeMockAnthropic(JSON.stringify({
+      status: "incomplete",
+      findings: [],
+      unresolvedContextRequests: ["needed to read src/missing.js"],
+      coverageSatisfied: false,
+    }));
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit: makeMockOctokit(), owner: "org", repo: "repo", anthropic,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.unresolvedContextRequests).toBeDefined();
+    expect(receipt.unresolvedContextRequests).toHaveLength(1);
+  });
+});
+
+// ── Timeout enforcement ────────────────────────────────────────────────────
+
+describe("RI-5: timeout enforcement", () => {
+
+  it("returns INCOMPLETE when LLM call hangs past maxDurationMs", async () => {
+    const evidence = makeEvidence();
+    const anthropic = {
+      messages: {
+        create: jest.fn().mockImplementation(() => new Promise(() => {})), // never resolves
+      },
+    };
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit: makeMockOctokit(), owner: "org", repo: "repo", anthropic,
+      maxDurationMs: 100, // 100ms timeout
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.approvalSafe).toBe(false);
+    expect(receipt.error).toContain("timed out");
+  }, 5000); // test timeout must exceed maxDurationMs
+});
+
+// ── Full-file repo-read finding validation ─────────────────────────────────
+
+describe("RI-5: broker context items for finding validation", () => {
+
+  it("keeps a P2 finding valid when based on a full-file repo-read", async () => {
+    const evidence = makeEvidence(["src/app.js"]);
+    // The tool-use mock reads src/config.js at HEAD and the octokit returns 3 lines
+    const octokit = {
+      request: jest.fn().mockImplementation((route) => {
+        if (route.includes("/contents/")) {
+          return Promise.resolve({
+            data: {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from("line1\nline2\nline3", "utf-8").toString("base64"),
+              sha: "blob_config",
+              path: "src/config.js",
+            },
+          });
+        }
+        if (route.includes("/git/trees/")) {
+          return Promise.resolve({ data: { sha: HEAD_SHA, tree: [{ path: "src/config.js", type: "blob", sha: "blob_config" }] } });
+        }
+        if (route.includes("/git/blobs/")) {
+          return Promise.resolve({ data: { sha: "blob_config", encoding: "base64", content: Buffer.from("line1\nline2\nline3", "utf-8").toString("base64") } });
+        }
+        return Promise.resolve({ data: {} });
+      }),
+    };
+    const finalResponse = JSON.stringify({
+      status: "material_findings",
+      findings: [{
+        severity: "P2",
+        category: "bug",
+        claim: "Config import missing",
+        description: "src/config.js line 2 has a broken import",
+        affectedPaths: [],
+        evidenceRefs: ["repo-read:src/config.js@HEAD:L2"],
+        proof: { type: "static_trace", summary: "Line 2 shows broken import" },
+      }],
+      unresolvedContextNeeds: [],
+      coverageSatisfied: true,
+    });
+    const anthropic = makeToolUseMockAnthropic(
+      "read_repo_file",
+      { path: "src/config.js", ref: HEAD_SHA },
+      finalResponse,
+    );
+
+    const receipt = await runApprovalVerification({
+      evidence, octokit, owner: "org", repo: "repo", anthropic,
+    });
+
+    // The P2 finding should remain material (not downgraded) because the
+    // verifier successfully read src/config.js and the finding cites L2
+    // which is within the 3-line content.
+    expect(receipt.status).toBe(VERIFIER_STATUS.MATERIAL_FINDINGS);
+    expect(receipt.materialFindingCount).toBe(1);
+    expect(receipt.findings[0].severity).toBe("P2");
+  });
 });
