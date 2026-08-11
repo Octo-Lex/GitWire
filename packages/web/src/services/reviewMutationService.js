@@ -133,12 +133,17 @@ export function createReviewMutationManager({
    * Submit a GitHub review with idempotency guarantee.
    *
    * Flow:
-   *   1. Check if a mutation already exists for this invocation.
-   *   2. If CONFIRMED: return the existing review ID (retry recovery).
-   *   3. If SUBMITTED: try to find the review by querying recent reviews
-   *      for this PR at this SHA (crash recovery).
-   *   4. If PLANNED or no record: mark PLANNED, POST the review,
-   *      mark SUBMITTED, persist review ID, mark CONFIRMED.
+   *   1. Atomically acquire ownership (SETNX PLANNED). Fail closed if another
+   *      worker already owns this invocation.
+   *   2. If already CONFIRMED: return the existing review ID (retry recovery).
+   *   3. If PLANNED or SUBMITTED: attempt recovery — check if a review with
+   *      this invocation's marker was already posted at this SHA.
+   *   4. If recovery finds the review: CONFIRM and return it.
+   *   5. If recovery finds nothing: POST a new review with the invocation
+   *      marker embedded, then CONFIRM.
+   *
+   * The invocation marker is embedded in the review body so recovery is
+   * invocation-specific, not just "any gitwire review at this SHA."
    *
    * @param {object} review - { event, body, commit_id, comments }
    * @returns {Promise<object>} { reviewId, action: "created" | "recovered" }
@@ -148,29 +153,69 @@ export function createReviewMutationManager({
     const existing = await getState();
 
     if (existing && existing.state === MUTATION_STATE.CONFIRMED && existing.reviewId) {
-      // Already submitted and confirmed — return existing (worker retry)
       logger.info({ invocationId, reviewId: existing.reviewId }, "Review mutation already confirmed — returning existing");
       return { reviewId: existing.reviewId, action: "recovered" };
     }
 
-    if (existing && existing.state === MUTATION_STATE.SUBMITTED) {
-      // POST was accepted but crash happened before confirmation.
-      // Try to find the review by querying recent reviews at this SHA.
+    // ── Step 2: Attempt recovery from PLANNED or SUBMITTED ─────────────────
+    // The crash window: GitHub accepted POST, process crashed before
+    // CONFIRMED was persisted. Redis shows PLANNED or SUBMITTED but the
+    // review may already exist on GitHub. Always check before POSTing.
+    if (existing && (existing.state === MUTATION_STATE.PLANNED || existing.state === MUTATION_STATE.SUBMITTED)) {
       const recoveredId = await tryRecoverReview();
       if (recoveredId) {
         await setState({ state: MUTATION_STATE.CONFIRMED, reviewId: recoveredId, event: review.event, timestamp: Date.now() });
-        logger.info({ invocationId, reviewId: recoveredId }, "Review mutation recovered from submitted state");
+        logger.info({ invocationId, reviewId: recoveredId }, "Review mutation recovered from " + existing.state + " state");
         return { reviewId: recoveredId, action: "recovered" };
       }
-      // Could not recover — proceed to POST (may create a duplicate,
-      // but this is safer than skipping the review entirely)
-      logger.warn({ invocationId }, "Could not recover submitted review — proceeding with new POST");
+      // Could not recover — the POST either didn't happen (crash before)
+      // or GitHub lost it. Proceed with a new POST.
+      logger.warn({ invocationId, existingState: existing.state }, "Could not recover review — proceeding with new POST");
     }
 
-    // ── Step 2: Mark PLANNED ───────────────────────────────────────────────
-    await setState({ state: MUTATION_STATE.PLANNED, reviewId: null, event: review.event, timestamp: Date.now() });
+    // ── Step 3: Atomically acquire ownership ────────────────────────────────
+    // Clear any stale PLANNED/SUBMITTED state from this process before
+    // acquiring fresh ownership. This is safe because we just confirmed
+    // via recovery that no review exists for this invocation.
+    if (existing && existing.state !== MUTATION_STATE.CONFIRMED) {
+      try { await redis.del(key); } catch (_e) { /* best effort */ }
+    }
 
-    // ── Step 3: POST the review ────────────────────────────────────────────
+    // Use SETNX to prevent concurrent workers from both POSTing.
+    let ownershipAcquired = false;
+    try {
+      const result = await redis.setnx(key, JSON.stringify({
+        state: MUTATION_STATE.PLANNED,
+        reviewId: null,
+        event: review.event,
+        timestamp: Date.now(),
+        invocationId,
+      }));
+      if (result === 1) {
+        ownershipAcquired = true;
+        // Set TTL on the newly acquired key
+        await redis.expire(key, ttlSeconds);
+      }
+    } catch (err) {
+      // Redis error — fail closed
+      throw new Error("Cannot establish review mutation ownership: Redis error — " + err.message);
+    }
+
+    if (!ownershipAcquired) {
+      // Another worker owns this invocation. Check if it has confirmed.
+      const concurrent = await getState();
+      if (concurrent && concurrent.state === MUTATION_STATE.CONFIRMED && concurrent.reviewId) {
+        return { reviewId: concurrent.reviewId, action: "recovered" };
+      }
+      // Another worker is in progress — fail closed
+      throw new Error("Review mutation ownership conflict — another worker is processing invocation " + invocationId);
+    }
+
+    // ── Step 4: Embed invocation marker in review body ──────────────────────
+    const invocationMarker = "<!-- gitwire-invocation:" + invocationId + " -->";
+    const reviewBody = (review.body || "") + "\n\n" + invocationMarker;
+
+    // ── Step 5: POST the review ────────────────────────────────────────────
     let reviewId;
     try {
       const { data } = await octokit.request(
@@ -180,7 +225,7 @@ export function createReviewMutationManager({
           repo,
           pull_number: prNumber,
           commit_id: review.commit_id || headSha,
-          body: review.body || "",
+          body: reviewBody,
           event: review.event,
           comments: review.comments || [],
         }
@@ -191,10 +236,7 @@ export function createReviewMutationManager({
       throw err;
     }
 
-    // ── Step 4: Mark SUBMITTED (POST accepted but not yet confirmed) ───────
-    await setState({ state: MUTATION_STATE.SUBMITTED, reviewId, event: review.event, timestamp: Date.now() });
-
-    // ── Step 5: Mark CONFIRMED ─────────────────────────────────────────────
+    // ── Step 6: Mark CONFIRMED ─────────────────────────────────────────────
     await setState({ state: MUTATION_STATE.CONFIRMED, reviewId, event: review.event, timestamp: Date.now() });
 
     logger.info({ invocationId, reviewId, event: review.event }, "Review mutation submitted and confirmed");
@@ -204,19 +246,22 @@ export function createReviewMutationManager({
   /**
    * Try to recover a review that was POSTed but not confirmed.
    * Queries recent reviews on the PR at the head SHA and looks for one
-   * created by gitwire-hq after the SUBMITTED timestamp.
+   * containing THIS invocation's marker in the body.
+   * This is invocation-specific: another GitWire invocation or an unrelated
+   * bot review at the same SHA will NOT be matched.
    */
   async function tryRecoverReview() {
     try {
       const { data: reviews } = await octokit.request(
         "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
-        { owner, repo, pull_number: prNumber, per_page: 10 }
+        { owner, repo, pull_number: prNumber, per_page: 30 }
       );
 
-      // Find a review at the same commit SHA by the GitWire bot
+      // Look for a review at this SHA containing our invocation marker
+      const invocationMarker = "gitwire-invocation:" + invocationId;
       const candidate = reviews.find(r =>
         r.commit_id === headSha &&
-        (r.user?.login?.includes("gitwire") || r.user?.login?.endsWith("[bot]"))
+        r.body && r.body.includes(invocationMarker)
       );
 
       return candidate?.id || null;
