@@ -51,7 +51,7 @@ function makeEvidenceWithStatus(path, status) {
 }
 
 const CONTEXT_ITEMS = [
-  { path: "src/config.js", type: "file_read", ref: HEAD_SHA, resolvedSha: HEAD_SHA },
+  { path: "src/config.js", type: "file_read", ref: HEAD_SHA, resolvedSha: HEAD_SHA, content: "line1\nline2\nline3\nline4\nline5" },
 ];
 
 function makeFinding(overrides = {}) {
@@ -104,7 +104,7 @@ describe("RI-4: validateFinding", () => {
 
   it("accepts a valid P2 finding with evidence reference to a changed file", () => {
     const evidence = makeEvidence(["src/calculator.js"]);
-    const finding = makeFinding({ affectedPaths: [] });
+    const finding = makeFinding({ evidenceRefs: ["changed:src/calculator.js@HEAD:L2-L4"], affectedPaths: [] });
     const result = validateFinding(finding, evidence);
 
     expect(result.valid).toBe(true);
@@ -198,7 +198,7 @@ describe("RI-4: validateFinding", () => {
     const evidence = makeEvidence(["src/app.js"]);
     const finding = makeFinding({
       severity: "P1",
-      evidenceRefs: ["repo-read:src/config.js@HEAD:L10-L15"],
+      evidenceRefs: ["repo-read:src/config.js@HEAD:L2-L4"], // within 5-line content
       affectedPaths: [],
     });
     const result = validateFinding(finding, evidence, CONTEXT_ITEMS);
@@ -209,7 +209,7 @@ describe("RI-4: validateFinding", () => {
 
   it("rejects repo-read evidence ref when context item ref does not match requested side", () => {
     const evidence = makeEvidence(["src/app.js"]);
-    const wrongContext = [{ path: "src/config.js", type: "file_read", ref: BASE_SHA, resolvedSha: BASE_SHA }];
+    const wrongContext = [{ path: "src/config.js", type: "file_read", ref: BASE_SHA, resolvedSha: BASE_SHA, content: "x" }];
     const finding = makeFinding({
       severity: "P1",
       evidenceRefs: ["repo-read:src/config.js@HEAD:L10-L15"], // requests HEAD but context is at BASE
@@ -334,6 +334,34 @@ describe("RI-4: validateFinding", () => {
 
     expect(result.valid).toBe(true);
     expect(result.validEvidenceRefs).toHaveLength(1);
+  });
+
+  it("rejects evidence ref citing a line within the original hunk header but past truncation", () => {
+    // Patch hunk claims +1,10 but body is truncated at line 5
+    const evidence = makeEvidence(["src/app.js"]);
+    evidence.changedFiles[0].patch = "@@ -1,5 +1,10 @@\n ctx\n-old\n+new1\n+new2\n+new3\n... (truncated at 3 changed lines)";
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/app.js@HEAD:L8-L9"], // within header count but past truncation
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.downgraded).toBe(true);
+    expect(result.invalidEvidenceRefs[0].reason).toBe("line_range_not_in_patch_hunks");
+  });
+
+  it("rejects repo-read ref citing a line beyond the full-file content", () => {
+    const evidence = makeEvidence(["src/app.js"]);
+    // CONTEXT_ITEMS has src/config.js with 5 lines of content, range=null
+    const finding = makeFinding({
+      severity: "P1",
+      evidenceRefs: ["repo-read:src/config.js@HEAD:L999"], // way beyond 5-line file
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence, CONTEXT_ITEMS);
+
+    expect(result.downgraded).toBe(true);
+    expect(result.invalidEvidenceRefs[0].reason).toBe("line_range_not_in_context_item");
   });
 
   // ── affectedPaths checks evidence.contextItems ───────────────────────────

@@ -264,44 +264,93 @@ export function validateFindings(findings, evidence, contextItems = []) {
  * @returns {object} { valid: boolean, reason?: string }
  */
 /**
- * Extract the represented line ranges from a unified diff patch.
- * Parses @@ hunk headers and returns the set of line intervals that
- * the patch actually covers.
+ * Extract the represented line ranges from a unified diff patch by
+ * walking the actual retained hunk body.
  *
- * For HEAD side, returns the "new" line ranges (after +).
- * For BASE side, returns the "old" line ranges (before -).
+ * Advances old/new cursors for context/+/- lines and stops at the
+ * truncation marker ("... (truncated"). This ensures a truncated patch
+ * only validates citations within the actually-represented portion.
  *
- * @param {string} patch - unified diff patch
+ * For HEAD side, tracks new-file line numbers.
+ * For BASE side, tracks old-file line numbers.
+ *
+ * If no valid hunks are found, returns null (fail closed).
+ *
+ * @param {string} patch - unified diff patch (possibly truncated)
  * @param {string} side - "HEAD" or "BASE"
- * @returns {number[][]} array of [startLine, endLine] intervals
+ * @returns {number[][]|null} array of [startLine, endLine] intervals, or null
  */
 function extractPatchLineRanges(patch, side) {
-  if (!patch || typeof patch !== "string") return [];
+  if (!patch || typeof patch !== "string") return null;
   const ranges = [];
-  // Parse hunk headers: @@ -oldStart,oldCount +newStart,newCount @@
-  // Trust the header counts rather than counting body lines.
-  const hunkRegex = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm;
-  let match;
-  while ((match = hunkRegex.exec(patch)) !== null) {
-    const oldStart = parseInt(match[1], 10);
-    const oldCount = match[2] ? parseInt(match[2], 10) : 1;
-    const newStart = parseInt(match[3], 10);
-    const newCount = match[4] ? parseInt(match[4], 10) : 1;
+  const hunkRegex = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/gm;
+  let hunkMatch;
+  let foundAnyHunk = false;
 
-    if (side === "HEAD") {
-      ranges.push([newStart, newStart + Math.max(newCount - 1, 0)]);
-    } else {
-      ranges.push([oldStart, oldStart + Math.max(oldCount - 1, 0)]);
+  while ((hunkMatch = hunkRegex.exec(patch)) !== null) {
+    foundAnyHunk = true;
+    let oldLine = parseInt(hunkMatch[1], 10);
+    let newLine = parseInt(hunkMatch[2], 10);
+    const hunkBodyStart = hunkMatch.index + hunkMatch[0].length;
+
+    // Find where this hunk body ends: next @@ or end of patch
+    const nextHunkIdx = patch.indexOf("\n@@", hunkBodyStart);
+    const hunkBodyEnd = nextHunkIdx === -1 ? patch.length : nextHunkIdx + 1;
+    const hunkBody = patch.substring(hunkBodyStart, hunkBodyEnd);
+
+    // Track the represented interval for this hunk
+    let intervalStart = null;
+    let intervalEnd = null;
+
+    for (const rawLine of hunkBody.split("\n")) {
+      // Stop at truncation marker
+      if (rawLine.includes("... (truncated")) break;
+
+      if (rawLine.startsWith("@@")) break; // next hunk
+
+      if (rawLine.startsWith("+")) {
+        // Added line — advances new cursor
+        if (side === "HEAD") {
+          if (intervalStart === null) intervalStart = newLine;
+          intervalEnd = newLine;
+        }
+        newLine++;
+      } else if (rawLine.startsWith("-")) {
+        // Removed line — advances old cursor
+        if (side === "BASE") {
+          if (intervalStart === null) intervalStart = oldLine;
+          intervalEnd = oldLine;
+        }
+        oldLine++;
+      } else if (rawLine.trim()) {
+        // Context line — advances both cursors
+        if (side === "HEAD") {
+          if (intervalStart === null) intervalStart = newLine;
+          intervalEnd = newLine;
+        } else {
+          if (intervalStart === null) intervalStart = oldLine;
+          intervalEnd = oldLine;
+        }
+        oldLine++;
+        newLine++;
+      }
+    }
+
+    if (intervalStart !== null && intervalEnd !== null) {
+      ranges.push([intervalStart, intervalEnd]);
     }
   }
-  return ranges;
+
+  return foundAnyHunk ? ranges : null;
 }
 
 /**
  * Check if a line range falls within any of the represented intervals.
+ * Returns false if ranges is null (fail closed).
  */
 function isLineInRange(startLine, endLine, ranges) {
-  if (ranges.length === 0) return true; // no ranges extracted — can't validate, allow
+  if (ranges === null) return false; // fail closed
+  if (!Array.isArray(ranges) || ranges.length === 0) return false;
   return ranges.some(([rStart, rEnd]) => startLine >= rStart && endLine <= rEnd);
 }
 
@@ -331,7 +380,7 @@ function validateEvidenceRef(parsed, evidence, contextItems = []) {
     }
 
     const patchRanges = extractPatchLineRanges(cf.patch, parsed.side);
-    if (patchRanges.length > 0 && !isLineInRange(parsed.startLine, parsed.endLine, patchRanges)) {
+    if (!isLineInRange(parsed.startLine, parsed.endLine, patchRanges)) {
       return { valid: false, reason: "line_range_not_in_patch_hunks" };
     }
 
@@ -342,21 +391,37 @@ function validateEvidenceRef(parsed, evidence, contextItems = []) {
     const reviewRoot = evidence?.review;
     const expectedSha = parsed.side === "HEAD" ? reviewRoot?.headSha : reviewRoot?.baseSha;
 
-    // Match path + requested SHA (not just first path match)
+    // Require a file_read item matching path + requested SHA
     const ci = allContextItems.find(item =>
       item.path === path &&
+      item.type === "file_read" &&
       (item.ref === expectedSha || item.resolvedSha === expectedSha)
     );
     if (!ci) {
-      return { valid: false, reason: "path_not_in_context_or_ref_mismatch" };
+      return { valid: false, reason: "file_read_not_found_or_ref_mismatch" };
     }
 
-    // Validate cited lines fall within the context item's represented range
+    // Validate cited lines against the context item's represented range.
+    // If ci.range is present, use it. Otherwise derive from ci.content line count.
+    let representedRange = null;
     if (ci.range && typeof ci.range.startLine === "number") {
-      if (parsed.startLine < ci.range.startLine ||
-          parsed.endLine > (ci.range.endLine || ci.range.startLine)) {
+      representedRange = [ci.range.startLine, ci.range.endLine || ci.range.startLine];
+    } else if (typeof ci.content === "string") {
+      // Full-file read with no explicit range — derive [1..lineCount]
+      // Account for trailing newline: "a\nb" is 2 lines, "a\nb\n" is still 2 lines
+      const lineCount = ci.content === "" ? 0 : ci.content.split("\n").length - (ci.content.endsWith("\n") ? 1 : 0);
+      if (lineCount > 0) {
+        representedRange = [1, lineCount];
+      }
+    }
+
+    if (representedRange) {
+      if (parsed.startLine < representedRange[0] || parsed.endLine > representedRange[1]) {
         return { valid: false, reason: "line_range_not_in_context_item" };
       }
+    } else {
+      // Cannot establish represented range — fail closed
+      return { valid: false, reason: "context_range_not_establishable" };
     }
 
     return { valid: true };
