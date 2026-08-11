@@ -116,61 +116,82 @@ export function validateFinding(finding, evidence, contextItems = []) {
       continue;
     }
 
-    // Verify the referenced path exists in the evidence
-    const pathExists = checkPathExists(parsed, evidence, contextItems);
-    if (!pathExists) {
-      invalidRefs.push({ ref, reason: "path_not_in_evidence", parsed });
+    // Validate source, side, and represented range
+    const refCheck = validateEvidenceRef(parsed, evidence, contextItems);
+    if (!refCheck.valid) {
+      invalidRefs.push({ ref, reason: refCheck.reason, parsed });
       continue;
     }
 
     validRefs.push(parsed);
   }
 
-  // Material findings (P0/P1/P2) must have at least one valid evidence reference
-  if (isMaterial && validRefs.length === 0) {
-    if (evidenceRefs.length > 0) {
-      // Had refs but all were invalid — downgrade to P3
-      warnings.push("All evidence references invalid — downgraded from " + result.severity + " to P3");
-      result.severity = SEVERITY.P3;
-      result.downgradeReason = "All evidence references were invalid";
-      downgraded = true;
+  // Material findings (P0/P1/P2) with any invalid evidence refs must downgrade or reject.
+  // If ALL refs are invalid → downgrade to P3 (if refs were provided) or reject (no refs).
+  // If SOME refs are valid but some are invalid → downgrade to P3.
+  if (isMaterial && invalidRefs.length > 0) {
+    if (validRefs.length === 0) {
+      if (evidenceRefs.length > 0) {
+        warnings.push("All evidence references invalid — downgraded from " + result.severity + " to P3");
+        result.severity = SEVERITY.P3;
+        result.downgradeReason = "All evidence references were invalid";
+        downgraded = true;
+      } else {
+        errors.push("P0/P1/P2 finding requires at least one valid evidence reference");
+        return { valid: false, finding: result, errors, warnings, downgraded };
+      }
     } else {
-      // No refs at all on a material finding — reject
-      errors.push("P0/P1/P2 finding requires at least one valid evidence reference");
-      return { valid: false, finding: result, errors, warnings, downgraded };
+      // Some valid, some invalid — still downgrade
+      warnings.push("Contains invalid evidence references — downgraded from " + result.severity + " to P3");
+      result.severity = SEVERITY.P3;
+      result.downgradeReason = invalidRefs.length + " evidence reference(s) were invalid";
+      downgraded = true;
     }
+  }
+
+  // Material findings with no refs at all → reject
+  if (isMaterial && validRefs.length === 0 && !downgraded) {
+    errors.push("P0/P1/P2 finding requires at least one valid evidence reference");
+    return { valid: false, finding: result, errors, warnings, downgraded };
   }
 
   // ── Cross-file claim validation ──────────────────────────────────────────
 
-  // Check affectedPaths — if the finding claims to affect files, those files
-  // must exist in the evidence (changed files or context items)
   if (result.affectedPaths && Array.isArray(result.affectedPaths)) {
     for (const p of result.affectedPaths) {
-      const inChanged = (evidence?.changedFiles || []).some(cf => cf.path === p);
+      const inChanged = (evidence?.changedFiles || []).some(cf => cf.path === p || cf.previousPath === p);
       const inContext = contextItems.some(ci => ci.path === p);
       if (!inChanged && !inContext) {
-        warnings.push("affectedPath not in evidence: " + p);
+        if (MATERIAL_SEVERITIES.has(result.severity)) {
+          // Material finding claims a file not in evidence → reject
+          errors.push("affectedPath not in evidence: " + p + " — material finding cannot claim unverified file");
+          return { valid: false, finding: result, errors, warnings, downgraded };
+        } else {
+          warnings.push("affectedPath not in evidence: " + p);
+        }
       }
     }
   }
 
   // ── Proof validation for behavior claims ─────────────────────────────────
 
-  if (isMaterial || result.severity === "P3" && result.proof) {
-    if (result.proof) {
-      if (!result.proof.type || !VALID_PROOF_TYPES.has(result.proof.type)) {
-        warnings.push("Invalid proof type: " + result.proof.type);
-      }
-      // Behavior claims (bug, regression, security) at P0/P1/P2 require
-      // a proof that is not just inference, unless explicitly marked
-      const isBehaviorCategory = ["bug", "security", "regression"].includes(result.category);
-      if (isMaterial && isBehaviorCategory && result.proof.type === PROOF_TYPES.INFERENCE) {
-        warnings.push("Material behavior claim marked as inference — not a static trace, counterexample, or reproduction");
-      }
-    } else if (isMaterial) {
-      // Material findings should have a proof
-      warnings.push("P0/P1/P2 finding has no proof object");
+  if (MATERIAL_SEVERITIES.has(result.severity)) {
+    const isBehaviorCategory = ["bug", "security", "regression"].includes(result.category);
+
+    if (!result.proof) {
+      // Material findings must have a proof object
+      errors.push("P0/P1/P2 finding requires a proof object");
+      return { valid: false, finding: result, errors, warnings, downgraded };
+    }
+
+    if (!result.proof.type || !VALID_PROOF_TYPES.has(result.proof.type)) {
+      errors.push("Invalid or missing proof type: " + result.proof.type);
+      return { valid: false, finding: result, errors, warnings, downgraded };
+    }
+
+    if (isBehaviorCategory && result.proof.type === PROOF_TYPES.INFERENCE) {
+      // Inference is allowed but warned for behavior claims
+      warnings.push("Material behavior claim marked as inference — not a static trace, counterexample, or reproduction");
     }
   }
 
@@ -219,33 +240,76 @@ export function validateFindings(findings, evidence, contextItems = []) {
   return { valid, rejected, downgraded };
 }
 
-// ── Path existence check ────────────────────────────────────────────────────
+// ── Evidence reference validation ───────────────────────────────────────────
 
 /**
- * Check whether a parsed evidence reference points to a file that exists
- * in the ReviewEvidence changedFiles or the contextItems.
+ * Validate that a parsed evidence reference points to a real file with
+ * the correct side and a represented range.
+ *
+ * For changed: refs:
+ *   - File must exist in changedFiles (by path or previousPath)
+ *   - If side is HEAD, the file must have a non-null head identity
+ *   - If side is BASE, the file must have a non-null base identity
+ *   - Line range must be within the file's represented lines
+ *
+ * For repo-read: refs:
+ *   - File must exist in evidence.contextItems or the passed contextItems
+ *   - The context item's ref must match the requested side (HEAD=headSha, BASE=baseSha)
  *
  * @param {object} parsed - parsed evidence reference
  * @param {object} evidence - ReviewEvidence
- * @param {object[]} contextItems - retrieved context items
- * @returns {boolean}
+ * @param {object[]} contextItems - externally passed context items
+ * @returns {object} { valid: boolean, reason?: string }
  */
-function checkPathExists(parsed, evidence, contextItems = []) {
+function validateEvidenceRef(parsed, evidence, contextItems = []) {
   const path = parsed.path;
+  const changedFiles = evidence?.changedFiles || [];
+  const evidenceContextItems = evidence?.contextItems || [];
+  const allContextItems = [...evidenceContextItems, ...contextItems];
 
   if (parsed.type === "changed") {
-    // Must exist in changedFiles
-    return (evidence?.changedFiles || []).some(cf =>
-      cf.path === path || cf.previousPath === path
-    );
+    const cf = changedFiles.find(f => f.path === path || f.previousPath === path);
+    if (!cf) {
+      return { valid: false, reason: "path_not_in_evidence" };
+    }
+
+    // Validate the requested side exists for this file
+    if (parsed.side === "HEAD" && !cf.head) {
+      return { valid: false, reason: "head_side_not_available (file may be removed)" };
+    }
+    if (parsed.side === "BASE" && !cf.base) {
+      return { valid: false, reason: "base_side_not_available (file may be added)" };
+    }
+
+    // Validate line range is within represented lines
+    // For removed files, the patch contains deletion lines; for others, the diff.
+    // We check that startLine > 0 and endLine >= startLine (basic sanity).
+    // A full line-range validation against the diff content would require parsing
+    // the patch, which is out of scope for this deterministic check.
+    if (parsed.startLine < 1 || parsed.endLine < parsed.startLine) {
+      return { valid: false, reason: "invalid_line_range" };
+    }
+
+    return { valid: true };
   }
 
   if (parsed.type === "repo-read") {
-    // Must exist in contextItems or changedFiles (changed files can also be read via context broker)
-    const inContext = contextItems.some(ci => ci.path === path);
-    const inChanged = (evidence?.changedFiles || []).some(cf => cf.path === path);
-    return inContext || inChanged;
+    // Must exist in contextItems with matching ref
+    const reviewRoot = evidence?.review;
+    const expectedSha = parsed.side === "HEAD" ? reviewRoot?.headSha : reviewRoot?.baseSha;
+
+    const ci = allContextItems.find(item => item.path === path);
+    if (!ci) {
+      return { valid: false, reason: "path_not_in_context" };
+    }
+
+    // The context item's ref must match the requested side's SHA
+    if (expectedSha && ci.ref !== expectedSha && ci.resolvedSha !== expectedSha) {
+      return { valid: false, reason: "ref_mismatch: context item ref does not match requested " + parsed.side + " SHA" };
+    }
+
+    return { valid: true };
   }
 
-  return false;
+  return { valid: false, reason: "unknown_evidence_type" };
 }

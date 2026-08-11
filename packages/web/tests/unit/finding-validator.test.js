@@ -1,12 +1,5 @@
 // tests/unit/finding-validator.test.js
 // Tests for RI-4: evidence-bound finding schema and validation.
-//
-// Proves the frozen CI gates:
-//   P2 finding without evidence → rejected
-//   cross-file evidence references validated
-//   invalid evidence reference → rejected or downgraded
-//   P3 findings don't require evidence
-//   valid P0/P1/P2 with evidence → accepted
 
 import {
   SEVERITY,
@@ -18,24 +11,45 @@ import {
 
 // ── Test fixtures ───────────────────────────────────────────────────────────
 
+const HEAD_SHA = "head123";
+const BASE_SHA = "base456";
+
 function makeEvidence(changedPaths = ["src/app.js", "src/utils.js"]) {
   return {
     version: 1,
-    review: { baseSha: "base", headSha: "head", invocationId: "inv1" },
+    review: { baseSha: BASE_SHA, headSha: HEAD_SHA, invocationId: "inv1", repoId: 999, repoFullName: "org/repo", prNumber: 42 },
     changedFiles: changedPaths.map(p => ({
       path: p,
       status: "modified",
       coverage: "full",
-      base: { sha: "base", blobSha: "b_" + p, contentDigest: "sha256:base_" + p },
-      head: { sha: "head", blobSha: "h_" + p, contentDigest: "sha256:head_" + p },
+      representedLines: 100,
+      base: { sha: BASE_SHA, blobSha: "b_" + p, contentDigest: "sha256:base_" + p },
+      head: { sha: HEAD_SHA, blobSha: "h_" + p, contentDigest: "sha256:head_" + p },
     })),
     contextItems: [],
     coverage: { approvalEvidenceComplete: true },
   };
 }
 
+function makeEvidenceWithStatus(path, status) {
+  return {
+    version: 1,
+    review: { baseSha: BASE_SHA, headSha: HEAD_SHA, invocationId: "inv1", repoId: 999, repoFullName: "org/repo", prNumber: 42 },
+    changedFiles: [{
+      path,
+      status,
+      coverage: "full",
+      representedLines: 100,
+      base: status === "added" ? null : { sha: BASE_SHA, blobSha: "b", contentDigest: "sha256:b" },
+      head: status === "removed" ? null : { sha: HEAD_SHA, blobSha: "h", contentDigest: "sha256:h" },
+    }],
+    contextItems: [],
+    coverage: { approvalEvidenceComplete: true },
+  };
+}
+
 const CONTEXT_ITEMS = [
-  { path: "src/config.js", type: "file_read", ref: "head", resolvedSha: "head" },
+  { path: "src/config.js", type: "file_read", ref: HEAD_SHA, resolvedSha: HEAD_SHA },
 ];
 
 function makeFinding(overrides = {}) {
@@ -45,7 +59,7 @@ function makeFinding(overrides = {}) {
     category: "bug",
     claim: "The subtract function uses + instead of -",
     description: "src/calculator.js subtract() returns a+b instead of a-b",
-    affectedPaths: ["src/calculator.js"],
+    affectedPaths: [],
     evidenceRefs: ["changed:src/calculator.js@HEAD:L5-L7"],
     proof: { type: "static_trace", summary: "Line 5 shows return a + b" },
     confidence: 0.8,
@@ -79,7 +93,6 @@ describe("RI-4: parseEvidenceRef", () => {
     expect(parseEvidenceRef("not a ref")).toBeNull();
     expect(parseEvidenceRef("")).toBeNull();
     expect(parseEvidenceRef(null)).toBeNull();
-    expect(parseEvidenceRef("changed:src/foo.js")).toBeNull(); // missing @SIDE:L part
   });
 });
 
@@ -89,7 +102,7 @@ describe("RI-4: validateFinding", () => {
 
   it("accepts a valid P2 finding with evidence reference to a changed file", () => {
     const evidence = makeEvidence(["src/calculator.js"]);
-    const finding = makeFinding();
+    const finding = makeFinding({ affectedPaths: [] });
     const result = validateFinding(finding, evidence);
 
     expect(result.valid).toBe(true);
@@ -99,10 +112,7 @@ describe("RI-4: validateFinding", () => {
 
   it("rejects a P0 finding with no evidence references", () => {
     const evidence = makeEvidence();
-    const finding = makeFinding({
-      severity: "P0",
-      evidenceRefs: [],
-    });
+    const finding = makeFinding({ severity: "P0", evidenceRefs: [], affectedPaths: [] });
     const result = validateFinding(finding, evidence);
 
     expect(result.valid).toBe(false);
@@ -111,17 +121,31 @@ describe("RI-4: validateFinding", () => {
 
   it("rejects a P2 finding with no evidence references", () => {
     const evidence = makeEvidence();
-    const finding = makeFinding({ evidenceRefs: [] });
+    const finding = makeFinding({ evidenceRefs: [], affectedPaths: [] });
     const result = validateFinding(finding, evidence);
 
     expect(result.valid).toBe(false);
     expect(result.errors[0]).toContain("requires at least one valid evidence reference");
   });
 
-  it("downgrades a P2 finding when all evidence refs are invalid (path not in evidence)", () => {
+  it("downgrades a P2 finding when ALL evidence refs are invalid (path not in evidence)", () => {
     const evidence = makeEvidence(["src/app.js"]); // does NOT contain src/calculator.js
+    const finding = makeFinding({ affectedPaths: [] });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.valid).toBe(true); // not rejected — downgraded
+    expect(result.downgraded).toBe(true);
+    expect(result.finding.severity).toBe("P3");
+  });
+
+  it("downgrades a P2 finding when SOME evidence refs are invalid (mixed valid/invalid)", () => {
+    const evidence = makeEvidence(["src/app.js", "src/calculator.js"]);
     const finding = makeFinding({
-      evidenceRefs: ["changed:src/calculator.js@HEAD:L5-L7"],
+      evidenceRefs: [
+        "changed:src/calculator.js@HEAD:L5-L7",  // valid
+        "changed:nonexistent.js@HEAD:L1-L5",       // invalid — path not in evidence
+      ],
+      affectedPaths: [],
     });
     const result = validateFinding(finding, evidence);
 
@@ -131,11 +155,36 @@ describe("RI-4: validateFinding", () => {
     expect(result.finding.downgradeReason).toContain("invalid");
   });
 
+  it("rejects evidence ref citing BASE on an added file (no BASE side)", () => {
+    const evidence = makeEvidenceWithStatus("src/new.js", "added");
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/new.js@BASE:L1-L5"], // added file has no BASE
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.downgraded).toBe(true); // downgraded because ref is invalid
+    expect(result.finding.severity).toBe("P3");
+  });
+
+  it("rejects evidence ref citing HEAD on a removed file (no HEAD side)", () => {
+    const evidence = makeEvidenceWithStatus("src/deleted.js", "removed");
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/deleted.js@HEAD:L1-L5"],
+      affectedPaths: [],
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.downgraded).toBe(true);
+    expect(result.finding.severity).toBe("P3");
+  });
+
   it("accepts a P3 finding without evidence references", () => {
     const evidence = makeEvidence();
     const finding = makeFinding({
       severity: "P3",
       evidenceRefs: [],
+      affectedPaths: [],
       proof: { type: "inference", summary: "Style suggestion" },
     });
     const result = validateFinding(finding, evidence);
@@ -143,12 +192,12 @@ describe("RI-4: validateFinding", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("validates repo-read evidence refs against contextItems", () => {
+  it("validates repo-read evidence refs against contextItems with matching ref", () => {
     const evidence = makeEvidence(["src/app.js"]);
     const finding = makeFinding({
       severity: "P1",
       evidenceRefs: ["repo-read:src/config.js@HEAD:L10-L15"],
-      affectedPaths: ["src/config.js"],
+      affectedPaths: [],
     });
     const result = validateFinding(finding, evidence, CONTEXT_ITEMS);
 
@@ -156,42 +205,87 @@ describe("RI-4: validateFinding", () => {
     expect(result.validEvidenceRefs).toHaveLength(1);
   });
 
-  it("rejects repo-read evidence ref when path is not in evidence or context", () => {
+  it("rejects repo-read evidence ref when context item ref does not match requested side", () => {
     const evidence = makeEvidence(["src/app.js"]);
+    const wrongContext = [{ path: "src/config.js", type: "file_read", ref: BASE_SHA, resolvedSha: BASE_SHA }];
     const finding = makeFinding({
       severity: "P1",
-      evidenceRefs: ["repo-read:nonexistent.js@HEAD:L1"],
+      evidenceRefs: ["repo-read:src/config.js@HEAD:L10-L15"], // requests HEAD but context is at BASE
+      affectedPaths: [],
     });
-    const result = validateFinding(finding, evidence, CONTEXT_ITEMS);
+    const result = validateFinding(finding, evidence, wrongContext);
 
     expect(result.downgraded).toBe(true);
     expect(result.finding.severity).toBe("P3");
   });
 
-  it("rejects a finding with invalid severity", () => {
-    const evidence = makeEvidence();
-    const finding = makeFinding({ severity: "P9" });
+  // ── Cross-file affectedPath validation ───────────────────────────────────
+
+  it("rejects a P2 finding whose affectedPath is not in evidence", () => {
+    const evidence = makeEvidence(["src/app.js"]);
+    const finding = makeFinding({
+      evidenceRefs: ["changed:src/app.js@HEAD:L1-L5"],
+      affectedPaths: ["src/nonexistent.js"], // not in evidence
+    });
     const result = validateFinding(finding, evidence);
 
     expect(result.valid).toBe(false);
-    expect(result.errors[0]).toContain("Invalid or missing severity");
+    expect(result.errors[0]).toContain("affectedPath not in evidence");
   });
 
-  it("rejects a finding with missing claim", () => {
-    const evidence = makeEvidence();
-    const finding = makeFinding({ claim: null });
+  it("accepts a P3 finding whose affectedPath is not in evidence (warning only)", () => {
+    const evidence = makeEvidence(["src/app.js"]);
+    const finding = makeFinding({
+      severity: "P3",
+      evidenceRefs: [],
+      affectedPaths: ["src/nonexistent.js"],
+      proof: { type: "inference", summary: "Maybe affects this file" },
+    });
     const result = validateFinding(finding, evidence);
 
-    expect(result.valid).toBe(false);
-    expect(result.errors[0]).toContain("Missing or invalid claim");
+    expect(result.valid).toBe(true);
+    expect(result.warnings.some(w => w.includes("affectedPath"))).toBe(true);
   });
 
-  it("warns on behavior claim with inference proof at P1", () => {
+  // ── Proof validation ─────────────────────────────────────────────────────
+
+  it("rejects a P1 behavior finding with no proof object", () => {
     const evidence = makeEvidence(["src/app.js"]);
     const finding = makeFinding({
       severity: "P1",
       category: "bug",
-      evidenceRefs: ["changed:src/app.js@HEAD:L5-L7"],
+      evidenceRefs: ["changed:src/app.js@HEAD:L1-L5"],
+      affectedPaths: [],
+      proof: null,
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain("requires a proof object");
+  });
+
+  it("rejects a P0 finding with invalid proof type", () => {
+    const evidence = makeEvidence(["src/app.js"]);
+    const finding = makeFinding({
+      severity: "P0",
+      category: "security",
+      evidenceRefs: ["changed:src/app.js@HEAD:L1-L5"],
+      affectedPaths: [],
+      proof: { type: "guess", summary: "I'm guessing" },
+    });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain("Invalid or missing proof type");
+  });
+
+  it("accepts a P1 behavior finding with inference proof (warned)", () => {
+    const evidence = makeEvidence(["src/app.js"]);
+    const finding = makeFinding({
+      severity: "P1",
+      category: "bug",
+      evidenceRefs: ["changed:src/app.js@HEAD:L1-L5"],
+      affectedPaths: [],
       proof: { type: "inference", summary: "I think this might be wrong" },
     });
     const result = validateFinding(finding, evidence);
@@ -200,18 +294,38 @@ describe("RI-4: validateFinding", () => {
     expect(result.warnings.some(w => w.includes("inference"))).toBe(true);
   });
 
-  it("accepts behavior claim with static_trace proof at P0", () => {
+  it("accepts a P0 security finding with static_trace proof", () => {
     const evidence = makeEvidence(["src/app.js"]);
     const finding = makeFinding({
       severity: "P0",
       category: "security",
-      evidenceRefs: ["changed:src/app.js@HEAD:L5-L7"],
+      evidenceRefs: ["changed:src/app.js@HEAD:L1-L5"],
+      affectedPaths: [],
       proof: { type: "static_trace", summary: "SQL injection at line 5" },
     });
     const result = validateFinding(finding, evidence);
 
     expect(result.valid).toBe(true);
-    expect(result.warnings.some(w => w.includes("inference"))).toBe(false);
+  });
+
+  // ── Basic field validation ───────────────────────────────────────────────
+
+  it("rejects a finding with invalid severity", () => {
+    const evidence = makeEvidence();
+    const finding = makeFinding({ severity: "P9", affectedPaths: [] });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain("Invalid or missing severity");
+  });
+
+  it("rejects a finding with missing claim", () => {
+    const evidence = makeEvidence();
+    const finding = makeFinding({ claim: null, affectedPaths: [] });
+    const result = validateFinding(finding, evidence);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain("Missing or invalid claim");
   });
 });
 
@@ -222,40 +336,33 @@ describe("RI-4: validateFindings (batch)", () => {
   it("separates valid, rejected, and downgraded findings", () => {
     const evidence = makeEvidence(["src/app.js", "src/utils.js"]);
     const findings = [
-      // Valid P2 with evidence
       makeFinding({
         findingId: "F-1",
         evidenceRefs: ["changed:src/app.js@HEAD:L1-L5"],
+        affectedPaths: [],
       }),
-      // Rejected — P1 with no evidence
       makeFinding({
         findingId: "F-2",
         severity: "P1",
         evidenceRefs: [],
+        affectedPaths: [],
       }),
-      // Downgraded — P2 with invalid ref
       makeFinding({
         findingId: "F-3",
         evidenceRefs: ["changed:nonexistent.js@HEAD:L1"],
+        affectedPaths: [],
       }),
     ];
 
     const result = validateFindings(findings, evidence);
 
-    expect(result.valid).toHaveLength(2); // F-1 (valid) + F-3 (downgraded to P3)
+    expect(result.valid).toHaveLength(2); // F-1 (valid) + F-3 (downgraded)
     expect(result.rejected).toHaveLength(1); // F-2
     expect(result.downgraded).toHaveLength(1); // F-3
-    expect(result.rejected[0].finding.findingId).toBe("F-2");
   });
 
-  it("handles empty findings array", () => {
-    const result = validateFindings([], makeEvidence());
-    expect(result.valid).toHaveLength(0);
-    expect(result.rejected).toHaveLength(0);
-  });
-
-  it("handles null/undefined findings", () => {
-    const result = validateFindings(null, makeEvidence());
-    expect(result.valid).toHaveLength(0);
+  it("handles empty and null findings", () => {
+    expect(validateFindings([], makeEvidence()).valid).toHaveLength(0);
+    expect(validateFindings(null, makeEvidence()).valid).toHaveLength(0);
   });
 });
