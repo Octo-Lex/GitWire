@@ -25,6 +25,8 @@ import { db } from "../lib/db.js";
  * @param {object} params.evidence - ReviewEvidence (trimmed to manifest)
  * @param {object} params.verifierReceipt - from runApprovalVerification
  * @param {object} params.decision - from computeReviewDecision
+ * @param {object[]} params.primaryFindings - validated primary findings
+ * @param {object} params.budgetState - context broker budget state
  * @param {string} params.invocationId - from computeInvocationId
  * @param {number} params.integrityVersion - schema version (default 1)
  */
@@ -33,11 +35,13 @@ export async function persistIntegrityReceipt({
   evidence,
   verifierReceipt,
   decision,
+  primaryFindings,
+  budgetState,
   invocationId,
   integrityVersion = 1,
 }) {
   // Build the evidence manifest — the receipt, not full contents
-  const manifest = buildEvidenceManifest(evidence);
+  const manifest = buildEvidenceManifest(evidence, primaryFindings, budgetState);
 
   // Build the verification receipt (trimmed — no full review body)
   const verifierReceiptRecord = verifierReceipt ? {
@@ -55,7 +59,11 @@ export async function persistIntegrityReceipt({
     tokensUsed: verifierReceipt.tokensUsed || 0,
     durationMs: verifierReceipt.durationMs || 0,
     unresolvedContextRequests: verifierReceipt.unresolvedContextRequests || [],
-    contextTraceCount: (verifierReceipt.contextTrace || []).length,
+    contextTrace: (verifierReceipt.contextTrace || []).map(t => ({
+      type: t.type, result: t.result, path: t.path || null,
+      ref: t.ref || t.resolvedSha || null, round: t.round || null,
+      truncated: t.truncated || false, reason: t.reason || undefined,
+    })),
   } : null;
 
   await db.query(
@@ -83,10 +91,12 @@ export async function persistIntegrityReceipt({
  * Build the evidence manifest from a ReviewEvidence object.
  *
  * The manifest stores file accounting, coverage states, Git/blob SHAs,
- * content digests, and retrieval metadata — enough to reconstruct the
- * review's evidence scope without storing full file contents.
+ * content digests, trimmed retrieval/context metadata with immutable
+ * identities (no contents/fragments), primary validated finding evidence
+ * refs, and budget consumption. Enough to reconstruct why a decision was
+ * made without storing full source.
  */
-function buildEvidenceManifest(evidence) {
+function buildEvidenceManifest(evidence, primaryFindings, budgetState) {
   if (!evidence) return null;
 
   return {
@@ -106,8 +116,48 @@ function buildEvidenceManifest(evidence) {
       base: cf.base ? { sha: cf.base.sha, blobSha: cf.base.blobSha, contentDigest: cf.base.contentDigest } : null,
       policyExemption: cf.policyExemption || null,
     })),
-    contextItemsCount: (evidence.contextItems || []).length,
-    retrievalTraceCount: (evidence.retrievalTrace || []).length,
+    // Trimmed context items: immutable identity only, no content/fragments
+    contextItems: (evidence.contextItems || []).map(ci => ({
+      id: ci.id || null,
+      type: ci.type || null,
+      path: ci.path || null,
+      ref: ci.ref || ci.resolvedSha || null,
+      resolvedSha: ci.resolvedSha || null,
+      blobSha: ci.blobSha || null,
+      contentDigest: ci.contentDigest || null,
+      range: ci.range || null,
+      truncated: ci.truncated || false,
+      retrievalReason: ci.retrievalReason || null,
+    })),
+    // Trimmed retrieval trace: audit entries, no content
+    retrievalTrace: (evidence.retrievalTrace || []).map(t => ({
+      type: t.type,
+      result: t.result,
+      path: t.path || null,
+      ref: t.ref || t.resolvedSha || null,
+      round: t.round || null,
+      truncated: t.truncated || false,
+      reason: t.reason || undefined,
+      contentLength: t.contentLength || undefined,
+    })),
+    // Primary validated findings: evidence refs and proof types (no full descriptions)
+    primaryFindings: (primaryFindings || []).map(f => ({
+      severity: f.severity,
+      category: f.category,
+      claim: f.claim,
+      evidenceRefs: f.evidenceRefs || [],
+      proofType: f.proof?.type || null,
+      affectedPaths: f.affectedPaths || [],
+    })),
+    // Context broker budget consumption
+    budgetConsumption: budgetState ? {
+      fileReads: budgetState.fileReads || 0,
+      searches: budgetState.searches || 0,
+      retrievedChars: budgetState.retrievedChars || 0,
+      contextRounds: budgetState.contextRounds || 0,
+      exhausted: budgetState.exhausted || false,
+      limits: budgetState.limits || null,
+    } : null,
   };
 }
 
@@ -139,6 +189,8 @@ export async function recordReviewMetrics({
   primaryLatencyMs = 0,
   totalLatencyMs = 0,
   budgetState = null,
+  mutationRetries = 0,
+  duplicatePreventionEvents = 0,
 }) {
   const metrics = {
     timestamp: new Date().toISOString(),
@@ -155,7 +207,7 @@ export async function recordReviewMetrics({
     policyExemptFiles: evidence?.coverage?.policyExemptFiles || 0,
     partialFiles: evidence?.coverage?.partialFiles || 0,
     unavailableFiles: evidence?.coverage?.unavailableFiles || 0,
-    coverageLimits: evidence?.coverage?.limitsExceeded || [],
+    coverageFailureReasons: evidence?.coverage?.limitsExceeded || [],
 
     // Primary findings
     primaryFindingCount: (primaryFindings || []).length,
@@ -167,6 +219,9 @@ export async function recordReviewMetrics({
     verifierStatus: verifierReceipt?.status || "not_run",
     verifierFindingCount: verifierReceipt?.findings?.length || 0,
     verifierMaterialCount: verifierReceipt?.materialFindingCount || 0,
+    verifierOverturn: verifierReceipt?.hasMaterialFindings && (primaryFindings || []).filter(f =>
+      ["P0", "P1", "P2"].includes(f.severity)
+    ).length === 0,
     verifierIncomplete: verifierReceipt?.status === "incomplete",
     verifierTokens: verifierReceipt?.tokensUsed || 0,
     verifierLatencyMs: verifierReceipt?.durationMs || 0,
@@ -185,9 +240,13 @@ export async function recordReviewMetrics({
     contextSearches: budgetState?.searches || 0,
     contextRounds: budgetState?.contextRounds || 0,
     contextExhausted: budgetState?.exhausted || false,
+
+    // Mutation safety
+    mutationRetries,
+    duplicatePreventionEvents,
   };
 
-  // Record to a metrics table or structured log
+  // Record to the review_metrics_log table (created in migration 043)
   try {
     await db.query(
       `INSERT INTO review_metrics_log
@@ -201,14 +260,16 @@ export async function recordReviewMetrics({
         primary_tokens, total_tokens,
         primary_latency_ms, total_latency_ms,
         context_reads, context_searches, context_rounds, context_exhausted,
-        context_retrieved_chars)
+        context_retrieved_chars,
+        mutation_retries, duplicate_prevention_events)
        VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9,
                $10, $11, $12, $13, $14, $15, $16, $17, $18,
-               $19, $20, $21, $22, $23, $24, $25, $26, $27)`,
+               $19, $20, $21, $22, $23, $24, $25, $26, $27,
+               $28, $29)`,
       [
         metrics.event, metrics.checkState, metrics.approvalEligible,
         metrics.coverageComplete, metrics.totalChangedFiles, metrics.fullyCoveredFiles,
-        metrics.partialFiles, metrics.unavailableFiles, JSON.stringify(metrics.coverageLimits),
+        metrics.partialFiles, metrics.unavailableFiles, JSON.stringify(metrics.coverageFailureReasons),
         metrics.primaryFindingCount, metrics.primaryMaterialCount,
         metrics.verifierStatus, metrics.verifierFindingCount, metrics.verifierMaterialCount,
         metrics.verifierIncomplete, metrics.verifierTokens, metrics.verifierLatencyMs,
@@ -217,12 +278,14 @@ export async function recordReviewMetrics({
         metrics.primaryLatencyMs, metrics.totalLatencyMs,
         metrics.contextReads, metrics.contextSearches, metrics.contextRounds,
         metrics.contextExhausted, metrics.contextRetrievedChars,
+        metrics.mutationRetries, metrics.duplicatePreventionEvents,
       ]
     );
   } catch (_e) {
-    // Metrics table may not exist yet — non-fatal. In production, this
-    // should be a structured log (e.g., JSON to stdout) as a fallback.
-    console.warn("review-metrics-log: table not available, skipping structured metrics");
+    // If the metrics table is unavailable, emit as structured JSON to stdout
+    // as a fallback log sink for downstream aggregation.
+    console.warn("review-metrics-log: table not available, emitting to stdout");
+    console.log(JSON.stringify({ type: "review_metrics", ...metrics }));
   }
 
   return metrics;
