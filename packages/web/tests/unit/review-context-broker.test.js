@@ -205,6 +205,24 @@ describe("RI-3: budget enforcement", () => {
     expect(r2.reason).toBe("max_retrieved_chars_exceeded");
   });
 
+  it("ranged read + char truncation recomputes the actual represented end line", async () => {
+    // 10 lines of 10 chars each = 100 chars total
+    const lines = Array.from({ length: 10 }, (_, i) => "line" + i + "xxxxx"); // ~10 chars each
+    const content = lines.join("\n");
+    const map = new Map([[HEAD_SHA + ":data.txt", content]]);
+    // Budget of 25 chars: only ~2-3 lines fit
+    const { broker } = makeBroker(map, new Map(), new Map(), { maxRetrievedChars: 25, maxFileReads: 10 });
+
+    const result = await broker.readRepoFile("data.txt", HEAD_SHA, { range: { startLine: 1, endLine: 10 } });
+
+    expect(result.error).toBeUndefined();
+    expect(result.truncated).toBe(true);
+    expect(result.range.startLine).toBe(1);
+    // endLine must reflect the ACTUAL represented content, not the requested range
+    expect(result.range.endLine).toBeLessThan(10);
+    expect(result.range.endLine).toBe(result.range.startLine + result.content.split("\n").length - 1);
+  });
+
   it("enforces maxContextRounds and traces the denial", async () => {
     const map = new Map([[HEAD_SHA + ":file.js", "x"]]);
     const { broker } = makeBroker(map, new Map(), new Map(), { maxContextRounds: 1, maxFileReads: 10, maxRetrievedChars: 10000 });
@@ -318,7 +336,7 @@ describe("RI-3: searchRepoText (exact-SHA tree search)", () => {
     expect(denied).toBeDefined();
   });
 
-  it("search respects the char budget — stops when budget would be exceeded", async () => {
+  it("search respects the char budget — reports explicit truncated state when budget terminates", async () => {
     const tree = [
       { path: "a.js", type: "blob", sha: "sha_a" },
       { path: "b.js", type: "blob", sha: "sha_b" },
@@ -328,16 +346,24 @@ describe("RI-3: searchRepoText (exact-SHA tree search)", () => {
       ["sha_a", longContent],
       ["sha_b", longContent],
     ]);
-    // Set a very small char budget so only one result fits
+    // Fragment is ±200 chars around match = ~205 chars.
+    // Set budget to 250 so first match (205) fits but second (410 total) would not.
     const { broker } = makeBroker(new Map(), new Map([[HEAD_SHA, tree]]), blobs, {
-      maxSearches: 5, maxSearchResults: 10, maxRetrievedChars: 700, maxFileReads: 10,
+      maxSearches: 5, maxSearchResults: 10, maxRetrievedChars: 250, maxFileReads: 10,
     });
 
     const result = await broker.searchRepoText("match", HEAD_SHA);
 
     expect(result.error).toBeUndefined();
-    // Only 1 result should fit in the budget (each fragment ~500 chars)
-    expect(result.results.length).toBeLessThanOrEqual(2);
+    // First match fits (205 chars), second would push past 250 budget
+    expect(result.truncated).toBe(true);
+
+    // Trace must show ok_truncated with reason
+    const trace = broker.getTrace();
+    const searchTrace = trace.find(t => t.type === "repo_search");
+    expect(searchTrace.result).toBe("ok_truncated");
+    expect(searchTrace.truncated).toBe(true);
+    expect(searchTrace.reason).toBe("max_retrieved_chars_exceeded");
   });
 });
 

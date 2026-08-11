@@ -217,8 +217,12 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
         // Truncate to remaining budget — explicit bounded-partial
         content = content.slice(0, remaining);
         truncated = true;
-        if (!range) {
-          range = { startLine: 1, endLine: content.split("\n").length };
+        // Recompute range to reflect the actually represented lines
+        const actualEndLine = (range ? range.startLine : 1) + content.split("\n").length - 1;
+        if (range) {
+          range = { startLine: range.startLine, endLine: actualEndLine };
+        } else {
+          range = { startLine: 1, endLine: actualEndLine };
         }
       }
 
@@ -328,12 +332,16 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
       const queryLower = query.toLowerCase();
       const matches = [];
       let searchCharsConsumed = 0;
+      let budgetTerminated = false;
 
       for (const blob of blobs) {
         if (matches.length >= effectiveBudgets.maxSearchResults) break;
 
         // Check budget before fetching each blob content
-        if (retrievedChars + searchCharsConsumed >= effectiveBudgets.maxRetrievedChars) break;
+        if (retrievedChars + searchCharsConsumed >= effectiveBudgets.maxRetrievedChars) {
+          budgetTerminated = true;
+          break;
+        }
 
         try {
           const { data: blobData } = await octokit.request(
@@ -348,17 +356,16 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
           const matchIndex = contentLower.indexOf(queryLower);
 
           if (matchIndex !== -1) {
-            // Find the line number of the match
             const beforeMatch = content.substring(0, matchIndex);
             const lineNumber = beforeMatch.split("\n").length;
 
-            // Build a fragment around the match (±200 chars)
             const fragStart = Math.max(0, matchIndex - 200);
             const fragEnd = Math.min(content.length, matchIndex + query.length + 200);
             const fragment = content.substring(fragStart, fragEnd);
 
             // Hard budget check: stop if this fragment would exceed budget
             if (retrievedChars + searchCharsConsumed + fragment.length > effectiveBudgets.maxRetrievedChars) {
+              budgetTerminated = true;
               break;
             }
             searchCharsConsumed += fragment.length;
@@ -391,11 +398,13 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
         resolvedSha: resolvedRef,
         resultCount: matches.length,
         charsConsumed: searchCharsConsumed,
-        result: "ok",
+        result: budgetTerminated ? "ok_truncated" : "ok",
+        truncated: budgetTerminated,
+        reason: budgetTerminated ? "max_retrieved_chars_exceeded" : undefined,
         round: currentRound,
       });
 
-      return { results: matches, ref: resolvedRef };
+      return { results: matches, ref: resolvedRef, truncated: budgetTerminated };
 
     } catch (err) {
       searches++;
