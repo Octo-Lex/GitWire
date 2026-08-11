@@ -78,6 +78,40 @@ function makeMockOctokit(existingReviews = []) {
   };
 }
 
+/** Mock Octokit with a deferred POST gate for concurrency testing */
+function makeGatedMockOctokit(existingReviews = []) {
+  const postedReviews = [];
+  let nextId = 1000;
+  let gateResolve = null;
+  let gatePromise = null;
+
+  function holdPostGate() {
+    gatePromise = new Promise(resolve => { gateResolve = resolve; });
+  }
+  function releasePostGate() {
+    if (gateResolve) { gateResolve(); gateResolve = null; gatePromise = null; }
+  }
+
+  return {
+    request: jest.fn(async (route, params) => {
+      if (route.includes("POST") && route.includes("/reviews")) {
+        if (gatePromise) await gatePromise;
+        const id = nextId++;
+        const review = { id, ...params, commit_id: params.commit_id };
+        postedReviews.push(review);
+        return { data: { id, commit_id: params.commit_id } };
+      }
+      if (route.includes("GET") && route.includes("/reviews")) {
+        return { data: [...postedReviews.map(r => ({ id: r.id, commit_id: r.commit_id, body: r.body })), ...existingReviews] };
+      }
+      return { data: {} };
+    }),
+    _postedReviews: postedReviews,
+    holdPostGate,
+    releasePostGate,
+  };
+}
+
 const BASE_PARAMS = {
   owner: "org",
   repo: "repo",
@@ -261,28 +295,35 @@ describe("RI-7: exactly one review per invocation", () => {
     expect(octokit._postedReviews).toHaveLength(1);
   });
 
-  it("genuinely overlapping workers: worker B fails closed while A holds live PLANNED lease", async () => {
+  it("genuinely overlapping workers: A holds POST gate, B fails closed, A completes with exactly one POST", async () => {
     const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
     const redis = makeMockRedis();
-    const octokit = makeMockOctokit([]);
+    const octokit = makeGatedMockOctokit([]);
 
-    // Worker A acquires ownership first (CAS creates PLANNED with A's leaseToken)
+    // Worker A acquires ownership
     const managerA = createReviewMutationManager({
       redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
     });
-    // Start A's POST — don't await yet (A is mid-flight)
+
+    // Hold the POST gate so A is stuck inside the GitHub request
+    octokit.holdPostGate();
+
+    // Start A's POST — it will block on the gate
     const promiseA = managerA.submitReview({ event: "APPROVE", body: "LGTM", commit_id: "abc" });
 
-    // Worker B has a DIFFERENT leaseToken — CAS must fail
+    // Give A time to reach the POST (CAS to PLANNED + start of POST)
+    await new Promise(r => setTimeout(r, 50));
+
+    // Worker B starts with a different leaseToken — CAS must fail
     const managerB = createReviewMutationManager({
       redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
     });
 
-    // B must fail closed — cannot acquire ownership while A's lease is live
     await expect(managerB.submitReview({ event: "APPROVE", body: "LGTM", commit_id: "abc" }))
       .rejects.toThrow("ownership conflict");
 
-    // Wait for A to complete
+    // Release the gate — A can complete its POST
+    octokit.releasePostGate();
     const resultA = await promiseA;
     expect(resultA.action).toBe("created");
 
@@ -322,6 +363,69 @@ describe("RI-7: exactly one review per invocation", () => {
     // The CAS eval should have been called multiple times
     // (PLANNED, SUBMITTED, CONFIRMED transitions)
     expect(redis.eval.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("SUBMITTED CAS failure throws — retry recovers the already-created review with zero additional POSTs", async () => {
+    const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
+    const redis = makeMockRedis();
+    const octokit = makeMockOctokit();
+
+    // First manager: CAS succeeds for PLANNED, POST succeeds,
+    // but CAS for SUBMITTED fails (simulated by overwriting the lease)
+    const manager1 = createReviewMutationManager({
+      redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
+    });
+
+    // Manually clobber the lease after PLANNED is acquired but before SUBMITTED
+    // by writing a different leaseToken to the key
+    const origEval = redis.eval;
+    let evalCallCount = 0;
+    redis.eval = jest.fn(async (script, numkeys, key, val, expectedLeaseToken, ttl) => {
+      evalCallCount++;
+      if (evalCallCount === 2) {
+        // This is the SUBMITTED CAS — simulate failure by writing a
+        // different leaseToken to the key first
+        redis._store.set(key, JSON.stringify({ state: "planned", leaseToken: "some-other-token", invocationId }));
+      }
+      return origEval(script, numkeys, key, val, expectedLeaseToken, ttl);
+    });
+
+    // First attempt: POST succeeds, SUBMITTED CAS throws
+    await expect(manager1.submitReview({ event: "APPROVE", body: "LGTM", commit_id: "abc" }))
+      .rejects.toThrow("SUBMITTED persistence failed");
+
+    // One POST was made (the review exists on GitHub)
+    expect(octokit._postedReviews).toHaveLength(1);
+    const postedReviewId = octokit._postedReviews[0].id;
+
+    // Now the review is on GitHub with the invocation marker.
+    // Update the mock to return the posted review on GET.
+    octokit.request.mockImplementation(async (route) => {
+      if (route.includes("GET") && route.includes("/reviews")) {
+        return { data: octokit._postedReviews.map(r => ({
+          id: r.id, commit_id: r.commit_id || "abc",
+          body: r.body,
+        })) };
+      }
+      if (route.includes("POST") && route.includes("/reviews")) {
+        // Should NOT be called on retry
+        throw new Error("Unexpected duplicate POST");
+      }
+      return { data: {} };
+    });
+
+    // Reset eval to normal behavior
+    redis.eval = origEval;
+
+    // Second attempt (retry): recovery finds the review, zero additional POSTs
+    const manager2 = createReviewMutationManager({
+      redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
+    });
+    const result2 = await manager2.submitReview({ event: "APPROVE", body: "LGTM", commit_id: "abc" });
+
+    expect(result2.action).toBe("recovered");
+    expect(result2.reviewId).toBe(postedReviewId);
+    expect(octokit._postedReviews).toHaveLength(1); // still only one
   });
 
   it("paginated recovery finds invocation marker beyond page 1", async () => {

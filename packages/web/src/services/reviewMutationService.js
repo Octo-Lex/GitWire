@@ -244,18 +244,27 @@ export function createReviewMutationManager({
     // ── Step 6: Mark SUBMITTED (POST accepted, review ID known) ─────────────
     const submitted = await casState({ state: MUTATION_STATE.SUBMITTED, reviewId, event: review.event, timestamp: Date.now() });
     if (!submitted) {
-      // CAS failed — another worker may have taken over. The POST already
-      // succeeded, so the review exists on GitHub. Recovery on the next
-      // attempt will find it via the invocation marker.
-      logger.warn({ invocationId, reviewId }, "SUBMITTED CAS failed — review exists on GitHub, recovery will find it");
-      return { reviewId, action: "created" };
+      // The POST succeeded (review exists on GitHub) but we could not persist
+      // the SUBMITTED transition. This means another worker took over our lease
+      // while we were awaiting the POST response, OR Redis is unavailable.
+      // Either way, the review is on GitHub. Throw so the worker retries —
+      // the retry's recovery will find the review via the invocation marker
+      // with zero additional POSTs.
+      throw new Error(
+        "Review mutation SUBMITTED persistence failed for invocation " + invocationId +
+        " — review " + reviewId + " exists on GitHub; retry will recover it"
+      );
     }
 
     // ── Step 7: Mark CONFIRMED ─────────────────────────────────────────────
     const confirmed = await casState({ state: MUTATION_STATE.CONFIRMED, reviewId, event: review.event, timestamp: Date.now() });
     if (!confirmed) {
-      // Same as above — review exists, recovery will find it.
-      logger.warn({ invocationId, reviewId }, "CONFIRMED CAS failed — review exists on GitHub, recovery will find it");
+      // Same situation: review exists on GitHub, but CONFIRMED persistence
+      // failed. Throw so the retry recovers it.
+      throw new Error(
+        "Review mutation CONFIRMED persistence failed for invocation " + invocationId +
+        " — review " + reviewId + " exists on GitHub; retry will recover it"
+      );
     }
 
     return { reviewId, action: "created" };
