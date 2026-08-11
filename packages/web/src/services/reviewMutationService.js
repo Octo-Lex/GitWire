@@ -124,11 +124,29 @@ export function createReviewMutationManager({
 
   /**
    * Best-effort write (for FAILED state on error paths).
+   * Returns true on success, false on failure (does not throw).
    */
   async function setState(state) {
     try {
       await redis.setex(key, ttlSeconds, JSON.stringify({ ...state, invocationId }));
-    } catch (_e) { /* non-fatal on error paths */ }
+      return true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  /**
+   * Required write — throws on failure. Used for CONFIRMED transitions
+   * where persistence is mandatory before returning success.
+   */
+  async function requireSetState(state) {
+    const ok = await setState(state);
+    if (!ok) {
+      throw new Error(
+        "Review mutation " + state.state + " persistence failed for invocation " + invocationId +
+        (state.reviewId ? " — review " + state.reviewId + " exists on GitHub; retry will recover it" : "")
+      );
+    }
   }
 
   // Lua CAS: compare-and-set with owner token.
@@ -185,11 +203,10 @@ export function createReviewMutationManager({
     if (existing && (existing.state === MUTATION_STATE.PLANNED || existing.state === MUTATION_STATE.SUBMITTED)) {
       const recoveredId = await tryRecoverReview();
       if (recoveredId) {
-        // Recovery found the review. We cannot CAS to CONFIRMED because
-        // we don't own the lease (another worker created the PLANNED).
-        // Use unconditional setex — this is safe because the review
-        // provably exists on GitHub (recovery found it).
-        await setState({ state: MUTATION_STATE.CONFIRMED, reviewId: recoveredId, event: review.event, timestamp: Date.now() });
+        // Recovery found the review. Persist CONFIRMED — fail closed
+        // if persistence fails (the review exists on GitHub; retry will
+        // recover it again).
+        await requireSetState({ state: MUTATION_STATE.CONFIRMED, reviewId: recoveredId, event: review.event, timestamp: Date.now() });
         return { reviewId: recoveredId, action: "recovered" };
       }
     }

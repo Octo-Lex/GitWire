@@ -499,11 +499,11 @@ describe("RI-7: exactly one review per invocation", () => {
   });
 
   it("records FAILED state when POST fails", async () => {
-    const redis = makeMockRedis();
+    const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
     const octokit = {
       request: jest.fn().mockRejectedValue(new Error("GitHub API error")),
     };
-    const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
+    const redis = makeMockRedis();
     const manager = createReviewMutationManager({
       redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
     });
@@ -514,5 +514,62 @@ describe("RI-7: exactly one review per invocation", () => {
     const state = await manager.getMutationState();
     expect(state.state).toBe(MUTATION_STATE.FAILED);
     expect(state.error).toContain("GitHub API error");
+  });
+
+  it("recovery CONFIRMED persistence failure throws — retry recovers same review with zero additional POSTs", async () => {
+    const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
+    const marker = "gitwire-invocation:" + invocationId;
+    const existingReviewId = 777;
+
+    // Redis starts with a SUBMITTED state (crash window) and setex fails
+    const redis = makeMockRedis({
+      state: MUTATION_STATE.SUBMITTED,
+      reviewId: null,
+      event: "COMMENT",
+      timestamp: Date.now(),
+      invocationId,
+    });
+
+    // GitHub has the review with this invocation's marker
+    const octokit = makeMockOctokit([
+      { id: existingReviewId, commit_id: "abc", body: "test\n\n<!-- " + marker + " -->" },
+    ]);
+
+    // Make setex fail on the first call (CONFIRMED during recovery)
+    const origSetex = redis.setex;
+    let setexCallCount = 0;
+    redis.setex = jest.fn(async (key, ttl, val) => {
+      setexCallCount++;
+      if (setexCallCount === 1) {
+        throw new Error("Redis connection lost");
+      }
+      // Second call succeeds (retry)
+      redis._store.set(key, val);
+      return "OK";
+    });
+
+    const manager1 = createReviewMutationManager({
+      redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
+    });
+
+    // First attempt: recovery finds the review, but CONFIRMED persistence throws
+    await expect(manager1.submitReview({ event: "COMMENT", body: "test", commit_id: "abc" }))
+      .rejects.toThrow("confirmed persistence failed");
+
+    // Zero additional POSTs (recovery found the existing review)
+    expect(octokit._postedReviews).toHaveLength(0);
+
+    // Restore setex for the retry
+    redis.setex = origSetex;
+
+    // Second attempt (retry): recovery finds the same review, CONFIRMED succeeds
+    const manager2 = createReviewMutationManager({
+      redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
+    });
+    const result = await manager2.submitReview({ event: "COMMENT", body: "test", commit_id: "abc" });
+
+    expect(result.action).toBe("recovered");
+    expect(result.reviewId).toBe(existingReviewId);
+    expect(octokit._postedReviews).toHaveLength(0); // still zero — no POSTs ever made
   });
 });
