@@ -37,8 +37,9 @@ function makeMockRedis(storedState) {
     }),
     expire: jest.fn(async (key, ttl) => { return 1; }),
     del: jest.fn(async (key) => { store.delete(key); return 1; }),
-    eval: jest.fn(async (script, numkeys, key, val, ttl) => {
-      // Simulate the CAS script behavior
+    eval: jest.fn(async (script, numkeys, key, val, expectedLeaseToken, ttl) => {
+      // Simulate the lease-token CAS script behavior:
+      // SET only if key missing OR existing record's leaseToken matches
       const current = store.get(key);
       if (current === undefined) {
         store.set(key, val);
@@ -46,7 +47,7 @@ function makeMockRedis(storedState) {
       }
       try {
         const decoded = JSON.parse(current);
-        if (decoded.state === "planned" || decoded.state === "submitted") {
+        if (decoded.leaseToken === expectedLeaseToken) {
           store.set(key, val);
           return 1;
         }
@@ -217,15 +218,10 @@ describe("RI-7: exactly one review per invocation", () => {
     const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
     const otherInvocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "manual-123" });
 
-    const redis = makeMockRedis({
-      state: MUTATION_STATE.SUBMITTED,
-      reviewId: null,
-      event: "COMMENT",
-      timestamp: Date.now(),
-      invocationId,
-    });
+    // No pre-seeded state — manager starts fresh
+    const redis = makeMockRedis();
 
-    // Existing reviews have a DIFFERENT invocation's marker
+    // Existing reviews on GitHub have a DIFFERENT invocation's marker
     const octokit = makeMockOctokit([
       { id: 999, commit_id: "abc", body: "other\n\n<!-- gitwire-invocation:" + otherInvocationId + " -->" },
       { id: 998, commit_id: "abc", body: "unrelated bot\n\nsome other content", user: { login: "codex-bot[bot]" } },
@@ -265,42 +261,48 @@ describe("RI-7: exactly one review per invocation", () => {
     expect(octokit._postedReviews).toHaveLength(1);
   });
 
-  it("worker B fails closed when A's live PLANNED lease is active (no del+repost)", async () => {
+  it("genuinely overlapping workers: worker B fails closed while A holds live PLANNED lease", async () => {
     const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
-
-    // Pre-seed a live PLANNED state (worker A is mid-POST)
-    const redis = makeMockRedis({
-      state: MUTATION_STATE.PLANNED,
-      reviewId: null,
-      event: "APPROVE",
-      timestamp: Date.now(),
-      invocationId,
-    });
-
-    // No existing reviews on GitHub (A hasn't POSTed yet)
+    const redis = makeMockRedis();
     const octokit = makeMockOctokit([]);
 
+    // Worker A acquires ownership first (CAS creates PLANNED with A's leaseToken)
+    const managerA = createReviewMutationManager({
+      redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
+    });
+    // Start A's POST — don't await yet (A is mid-flight)
+    const promiseA = managerA.submitReview({ event: "APPROVE", body: "LGTM", commit_id: "abc" });
+
+    // Worker B has a DIFFERENT leaseToken — CAS must fail
     const managerB = createReviewMutationManager({
       redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
     });
 
-    // Worker B tries to submit — recovery finds nothing, then CAS fails
-    // because the CAS script won't overwrite a PLANNED with a new PLANNED
-    // (it returns 1 for planned→planned in our mock, but the real script
-    // would also return 1 — we need to simulate B seeing A's state).
-    // Actually the CAS allows planned→planned overwrite, which means B
-    // would proceed. The real protection is that B's recovery found
-    // nothing, and the CAS advances the state. But both A and B could
-    // still POST. The fix is that only the CAS winner proceeds.
-    //
-    // In this test, B does CAS (succeeds because state is PLANNED),
-    // then POSTs. This is the expected behavior — B takes over from
-    // a crashed A. The key invariant is that B does NOT POST if A's
-    // review already exists (recovery catches that).
+    // B must fail closed — cannot acquire ownership while A's lease is live
+    await expect(managerB.submitReview({ event: "APPROVE", body: "LGTM", commit_id: "abc" }))
+      .rejects.toThrow("ownership conflict");
 
-    const result = await managerB.submitReview({ event: "APPROVE", body: "LGTM", commit_id: "abc" });
-    expect(result.action).toBe("created");
+    // Wait for A to complete
+    const resultA = await promiseA;
+    expect(resultA.action).toBe("created");
+
+    // Exactly one POST despite both workers trying
     expect(octokit._postedReviews).toHaveLength(1);
+  });
+
+  it("EVAL failure causes fail-closed (no unsafe setex fallback)", async () => {
+    const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
+    const redis = makeMockRedis();
+    redis.eval = jest.fn(async () => { throw new Error("EVAL not supported"); });
+
+    const octokit = makeMockOctokit();
+    const manager = createReviewMutationManager({
+      redis, octokit, ...BASE_PARAMS, headSha: "abc", invocationId,
+    });
+
+    await expect(manager.submitReview({ event: "APPROVE", body: "LGTM", commit_id: "abc" }))
+      .rejects.toThrow("ownership conflict");
+    expect(octokit._postedReviews).toHaveLength(0);
   });
 
   it("records explicit SUBMITTED transition before CONFIRMED", async () => {

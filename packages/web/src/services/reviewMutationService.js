@@ -102,9 +102,15 @@ export function createReviewMutationManager({
 }) {
   const key = mutationKey(invocationId);
 
+  // Generate a unique lease token for this manager instance.
+  // Each worker gets its own token; CAS compares the token to prevent
+  // one worker from overwriting another's live lease.
+  const leaseToken = createHash("sha256")
+    .update(invocationId + ":" + process.pid + ":" + Date.now() + ":" + Math.random())
+    .digest("hex").slice(0, 24);
+
   /**
    * Read the current mutation state from Redis.
-   * Returns { state, reviewId, event, timestamp } or null if no record.
    */
   async function getState() {
     try {
@@ -117,69 +123,52 @@ export function createReviewMutationManager({
   }
 
   /**
-   * Write the mutation state to Redis atomically.
+   * Best-effort write (for FAILED state on error paths).
    */
   async function setState(state) {
     try {
-      await redis.setex(key, ttlSeconds, JSON.stringify(state));
-    } catch (err) {
-      // Non-fatal — if Redis is down, we can still proceed with the POST
-      // but lose crash-recovery capability for this invocation.
-      logger.warn({ err: err.message, key, invocationId }, "Failed to persist review mutation state");
-    }
+      await redis.setex(key, ttlSeconds, JSON.stringify({ ...state, invocationId }));
+    } catch (_e) { /* non-fatal on error paths */ }
   }
 
-  // Atomic CAS script: only set the key if it doesn't exist OR if the
-  // existing value matches the expected state (allowing the same owner to
-  // advance PLANNED→SUBMITTED→CONFIRMED). A different worker's live lease
-  // is never deleted or overwritten.
+  // Lua CAS: compare-and-set with owner token.
+  // SET only if: key missing (first acquisition), OR the existing record's
+  // leaseToken matches ARGV[2] (same worker advancing its own state).
+  // A different worker's live lease is never overwritten.
   const CAS_SCRIPT = `
     local current = redis.call('GET', KEYS[1])
     if current == false then
-      redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+      redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
       return 1
     end
     local decoded = cjson.decode(current)
-    if decoded.state == 'planned' or decoded.state == 'submitted' then
-      redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+    if decoded.leaseToken == ARGV[2] then
+      redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
       return 1
     end
     return 0
   `;
 
   /**
-   * Write the mutation state via atomic CAS. Only succeeds if:
-   *   - The key doesn't exist (first acquisition), OR
-   *   - The existing state is PLANNED or SUBMITTED (same worker advancing)
-   * Never overwrites a CONFIRMED or FAILED state owned by another worker.
-   * Returns true if the write succeeded.
+   * Write state via atomic CAS with owner token. Only succeeds if:
+   *   - Key doesn't exist (first acquisition), OR
+   *   - The existing record has the same leaseToken (same worker)
+   * Never overwrites another worker's live lease.
+   * No unsafe fallback — if EVAL fails, returns false (fail closed).
    */
   async function casState(state) {
-    const val = JSON.stringify({ ...state, invocationId });
+    const val = JSON.stringify({ ...state, invocationId, leaseToken });
     try {
-      const result = await redis.eval(CAS_SCRIPT, 1, key, val, String(ttlSeconds));
+      const result = await redis.eval(CAS_SCRIPT, 1, key, val, leaseToken, String(ttlSeconds));
       return result === 1;
-    } catch (err) {
-      // Redis eval not available — fall back to setex (less safe but functional)
-      logger.warn({ err: err.message, key }, "Redis CAS eval failed — falling back to setex");
-      try { await redis.setex(key, ttlSeconds, val); return true; }
-      catch (e) { return false; }
+    } catch (_e) {
+      // EVAL failed — fail closed. No unsafe SETEX fallback.
+      return false;
     }
   }
 
   /**
    * Submit a GitHub review with idempotency guarantee.
-   *
-   * Flow:
-   *   1. Check existing state. If CONFIRMED, return existing review ID.
-   *   2. If PLANNED or SUBMITTED: attempt paginated recovery — search ALL
-   *      review pages for this invocation's marker at this SHA.
-   *   3. If recovery finds the review: CAS to CONFIRMED and return it.
-   *   4. If recovery finds nothing: CAS to PLANNED (atomic ownership).
-   *      If CAS fails (another live worker owns it), fail closed.
-   *   5. POST the review with the invocation marker.
-   *   6. CAS to SUBMITTED (POST accepted).
-   *   7. CAS to CONFIRMED (review ID persisted).
    *
    * @param {object} review - { event, body, commit_id, comments }
    * @returns {Promise<object>} { reviewId, action: "created" | "recovered" }
@@ -196,22 +185,20 @@ export function createReviewMutationManager({
     if (existing && (existing.state === MUTATION_STATE.PLANNED || existing.state === MUTATION_STATE.SUBMITTED)) {
       const recoveredId = await tryRecoverReview();
       if (recoveredId) {
-        const ok = await casState({ state: MUTATION_STATE.CONFIRMED, reviewId: recoveredId, event: review.event, timestamp: Date.now() });
-        if (ok) {
-          return { reviewId: recoveredId, action: "recovered" };
-        }
-        // CAS failed — another worker advanced the state. Re-read.
-        const current = await getState();
-        if (current && current.state === MUTATION_STATE.CONFIRMED && current.reviewId) {
-          return { reviewId: current.reviewId, action: "recovered" };
-        }
-        throw new Error("Review mutation ownership conflict during recovery for invocation " + invocationId);
+        // Recovery found the review. We cannot CAS to CONFIRMED because
+        // we don't own the lease (another worker created the PLANNED).
+        // Use unconditional setex — this is safe because the review
+        // provably exists on GitHub (recovery found it).
+        await setState({ state: MUTATION_STATE.CONFIRMED, reviewId: recoveredId, event: review.event, timestamp: Date.now() });
+        return { reviewId: recoveredId, action: "recovered" };
       }
     }
 
-    // ── Step 3: Atomically acquire ownership via CAS ────────────────────────
-    // CAS only succeeds if the key doesn't exist or is PLANNED/SUBMITTED.
-    // A live worker's lease is never deleted by another worker.
+    // ── Step 3: Acquire ownership via CAS ──────────────────────────────────
+    // CAS succeeds only if key is missing (fresh acquisition). If another
+    // worker has a live lease with a different leaseToken, CAS returns 0 —
+    // fail closed. An abandoned lease (from a crashed worker) will expire
+    // via TTL, allowing a future retry to acquire fresh ownership.
     const acquired = await casState({
       state: MUTATION_STATE.PLANNED,
       reviewId: null,
@@ -220,12 +207,12 @@ export function createReviewMutationManager({
     });
 
     if (!acquired) {
-      // Another worker owns this invocation. Check if it has confirmed.
+      // Another worker owns this invocation with a different lease.
+      // Check if it has confirmed while we were waiting.
       const concurrent = await getState();
       if (concurrent && concurrent.state === MUTATION_STATE.CONFIRMED && concurrent.reviewId) {
         return { reviewId: concurrent.reviewId, action: "recovered" };
       }
-      // Another worker is in progress — fail closed
       throw new Error("Review mutation ownership conflict — another worker owns invocation " + invocationId);
     }
 
@@ -255,18 +242,29 @@ export function createReviewMutationManager({
     }
 
     // ── Step 6: Mark SUBMITTED (POST accepted, review ID known) ─────────────
-    await casState({ state: MUTATION_STATE.SUBMITTED, reviewId, event: review.event, timestamp: Date.now() });
+    const submitted = await casState({ state: MUTATION_STATE.SUBMITTED, reviewId, event: review.event, timestamp: Date.now() });
+    if (!submitted) {
+      // CAS failed — another worker may have taken over. The POST already
+      // succeeded, so the review exists on GitHub. Recovery on the next
+      // attempt will find it via the invocation marker.
+      logger.warn({ invocationId, reviewId }, "SUBMITTED CAS failed — review exists on GitHub, recovery will find it");
+      return { reviewId, action: "created" };
+    }
 
     // ── Step 7: Mark CONFIRMED ─────────────────────────────────────────────
-    await casState({ state: MUTATION_STATE.CONFIRMED, reviewId, event: review.event, timestamp: Date.now() });
+    const confirmed = await casState({ state: MUTATION_STATE.CONFIRMED, reviewId, event: review.event, timestamp: Date.now() });
+    if (!confirmed) {
+      // Same as above — review exists, recovery will find it.
+      logger.warn({ invocationId, reviewId }, "CONFIRMED CAS failed — review exists on GitHub, recovery will find it");
+    }
 
     return { reviewId, action: "created" };
   }
 
   /**
    * Try to recover a review that was POSTed but not confirmed.
-   * Paginates through ALL review pages searching for a review containing
-   * THIS invocation's marker at the head SHA.
+   * Paginates through ALL review pages (until end-of-list) searching for
+   * a review containing THIS invocation's marker at the head SHA.
    * Invocation-specific: another GitWire invocation or unrelated bot at the
    * same SHA will NOT be matched.
    */
@@ -275,13 +273,16 @@ export function createReviewMutationManager({
       const invocationMarker = "gitwire-invocation:" + invocationId;
       let page = 1;
       const PER_PAGE = 30;
-      const MAX_PAGES = 10; // safety limit (300 reviews)
 
-      while (page <= MAX_PAGES) {
+      while (true) {
         const { data: reviews } = await octokit.request(
           "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
           { owner, repo, pull_number: prNumber, per_page: PER_PAGE, page }
         );
+
+        if (!reviews || reviews.length === 0) {
+          break; // exhausted all pages
+        }
 
         const candidate = reviews.find(r =>
           r.commit_id === headSha &&
@@ -293,7 +294,7 @@ export function createReviewMutationManager({
         }
 
         if (reviews.length < PER_PAGE) {
-          break; // last page
+          break; // last page — end of list
         }
 
         page++;
