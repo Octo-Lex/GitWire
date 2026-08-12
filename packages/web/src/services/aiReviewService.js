@@ -312,6 +312,112 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       }
     }
 
+    // ── 9b. Review Integrity v2 cutover (RI-9) ─────────────────────────────────
+    // When review_integrity_v2 is "live", the deterministic decision policy
+    // controls the GitHub review event instead of reportToLegacy().
+    // Any v2 failure falls back to the legacy verdict (kill switch).
+    const v2Mode = cfg.review_integrity_v2;
+    if (v2Mode === "live") {
+      try {
+        const { buildReviewEvidence, acquireChangedFiles } = await import("./reviewEvidenceService.js");
+        const { validateFindings } = await import("./findingValidator.js");
+        const { computeReviewDecision } = await import("./reviewDecisionPolicy.js");
+        const { runApprovalVerification } = await import("./approvalVerificationService.js");
+        const { persistIntegrityReceipt } = await import("./integrityReceiptService.js");
+
+        // Build v2 evidence from the same files the primary review used
+        const v2Files = files.map(f => ({
+          filename: f.filename, status: f.status,
+          additions: f.added, deletions: f.removed,
+          patch: f.patch, sha: f.sha,
+        }));
+        const { allFiles: v2All } = await acquireChangedFiles(
+          octokit, owner, repo, pr.number, pr.changed_files || v2Files.length,
+        );
+        const v2Evidence = await buildReviewEvidence({
+          allFiles: v2All,
+          ignorePatterns: cfg.ignore_patterns || [],
+          maxFiles: cfg.max_files_to_review || 30,
+          maxLines: cfg.max_lines_to_review || 2000,
+          review: {
+            repoId: repository.id, repoFullName: repository.full_name,
+            prNumber: pr.number, baseSha: pr.base?.sha, headSha: pr.head.sha,
+            invocationId: "v2-" + pr.number + "-" + pr.head.sha,
+          },
+          octokit, owner, repo,
+        });
+
+        // Convert and validate findings through the v2 schema
+        const v2Findings = findings.map(f => ({
+          severity: f.severity === "critical" ? "P0" : f.severity === "high" ? "P1" :
+                     f.severity === "medium" ? "P2" : "P3",
+          category: f.category || "bug",
+          claim: f.title || "Untitled",
+          description: f.description || "",
+          affectedPaths: f.file ? [f.file] : [],
+          evidenceRefs: f.file ? ["changed:" + f.file + "@HEAD:" + (f.line ? "L" + f.line : "L1")] : [],
+          proof: { type: "static_trace", summary: f.description || f.title || "" },
+        }));
+        const v2Validated = validateFindings(v2Findings, v2Evidence);
+        const v2Primary = v2Validated.valid;
+
+        // Run verifier only if v2 primary has zero material findings and evidence is complete
+        let v2Verifier = null;
+        const v2HasMaterial = v2Primary.some(f => ["P0", "P1", "P2"].includes(f.severity));
+        if (!v2HasMaterial && v2Evidence.coverage?.approvalEvidenceComplete) {
+          const Anthropic2 = (await import("@anthropic-ai/sdk")).default;
+          const v2Anthropic = new Anthropic2({ apiKey: config.anthropic.apiKey, baseURL: config.anthropic.baseURL });
+          try {
+            v2Verifier = await runApprovalVerification({
+              evidence: v2Evidence,
+              octokit, owner, repo,
+              anthropic: v2Anthropic,
+              model: cfg.model || "claude-sonnet-4-20250514",
+            });
+          } catch (vErr) {
+            v2Verifier = { status: "incomplete", findings: [], approvalSafe: false, error: vErr.message };
+          }
+        }
+
+        // Compute the v2 deterministic decision
+        const v2Decision = computeReviewDecision({
+          primaryFindings: v2Primary,
+          verifierReceipt: v2Verifier,
+          evidence: v2Evidence,
+        });
+
+        // Map v2 event back to legacy verdict vocabulary for postGitHubReview
+        if (v2Decision.event === "REQUEST_CHANGES") {
+          verdict = "request_changes";
+        } else if (v2Decision.event === "APPROVE") {
+          verdict = "approved";
+        } else {
+          verdict = "needs_discussion";
+        }
+
+        logger.info({
+          pr: pr.number, v2Event: v2Decision.event, v2CheckState: v2Decision.checkState,
+          legacyVerdict: reportToLegacy ? "overridden" : "n/a",
+        }, "Review Integrity v2 cutover: decision policy controls event");
+
+        // Persist v2 receipt
+        try {
+          await persistIntegrityReceipt({
+            reviewRowId: reviewRow.id,
+            evidence: v2Evidence,
+            verifierReceipt: v2Verifier,
+            decision: v2Decision,
+            primaryFindings: v2Primary,
+            invocationId: "v2-" + pr.number + "-" + pr.head.sha,
+          });
+        } catch (_e) { /* non-fatal */ }
+
+      } catch (v2Err) {
+        // Kill switch: any v2 failure falls back to legacy verdict
+        logger.warn({ err: v2Err.message, pr: pr.number }, "Review Integrity v2 cutover failed — falling back to legacy verdict");
+      }
+    }
+
     // ── 10. Post GitHub PR Review ──────────────────────────────────────────────
     let reviewId = null;
     let githubSummary = "";
