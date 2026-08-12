@@ -59,7 +59,7 @@ const DEFAULT_MODEL = "claude-sonnet-4-20250514";
  * @param {object} opts.octokit
  * @param {boolean} [opts.commentFindings=true]
  */
-export async function reviewPR({ pr, repository, octokit, commentFindings = true, principalId = null, surfaceId = null }) {
+export async function reviewPR({ pr, repository, octokit, commentFindings = true, principalId = null, surfaceId = null, logicalInvocation = "automatic" }) {
   const owner  = repository.owner.login;
   const repo   = repository.name;
   const repoId = repository.id;
@@ -319,6 +319,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     // The actual kill switch is changing the feature flag back to "shadow" or "disabled".
     const v2Mode = cfg.review_integrity_v2;
     let v2DecisionComputed = false;
+    let v2Decision = null;
     if (v2Mode === "live") {
       try {
         const { buildReviewEvidence, acquireChangedFiles } = await import("./reviewEvidenceService.js");
@@ -382,11 +383,29 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         }
 
         // Compute the v2 deterministic decision
-        const v2Decision = computeReviewDecision({
+        const computedDecision = computeReviewDecision({
           primaryFindings: v2Primary,
           verifierReceipt: v2Verifier,
           evidence: v2Evidence,
         });
+
+        // Persist v2 receipt FIRST — required in live mode (must throw on
+        // failure to guarantee auditability before the GitHub mutation).
+        // Only after persistence succeeds do we mark the decision as computed
+        // and map it to the verdict. This ensures a receipt-write failure
+        // after an APPROVE decision forces COMMENT via the fail-closed path.
+        await persistIntegrityReceipt({
+          reviewRowId: reviewRow.id,
+          evidence: v2Evidence,
+          verifierReceipt: v2Verifier,
+          decision: computedDecision,
+          primaryFindings: v2Primary,
+          invocationId: "v2-" + pr.number + "-" + pr.head.sha,
+        });
+
+        // Receipt persisted — safe to expose the decision to downstream steps
+        v2Decision = computedDecision;
+        v2DecisionComputed = true;
 
         // Map v2 event back to legacy verdict vocabulary for postGitHubReview
         if (v2Decision.event === "REQUEST_CHANGES") {
@@ -396,22 +415,10 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         } else {
           verdict = "needs_discussion";
         }
-        v2DecisionComputed = true;
 
         logger.info({
           pr: pr.number, v2Event: v2Decision.event, v2CheckState: v2Decision.checkState,
         }, "Review Integrity v2 cutover: decision policy controls event");
-
-        // Persist v2 receipt — required in live mode (must throw on failure
-        // to guarantee auditability before the GitHub mutation)
-        await persistIntegrityReceipt({
-          reviewRowId: reviewRow.id,
-          evidence: v2Evidence,
-          verifierReceipt: v2Verifier,
-          decision: v2Decision,
-          primaryFindings: v2Primary,
-          invocationId: "v2-" + pr.number + "-" + pr.head.sha,
-        });
 
       } catch (v2Err) {
         // In live mode, v2 failure MUST NOT fall back to legacy APPROVE.
@@ -433,13 +440,15 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       // Build review body once (shared between legacy and v2 paths)
       const reviewBody = buildReviewMarkdown(findings, verdict, confidence, validation.scopeDroppedCount, adversarialMeta);
 
-      if (v2Mode === "live" && v2DecisionComputed) {
-        // In v2 live mode, use the RI-7 mutation manager for exactly-once
+      if (v2Mode === "live") {
+        // In v2 live mode, EVERY review mutation goes through the RI-7 mutation
+        // manager — including the fail-closed COMMENT when the v2 pipeline fails.
+        // This guarantees exactly-once semantics for all live mutations.
         const { computeInvocationId, createReviewMutationManager } = await import("./reviewMutationService.js");
         const { redis } = await import("../lib/queue.js");
         const liveInvocationId = computeInvocationId({
           repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
-          logicalInvocation: "v2-live",
+          logicalInvocation,
         });
         const mutationManager = createReviewMutationManager({
           redis, octokit, owner, repo,
@@ -472,21 +481,21 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 11. Update check run ──────────────────────────────────────────────────
-    // In v2 live mode, check semantics come from the deterministic decision,
-    // not legacy block_on_verdict.
+    // In v2 live mode, check semantics come from the deterministic decision
+    // policy (RI-6), not legacy block_on_verdict. This preserves the
+    // distinction between REVIEW_BLOCKED (P2 COMMENT → failure) and
+    // REVIEW_INCOMPLETE (incomplete evidence → neutral). A v2 pipeline
+    // failure produces a synthetic REVIEW_INCOMPLETE — never success.
     let shouldBlock;
-    let checkConclusion = "success";
-    if (v2Mode === "live" && v2DecisionComputed) {
-      if (verdict === "request_changes") {
-        shouldBlock = true;
-        checkConclusion = "failure";
-      } else if (verdict === "needs_discussion") {
-        shouldBlock = false;
-        checkConclusion = "neutral";
-      } else {
-        shouldBlock = false;
-        checkConclusion = "success";
-      }
+    let checkConclusion;
+    if (v2Mode === "live") {
+      const { buildCheckConclusion, CHECK_STATE } = await import("./reviewDecisionPolicy.js");
+      const effectiveDecision = (v2DecisionComputed && v2Decision)
+        ? v2Decision
+        : { checkState: CHECK_STATE.REVIEW_INCOMPLETE, decisionReason: "v2 pipeline failed — fail-closed COMMENT" };
+      const checkResult = buildCheckConclusion(effectiveDecision);
+      checkConclusion = checkResult.conclusion;
+      shouldBlock = effectiveDecision.checkState === CHECK_STATE.REVIEW_BLOCKED;
     } else {
       shouldBlock = cfg.block_on_verdict?.includes(verdict) &&
         confidenceLevel(confidence) >= confidenceLevel(cfg.min_confidence_to_block);

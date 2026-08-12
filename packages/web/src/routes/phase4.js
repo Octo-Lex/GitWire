@@ -241,6 +241,7 @@ phase4Router.post("/review/trigger/:owner/:repo/:pr", async (req, res, next) => 
       pr,
       repository: { ...ctx.repo, id: ctx.repo.github_id, owner: { login: ctx.repo.owner } },
       octokit:    ctx.octokit,
+      logicalInvocation: "manual-" + Date.now(),
     }).catch(err => logger.error({ err }, "Review trigger failed"));
   } catch (err) { next(err); }
 });

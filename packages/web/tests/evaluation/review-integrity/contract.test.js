@@ -17,6 +17,7 @@ const describeOrSkip = REVIEW_INTEGRITY_V2 ? describe : describe.skip;
 
 // Import conditionally to avoid config validation crash when disabled
 let getAllFixtures, getBrokenFixtures, getFixedFixtures, buildFixtureOctokit, reviewPR;
+let receiptShouldFail = false;
 
 if (REVIEW_INTEGRITY_V2) {
   // These will be set up in a beforeAll to allow dynamic imports
@@ -49,6 +50,9 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
       },
     }));
     const mockDbQuery = jest.fn().mockImplementation((sql) => {
+      if (receiptShouldFail && sql.includes("evidence_manifest")) {
+        throw new Error("Simulated receipt persistence failure");
+      }
       if (sql.includes("ai_review_config")) return { rows: [{
         enabled: true,
         review_integrity_v2: "live",
@@ -296,5 +300,32 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     expect(result).not.toBeNull();
     expect(result.verdict).not.toBe("approved");
     expect(result.verdict).toBe("needs_discussion");
+  });
+
+  // ── Receipt persistence failure regression ─────────────────────────────────
+
+  it("APPROVE + receipt-write failure ⇒ never APPROVE", async () => {
+    const fixtures = getFixedFixtures();
+    const f = fixtures.find(fx => fx.caseId === "RI-01");
+    const octokit = buildFixtureOctokit(f);
+
+    // Sabotage ONLY the receipt persistence UPDATE. The v2 pipeline runs
+    // to completion, computes APPROVE, but persistIntegrityReceipt throws.
+    // The decision must NOT be APPROVE — fail-closed COMMENT.
+    receiptShouldFail = true;
+    try {
+      const result = await reviewPR({
+        pr: makeV2PR(f),
+        repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
+        octokit,
+        commentFindings: false,
+      });
+
+      expect(result).not.toBeNull();
+      expect(result.verdict).not.toBe("approved");
+      expect(result.verdict).toBe("needs_discussion");
+    } finally {
+      receiptShouldFail = false;
+    }
   });
 });
