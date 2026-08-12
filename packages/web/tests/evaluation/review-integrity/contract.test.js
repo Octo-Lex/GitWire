@@ -49,8 +49,20 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
       },
     }));
     const mockDbQuery = jest.fn().mockImplementation((sql) => {
-      if (sql.includes("ai_review_config")) return { rows: [{ enabled: true }] };
-      if (sql.includes("ai_reviews")) return { rows: [{ id: 1 }] };
+      if (sql.includes("ai_review_config")) return { rows: [{
+        enabled: true,
+        review_integrity_v2: "live",
+        check_logic: true, check_security: true, check_architecture: true,
+        check_cost_leaks: true, check_tests: true, check_docs: false,
+        block_on_verdict: ["request_changes"], min_confidence_to_block: "medium",
+        max_files_to_review: 30, max_lines_to_review: 2000,
+        ignore_patterns: ["*.lock", "package-lock.json"],
+        engine: "claude", model: "claude-sonnet-4-20250514",
+        max_duration_seconds: 300, bundle_max_chars: 180000,
+        require_file_scope: true,
+      }] };
+      if (sql.includes("INSERT INTO ai_reviews")) return { rows: [{ id: 1 }] };
+      if (sql.includes("UPDATE ai_reviews")) return { rows: [] };
       return { rows: [] };
     });
     await jest.unstable_mockModule("../../../src/lib/db.js", () => ({ db: { query: mockDbQuery } }));
@@ -73,19 +85,39 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     await jest.unstable_mockModule("../../../src/lib/github.js", () => ({ getInstallationClient: jest.fn() }));
     await jest.unstable_mockModule("../../../src/lib/githubWrapper.js", () => ({ wrapOctokit: (c) => c }));
 
-    // Mock the Anthropic SDK so the suite is hermetic — fails on verdict
-    // mismatch, not on networking/SDK configuration.
-    const mockAnthropicCreate = jest.fn().mockResolvedValue({
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          findings: [],
-          overall_correctness: "patch is correct",
-          overall_explanation: "The changes look clean and correct.",
-          overall_confidence: 0.9,
-        }),
-      }],
-      usage: { input_tokens: 5000, output_tokens: 200 },
+    // Mock the Anthropic SDK so the suite is hermetic.
+    // Returns different formats based on whether tools are present:
+    // - No tools: primary review format (findings, overall_correctness)
+    // - With tools: verifier format (status, coverageSatisfied)
+    const mockAnthropicCreate = jest.fn().mockImplementation((params) => {
+      if (params && params.tools && params.tools.length > 0) {
+        return Promise.resolve({
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: "verified",
+              findings: [],
+              unresolvedContextNeeds: [],
+              coverageSatisfied: true,
+            }),
+          }],
+          usage: { input_tokens: 2000, output_tokens: 200 },
+          stop_reason: "end_turn",
+        });
+      }
+      return Promise.resolve({
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "The changes look clean and correct.",
+            overall_confidence: 0.9,
+          }),
+        }],
+        usage: { input_tokens: 5000, output_tokens: 200 },
+        stop_reason: "end_turn",
+      });
     });
     await jest.unstable_mockModule("@anthropic-ai/sdk", () => ({
       default: class { messages = { create: mockAnthropicCreate }; },
@@ -104,6 +136,19 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     reviewPR = svc.reviewPR;
   });
 
+  // Helper to build PR object with all fields the v2 cutover needs
+  function makeV2PR(f) {
+    return {
+      number: 42,
+      head: { sha: f.prMetadata.head },
+      base: { ref: f.prMetadata.base, sha: f.prMetadata.base },
+      user: { login: f.prMetadata.author },
+      title: f.prMetadata.title,
+      body: f.prMetadata.body,
+      changed_files: f.changedFiles.length,
+    };
+  }
+
   // ── 4 broken fixtures: must never approve ─────────────────────────────────
 
   it("RI-01 BROKEN: stale status declarations — v2 must NOT approve", async () => {
@@ -111,8 +156,7 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     const f = fixtures.find(fx => fx.caseId === "RI-01");
     const octokit = buildFixtureOctokit(f);
     const result = await reviewPR({
-      pr: { number: 42, head: { sha: f.prMetadata.head }, base: { ref: f.prMetadata.base },
-            user: { login: f.prMetadata.author }, title: f.prMetadata.title, body: f.prMetadata.body },
+      pr: makeV2PR(f),
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
       commentFindings: false,
@@ -126,8 +170,7 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     const f = fixtures.find(fx => fx.caseId === "RI-02");
     const octokit = buildFixtureOctokit(f);
     const result = await reviewPR({
-      pr: { number: 42, head: { sha: f.prMetadata.head }, base: { ref: f.prMetadata.base },
-            user: { login: f.prMetadata.author }, title: f.prMetadata.title, body: f.prMetadata.body },
+      pr: makeV2PR(f),
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
       commentFindings: false,
@@ -156,8 +199,7 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     const f = fixtures.find(fx => fx.caseId === "RI-04");
     const octokit = buildFixtureOctokit(f);
     const result = await reviewPR({
-      pr: { number: 42, head: { sha: f.prMetadata.head }, base: { ref: f.prMetadata.base },
-            user: { login: f.prMetadata.author }, title: f.prMetadata.title, body: f.prMetadata.body },
+      pr: makeV2PR(f),
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
       commentFindings: false,
@@ -173,8 +215,7 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     const f = fixtures.find(fx => fx.caseId === "RI-01");
     const octokit = buildFixtureOctokit(f);
     const result = await reviewPR({
-      pr: { number: 42, head: { sha: f.prMetadata.head }, base: { ref: f.prMetadata.base },
-            user: { login: f.prMetadata.author }, title: f.prMetadata.title, body: f.prMetadata.body },
+      pr: makeV2PR(f),
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
       commentFindings: false,
@@ -188,8 +229,7 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     const f = fixtures.find(fx => fx.caseId === "RI-02");
     const octokit = buildFixtureOctokit(f);
     const result = await reviewPR({
-      pr: { number: 42, head: { sha: f.prMetadata.head }, base: { ref: f.prMetadata.base },
-            user: { login: f.prMetadata.author }, title: f.prMetadata.title, body: f.prMetadata.body },
+      pr: makeV2PR(f),
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
       commentFindings: false,
@@ -203,8 +243,7 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     const f = fixtures.find(fx => fx.caseId === "RI-03");
     const octokit = buildFixtureOctokit(f);
     const result = await reviewPR({
-      pr: { number: 42, head: { sha: f.prMetadata.head }, base: { ref: f.prMetadata.base },
-            user: { login: f.prMetadata.author }, title: f.prMetadata.title, body: f.prMetadata.body },
+      pr: makeV2PR(f),
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
       commentFindings: false,
@@ -218,13 +257,45 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     const f = fixtures.find(fx => fx.caseId === "RI-04");
     const octokit = buildFixtureOctokit(f);
     const result = await reviewPR({
-      pr: { number: 42, head: { sha: f.prMetadata.head }, base: { ref: f.prMetadata.base },
-            user: { login: f.prMetadata.author }, title: f.prMetadata.title, body: f.prMetadata.body },
+      pr: makeV2PR(f),
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
       commentFindings: false,
     });
     expect(result).not.toBeNull();
     expect(result.verdict).toBe("approved");
+  });
+
+  // ── Fail-closed regression: legacy would approve + v2 failure ⇒ never APPROVE ─
+
+  it("v2 cutover failure forces COMMENT — never falls back to legacy APPROVE", async () => {
+    const fixtures = getFixedFixtures();
+    const f = fixtures.find(fx => fx.caseId === "RI-01");
+    const octokit = buildFixtureOctokit(f);
+
+    // Sabotage ONLY the contents endpoint — v2 buildReviewEvidence calls it
+    // to fetch base/head content, but legacy fetchDiff does NOT.
+    // This lets the legacy review complete (producing "approved") while
+    // causing the v2 cutover to fail.
+    const origRequest = octokit.request;
+    octokit.request = function(route, params) {
+      if (route.includes("GET") && route.includes("/contents/")) {
+        return Promise.reject(new Error("Simulated contents API failure"));
+      }
+      return origRequest.call(octokit, route, params);
+    };
+
+    const result = await reviewPR({
+      pr: makeV2PR(f),
+      repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
+      octokit,
+      commentFindings: false,
+    });
+
+    // Legacy review would produce "approved", but v2 cutover fails.
+    // Fail-closed: must force COMMENT, never APPROVE.
+    expect(result).not.toBeNull();
+    expect(result.verdict).not.toBe("approved");
+    expect(result.verdict).toBe("needs_discussion");
   });
 });

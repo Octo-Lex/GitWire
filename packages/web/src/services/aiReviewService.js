@@ -315,9 +315,11 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     // ── 9b. Review Integrity v2 cutover (RI-9) ─────────────────────────────────
     // When review_integrity_v2 is "live", the deterministic decision policy
     // controls the GitHub review event instead of reportToLegacy().
-    // Any v2 failure falls back to the legacy verdict (kill switch).
+    // In live mode, v2 failure forces COMMENT (never falls back to legacy APPROVE).
+    // The actual kill switch is changing the feature flag back to "shadow" or "disabled".
     const v2Mode = cfg.review_integrity_v2;
     if (v2Mode === "live") {
+      let v2DecisionComputed = false;
       try {
         const { buildReviewEvidence, acquireChangedFiles } = await import("./reviewEvidenceService.js");
         const { validateFindings } = await import("./findingValidator.js");
@@ -394,10 +396,10 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         } else {
           verdict = "needs_discussion";
         }
+        v2DecisionComputed = true;
 
         logger.info({
           pr: pr.number, v2Event: v2Decision.event, v2CheckState: v2Decision.checkState,
-          legacyVerdict: reportToLegacy ? "overridden" : "n/a",
         }, "Review Integrity v2 cutover: decision policy controls event");
 
         // Persist v2 receipt
@@ -413,8 +415,15 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         } catch (_e) { /* non-fatal */ }
 
       } catch (v2Err) {
-        // Kill switch: any v2 failure falls back to legacy verdict
-        logger.warn({ err: v2Err.message, pr: pr.number }, "Review Integrity v2 cutover failed — falling back to legacy verdict");
+        // In live mode, v2 failure MUST NOT fall back to legacy APPROVE.
+        // Force COMMENT (incomplete) — the only safe non-approval state.
+        logger.error({ err: v2Err.message, pr: pr.number }, "Review Integrity v2 cutover failed — forcing COMMENT (never APPROVE)");
+      }
+
+      // If v2 did not produce a valid decision, force COMMENT
+      if (!v2DecisionComputed) {
+        verdict = "needs_discussion";
+        confidence = "low";
       }
     }
 
