@@ -318,8 +318,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     // In live mode, v2 failure forces COMMENT (never falls back to legacy APPROVE).
     // The actual kill switch is changing the feature flag back to "shadow" or "disabled".
     const v2Mode = cfg.review_integrity_v2;
+    let v2DecisionComputed = false;
     if (v2Mode === "live") {
-      let v2DecisionComputed = false;
       try {
         const { buildReviewEvidence, acquireChangedFiles } = await import("./reviewEvidenceService.js");
         const { validateFindings } = await import("./findingValidator.js");
@@ -402,17 +402,16 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           pr: pr.number, v2Event: v2Decision.event, v2CheckState: v2Decision.checkState,
         }, "Review Integrity v2 cutover: decision policy controls event");
 
-        // Persist v2 receipt
-        try {
-          await persistIntegrityReceipt({
-            reviewRowId: reviewRow.id,
-            evidence: v2Evidence,
-            verifierReceipt: v2Verifier,
-            decision: v2Decision,
-            primaryFindings: v2Primary,
-            invocationId: "v2-" + pr.number + "-" + pr.head.sha,
-          });
-        } catch (_e) { /* non-fatal */ }
+        // Persist v2 receipt — required in live mode (must throw on failure
+        // to guarantee auditability before the GitHub mutation)
+        await persistIntegrityReceipt({
+          reviewRowId: reviewRow.id,
+          evidence: v2Evidence,
+          verifierReceipt: v2Verifier,
+          decision: v2Decision,
+          primaryFindings: v2Primary,
+          invocationId: "v2-" + pr.number + "-" + pr.head.sha,
+        });
 
       } catch (v2Err) {
         // In live mode, v2 failure MUST NOT fall back to legacy APPROVE.
@@ -431,22 +430,72 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     let reviewId = null;
     let githubSummary = "";
     if (commentFindings) {
-      const result = await postGitHubReview({
-        octokit, owner, repo, pr, findings, verdict, confidence, cfg,
-        scopeDroppedCount: validation.scopeDroppedCount,
-        adversarialMeta,
-      });
-      reviewId = result.reviewId;
-      githubSummary = result.summary;
+      // Build review body once (shared between legacy and v2 paths)
+      const reviewBody = buildReviewMarkdown(findings, verdict, confidence, validation.scopeDroppedCount, adversarialMeta);
+
+      if (v2Mode === "live" && v2DecisionComputed) {
+        // In v2 live mode, use the RI-7 mutation manager for exactly-once
+        const { computeInvocationId, createReviewMutationManager } = await import("./reviewMutationService.js");
+        const { redis } = await import("../lib/queue.js");
+        const liveInvocationId = computeInvocationId({
+          repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
+          logicalInvocation: "v2-live",
+        });
+        const mutationManager = createReviewMutationManager({
+          redis, octokit, owner, repo,
+          prNumber: pr.number, headSha: pr.head.sha,
+          invocationId: liveInvocationId,
+        });
+        const mutationResult = await mutationManager.submitReview({
+          event: verdict === "approved" ? "APPROVE" : verdict === "request_changes" ? "REQUEST_CHANGES" : "COMMENT",
+          body: reviewBody.body,
+          commit_id: pr.head.sha,
+          comments: reviewBody.comments,
+        });
+        reviewId = mutationResult.reviewId;
+        githubSummary = reviewBody.summary;
+      } else {
+        var ghVerdict =
+          verdict === "request_changes" ? "REQUEST_CHANGES" :
+          verdict === "approved"        ? "APPROVE"         : "COMMENT";
+        var { data: review } = await octokit.request(
+          "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+          {
+            owner, repo, pull_number: pr.number,
+            commit_id: pr.head.sha, body: reviewBody.body,
+            event: ghVerdict, comments: reviewBody.comments,
+          }
+        );
+        reviewId = review.id;
+        githubSummary = reviewBody.summary;
+      }
     }
 
     // ── 11. Update check run ──────────────────────────────────────────────────
-    const shouldBlock = cfg.block_on_verdict?.includes(verdict) &&
-      confidenceLevel(confidence) >= confidenceLevel(cfg.min_confidence_to_block);
+    // In v2 live mode, check semantics come from the deterministic decision,
+    // not legacy block_on_verdict.
+    let shouldBlock;
+    let checkConclusion = "success";
+    if (v2Mode === "live" && v2DecisionComputed) {
+      if (verdict === "request_changes") {
+        shouldBlock = true;
+        checkConclusion = "failure";
+      } else if (verdict === "needs_discussion") {
+        shouldBlock = false;
+        checkConclusion = "neutral";
+      } else {
+        shouldBlock = false;
+        checkConclusion = "success";
+      }
+    } else {
+      shouldBlock = cfg.block_on_verdict?.includes(verdict) &&
+        confidenceLevel(confidence) >= confidenceLevel(cfg.min_confidence_to_block);
+      checkConclusion = shouldBlock ? "failure" : "success";
+    }
 
     if (checkRunId) {
       await finaliseCheckRun(octokit, owner, repo, checkRunId,
-        shouldBlock ? "failure" : "success",
+        checkConclusion,
         buildCheckOutput(findings, verdict, confidence, githubSummary, validation.scopeDroppedCount)
       );
     }
@@ -522,7 +571,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 
     return { verdict, confidence, findings, blocked: shouldBlock };
 
-  } catch (err) {
+    } catch (err) {
     logger.error({ err: err.message, pr: pr.number }, "AI review: failed");
     const durationMs = Date.now() - startTime;
 
@@ -686,10 +735,10 @@ export function computeVerdict(findings, cfg) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// GitHub PR Review posting
+// GitHub PR Review body building (shared between legacy POST and v2 mutation manager)
 // ════════════════════════════════════════════════════════════════════════════
 
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta }) {
+function buildReviewMarkdown(findings, verdict, confidence, scopeDroppedCount, adversarialMeta) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
@@ -699,8 +748,6 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   var critical = findings.filter(function (f) { return f.severity === "critical"; });
   var high     = findings.filter(function (f) { return f.severity === "high"; });
   var others   = findings.filter(function (f) { return ["critical", "high"].indexOf(f.severity) === -1; });
-
-  // Separate adversarial-discovered findings
   var adversarialFindings = findings.filter(function (f) { return f.adversarial_status === "missed_risk"; });
   var upheldFindings = findings.filter(function (f) { return f.adversarial_status === "upheld"; });
 
@@ -731,7 +778,6 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     summaryLines.push("");
   }
 
-  // Devil's Advocate summary
   if (adversarialMeta) {
     var advParts = [];
     if (adversarialMeta.dropped > 0) advParts.push(adversarialMeta.dropped + " false positive" + (adversarialMeta.dropped !== 1 ? "s" : "") + " dropped");
@@ -745,7 +791,6 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     }
   }
 
-  // Dropped findings section
   if (adversarialMeta && adversarialMeta.dropped > 0) {
     summaryLines.push("<details><summary>❌ " + adversarialMeta.dropped + " finding" + (adversarialMeta.dropped !== 1 ? "s" : "") + " overruled by Devil's Advocate</summary>");
     summaryLines.push("<em>False positives eliminated by adversarial challenge pass.</em>");
@@ -762,7 +807,6 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
   var summary = summaryLines.slice(0, 3).join(" ");
 
-  // Build inline comments for findings that have file + line
   var comments = findings
     .filter(function (f) { return f.file && f.line; })
     .slice(0, 10)
@@ -774,6 +818,15 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
       };
     });
 
+  return { body, summary, comments };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Legacy GitHub PR Review posting (retained for non-v2 path)
+// ════════════════════════════════════════════════════════════════════════════
+
+async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta }) {
+  var reviewBody = buildReviewMarkdown(findings, verdict, confidence, scopeDroppedCount, adversarialMeta);
   var ghVerdict =
     verdict === "request_changes" ? "REQUEST_CHANGES" :
     verdict === "approved"        ? "APPROVE"         : "COMMENT";
@@ -785,13 +838,13 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
       repo,
       pull_number: pr.number,
       commit_id:   pr.head.sha,
-      body,
+      body:        reviewBody.body,
       event:       ghVerdict,
-      comments,
+      comments:    reviewBody.comments,
     }
   );
 
-  return { reviewId: review.id, summary };
+  return { reviewId: review.id, summary: reviewBody.summary };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

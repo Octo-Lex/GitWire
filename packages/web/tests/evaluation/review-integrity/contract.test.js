@@ -184,8 +184,7 @@ describeOrSkip("RI v2 contract — broken fixtures must never approve", () => {
     const f = fixtures.find(fx => fx.caseId === "RI-03");
     const octokit = buildFixtureOctokit(f);
     const result = await reviewPR({
-      pr: { number: 42, head: { sha: f.prMetadata.head }, base: { ref: f.prMetadata.base },
-            user: { login: f.prMetadata.author }, title: f.prMetadata.title, body: f.prMetadata.body },
+      pr: makeV2PR(f),
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
       commentFindings: false,
