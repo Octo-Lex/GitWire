@@ -102,6 +102,23 @@ export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNum
     conclusion = "neutral";
     title = "GitWire \u2014 no review needed";
     summary = "AI review is not configured for this repository, or the PR was skipped.";
+  } else if (reviewResult.checkState) {
+    // v2 mode: honor RI-6 check-state semantics for the top-level GitWire check.
+    // This prevents REVIEW_INCOMPLETE from terminalizing as success.
+    if (reviewResult.checkState === "review_blocked") {
+      conclusion = "failure";
+      title = "GitWire \u2014 review blocked merge";
+      summary = "AI review found " + reviewResult.findings.length + " finding(s). Verdict: " + reviewResult.verdict + ".";
+    } else if (reviewResult.checkState === "review_passed") {
+      conclusion = "success";
+      title = "GitWire \u2014 review passed";
+      summary = "AI review completed. Verdict: " + reviewResult.verdict + ", " + reviewResult.findings.length + " finding(s).";
+    } else {
+      // review_incomplete, review_unavailable, or any other → neutral
+      conclusion = "neutral";
+      title = "GitWire \u2014 review incomplete";
+      summary = "AI review could not reach a definitive conclusion. Verdict: " + reviewResult.verdict + ".";
+    }
   } else if (reviewResult.blocked) {
     conclusion = "failure";
     title = "GitWire \u2014 review blocked merge";

@@ -320,7 +320,17 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     const v2Mode = cfg.review_integrity_v2;
     let v2DecisionComputed = false;
     let v2Decision = null;
+    let v2InvocationId = null;
+    let v2CheckState = null;
     if (v2Mode === "live") {
+      // Compute the RI-7 invocation ID once — used for both the persisted
+      // receipt and the mutation manager, so they share the same identity.
+      const { computeInvocationId } = await import("./reviewMutationService.js");
+      v2InvocationId = computeInvocationId({
+        repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
+        logicalInvocation,
+      });
+
       try {
         const { buildReviewEvidence, acquireChangedFiles } = await import("./reviewEvidenceService.js");
         const { validateFindings } = await import("./findingValidator.js");
@@ -345,7 +355,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           review: {
             repoId: repository.id, repoFullName: repository.full_name,
             prNumber: pr.number, baseSha: pr.base?.sha, headSha: pr.head.sha,
-            invocationId: "v2-" + pr.number + "-" + pr.head.sha,
+            invocationId: v2InvocationId,
           },
           octokit, owner, repo,
         });
@@ -400,7 +410,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           verifierReceipt: v2Verifier,
           decision: computedDecision,
           primaryFindings: v2Primary,
-          invocationId: "v2-" + pr.number + "-" + pr.head.sha,
+          invocationId: v2InvocationId,
         });
 
         // Receipt persisted — safe to expose the decision to downstream steps
@@ -444,16 +454,14 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         // In v2 live mode, EVERY review mutation goes through the RI-7 mutation
         // manager — including the fail-closed COMMENT when the v2 pipeline fails.
         // This guarantees exactly-once semantics for all live mutations.
-        const { computeInvocationId, createReviewMutationManager } = await import("./reviewMutationService.js");
+        // The invocation ID was computed once before the v2 try block and is
+        // shared with the persisted receipt.
+        const { createReviewMutationManager } = await import("./reviewMutationService.js");
         const { redis } = await import("../lib/queue.js");
-        const liveInvocationId = computeInvocationId({
-          repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
-          logicalInvocation,
-        });
         const mutationManager = createReviewMutationManager({
           redis, octokit, owner, repo,
           prNumber: pr.number, headSha: pr.head.sha,
-          invocationId: liveInvocationId,
+          invocationId: v2InvocationId,
         });
         const mutationResult = await mutationManager.submitReview({
           event: verdict === "approved" ? "APPROVE" : verdict === "request_changes" ? "REQUEST_CHANGES" : "COMMENT",
@@ -496,6 +504,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       const checkResult = buildCheckConclusion(effectiveDecision);
       checkConclusion = checkResult.conclusion;
       shouldBlock = effectiveDecision.checkState === CHECK_STATE.REVIEW_BLOCKED;
+      v2CheckState = effectiveDecision.checkState;
     } else {
       shouldBlock = cfg.block_on_verdict?.includes(verdict) &&
         confidenceLevel(confidence) >= confidenceLevel(cfg.min_confidence_to_block);
@@ -578,7 +587,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "AI review: complete (bundle-driven v2)"
     );
 
-    return { verdict, confidence, findings, blocked: shouldBlock };
+    return { verdict, confidence, findings, blocked: shouldBlock, checkState: v2CheckState };
 
     } catch (err) {
     logger.error({ err: err.message, pr: pr.number }, "AI review: failed");

@@ -205,7 +205,7 @@ export function startPhase4Worker() {
             commentFindings: reviewOpts.comment_findings !== false,
             principalId: ph4PrincipalId,
             surfaceId: "audit_trail:ai_decision",
-            logicalInvocation: "automatic",
+            logicalInvocation: job.data.logicalInvocation || "automatic",
           });
 
           await finalizeOwn(result);
