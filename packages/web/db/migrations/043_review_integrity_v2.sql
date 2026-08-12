@@ -72,7 +72,13 @@ CREATE TABLE IF NOT EXISTS review_metrics_log (
 
   -- Mutation safety
   mutation_retries        INTEGER NOT NULL DEFAULT 0,
-  duplicate_prevention_events INTEGER NOT NULL DEFAULT 0
+  duplicate_prevention_events INTEGER NOT NULL DEFAULT 0,
+
+  -- Verifier overturn (verifier finds material when primary found none)
+  verifier_overturn       BOOLEAN NOT NULL DEFAULT FALSE,
+
+  -- Context-retrieval token estimate (chars / 4 as approximate token count)
+  context_retrieval_tokens INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_metrics_recorded_at

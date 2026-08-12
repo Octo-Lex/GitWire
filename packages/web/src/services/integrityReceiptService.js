@@ -219,19 +219,15 @@ export async function recordReviewMetrics({
     verifierStatus: verifierReceipt?.status || "not_run",
     verifierFindingCount: verifierReceipt?.findings?.length || 0,
     verifierMaterialCount: verifierReceipt?.materialFindingCount || 0,
-    verifierOverturn: verifierReceipt?.hasMaterialFindings && (primaryFindings || []).filter(f =>
-      ["P0", "P1", "P2"].includes(f.severity)
-    ).length === 0,
     verifierIncomplete: verifierReceipt?.status === "incomplete",
     verifierTokens: verifierReceipt?.tokensUsed || 0,
     verifierLatencyMs: verifierReceipt?.durationMs || 0,
     verifierUnresolvedContext: (verifierReceipt?.unresolvedContextRequests || []).length,
 
-    // Tokens and latency
+    // Tokens and latency (totalTokens computed later to include context retrieval)
     primaryTokens,
     verifierTokens: verifierReceipt?.tokensUsed || 0,
     contextRetrievedChars: budgetState?.retrievedChars || 0,
-    totalTokens: primaryTokens + (verifierReceipt?.tokensUsed || 0),
     primaryLatencyMs,
     totalLatencyMs,
 
@@ -244,7 +240,18 @@ export async function recordReviewMetrics({
     // Mutation safety
     mutationRetries,
     duplicatePreventionEvents,
+
+    // Verifier overturn (verifier finds material when primary found none)
+    verifierOverturn: verifierReceipt?.hasMaterialFindings && (primaryFindings || []).filter(f =>
+      ["P0", "P1", "P2"].includes(f.severity)
+    ).length === 0,
+
+    // Context-retrieval token estimate (approx 4 chars per token)
+    contextRetrievalTokens: Math.round((budgetState?.retrievedChars || 0) / 4),
   };
+
+  // totalTokens includes primary + verifier + context retrieval
+  metrics.totalTokens = metrics.primaryTokens + metrics.verifierTokens + metrics.contextRetrievalTokens;
 
   // Record to the review_metrics_log table (created in migration 043)
   try {
@@ -261,11 +268,12 @@ export async function recordReviewMetrics({
         primary_latency_ms, total_latency_ms,
         context_reads, context_searches, context_rounds, context_exhausted,
         context_retrieved_chars,
-        mutation_retries, duplicate_prevention_events)
+        mutation_retries, duplicate_prevention_events,
+        verifier_overturn, context_retrieval_tokens)
        VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9,
                $10, $11, $12, $13, $14, $15, $16, $17, $18,
                $19, $20, $21, $22, $23, $24, $25, $26, $27,
-               $28, $29)`,
+               $28, $29, $30, $31)`,
       [
         metrics.event, metrics.checkState, metrics.approvalEligible,
         metrics.coverageComplete, metrics.totalChangedFiles, metrics.fullyCoveredFiles,
@@ -279,6 +287,7 @@ export async function recordReviewMetrics({
         metrics.contextReads, metrics.contextSearches, metrics.contextRounds,
         metrics.contextExhausted, metrics.contextRetrievedChars,
         metrics.mutationRetries, metrics.duplicatePreventionEvents,
+        metrics.verifierOverturn, metrics.contextRetrievalTokens,
       ]
     );
   } catch (_e) {

@@ -145,7 +145,7 @@ describe("RI-8: persistIntegrityReceipt", () => {
 
 describe("RI-8: recordReviewMetrics", () => {
 
-  it("records all frozen metrics including verifier overturn, coverage reasons, mutation safety", async () => {
+  it("records all frozen metrics including verifier overturn, coverage reasons, mutation safety, three-way tokens", async () => {
     const metrics = await recordReviewMetrics({
       decision: { event: "APPROVE", checkState: "review_passed", approvalEligible: true },
       evidence: { coverage: { approvalEvidenceComplete: true, totalChangedFiles: 3,
@@ -169,10 +169,16 @@ describe("RI-8: recordReviewMetrics", () => {
     expect(metrics.duplicatePreventionEvents).toBe(1);
     expect(metrics.coverageFailureReasons).toEqual([]);
 
-    // INSERT includes mutation safety columns
+    // Three-way token arithmetic: primary + verifier + context retrieval
+    expect(metrics.contextRetrievalTokens).toBe(1250); // 5000 chars / 4
+    expect(metrics.totalTokens).toBe(1500 + 2000 + 1250); // 4750
+
+    // INSERT includes all frozen columns
     const sql = mockDbQuery.mock.calls[0][0];
     expect(sql).toContain("mutation_retries");
     expect(sql).toContain("duplicate_prevention_events");
+    expect(sql).toContain("verifier_overturn");
+    expect(sql).toContain("context_retrieval_tokens");
   });
 
   it("records verifier overturn when verifier finds material but primary found none", async () => {
@@ -188,6 +194,9 @@ describe("RI-8: recordReviewMetrics", () => {
     });
 
     expect(metrics.verifierOverturn).toBe(true);
+    // INSERT binds verifier_overturn = true
+    const params = mockDbQuery.mock.calls[0][1];
+    expect(params).toContain(true); // verifier_overturn bound as true
   });
 
   it("records coverage failure reasons as JSON array", async () => {
