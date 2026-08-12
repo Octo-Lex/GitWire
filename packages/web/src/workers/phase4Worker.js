@@ -221,7 +221,7 @@ export function startPhase4Worker() {
               const { acquireChangedFiles, buildReviewEvidence } = await import("../services/reviewEvidenceService.js");
               const { allFiles, paginatedFully } = await acquireChangedFiles(
                 octokit, repository.owner.login, repository.name, pr.number,
-                pr.changed_files || result?.files_reviewed || 0,
+                pr.changed_files || 0,
               );
               const evidence = await buildReviewEvidence({
                 allFiles,
@@ -233,7 +233,7 @@ export function startPhase4Worker() {
                   repoId: repository.id,
                   repoFullName: repository.full_name,
                   prNumber: pr.number,
-                  baseSha: pr.base?.sha || pr.base?.ref || "unknown",
+                  baseSha: pr.base?.sha,
                   headSha: pr.head.sha,
                   invocationId: "shadow-" + pr.number + "-" + pr.head.sha,
                 },
@@ -242,22 +242,47 @@ export function startPhase4Worker() {
                 repo: repository.name,
               });
 
-              await runShadowVerification({
+              // Construct a real Anthropic client for the verifier from production config
+              const { config } = await import("../../config/index.js");
+              const Anthropic = (await import("@anthropic-ai/sdk")).default;
+              const shadowAnthropic = new Anthropic({
+                apiKey: config.anthropic.apiKey,
+                baseURL: config.anthropic.baseURL,
+              });
+
+              const shadowResult = await runShadowVerification({
                 productionResult: result,
                 productionFindings: result?.findings || [],
                 evidence,
                 octokit,
                 owner: repository.owner.login,
                 repo: repository.name,
-                anthropic: null, // shadow verifier may use same or separate model
+                anthropic: shadowAnthropic,
                 model: reviewOpts.model || "claude-sonnet-4-20250514",
                 repoConfig,
                 reviewConfig: reviewOpts,
-                reviewRowId: 0, // shadow persistence is best-effort
+                reviewRowId: 0, // best-effort: reviewRow id not exposed by reviewPR return
                 invocationId: "shadow-" + pr.number + "-" + pr.head.sha,
-                primaryTokens: result?.tokens_used || 0,
-                primaryLatencyMs: 0,
+                primaryTokens: 0, // production token count not exposed by reviewPR return
+                primaryLatencyMs: 0, // production latency not exposed by reviewPR return
               });
+
+              // Durable divergence recording
+              if (shadowResult.ran && shadowResult.divergence?.diverged) {
+                logger.warn({
+                  pr: pr.number,
+                  repo: repository.full_name,
+                  productionEvent: shadowResult.productionEvent,
+                  v2Event: shadowResult.v2Event,
+                  divergence: shadowResult.divergence,
+                }, "Shadow v2 divergence detected — production and v2 decisions differ");
+              } else if (shadowResult.ran) {
+                logger.info({
+                  pr: pr.number,
+                  productionEvent: shadowResult.productionEvent,
+                  v2Event: shadowResult.v2Event,
+                }, "Shadow v2 completed — no divergence");
+              }
             }
           } catch (shadowErr) {
             // Shadow failures must NEVER affect the production review path
