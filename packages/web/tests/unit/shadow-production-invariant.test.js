@@ -189,8 +189,7 @@ describe("RI-9: production-path one-mutation invariant", () => {
       require_file_scope: true,
     };
 
-    // Run production reviewPR (no commentFindings = no POST /reviews from production)
-    // Then manually verify the shadow path doesn't add one
+    // Run production reviewPR WITH commentFindings enabled — production POSTs one review
     const result = await reviewPR({
       pr: {
         number: 42,
@@ -203,12 +202,13 @@ describe("RI-9: production-path one-mutation invariant", () => {
       },
       repository: { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" },
       octokit,
-      commentFindings: false, // disable actual review POST in production
+      commentFindings: true, // production WILL POST a review
     });
 
-    // production review completed
+    // production review completed and POSTed exactly one review
     expect(result).not.toBeNull();
     expect(result.verdict).toBe("approved");
+    expect(postReviewCalls).toHaveLength(1);
 
     // Now run the shadow verification using the same octokit
     const { runShadowVerification } = await import("../../src/services/reviewIntegrityShadow.js");
@@ -248,9 +248,7 @@ describe("RI-9: production-path one-mutation invariant", () => {
     expect(shadowResult.ran).toBe(true);
     expect(shadowResult.mutationProduced).toBe(false);
 
-    // Count total POST /reviews across the entire session
-    // production had commentFindings:false (no POST), shadow never POSTs
-    // So total should be 0 (production didn't POST either)
-    expect(postReviewCalls).toHaveLength(0);
+    // After production (1 POST) + shadow (0 POSTs), total must be exactly 1
+    expect(postReviewCalls).toHaveLength(1);
   }, 60000);
 });
