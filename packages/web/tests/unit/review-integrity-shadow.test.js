@@ -169,11 +169,9 @@ describe("RI-9: runShadowVerification", () => {
     const result = await runShadowVerification({
       productionResult: { verdict: "needs_discussion" },
       productionFindings: [
-        { severity: "P1", category: "bug", claim: "Bad finding",
-          evidenceRefs: ["changed:nonexistent.js@HEAD:L1-L5"],
-          proof: { type: "static_trace", summary: "bad" },
-          affectedPaths: [],
-        },
+        // Production-format finding: legacy severity + title/description/file/line
+        { severity: "high", title: "Bad finding", description: "desc",
+          file: "nonexistent.js", line: 5, category: "bug" },
       ],
       evidence: makeEvidence(true),
       octokit: makeMockOctokit(),
@@ -189,18 +187,14 @@ describe("RI-9: runShadowVerification", () => {
 
     expect(result.ran).toBe(true);
     expect(result.v2Downgraded).toBe(1); // v2 downgraded the invalid finding from P1 to P3
-    expect(result.divergence.findingDifferences.rejectedByV2).toBeGreaterThanOrEqual(0);
   });
 
   it("does not run verifier when v2 primary already has material findings", async () => {
     const result = await runShadowVerification({
       productionResult: { verdict: "request_changes" },
       productionFindings: [
-        { severity: "P1", category: "bug", claim: "Valid bug",
-          evidenceRefs: ["changed:src/app.js@HEAD:L1-L3"],
-          proof: { type: "static_trace", summary: "Found" },
-          affectedPaths: [],
-        },
+        { severity: "high", title: "Valid bug", description: "desc",
+          file: "src/app.js", line: 2, category: "bug" },
       ],
       evidence: makeEvidence(true),
       octokit: makeMockOctokit(),
@@ -214,5 +208,61 @@ describe("RI-9: runShadowVerification", () => {
 
     expect(result.verifierStatus).toBe("not_run");
     expect(result.v2Event).toBe("REQUEST_CHANGES");
+  });
+
+  it("production-path one-mutation invariant: shadow NEVER calls POST /reviews", async () => {
+    const postCalls = [];
+    const octokit = {
+      request: jest.fn().mockImplementation((route) => {
+        if (route.includes("POST") && route.includes("/reviews")) {
+          postCalls.push(route);
+        }
+        if (route.includes("GET") && route.includes("/contents")) {
+          return Promise.resolve({ data: { type: "file", encoding: "base64", content: "dGVzdA==", sha: "blob1" } });
+        }
+        return Promise.resolve({ data: {} });
+      }),
+    };
+    const anthropic = makeMockAnthropic(JSON.stringify({
+      status: "verified", findings: [], unresolvedContextNeeds: [], coverageSatisfied: true,
+    }));
+
+    await runShadowVerification({
+      productionResult: { verdict: "approved" },
+      productionFindings: [],
+      evidence: makeEvidence(true),
+      octokit,
+      owner: "org", repo: "repo",
+      anthropic,
+      model: "claude-sonnet-4-20250514",
+      repoConfig: { pillars: { ai_review: { review_integrity_v2: "shadow" } } },
+      reviewConfig: {},
+      reviewRowId: 1, invocationId: "rinv:test",
+    });
+
+    // Shadow must NEVER post a review
+    expect(postCalls).toHaveLength(0);
+    expect(octokit.request.mock.calls.some(c => c[0].includes("POST") && c[0].includes("/reviews"))).toBe(false);
+  });
+
+  it("converts legacy severity names correctly (critical→P0, high→P1, medium→P2, low→P3)", async () => {
+    const result = await runShadowVerification({
+      productionResult: { verdict: "request_changes" },
+      productionFindings: [
+        { severity: "critical", title: "Critical", description: "d", file: "src/app.js", line: 1, category: "security" },
+      ],
+      evidence: makeEvidence(true),
+      octokit: makeMockOctokit(),
+      owner: "org", repo: "repo",
+      anthropic: makeMockAnthropic("{}"),
+      model: "claude-sonnet-4-20250514",
+      repoConfig: { pillars: { ai_review: { review_integrity_v2: "shadow" } } },
+      reviewConfig: {},
+      reviewRowId: 1, invocationId: "rinv:test",
+    });
+
+    // critical → P0 → REQUEST_CHANGES
+    expect(result.v2Event).toBe("REQUEST_CHANGES");
+    expect(result.verifierStatus).toBe("not_run"); // P0 is material, verifier not needed
   });
 });

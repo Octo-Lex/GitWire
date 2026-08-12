@@ -17,7 +17,6 @@
 //   - shadow operational metrics acceptable
 //   - no lifecycle/mutation regressions
 
-import { buildReviewEvidence } from "./reviewEvidenceService.js";
 import { validateFindings } from "./findingValidator.js";
 import { runApprovalVerification } from "./approvalVerificationService.js";
 import { computeReviewDecision } from "./reviewDecisionPolicy.js";
@@ -101,8 +100,21 @@ export async function runShadowVerification({
     return { mode, ran: false };
   }
 
-  // ── Validate primary findings through the v2 validator ──────────────────
-  const validated = validateFindings(productionFindings || [], evidence);
+  // ── Convert production findings to v2 finding schema ─────────────────────
+  // Production findings use {severity, title, description, file, line, confidence}
+  // v2 findings use {severity, category, claim, description, evidenceRefs, proof}
+  const v2FormattedFindings = (productionFindings || []).map(f => ({
+    severity: severityToV2(f.severity),
+    category: f.category || "bug",
+    claim: f.title || f.claim || "Untitled finding",
+    description: f.description || f.body || "",
+    affectedPaths: f.file ? [f.file] : (f.affectedPaths || []),
+    evidenceRefs: f.file ? [`changed:${f.file}@HEAD:${f.line ? "L" + f.line : "L1"}`] : (f.evidenceRefs || []),
+    proof: f.proof || { type: "inference", summary: f.description || f.claim || "" },
+  }));
+
+  // ── Validate primary findings through the v2 evidence-bound validator ────
+  const validated = validateFindings(v2FormattedFindings, evidence);
   const v2PrimaryFindings = validated.valid;
 
   // ── Run the independent verifier (only if v2 primary found zero material) ──
@@ -241,4 +253,20 @@ function computeDivergence(prodEvent, v2Event, details) {
     coverageFailures: details.coverageFailures,
     evidenceComplete: details.evidenceComplete,
   };
+}
+
+/**
+ * Map production severity names to the v2 P0-P3 vocabulary.
+ * Production uses: critical, high, medium, low, info
+ * v2 uses: P0, P1, P2, P3
+ */
+function severityToV2(severity) {
+  switch (severity) {
+    case "critical": return "P0";
+    case "high": return "P1";
+    case "medium": return "P2";
+    case "low":
+    case "info": return "P3";
+    default: return severity; // already P0-P3, or unknown
+  }
 }

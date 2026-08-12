@@ -209,6 +209,61 @@ export function startPhase4Worker() {
 
           await finalizeOwn(result);
 
+          // ── Shadow v2 sidecar (RI-9) ──────────────────────────────────────
+          // Run the v2 pipeline alongside production when shadow mode is enabled.
+          // Shadow mode NEVER produces a GitHub mutation — it only records
+          // divergence between the production and v2 decisions.
+          try {
+            const { resolveShadowMode, runShadowVerification } = await import("../services/reviewIntegrityShadow.js");
+            const shadowMode = resolveShadowMode(repoConfig, reviewOpts);
+            if (shadowMode !== "disabled") {
+              // Build real v2 ReviewEvidence from the same octokit the production review used
+              const { acquireChangedFiles, buildReviewEvidence } = await import("../services/reviewEvidenceService.js");
+              const { allFiles, paginatedFully } = await acquireChangedFiles(
+                octokit, repository.owner.login, repository.name, pr.number,
+                pr.changed_files || result?.files_reviewed || 0,
+              );
+              const evidence = await buildReviewEvidence({
+                allFiles,
+                paginatedFully,
+                ignorePatterns: reviewOpts.ignore_patterns || [],
+                maxFiles: reviewOpts.max_files_to_review || 30,
+                maxLines: reviewOpts.max_lines_to_review || 2000,
+                review: {
+                  repoId: repository.id,
+                  repoFullName: repository.full_name,
+                  prNumber: pr.number,
+                  baseSha: pr.base?.sha || pr.base?.ref || "unknown",
+                  headSha: pr.head.sha,
+                  invocationId: "shadow-" + pr.number + "-" + pr.head.sha,
+                },
+                octokit,
+                owner: repository.owner.login,
+                repo: repository.name,
+              });
+
+              await runShadowVerification({
+                productionResult: result,
+                productionFindings: result?.findings || [],
+                evidence,
+                octokit,
+                owner: repository.owner.login,
+                repo: repository.name,
+                anthropic: null, // shadow verifier may use same or separate model
+                model: reviewOpts.model || "claude-sonnet-4-20250514",
+                repoConfig,
+                reviewConfig: reviewOpts,
+                reviewRowId: 0, // shadow persistence is best-effort
+                invocationId: "shadow-" + pr.number + "-" + pr.head.sha,
+                primaryTokens: result?.tokens_used || 0,
+                primaryLatencyMs: 0,
+              });
+            }
+          } catch (shadowErr) {
+            // Shadow failures must NEVER affect the production review path
+            logger.debug({ err: shadowErr.message, pr: pr.number }, "Shadow v2 sidecar failed (non-fatal)");
+          }
+
           await emitWorkerEvent("review_completed", {
             repo: repository.full_name,
             repoId: repository.id,
