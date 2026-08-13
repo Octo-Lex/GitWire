@@ -204,6 +204,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         retrievalTrace: primaryReceipt.retrievalTrace,
         budgetState: primaryReceipt.budgetState,
         error: primaryReceipt.error || null,
+        rawTextSnippet: primaryReceipt.rawTextSnippet || null,
       };
       tokensUsed = primaryReceipt.tokensUsed;
       strategy = "v2_evidence_bound";

@@ -318,7 +318,7 @@ export async function runPrimaryReview({
   }
 
   // ── Tool-use loop ───────────────────────────────────────────────────────
-  let rawText = "";
+  const textParts = []; // accumulate text from all rounds (don't overwrite)
   let tokensUsed = 0;
   let actualModel = null;
   let messages = [{ role: "user", content: userPrompt }];
@@ -351,7 +351,7 @@ export async function runPrimaryReview({
         : [];
 
       if (textBlocks.length > 0) {
-        rawText = textBlocks.map(b => b.text).join("\n");
+        textParts.push(textBlocks.map(b => b.text).join("\n"));
       }
 
       if (message.stop_reason !== "tool_use" || toolUseBlocks.length === 0) {
@@ -404,13 +404,25 @@ export async function runPrimaryReview({
     );
   }
 
-  // ── Parse and validate ──────────────────────────────────────────────────
-  const parsed = parsePrimaryResult(rawText.trim());
+  // ── Parse: try each accumulated text part (model may produce JSON in an
+  //    earlier tool-use round and a summary in the final round). ───────────
+  const rawText = textParts.join("\n\n");
+  let parsed = null;
+  // Try the full concatenation first
+  parsed = parsePrimaryResult(rawText);
+  // Then try each part individually (most recent first — the model often
+  // produces its final answer in the last text round)
+  if (!parsed) {
+    for (let i = textParts.length - 1; i >= 0; i--) {
+      parsed = parsePrimaryResult(textParts[i]);
+      if (parsed) break;
+    }
+  }
   if (!parsed) {
     return makePrimaryReceipt(
       [], [], broker.getTrace(), broker.getBudgetState(),
       tokensUsed, Date.now() - startTime, "Failed to parse primary review response",
-      actualModel,
+      actualModel, rawText.slice(0, 2000),
     );
   }
 
@@ -442,12 +454,13 @@ export async function runPrimaryReview({
     Date.now() - startTime,
     undefined,
     actualModel,
+    rawText.slice(0, 500),
   );
 }
 
 // ── Receipt builder ─────────────────────────────────────────────────────────
 
-function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel) {
+function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText) {
   return {
     findings: validatedFindings,
     rawFindings: rawFindings || [],
@@ -456,6 +469,7 @@ function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budg
     tokensUsed: tokensUsed || 0,
     durationMs: durationMs || 0,
     error: error || undefined,
+    rawTextSnippet: rawText ? rawText.slice(0, 500) : undefined,
     promptVersion: PROMPT_VERSION,
     promptHash: PROMPT_HASH,
     actualModel: actualModel || null,
