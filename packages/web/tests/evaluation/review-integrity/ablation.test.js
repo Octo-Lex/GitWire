@@ -86,6 +86,7 @@ const { buildFixtureOctokit } = await import("./fixtureOctokit.js");
 // ── Config per arm ───────────────────────────────────────────────────────────
 
 function makeConfig(arm) {
+  const overrideModel = process.env.ABLATION_MODEL;
   const base = {
     enabled: true,
     check_logic: true, check_security: true, check_architecture: true,
@@ -93,7 +94,7 @@ function makeConfig(arm) {
     block_on_verdict: ["request_changes"], min_confidence_to_block: "medium",
     max_files_to_review: 30, max_lines_to_review: 2000,
     ignore_patterns: ["*.lock", "package-lock.json"],
-    engine: "claude", model: "claude-sonnet-4-20250514",
+    engine: "claude", model: overrideModel || "claude-sonnet-4-20250514",
     max_duration_seconds: 300, bundle_max_chars: 180000, require_file_scope: true,
     adversarial_review: false,
   };
