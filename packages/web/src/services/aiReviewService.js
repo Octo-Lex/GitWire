@@ -117,8 +117,120 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
   );
 
   try {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Shared variables — set by either the v2 production path or the legacy path
+    // ═══════════════════════════════════════════════════════════════════════════
+    const v2Mode = cfg.review_integrity_v2;
+    let v2DecisionComputed = false;
+    let v2Decision = null;
+    let v2InvocationId = null;
+    let v2CheckState = null;
+
+    // Pre-built v2 evidence and findings (set when v2 primary runs before legacy)
+    let v2PrimaryFindings = null;
+    let v2EvidencePreBuilt = null;
+
+    // Legacy/shared variables
+    let files = [], totalAdded = 0, totalRemoved = 0;
+    let findings = [], verdict = "approved", confidence = "high";
+    let summary = null, overallCorrectness = null, overallConfidence = null;
+    let adversarialMeta = null, tokensUsed = 0, strategy = "unknown";
+    let validation = {
+      valid: true, scopeDroppedCount: 0, ignoredFindings: [],
+      legacy: { findings: [], verdict: "approved", confidence: "high", summary: "", overallCorrectness: null, overallConfidence: null },
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // V2 PRODUCTION PATH: evidence-bound primary review
+    // When v2Mode === "live", ReviewEvidence is built BEFORE the primary
+    // review, and the model operates with bounded repository tools to
+    // produce evidence-bound findings directly.
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (v2Mode === "live") {
+      const { computeInvocationId } = await import("./reviewMutationService.js");
+      const { acquireChangedFiles, buildReviewEvidence } = await import("./reviewEvidenceService.js");
+      const { runPrimaryReview } = await import("./primaryReviewService.js");
+
+      v2InvocationId = computeInvocationId({
+        repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
+        logicalInvocation,
+      });
+
+      // Acquire ALL changed files (paginated, reconciled against changed_files count)
+      const { allFiles: v2AllFiles } = await acquireChangedFiles(
+        octokit, owner, repo, pr.number, pr.changed_files || 1,
+      );
+
+      // Build ReviewEvidence — changed files with coverage states and side identity
+      const v2EvidenceResult = await buildReviewEvidence({
+        allFiles: v2AllFiles,
+        ignorePatterns: cfg.ignore_patterns || [],
+        maxFiles: cfg.max_files_to_review || 30,
+        maxLines: cfg.max_lines_to_review || 2000,
+        review: {
+          repoId: repository.id, repoFullName: repository.full_name,
+          prNumber: pr.number, baseSha: pr.base?.sha, headSha: pr.head.sha,
+          invocationId: v2InvocationId,
+        },
+        octokit, owner, repo,
+      });
+      v2EvidencePreBuilt = v2EvidenceResult;
+
+      // Run the evidence-bound primary review with tool-use loop
+      const primaryReceipt = await runPrimaryReview({
+        evidence: v2EvidenceResult,
+        octokit, owner, repo,
+        anthropic,
+        model: cfg.model || DEFAULT_MODEL,
+        prMeta: {
+          title: pr.title || "",
+          author: "@" + (pr.user?.login || "unknown"),
+          branch: (pr.base?.ref || "main") + " \u2190 " + (pr.head?.ref || "unknown"),
+          repoName: repository.full_name,
+        },
+        maxDurationMs: (cfg.max_duration_seconds || 300) * 1000,
+      });
+
+      v2PrimaryFindings = primaryReceipt.findings;
+      tokensUsed = primaryReceipt.tokensUsed;
+      strategy = "v2_evidence_bound";
+
+      // Convert v2 findings to legacy format for shared steps 10-13
+      var SEVERITY_TO_LEGACY = { P0: "critical", P1: "high", P2: "medium", P3: "low" };
+      findings = primaryReceipt.findings.map(function (f) {
+        return {
+          severity: SEVERITY_TO_LEGACY[f.severity] || "low",
+          title: f.claim || "Untitled",
+          description: f.description || f.claim || "",
+          file: (f.affectedPaths || [])[0] || null,
+          line: null,
+          suggestion: "",
+          category: f.category,
+        };
+      });
+
+      // File accounting from the v2-acquired files
+      files = v2AllFiles;
+      totalAdded = v2AllFiles.reduce(function (s, f) { return s + (f.additions || 0); }, 0);
+      totalRemoved = v2AllFiles.reduce(function (s, f) { return s + (f.deletions || 0); }, 0);
+
+      logger.info({
+        repo: repository.full_name, pr: pr.number,
+        primaryModel: primaryReceipt.actualModel,
+        primaryTokens: primaryReceipt.tokensUsed,
+        primaryToolOps: (primaryReceipt.retrievalTrace || []).length,
+        primaryFindings: primaryReceipt.findings.length,
+        primaryError: primaryReceipt.error || null,
+      }, "AI review: v2 evidence-bound primary complete");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LEGACY PATH — steps 4-9 (skipped when v2 primary ran)
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (v2Mode !== "live") {
     // ── 4. Fetch diff ─────────────────────────────────────────────────────────
-    const { files, totalAdded, totalRemoved } = await fetchDiff(octokit, owner, repo, pr, cfg);
+    const { files: legacyFiles, totalAdded: legacyAdded, totalRemoved: legacyRemoved } = await fetchDiff(octokit, owner, repo, pr, cfg);
+    files = legacyFiles; totalAdded = legacyAdded; totalRemoved = legacyRemoved;
 
     if (!files.length) {
       if (checkRunId) {
@@ -146,7 +258,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       ? cfg.max_duration_seconds * 1000
       : DEFAULT_MAX_DURATION_MS;
 
-    const { rawText, tokensUsed } = await withHeartbeat(
+    const { rawText, tokensUsed: legacyTokens } = await withHeartbeat(
       function () {
         return runStructuredReview(bundle, changedFiles, {
           model: cfg.model || DEFAULT_MODEL,
@@ -161,8 +273,11 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       { label: "claude review", timeoutMs: maxDurationMs }
     );
 
+    tokensUsed = legacyTokens;
+
     // ── 7. Extract JSON with cascade ─────────────────────────────────────────
-    const { json, strategy } = extractReviewJSON(rawText);
+    const { json, strategy: legacyStrategy } = extractReviewJSON(rawText);
+    strategy = legacyStrategy;
 
     logger.info(
       { strategy, pr: pr.number, hasJson: !!json },
@@ -189,7 +304,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 8. Validate + scope-filter ────────────────────────────────────────────
-    const validation = validateReview(json, changedFiles);
+    validation = validateReview(json, changedFiles);
 
     if (!validation.valid) {
       logger.warn(
@@ -215,10 +330,10 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 9. Use validated legacy format ────────────────────────────────────────
-    let { findings, verdict, confidence, summary, overallCorrectness, overallConfidence } = validation.legacy;
+    ({ findings, verdict, confidence, summary, overallCorrectness, overallConfidence } = validation.legacy);
 
     // ── 9b. Devil's Advocate: adversarial challenge pass ──────────────────────
-    let adversarialMeta = null;
+    adversarialMeta = null;
     if (cfg.adversarial_review !== false && findings.length > 0) {
       try {
         const challenge = await runAdversarialChallenge(findings, {
@@ -311,68 +426,62 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         );
       }
     }
+    } // end legacy-only path (if v2Mode !== "live")
 
     // ── 9b. Review Integrity v2 cutover (RI-9) ─────────────────────────────────
     // When review_integrity_v2 is "live", the deterministic decision policy
-    // controls the GitHub review event instead of reportToLegacy().
-    // In live mode, v2 failure forces COMMENT (never falls back to legacy APPROVE).
-    // The actual kill switch is changing the feature flag back to "shadow" or "disabled".
-    const v2Mode = cfg.review_integrity_v2;
-    let v2DecisionComputed = false;
-    let v2Decision = null;
-    let v2InvocationId = null;
-    let v2CheckState = null;
+    // controls the GitHub review event. v2 failure forces COMMENT.
     if (v2Mode === "live") {
-      // Compute the RI-7 invocation ID once — used for both the persisted
-      // receipt and the mutation manager, so they share the same identity.
-      const { computeInvocationId } = await import("./reviewMutationService.js");
-      v2InvocationId = computeInvocationId({
-        repoId: repository.id, prNumber: pr.number, headSha: pr.head.sha,
-        logicalInvocation,
-      });
 
       try {
-        const { buildReviewEvidence, acquireChangedFiles } = await import("./reviewEvidenceService.js");
-        const { validateFindings } = await import("./findingValidator.js");
         const { computeReviewDecision } = await import("./reviewDecisionPolicy.js");
         const { runApprovalVerification } = await import("./approvalVerificationService.js");
         const { persistIntegrityReceipt } = await import("./integrityReceiptService.js");
 
-        // Build v2 evidence from the same files the primary review used
-        const v2Files = files.map(f => ({
-          filename: f.filename, status: f.status,
-          additions: f.added, deletions: f.removed,
-          patch: f.patch, sha: f.sha,
-        }));
-        const { allFiles: v2All } = await acquireChangedFiles(
-          octokit, owner, repo, pr.number, pr.changed_files || v2Files.length,
-        );
-        const v2Evidence = await buildReviewEvidence({
-          allFiles: v2All,
-          ignorePatterns: cfg.ignore_patterns || [],
-          maxFiles: cfg.max_files_to_review || 30,
-          maxLines: cfg.max_lines_to_review || 2000,
-          review: {
-            repoId: repository.id, repoFullName: repository.full_name,
-            prNumber: pr.number, baseSha: pr.base?.sha, headSha: pr.head.sha,
-            invocationId: v2InvocationId,
-          },
-          octokit, owner, repo,
-        });
-
-        // Convert and validate findings through the v2 schema
-        const v2Findings = findings.map(f => ({
-          severity: f.severity === "critical" ? "P0" : f.severity === "high" ? "P1" :
-                     f.severity === "medium" ? "P2" : "P3",
-          category: f.category || "bug",
-          claim: f.title || "Untitled",
-          description: f.description || "",
-          affectedPaths: f.file ? [f.file] : [],
-          evidenceRefs: f.file ? ["changed:" + f.file + "@HEAD:" + (f.line ? "L" + f.line : "L1")] : [],
-          proof: { type: "static_trace", summary: f.description || f.title || "" },
-        }));
-        const v2Validated = validateFindings(v2Findings, v2Evidence);
-        const v2Primary = v2Validated.valid;
+        let v2Evidence, v2Primary;
+        if (v2PrimaryFindings) {
+          // V2 evidence-bound primary already ran — use pre-built evidence
+          // and validated findings with real evidence references.
+          v2Evidence = v2EvidencePreBuilt;
+          v2Primary = v2PrimaryFindings;
+        } else {
+          // Legacy fallback — build evidence and convert legacy findings
+          // (used when shadow mode wraps the legacy path).
+          const { buildReviewEvidence, acquireChangedFiles } = await import("./reviewEvidenceService.js");
+          const { validateFindings } = await import("./findingValidator.js");
+          const v2Files = files.map(f => ({
+            filename: f.filename, status: f.status,
+            additions: f.added, deletions: f.removed,
+            patch: f.patch, sha: f.sha,
+          }));
+          const { allFiles: v2All } = await acquireChangedFiles(
+            octokit, owner, repo, pr.number, pr.changed_files || v2Files.length,
+          );
+          v2Evidence = await buildReviewEvidence({
+            allFiles: v2All,
+            ignorePatterns: cfg.ignore_patterns || [],
+            maxFiles: cfg.max_files_to_review || 30,
+            maxLines: cfg.max_lines_to_review || 2000,
+            review: {
+              repoId: repository.id, repoFullName: repository.full_name,
+              prNumber: pr.number, baseSha: pr.base?.sha, headSha: pr.head.sha,
+              invocationId: v2InvocationId,
+            },
+            octokit, owner, repo,
+          });
+          const v2Findings = findings.map(f => ({
+            severity: f.severity === "critical" ? "P0" : f.severity === "high" ? "P1" :
+                       f.severity === "medium" ? "P2" : "P3",
+            category: f.category || "bug",
+            claim: f.title || "Untitled",
+            description: f.description || "",
+            affectedPaths: f.file ? [f.file] : [],
+            evidenceRefs: f.file ? ["changed:" + f.file + "@HEAD:" + (f.line ? "L" + f.line : "L1")] : [],
+            proof: { type: "static_trace", summary: f.description || f.title || "" },
+          }));
+          const v2Validated = validateFindings(v2Findings, v2Evidence);
+          v2Primary = v2Validated.valid;
+        }
 
         // Run verifier only if v2 primary has zero material findings and evidence is complete
         let v2Verifier = null;

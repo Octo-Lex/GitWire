@@ -56,8 +56,8 @@ const AUDIT = {
   ],
 
   audit_trail_entries: [
-    { file: "services/aiReviewService.js", line: 549, func: "reviewPR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
-    { file: "services/aiReviewService.js", line: 563, func: "reviewPR gate block", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "services/aiReviewService.js", line: 658, func: "reviewPR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
+    { file: "services/aiReviewService.js", line: 672, func: "reviewPR gate block", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 835, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
   ],
 
