@@ -129,6 +129,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     // Pre-built v2 evidence and findings (set when v2 primary runs before legacy)
     let v2PrimaryFindings = null;
     let v2EvidencePreBuilt = null;
+    let v2PrimaryError = null;
+    let v2PrimaryMeta = null;
 
     // Legacy/shared variables
     let files = [], totalAdded = 0, totalRemoved = 0;
@@ -192,6 +194,17 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       });
 
       v2PrimaryFindings = primaryReceipt.findings;
+      v2PrimaryError = primaryReceipt.error || null;
+      v2PrimaryMeta = {
+        actualModel: primaryReceipt.actualModel,
+        promptVersion: primaryReceipt.promptVersion,
+        promptHash: primaryReceipt.promptHash,
+        rawFindings: primaryReceipt.rawFindings,
+        validatedCount: primaryReceipt.findings.length,
+        retrievalTrace: primaryReceipt.retrievalTrace,
+        budgetState: primaryReceipt.budgetState,
+        error: primaryReceipt.error || null,
+      };
       tokensUsed = primaryReceipt.tokensUsed;
       strategy = "v2_evidence_bound";
 
@@ -440,7 +453,12 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         const { persistIntegrityReceipt } = await import("./integrityReceiptService.js");
 
         let v2Evidence, v2Primary;
-        if (v2PrimaryFindings) {
+        if (v2PrimaryError) {
+          // Primary review failed (API/timeout/parse/schema). The empty
+          // findings array must NOT be treated as a clean primary — that
+          // would allow a clean verifier to reach APPROVE. Fail closed.
+          throw new Error("Primary review failed: " + v2PrimaryError);
+        } else if (v2PrimaryFindings) {
           // V2 evidence-bound primary already ran — use pre-built evidence
           // and validated findings with real evidence references.
           v2Evidence = v2EvidencePreBuilt;
@@ -697,7 +715,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "AI review: complete (bundle-driven v2)"
     );
 
-    return { verdict, confidence, findings, blocked: shouldBlock, checkState: v2CheckState };
+    return { verdict, confidence, findings, blocked: shouldBlock, checkState: v2CheckState, primaryMeta: v2PrimaryMeta };
 
     } catch (err) {
     logger.error({ err: err.message, pr: pr.number }, "AI review: failed");

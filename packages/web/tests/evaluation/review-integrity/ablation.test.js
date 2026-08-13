@@ -21,6 +21,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const LIVE = process.env.REVIEW_INTEGRITY_LIVE === "1";
 const describeOrSkip = LIVE ? describe : describe.skip;
 
+// Fixture filter for targeted reruns (comma-separated case IDs, e.g. "RI-03,RI-04")
+const FIXTURE_FILTER = process.env.ABLATION_FIXTURES
+  ? new Set(process.env.ABLATION_FIXTURES.split(",").map(s => s.trim()))
+  : null;
+
 // ── Mocks (same surface as live-after, @anthropic-ai/sdk stays real) ────────
 
 const mockDbQuery = jest.fn();
@@ -183,6 +188,7 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
   let currentConfig;
 
   for (const fixture of fixtures) {
+    if (FIXTURE_FILTER && !FIXTURE_FILTER.has(fixture.caseId)) continue;
     for (const arm of arms) {
       it(`${fixture.caseId} ${fixture.variant} arm ${arm}`, async () => {
         currentConfig = makeConfig(arm);
@@ -245,6 +251,8 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
           defectDetected,
           tokensUsed,
           latencyMs: elapsedMs,
+          // Full diagnostics from primaryReceipt (arm C only)
+          primaryMeta: result?.primaryMeta || null,
           falseApprove: fixture.variant === "broken" ? result?.verdict === "approved" : null,
           falsePositive: fixture.variant === "fixed" ? (legacyMaterial || v2Material) : null,
         };
