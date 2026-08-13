@@ -3,373 +3,186 @@
     "fixture": "RI-01",
     "variant": "broken",
     "run": 1,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:53:58.885Z",
+    "timestamp": "2026-08-13T12:56:27.928Z",
     "verdict": "needs_discussion",
     "blocked": false,
     "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": false,
-    "tokensUsed": 2902,
-    "latencyMs": 16770,
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-01",
-    "variant": "broken",
-    "run": 2,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:54:17.636Z",
-    "verdict": "needs_discussion",
-    "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": false,
-    "tokensUsed": 246,
-    "latencyMs": 18700,
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-01",
-    "variant": "broken",
-    "run": 3,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:54:20.449Z",
-    "verdict": "needs_discussion",
-    "blocked": true,
-    "checkState": "review_blocked",
-    "findingCount": 1,
+    "findingCount": 3,
     "findingSeverities": [
-      "medium"
+      "low",
+      "low",
+      "low"
     ],
     "findingTitles": [
-      "Incomplete sentence in roadmap.md"
+      "README.md status still says Phase 0.0 reopened/scaffold pending, contradicting the PR's closure of 0",
+      "constitution.md Status section still declares Phase 0.0 reopened with scaffold 'was not' complete",
+      "README.md 'Read first' reading-order list omits the new docs/roadmap.md orientation document"
     ],
     "v2PrimaryFindings": [
       {
-        "severity": "P2",
-        "claim": "Incomplete sentence in roadmap.md"
-      }
-    ],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "not_run",
-    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
-    "expectedDefectDetected": false,
-    "tokensUsed": 292,
-    "latencyMs": 2812,
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-01",
-    "variant": "fixed",
-    "run": 1,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:54:39.317Z",
-    "verdict": "needs_discussion",
-    "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": null,
-    "tokensUsed": 3368,
-    "latencyMs": 18863,
-    "falseApprove": null,
-    "falsePositive": false
-  },
-  {
-    "fixture": "RI-01",
-    "variant": "fixed",
-    "run": 2,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:55:11.276Z",
-    "verdict": "needs_discussion",
-    "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": null,
-    "tokensUsed": 490,
-    "latencyMs": 31958,
-    "falseApprove": null,
-    "falsePositive": false
-  },
-  {
-    "fixture": "RI-01",
-    "variant": "fixed",
-    "run": 3,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:55:16.654Z",
-    "verdict": "request_changes",
-    "blocked": true,
-    "checkState": "review_blocked",
-    "findingCount": 2,
-    "findingSeverities": [
-      "high",
-      "medium"
-    ],
-    "findingTitles": [
-      "Truncated roadmap content",
-      "Potential heading numbering error in README"
-    ],
-    "v2PrimaryFindings": [
-      {
-        "severity": "P1",
-        "claim": "Truncated roadmap content"
+        "severity": "P3",
+        "claim": "README.md status still says Phase 0.0 reopened/scaffold pending, contradicting the PR's closure of 0.0/0.1A/0.2"
       },
       {
-        "severity": "P2",
-        "claim": "Potential heading numbering error in README"
+        "severity": "P3",
+        "claim": "constitution.md Status section still declares Phase 0.0 reopened with scaffold 'was not' complete"
+      },
+      {
+        "severity": "P3",
+        "claim": "README.md 'Read first' reading-order list omits the new docs/roadmap.md orientation document"
       }
     ],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "not_run",
-    "v2DecisionReason": "P1 finding requires changes",
-    "expectedDefectDetected": null,
-    "tokensUsed": 557,
-    "latencyMs": 5377,
-    "falseApprove": null,
-    "falsePositive": true
-  },
-  {
-    "fixture": "RI-02",
-    "variant": "broken",
-    "run": 1,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:55:31.929Z",
-    "verdict": "needs_discussion",
-    "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Phase-0-spec.md declares Phases 0.0/0.1A/0.2 CLOSED while its own estimated-range block still labels 0.0 as REOPENED, an"
+      },
+      {
+        "severity": "P3",
+        "claim": "Status line asserts 'gate:0.2 green on main (dd07fb2)' with no verifiable gate receipt and apparently no implemented gat"
+      }
+    ],
     "v2VerifierStatus": "incomplete",
     "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": false,
-    "tokensUsed": 144,
-    "latencyMs": 15273,
+    "expectedDefectDetected": true,
+    "tokensUsed": 12633,
+    "latencyMs": 125109,
     "falseApprove": false,
     "falsePositive": null
   },
   {
-    "fixture": "RI-02",
+    "fixture": "RI-01",
     "variant": "broken",
     "run": 2,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:55:47.678Z",
-    "verdict": "needs_discussion",
+    "timestamp": "2026-08-13T12:58:21.160Z",
+    "verdict": "approved",
     "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": false,
-    "tokensUsed": 155,
-    "latencyMs": 15749,
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-02",
-    "variant": "broken",
-    "run": 3,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:56:02.999Z",
-    "verdict": "needs_discussion",
-    "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": false,
-    "tokensUsed": 2827,
-    "latencyMs": 15321,
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-02",
-    "variant": "fixed",
-    "run": 1,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:56:06.579Z",
-    "verdict": "needs_discussion",
-    "blocked": true,
-    "checkState": "review_blocked",
-    "findingCount": 1,
+    "checkState": "review_passed",
+    "findingCount": 3,
     "findingSeverities": [
-      "medium"
+      "low",
+      "low",
+      "low"
     ],
     "findingTitles": [
-      "Documentation roadmap.md truncated mid-word"
+      "README.md still declares 'Phase 0.0 reopened / scaffold pending', contradicting the new 'closed' sta",
+      "constitution.md ## Status still says 'Phase 0.0 is reopened', contradicting the new 'closed' status",
+      "roadmap.md is added but not referenced in README.md's 'Read first' reading-order list"
     ],
     "v2PrimaryFindings": [
       {
-        "severity": "P2",
-        "claim": "Documentation roadmap.md truncated mid-word"
+        "severity": "P3",
+        "claim": "README.md still declares 'Phase 0.0 reopened / scaffold pending', contradicting the new 'closed' status in phase-0-spec."
+      },
+      {
+        "severity": "P3",
+        "claim": "constitution.md ## Status still says 'Phase 0.0 is reopened', contradicting the new 'closed' status"
+      },
+      {
+        "severity": "P3",
+        "claim": "roadmap.md is added but not referenced in README.md's 'Read first' reading-order list"
       }
     ],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "not_run",
-    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
-    "expectedDefectDetected": null,
-    "tokensUsed": 402,
-    "latencyMs": 3579,
-    "falseApprove": null,
-    "falsePositive": true
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Internal self-contradiction: phase-0-spec.md marks Phase 0.0 as CLOSED but its own estimate table still says REOPENED"
+      },
+      {
+        "severity": "P3",
+        "claim": "README.md status and phase-at-a-glance now contradict the declared CLOSED status"
+      },
+      {
+        "severity": "P3",
+        "claim": "docs/constitution.md still declares Phase 0.0 reopened, contradicting the PR's CLOSED status"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": true,
+    "tokensUsed": 10867,
+    "latencyMs": 113190,
+    "falseApprove": true,
+    "falsePositive": null
   },
   {
-    "fixture": "RI-02",
-    "variant": "fixed",
-    "run": 2,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:56:39.596Z",
-    "verdict": "needs_discussion",
-    "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": null,
-    "tokensUsed": 225,
-    "latencyMs": 33016,
-    "falseApprove": null,
-    "falsePositive": false
-  },
-  {
-    "fixture": "RI-02",
-    "variant": "fixed",
+    "fixture": "RI-01",
+    "variant": "broken",
     "run": 3,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:56:43.480Z",
-    "verdict": "needs_discussion",
-    "blocked": true,
-    "checkState": "review_blocked",
-    "findingCount": 1,
+    "timestamp": "2026-08-13T13:00:40.335Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 4,
     "findingSeverities": [
-      "medium"
+      "low",
+      "low",
+      "low",
+      "low"
     ],
     "findingTitles": [
-      "Markdown list item renumbering error in README.md"
+      "README.md status still declares Phase 0.0 'reopened' after this PR marks 0.0/0.1A/0.2 closed",
+      "docs/constitution.md '## Status' section still says Phase 0.0 is 'reopened'",
+      "phase-0-spec.md 'estimated total range' block still labels 0.0 as '(REOPENED)' despite the section h",
+      "New roadmap.md is not linked from README.md 'Read first' list or phase-0-spec.md references"
     ],
     "v2PrimaryFindings": [
       {
-        "severity": "P2",
-        "claim": "Markdown list item renumbering error in README.md"
+        "severity": "P3",
+        "claim": "README.md status still declares Phase 0.0 'reopened' after this PR marks 0.0/0.1A/0.2 closed"
+      },
+      {
+        "severity": "P3",
+        "claim": "docs/constitution.md '## Status' section still says Phase 0.0 is 'reopened'"
+      },
+      {
+        "severity": "P3",
+        "claim": "phase-0-spec.md 'estimated total range' block still labels 0.0 as '(REOPENED)' despite the section heading being marked "
+      },
+      {
+        "severity": "P3",
+        "claim": "New roadmap.md is not linked from README.md 'Read first' list or phase-0-spec.md references"
       }
     ],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "not_run",
-    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
-    "expectedDefectDetected": null,
-    "tokensUsed": 445,
-    "latencyMs": 3884,
-    "falseApprove": null,
-    "falsePositive": true
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "README.md status still says Phase 0.0 REOPENED/scaffold pending, contradicting the PR's CLOSED declaration"
+      },
+      {
+        "severity": "P3",
+        "claim": "docs/constitution.md Status section still says Phase 0.0 is reopened"
+      },
+      {
+        "severity": "P3",
+        "claim": "Internal contradiction within changed file: phase-0-spec.md estimated range table still marks 0.0 as REOPENED"
+      },
+      {
+        "severity": "P3",
+        "claim": "Newly added docs/roadmap.md not listed in README.md 'Read first' document index"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": true,
+    "tokensUsed": 18387,
+    "latencyMs": 139175,
+    "falseApprove": true,
+    "falsePositive": null
   },
   {
-    "fixture": "RI-03",
-    "variant": "broken",
+    "fixture": "RI-01",
+    "variant": "fixed",
     "run": 1,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:57:17.192Z",
-    "verdict": "needs_discussion",
-    "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": false,
-    "tokensUsed": 6138,
-    "latencyMs": 33710,
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-03",
-    "variant": "broken",
-    "run": 2,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:57:36.019Z",
-    "verdict": "needs_discussion",
-    "blocked": false,
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": false,
-    "tokensUsed": 7281,
-    "latencyMs": 18827,
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-03",
-    "variant": "broken",
-    "run": 3,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:58:07.753Z",
+    "timestamp": "2026-08-13T13:01:50.378Z",
     "verdict": "needs_discussion",
     "blocked": false,
     "checkState": "review_incomplete",
@@ -378,68 +191,30 @@
       "low"
     ],
     "findingTitles": [
-      "Potential blocking of non-review pillars in handleManualRun"
+      "README 'Read first' numbered list has a duplicate '3.' after inserting roadmap.md"
     ],
     "v2PrimaryFindings": [
       {
         "severity": "P3",
-        "claim": "Potential blocking of non-review pillars in handleManualRun"
+        "claim": "README 'Read first' numbered list has a duplicate '3.' after inserting roadmap.md"
       }
     ],
     "v2VerifierFindings": [],
     "v2VerifierStatus": "incomplete",
     "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
-    "expectedDefectDetected": false,
-    "tokensUsed": 1232,
-    "latencyMs": 31733,
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-03",
-    "variant": "fixed",
-    "run": 1,
-    "model": "claude-sonnet-4-20250514",
-    "v2Mode": "live",
-    "timestamp": "2026-08-13T00:58:13.998Z",
-    "verdict": "needs_discussion",
-    "blocked": true,
-    "checkState": "review_blocked",
-    "findingCount": 2,
-    "findingSeverities": [
-      "medium",
-      "low"
-    ],
-    "findingTitles": [
-      "URL missing baseUrl normalization in activation link",
-      "Test mock conditional logic could mask assertion failures"
-    ],
-    "v2PrimaryFindings": [
-      {
-        "severity": "P2",
-        "claim": "URL missing baseUrl normalization in activation link"
-      },
-      {
-        "severity": "P3",
-        "claim": "Test mock conditional logic could mask assertion failures"
-      }
-    ],
-    "v2VerifierFindings": [],
-    "v2VerifierStatus": "not_run",
-    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
     "expectedDefectDetected": null,
-    "tokensUsed": 6632,
-    "latencyMs": 6244,
+    "tokensUsed": 10966,
+    "latencyMs": 70038,
     "falseApprove": null,
-    "falsePositive": true
+    "falsePositive": false
   },
   {
-    "fixture": "RI-03",
+    "fixture": "RI-01",
     "variant": "fixed",
     "run": 2,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:58:33.403Z",
+    "timestamp": "2026-08-13T13:03:39.697Z",
     "verdict": "needs_discussion",
     "blocked": false,
     "checkState": "review_incomplete",
@@ -448,20 +223,356 @@
       "low"
     ],
     "findingTitles": [
-      "Typo in manual run acknowledgment message"
+      "README 'Read first' list has a duplicate '3.' after inserting roadmap.md"
     ],
     "v2PrimaryFindings": [
       {
         "severity": "P3",
-        "claim": "Typo in manual run acknowledgment message"
+        "claim": "README 'Read first' list has a duplicate '3.' after inserting roadmap.md"
       }
     ],
     "v2VerifierFindings": [],
     "v2VerifierStatus": "incomplete",
     "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
     "expectedDefectDetected": null,
-    "tokensUsed": 361,
-    "latencyMs": 19404,
+    "tokensUsed": 9646,
+    "latencyMs": 109318,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 3,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:05:33.996Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' list has a duplicate '3.' marker after inserting roadmap.md",
+      "Roadmap names Phase 0.5 'Host runtime + durable cognition integration' but phase-0-spec.md §0.5 titl"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' list has a duplicate '3.' marker after inserting roadmap.md"
+      },
+      {
+        "severity": "P3",
+        "claim": "Roadmap names Phase 0.5 'Host runtime + durable cognition integration' but phase-0-spec.md §0.5 title is 'Durable cognit"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": null,
+    "tokensUsed": 8683,
+    "latencyMs": 114298,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 1,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:07:13.024Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Stale 'Phase 0.0 (REOPENED)' status remains in the spec's total-range section after the PR marks 0.0"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Stale 'Phase 0.0 (REOPENED)' status remains in the spec's total-range section after the PR marks 0.0 as CLOSED"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": false,
+    "tokensUsed": 13865,
+    "latencyMs": 99025,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 2,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:08:10.919Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "expectedDefectDetected": false,
+    "tokensUsed": 15324,
+    "latencyMs": 57894,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 3,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:09:25.375Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Status text cites base SHA dd07fb2 as the commit where gate:0.2 is green, but that SHA is the PR's b"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Status text cites base SHA dd07fb2 as the commit where gate:0.2 is green, but that SHA is the PR's base — representation"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": false,
+    "tokensUsed": 4507,
+    "latencyMs": 74456,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 1,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:10:52.544Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "expectedDefectDetected": null,
+    "tokensUsed": 9463,
+    "latencyMs": 87167,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 2,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:12:13.129Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Inserted roadmap.md entry into 'Read first' left a duplicate list item number (two '3.' items)",
+      "Phase 0.5 exit-gate prose in phase-0-spec.md is now a run-on sentence missing terminal punctuation b"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Inserted roadmap.md entry into 'Read first' left a duplicate list item number (two '3.' items)"
+      },
+      {
+        "severity": "P3",
+        "claim": "Phase 0.5 exit-gate prose in phase-0-spec.md is now a run-on sentence missing terminal punctuation before the original c"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": null,
+    "tokensUsed": 6988,
+    "latencyMs": 80585,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 3,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:13:25.797Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' list has a duplicate item number (3) and a skipped number (4) after inserting ro"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' list has a duplicate item number (3) and a skipped number (4) after inserting roadmap.md"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": null,
+    "tokensUsed": 3266,
+    "latencyMs": 72667,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 1,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:15:09.435Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "expectedDefectDetected": false,
+    "tokensUsed": 26541,
+    "latencyMs": 103636,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 2,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:16:48.975Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "None of the described source-code changes exist at the HEAD commit; the diff is entirely uncommitted"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "None of the described source-code changes exist at the HEAD commit; the diff is entirely uncommitted and the tests will "
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": false,
+    "tokensUsed": 8645,
+    "latencyMs": 99540,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 3,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:18:09.715Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "expectedDefectDetected": false,
+    "tokensUsed": 9785,
+    "latencyMs": 80740,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 1,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:19:26.267Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "expectedDefectDetected": null,
+    "tokensUsed": 23296,
+    "latencyMs": 76551,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 2,
+    "model": "glm-5.2",
+    "v2Mode": "live",
+    "timestamp": "2026-08-13T13:20:50.123Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "expectedDefectDetected": null,
+    "tokensUsed": 17301,
+    "latencyMs": 83855,
     "falseApprove": null,
     "falsePositive": false
   },
@@ -469,69 +580,43 @@
     "fixture": "RI-03",
     "variant": "fixed",
     "run": 3,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:58:39.473Z",
+    "timestamp": "2026-08-13T13:22:08.900Z",
     "verdict": "needs_discussion",
-    "blocked": true,
-    "checkState": "review_blocked",
-    "findingCount": 2,
-    "findingSeverities": [
-      "medium",
-      "medium"
-    ],
-    "findingTitles": [
-      "hardcoded fallback for activation URL may produce broken link",
-      "dynamic import inside hot path adds latency"
-    ],
-    "v2PrimaryFindings": [
-      {
-        "severity": "P2",
-        "claim": "hardcoded fallback for activation URL may produce broken link"
-      },
-      {
-        "severity": "P2",
-        "claim": "dynamic import inside hot path adds latency"
-      }
-    ],
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
     "v2VerifierFindings": [],
     "v2VerifierStatus": "not_run",
-    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
     "expectedDefectDetected": null,
-    "tokensUsed": 690,
-    "latencyMs": 6069,
+    "tokensUsed": 8991,
+    "latencyMs": 78776,
     "falseApprove": null,
-    "falsePositive": true
+    "falsePositive": false
   },
   {
     "fixture": "RI-04",
     "variant": "broken",
     "run": 1,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:58:43.660Z",
+    "timestamp": "2026-08-13T13:24:44.540Z",
     "verdict": "needs_discussion",
-    "blocked": true,
-    "checkState": "review_blocked",
-    "findingCount": 1,
-    "findingSeverities": [
-      "medium"
-    ],
-    "findingTitles": [
-      "Inaccurate footer text when auto_label is enabled"
-    ],
-    "v2PrimaryFindings": [
-      {
-        "severity": "P2",
-        "claim": "Inaccurate footer text when auto_label is enabled"
-      }
-    ],
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
     "v2VerifierFindings": [],
     "v2VerifierStatus": "not_run",
-    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
     "expectedDefectDetected": false,
-    "tokensUsed": 3275,
-    "latencyMs": 4186,
+    "tokensUsed": 22031,
+    "latencyMs": 155639,
     "falseApprove": false,
     "falsePositive": null
   },
@@ -539,9 +624,9 @@
     "fixture": "RI-04",
     "variant": "broken",
     "run": 2,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:59:02.858Z",
+    "timestamp": "2026-08-13T13:27:20.193Z",
     "verdict": "needs_discussion",
     "blocked": false,
     "checkState": "review_incomplete",
@@ -550,11 +635,10 @@
     "findingTitles": [],
     "v2PrimaryFindings": [],
     "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "v2VerifierStatus": "not_run",
     "expectedDefectDetected": false,
-    "tokensUsed": 186,
-    "latencyMs": 19198,
+    "tokensUsed": 12759,
+    "latencyMs": 155653,
     "falseApprove": false,
     "falsePositive": null
   },
@@ -562,22 +646,31 @@
     "fixture": "RI-04",
     "variant": "broken",
     "run": 3,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:59:22.799Z",
+    "timestamp": "2026-08-13T13:29:41.307Z",
     "verdict": "needs_discussion",
     "blocked": false,
     "checkState": "review_incomplete",
-    "findingCount": 0,
-    "findingSeverities": [],
-    "findingTitles": [],
-    "v2PrimaryFindings": [],
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "With the gate removed, an empty triage_summary produces a comment with only a header and footer"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "With the gate removed, an empty triage_summary produces a comment with only a header and footer"
+      }
+    ],
     "v2VerifierFindings": [],
     "v2VerifierStatus": "incomplete",
     "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
     "expectedDefectDetected": false,
-    "tokensUsed": 219,
-    "latencyMs": 19940,
+    "tokensUsed": 6267,
+    "latencyMs": 141114,
     "falseApprove": false,
     "falsePositive": null
   },
@@ -585,9 +678,9 @@
     "fixture": "RI-04",
     "variant": "fixed",
     "run": 1,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:59:47.321Z",
+    "timestamp": "2026-08-13T13:30:36.752Z",
     "verdict": "needs_discussion",
     "blocked": false,
     "checkState": "review_incomplete",
@@ -596,11 +689,10 @@
     "findingTitles": [],
     "v2PrimaryFindings": [],
     "v2VerifierFindings": [],
-    "v2VerifierStatus": "incomplete",
-    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "v2VerifierStatus": "not_run",
     "expectedDefectDetected": null,
-    "tokensUsed": 5109,
-    "latencyMs": 24521,
+    "tokensUsed": 21672,
+    "latencyMs": 55444,
     "falseApprove": null,
     "falsePositive": false
   },
@@ -608,47 +700,31 @@
     "fixture": "RI-04",
     "variant": "fixed",
     "run": 2,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T00:59:52.980Z",
-    "verdict": "request_changes",
-    "blocked": true,
-    "checkState": "review_blocked",
-    "findingCount": 2,
-    "findingSeverities": [
-      "high",
-      "medium"
-    ],
-    "findingTitles": [
-      "Pagination loop will never exit if page returns exactly PER_PAGE items",
-      "Mismatch between test expectation and function behavior"
-    ],
-    "v2PrimaryFindings": [
-      {
-        "severity": "P1",
-        "claim": "Pagination loop will never exit if page returns exactly PER_PAGE items"
-      },
-      {
-        "severity": "P2",
-        "claim": "Mismatch between test expectation and function behavior"
-      }
-    ],
+    "timestamp": "2026-08-13T13:31:52.068Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
     "v2VerifierFindings": [],
     "v2VerifierStatus": "not_run",
-    "v2DecisionReason": "P1 finding requires changes",
     "expectedDefectDetected": null,
-    "tokensUsed": 688,
-    "latencyMs": 5659,
+    "tokensUsed": 13444,
+    "latencyMs": 75315,
     "falseApprove": null,
-    "falsePositive": true
+    "falsePositive": false
   },
   {
     "fixture": "RI-04",
     "variant": "fixed",
     "run": 3,
-    "model": "claude-sonnet-4-20250514",
+    "model": "glm-5.2",
     "v2Mode": "live",
-    "timestamp": "2026-08-13T01:00:30.945Z",
+    "timestamp": "2026-08-13T13:33:46.027Z",
     "verdict": "needs_discussion",
     "blocked": false,
     "checkState": "review_incomplete",
@@ -660,8 +736,8 @@
     "v2VerifierStatus": "incomplete",
     "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
     "expectedDefectDetected": null,
-    "tokensUsed": 351,
-    "latencyMs": 37965,
+    "tokensUsed": 16475,
+    "latencyMs": 113959,
     "falseApprove": null,
     "falsePositive": false
   }
