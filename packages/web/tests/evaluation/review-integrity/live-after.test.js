@@ -11,6 +11,10 @@
 //
 // Results are written to live-after-results.json for side-by-side comparison
 // with live-baseline-results.json (the frozen GitWire-before baseline).
+//
+// Frozen acceptance criteria (per fixture, enforced):
+//   Broken: expected material defect detected in ≥2/3 runs
+//   Fixed:  zero false P0/P1/P2 findings AND APPROVE in ≥2/3 runs
 
 import { jest } from "@jest/globals";
 import { writeFileSync } from "node:fs";
@@ -24,6 +28,10 @@ const describeOrSkip = REVIEW_INTEGRITY_LIVE ? describe : describe.skip;
 // ── Mocks (same as live-baseline, EXCEPT @anthropic-ai/sdk stays real) ───────
 
 const mockDbQuery = jest.fn();
+
+// Captured from persistIntegrityReceipt's UPDATE call — gives us the
+// complete v2 finding/verifier receipt set, not just the legacy findings.
+let v2Capture = null;
 
 await jest.unstable_mockModule("../../../config/index.js", () => ({
   config: {
@@ -118,14 +126,13 @@ const BASE_CONFIG = {
   engine: "claude", model: "claude-sonnet-4-20250514",
   max_duration_seconds: 300, bundle_max_chars: 180000, require_file_scope: true,
   adversarial_review: false,
-  review_integrity_v2: "live",  // ← v2 cutover active
+  review_integrity_v2: "live",
 };
 
 function makeRepo() {
   return { id: 999, owner: { login: "org" }, name: "repo", full_name: "org/repo" };
 }
 
-// V2-compatible PR builder — includes base.sha and changed_files
 function makeV2PR(fixture) {
   return {
     number: 42,
@@ -138,11 +145,47 @@ function makeV2PR(fixture) {
   };
 }
 
+// ── Expected-defect detection (evaluated against COMBINED evidence) ──────────
+
+function checkExpectedDefect(caseId, combinedFindingText) {
+  switch (caseId) {
+    case "RI-01":
+      return (
+        (combinedFindingText.includes("synchron") || combinedFindingText.includes("stale") ||
+         combinedFindingText.includes("contradict") || combinedFindingText.includes("inconsisten")) &&
+        (combinedFindingText.includes("status") || combinedFindingText.includes("phase") ||
+         combinedFindingText.includes("declaration") || combinedFindingText.includes("readme") ||
+         combinedFindingText.includes("constitution"))
+      );
+    case "RI-02":
+      return (
+        (combinedFindingText.includes("gate") || combinedFindingText.includes("exit")) &&
+        (combinedFindingText.includes("agent") || combinedFindingText.includes("replace") ||
+         combinedFindingText.includes("restart"))
+      );
+    case "RI-03":
+      return (
+        combinedFindingText.includes("basepath") || combinedFindingText.includes("base path") ||
+        combinedFindingText.includes("/dashboard") ||
+        (combinedFindingText.includes("url") &&
+         (combinedFindingText.includes("path") || combinedFindingText.includes("config")))
+      );
+    case "RI-04":
+      return (
+        combinedFindingText.includes("paginat") ||
+        combinedFindingText.includes("duplicate comment") ||
+        (combinedFindingText.includes("page") && combinedFindingText.includes("comment"))
+      );
+    default:
+      return false;
+  }
+}
+
 // ── Results collector ────────────────────────────────────────────────────────
 
 const allResults = [];
 
-// ── Tests ────────────────────────────────────────────────────────────────────
+// ── Tests: one per fixture, each runs NUM_RUNS iterations ───────────────────
 
 describeOrSkip("RI live-after — v2 live cutover matrix", () => {
   const NUM_RUNS = 3;
@@ -150,6 +193,7 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    v2Capture = null;
     let reviewId = 1;
     mockDbQuery.mockImplementation((sql, params) => {
       if (sql.includes("ai_review_config")) return { rows: [BASE_CONFIG] };
@@ -157,6 +201,18 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
         return { rows: [{ id: reviewId }] };
       }
       if (sql.includes("UPDATE ai_reviews")) {
+        // Capture v2 evidence from persistIntegrityReceipt's UPDATE.
+        // params[0] = evidence_manifest JSON, params[1] = verification_receipt JSON,
+        // params[3] = decision_reason.
+        if (sql.includes("evidence_manifest") && Array.isArray(params)) {
+          try {
+            v2Capture = {
+              manifest: JSON.parse(params[0]),
+              verifierReceipt: params[1] ? JSON.parse(params[1]) : null,
+              decisionReason: params[3] || null,
+            };
+          } catch (_e) { /* parse failure — v2Capture stays null */ }
+        }
         return { rows: [] };
       }
       if (sql.includes("issues")) return { rows: [] };
@@ -166,8 +222,11 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
   });
 
   for (const fixture of fixtures) {
-    for (let run = 1; run <= NUM_RUNS; run++) {
-      it(`${fixture.caseId} ${fixture.variant} run ${run}/${NUM_RUNS}`, async () => {
+    it(`${fixture.caseId} ${fixture.variant} — frozen threshold (${NUM_RUNS} runs)`, async () => {
+      const runs = [];
+
+      for (let run = 1; run <= NUM_RUNS; run++) {
+        v2Capture = null;
         const startTime = Date.now();
         const octokit = buildFixtureOctokit(fixture);
 
@@ -180,7 +239,7 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
 
         const elapsedMs = Date.now() - startTime;
 
-        // Extract tokens from the mock DB UPDATE call
+        // Extract primary tokens from the mock DB UPDATE call
         let tokensUsed = 0;
         const updateCalls = mockDbQuery.mock.calls.filter(
           ([sql]) => typeof sql === "string" && sql.includes("UPDATE ai_reviews")
@@ -190,53 +249,34 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
           const sql = lastCall[0];
           const params = lastCall[1];
           if (Array.isArray(params)) {
-            if (sql.includes("tokens_used = $8")) {
-              tokensUsed = params[7] || 0;
-            } else if (sql.includes("tokens_used = $2")) {
-              tokensUsed = params[1] || 0;
-            }
+            if (sql.includes("tokens_used = $8")) tokensUsed = params[7] || 0;
+            else if (sql.includes("tokens_used = $2")) tokensUsed = params[1] || 0;
           }
         }
 
-        // Expected defect detection (same criteria as live-baseline)
-        let expectedDefectDetected = null;
-        if (fixture.expectedFinding) {
-          const findings = result?.findings || [];
-          const allFindingText = findings
-            .map(f => ((f.title || "") + " " + (f.description || f.body || "")).toLowerCase())
-            .join(" ");
+        // ── Capture the COMPLETE v2 evidence set ───────────────────────────
+        const v2PrimaryFindings = v2Capture?.manifest?.primaryFindings || [];
+        const v2VerifierFindings = v2Capture?.verifierReceipt?.findings || [];
+        const v2VerifierStatus = v2Capture?.verifierReceipt?.status || "not_run";
 
-          switch (fixture.caseId) {
-            case "RI-01":
-              expectedDefectDetected =
-                (allFindingText.includes("synchron") || allFindingText.includes("stale") ||
-                 allFindingText.includes("contradict") || allFindingText.includes("inconsisten")) &&
-                (allFindingText.includes("status") || allFindingText.includes("phase") ||
-                 allFindingText.includes("declaration") || allFindingText.includes("readme") ||
-                 allFindingText.includes("constitution"));
-              break;
-            case "RI-02":
-              expectedDefectDetected =
-                (allFindingText.includes("gate") || allFindingText.includes("exit")) &&
-                (allFindingText.includes("agent") || allFindingText.includes("replace") ||
-                 allFindingText.includes("restart"));
-              break;
-            case "RI-03":
-              expectedDefectDetected =
-                allFindingText.includes("basepath") || allFindingText.includes("base path") ||
-                allFindingText.includes("/dashboard") || allFindingText.includes("url") &&
-                (allFindingText.includes("path") || allFindingText.includes("config"));
-              break;
-            case "RI-04":
-              expectedDefectDetected =
-                allFindingText.includes("paginat") || allFindingText.includes("pagination") ||
-                allFindingText.includes("duplicate comment") ||
-                (allFindingText.includes("page") && allFindingText.includes("comment"));
-              break;
-            default:
-              expectedDefectDetected = false;
-          }
-        }
+        // Build combined finding text for defect detection — includes
+        // legacy result.findings AND v2 primary claims AND verifier claims
+        const combinedFindingText = [
+          ...(result?.findings || []).map(f =>
+            ((f.title || "") + " " + (f.description || f.body || "")).toLowerCase()),
+          ...v2PrimaryFindings.map(f => (f.claim || "").toLowerCase()),
+          ...v2VerifierFindings.map(f => (f.claim || "").toLowerCase()),
+        ].join(" ");
+
+        const expectedDefectDetected = fixture.expectedFinding
+          ? checkExpectedDefect(fixture.caseId, combinedFindingText)
+          : null;
+
+        // Material-finding check across BOTH legacy and v2 severity scales
+        const legacyMaterial = (result?.findings || []).some(f =>
+          ["critical", "high", "medium"].includes(f.severity));
+        const v2Material = [...v2PrimaryFindings, ...v2VerifierFindings].some(f =>
+          ["P0", "P1", "P2"].includes(f.severity));
 
         const record = {
           fixture: fixture.caseId,
@@ -251,28 +291,42 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
           findingCount: result?.findings?.length || 0,
           findingSeverities: (result?.findings || []).map(f => f.severity || "unknown"),
           findingTitles: (result?.findings || []).map(f => (f.title || "").slice(0, 100)),
+          // Complete v2 evidence set
+          v2PrimaryFindings: v2PrimaryFindings.map(f => ({ severity: f.severity, claim: (f.claim || "").slice(0, 120) })),
+          v2VerifierFindings: v2VerifierFindings.map(f => ({ severity: f.severity, claim: (f.claim || "").slice(0, 120) })),
+          v2VerifierStatus,
+          v2DecisionReason: v2Capture?.decisionReason,
           expectedDefectDetected,
           tokensUsed,
           latencyMs: elapsedMs,
           falseApprove: fixture.variant === "broken" ? result?.verdict === "approved" : null,
-          falsePositive: fixture.variant === "fixed"
-            ? (result?.findings || []).some(f => ["critical", "high", "medium"].includes(f.severity))
-            : null,
+          falsePositive: fixture.variant === "fixed" ? (legacyMaterial || v2Material) : null,
         };
 
+        runs.push(record);
         allResults.push(record);
 
-        const status = record.falseApprove === true ? "FALSE APPROVE" :
-                       record.falseApprove === false ? "correctly avoided" :
-                       record.falsePositive === true ? "FALSE POSITIVE" :
-                       record.falsePositive === false ? "clean" :
-                       record.verdict;
         console.log(
           `  ${fixture.caseId} ${fixture.variant} run ${run}: verdict=${record.verdict} ` +
-          `checkState=${record.checkState || "n/a"} (${record.tokensUsed} tokens, ${record.latencyMs}ms) — ${status}`
+          `checkState=${record.checkState || "n/a"} v2Verifier=${v2VerifierStatus} ` +
+          `defect=${expectedDefectDetected} (${record.tokensUsed} tokens, ${record.latencyMs}ms)`
         );
-      }, 180000); // 3 min timeout — v2 adds verifier LLM call
-    }
+      }
+
+      // ── Enforce frozen per-fixture thresholds ──────────────────────────
+      if (fixture.variant === "broken") {
+        // Each broken fixture must detect its expected material defect in ≥2/3 runs
+        const detections = runs.filter(r => r.expectedDefectDetected === true).length;
+        expect(detections).toBeGreaterThanOrEqual(2);
+      } else {
+        // Each fixed fixture must produce zero false P0/P1/P2 AND APPROVE in ≥2/3
+        const falsePositives = runs.filter(r => r.falsePositive === true).length;
+        expect(falsePositives).toBe(0);
+
+        const approves = runs.filter(r => r.verdict === "approved").length;
+        expect(approves).toBeGreaterThanOrEqual(2);
+      }
+    }, 600000); // 10 min for 3 runs
   }
 
   afterAll(() => {
@@ -285,15 +339,17 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
     const fixed = allResults.filter(r => r.variant === "fixed");
     const falseApproves = broken.filter(r => r.falseApprove === true);
     const falsePositives = fixed.filter(r => r.falsePositive === true);
+    const detections = broken.filter(r => r.expectedDefectDetected === true);
+    const approves = fixed.filter(r => r.verdict === "approved");
 
     console.log("\n=== GitWire-after (v2 live) Summary ===");
     console.log(`Broken: ${falseApproves.length}/${broken.length} false APPROVEs`);
-    console.log(`Broken: ${broken.filter(r => r.expectedDefectDetected === true).length}/${broken.length} expected defect detected`);
-    console.log(`Fixed: ${falsePositives.length}/${fixed.length} false positives`);
+    console.log(`Broken: ${detections.length}/${broken.length} expected defect detected`);
+    console.log(`Fixed: ${falsePositives.length}/${fixed.length} false positives (P0/P1/P2)`);
+    console.log(`Fixed: ${approves.length}/${fixed.length} APPROVEs`);
     console.log(`Avg tokens: ${Math.round(allResults.reduce((s, r) => s + r.tokensUsed, 0) / allResults.length)}`);
     console.log(`Avg latency: ${Math.round(allResults.reduce((s, r) => s + r.latencyMs, 0) / allResults.length)}ms`);
 
-    // v2-specific breakdown
     const byCheckState = {};
     for (const r of allResults) {
       const key = r.checkState || "legacy";
@@ -301,9 +357,31 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
     }
     console.log("Check states:", JSON.stringify(byCheckState));
 
+    // v2 verifier status breakdown
+    const byVerifier = {};
+    for (const r of allResults) {
+      byVerifier[r.v2VerifierStatus] = (byVerifier[r.v2VerifierStatus] || 0) + 1;
+    }
+    console.log("Verifier statuses:", JSON.stringify(byVerifier));
+
     console.log(`\nComparison with GitWire-before baseline:`);
     console.log(`  Before: 11/12 broken false APPROVEs (91.7%), 0/12 defect detection`);
-    console.log(`  After:  ${falseApproves.length}/${broken.length} broken false APPROVEs (${Math.round(falseApproves.length / broken.length * 100)}%), ${broken.filter(r => r.expectedDefectDetected === true).length}/${broken.length} defect detection`);
+    console.log(`  After:  ${falseApproves.length}/${broken.length} broken false APPROVEs (${Math.round(falseApproves.length / broken.length * 100)}%), ${detections.length}/${broken.length} defect detection`);
+
+    console.log(`\nFrozen threshold enforcement:`);
+    for (const fixture of fixtures) {
+      const fRuns = allResults.filter(r => r.fixture === fixture.caseId && r.variant === fixture.variant);
+      if (fRuns.length === 0) continue;
+      const det = fRuns.filter(r => r.expectedDefectDetected === true).length;
+      const fp = fRuns.filter(r => r.falsePositive === true).length;
+      const ap = fRuns.filter(r => r.verdict === "approved").length;
+      if (fixture.variant === "broken") {
+        console.log(`  ${fixture.caseId} broken: ${det}/3 defect detections (need ≥2)`);
+      } else {
+        console.log(`  ${fixture.caseId} fixed: ${ap}/3 APPROVEs (need ≥2), ${fp} false positives (need 0)`);
+      }
+    }
+
     console.log(`Results: ${outputPath}`);
   });
 });
