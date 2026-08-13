@@ -315,7 +315,11 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
 
       // ── Enforce frozen per-fixture thresholds ──────────────────────────
       if (fixture.variant === "broken") {
-        // Each broken fixture must detect its expected material defect in ≥2/3 runs
+        // Frozen requirement: zero false APPROVEs on broken code
+        const falseApproves = runs.filter(r => r.verdict === "approved").length;
+        expect(falseApproves).toBe(0);
+
+        // Frozen requirement: detect expected material defect in ≥2/3 runs
         const detections = runs.filter(r => r.expectedDefectDetected === true).length;
         expect(detections).toBeGreaterThanOrEqual(2);
       } else {
