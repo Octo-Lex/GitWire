@@ -123,7 +123,7 @@ const BASE_CONFIG = {
   max_files_to_review: 30, max_lines_to_review: 2000,
   architecture_context: null,
   ignore_patterns: ["*.lock", "package-lock.json"],
-  engine: "claude", model: "claude-sonnet-4-20250514",
+  engine: "claude", model: process.env.ABLATION_MODEL || "glm-5.2",
   max_duration_seconds: 300, bundle_max_chars: 180000, require_file_scope: true,
   adversarial_review: false,
   review_integrity_v2: "live",
