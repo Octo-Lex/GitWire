@@ -268,6 +268,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           prAuthor: "@" + (pr.user?.login || "unknown"),
           prBranch: (pr.base?.ref || "main") + " ← " + (pr.head?.ref || "unknown"),
           repoName: repository.full_name,
+          promptVariant: cfg._reviewPromptVariant || null,
         });
       },
       { label: "claude review", timeoutMs: maxDurationMs }
@@ -777,6 +778,32 @@ async function runStructuredReview(bundle, changedFiles, opts) {
     includeSecurity: opts.includeSecurity,
     includeArchitecture: opts.includeArchitecture,
   });
+
+  // Ablation arm B: cross-file prompt variant (corrected review instructions
+  // on the legacy data path, no tools). Appended to the standard system prompt.
+  if (opts.promptVariant === "cross_file") {
+    systemPrompt += [
+      "",
+      "## Cross-file correctness",
+      "",
+      "The changed files shown above are your STARTING POINT. However, correctness",
+      "can depend on unchanged callers, helpers, configs, tests, documentation,",
+      "and repository contracts. Consider:",
+      "",
+      "- Does a changed function signature break its callers?",
+      "- Does a change contradict documented status declarations, API contracts,",
+      "  configuration requirements, or gate definitions?",
+      "- Does a change require updates to tests or configuration that are missing?",
+      "- Are there cross-file dependencies that the diff alone does not show?",
+      "",
+      "Normative documentation — status declarations, executable specifications,",
+      "configuration contracts, API contracts — is correctness material when a",
+      "change can contradict it. Prose and style are not.",
+      "",
+      "A clean patch with no findings is a valid and welcome result.",
+      "Omit low-confidence speculation.",
+    ].join("\n");
+  }
 
   // Build a rich user prompt with PR metadata for context
   // The bundle already contains structured sections (metadata, diff, files, repo context)
