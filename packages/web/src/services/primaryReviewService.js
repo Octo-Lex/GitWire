@@ -291,6 +291,28 @@ function buildPrimaryUserPrompt(evidence, prMeta) {
     parts.push("");
   }
 
+  // Deterministically resolved dependency context (seeded before exploration)
+  const seeds = evidence.seededDependencies || [];
+  if (seeds.length > 0) {
+    parts.push("## Deterministically resolved dependencies (immutable HEAD)");
+    parts.push("");
+    parts.push("These local dependencies of the changed files were resolved and read at");
+    parts.push("the exact HEAD SHA before your review began. Treat them as already");
+    parts.push("retrieved — you do not need to re-read them.");
+    parts.push("");
+    for (const seed of seeds) {
+      parts.push(
+        "### " + seed.path +
+        " (" + seed.retrievalReason + ", blob " + (seed.blobSha || "?").slice(0, 10) +
+        (seed.truncated ? ", TRUNCATED to first " + (seed.range ? seed.range.endLine : "?") + " lines" : "") + ")"
+      );
+      parts.push("```");
+      parts.push(seed.content);
+      parts.push("```");
+      parts.push("");
+    }
+  }
+
   parts.push("## Instructions");
   parts.push("Review this pull request for correctness, regressions, and contract violations.");
   parts.push("Changed files are your starting point. Use your read and search tools to check");
@@ -360,6 +382,7 @@ export async function runPrimaryReview({
   prMeta = {},
   primaryBudgets,
   maxDurationMs = 180000,
+  sharedBroker = null, // broker pre-used by the seed planner (budgets shared)
 }) {
   const startTime = Date.now();
   const reviewRoot = evidence?.review;
@@ -368,17 +391,23 @@ export async function runPrimaryReview({
     return makePrimaryReceipt([], [], [], null, 0, Date.now() - startTime, "Missing review root with base/head SHAs");
   }
 
-  // ── Create primary's own Context Broker ─────────────────────────────────
+  // ── Broker: continue on the seed planner's shared broker when provided
+  //    (seed reads already count against the same budgets); otherwise create
+  //    the primary's own Context Broker.
   let broker;
-  try {
-    broker = createContextBroker({
-      octokit, owner, repo,
-      baseSha: reviewRoot.baseSha,
-      headSha: reviewRoot.headSha,
-      budgets: primaryBudgets?.contextBroker,
-    });
-  } catch (err) {
-    return makePrimaryReceipt([], [], [], null, 0, Date.now() - startTime, "Failed to create context broker: " + err.message);
+  if (sharedBroker) {
+    broker = sharedBroker;
+  } else {
+    try {
+      broker = createContextBroker({
+        octokit, owner, repo,
+        baseSha: reviewRoot.baseSha,
+        headSha: reviewRoot.headSha,
+        budgets: primaryBudgets?.contextBroker,
+      });
+    } catch (err) {
+      return makePrimaryReceipt([], [], [], null, 0, Date.now() - startTime, "Failed to create context broker: " + err.message);
+    }
   }
 
   const systemPrompt = buildPrimarySystemPrompt(evidence);

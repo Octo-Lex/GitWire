@@ -131,6 +131,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     let v2EvidencePreBuilt = null;
     let v2PrimaryError = null;
     let v2PrimaryMeta = null;
+    let v2SeedFailures = []; // REQUIRED seeded dependencies denied by hard boundaries
 
     // Legacy/shared variables
     let files = [], totalAdded = 0, totalRemoved = 0;
@@ -179,7 +180,30 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       });
       v2EvidencePreBuilt = v2EvidenceResult;
 
-      // Run the evidence-bound primary review with tool-use loop
+      // ── Deterministic first-order dependency seeding ────────────────────
+      // Obvious local dependencies of changed source files are resolved at the
+      // immutable HEAD BEFORE the reviewer starts, so their inspection no
+      // longer depends on model exploration behavior. Seeded reads share the
+      // broker budgets with the primary; a REQUIRED (patch-referenced callee)
+      // dependency denied by a hard boundary makes approval evidence incomplete.
+      const { planAndSeedDependencies, applySeedResultsToEvidence } = await import("./dependencySeedService.js");
+      const seedPlan = await planAndSeedDependencies({
+        evidence: v2EvidenceResult, octokit, owner, repo,
+      });
+      applySeedResultsToEvidence(v2EvidenceResult, seedPlan);
+      v2EvidenceResult.seededDependencies = seedPlan.seededItems;
+      v2SeedFailures = seedPlan.requiredFailures;
+
+      logger.info({
+        pr: pr.number,
+        seeded: seedPlan.seededItems.length,
+        seedPaths: seedPlan.seededItems.map(s => s.path),
+        requiredSeedFailures: seedPlan.requiredFailures.length,
+        seedSkipped: seedPlan.skipped.length,
+      }, "AI review: deterministic dependency seeding complete");
+
+      // Run the evidence-bound primary review with tool-use loop, continuing
+      // on the seed planner's broker (budgets shared with the seeds)
       const primaryReceipt = await runPrimaryReview({
         evidence: v2EvidenceResult,
         octokit, owner, repo,
@@ -192,6 +216,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           repoName: repository.full_name,
         },
         maxDurationMs: (cfg.max_duration_seconds || 300) * 1000,
+        sharedBroker: seedPlan.broker,
       });
 
       v2PrimaryFindings = primaryReceipt.findings;
@@ -300,6 +325,11 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         error: primaryReceipt.error || null,
         rawTextSnippet: primaryReceipt.rawTextSnippet || null,
         unresolvedContextRequests: primaryReceipt.unresolvedContextRequests || [],
+        seededDependencies: (v2EvidencePreBuilt?.seededDependencies || []).map(s => ({
+          path: s.path, reason: s.retrievalReason, tier: s.tier,
+          blobSha: s.blobSha, truncated: s.truncated, importedBy: s.importedBy,
+        })),
+        seedFailures: v2SeedFailures,
         submissionDiagnostics: primaryReceipt.submissionDiagnostics || null,
       };
       strategy = "v2_evidence_bound";
