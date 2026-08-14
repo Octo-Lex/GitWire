@@ -226,6 +226,8 @@ export async function runApprovalVerification({
             },
             description: "Optional line range to read",
           },
+          purpose: { type: "string", description: "Why this context is needed" },
+          requiredForApproval: { type: "boolean", description: "True if this dependency MUST be checked before approval can be justified." },
         },
         required: ["path", "ref"],
       },
@@ -269,6 +271,26 @@ export async function runApprovalVerification({
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      // When context rounds are exhausted, make a final-answer-only turn.
+      const vbs = broker.getBudgetState();
+      const vMaxRounds = vbs.limits?.maxContextRounds || 4;
+      if (round > 0 && vbs.contextRounds >= vMaxRounds) {
+        messages.push({
+          role: "user",
+          content: "Repository retrieval is now closed. Return the final structured result. If any correctness-material dependency still must be checked, list it in unresolvedContextNeeds. Do not request additional tools.",
+        });
+        const vFinalMsg = await withDeadline(
+          anthropic.messages.create({ model, max_tokens: 4096, system: systemPrompt, messages }),
+          "Verifier final answer",
+        );
+        if (vFinalMsg.model && !actualModel) actualModel = vFinalMsg.model;
+        tokensUsed += (vFinalMsg.usage?.input_tokens ?? 0) + (vFinalMsg.usage?.output_tokens ?? 0);
+        if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
+        var vFinalTextBlocks = Array.isArray(vFinalMsg.content) ? vFinalMsg.content.filter(b => b.type === "text") : [];
+        if (vFinalTextBlocks.length > 0) textParts.push(vFinalTextBlocks.map(b => b.text).join("\n"));
+        break;
+      }
+
       const message = await withDeadline(
         anthropic.messages.create({
           model,

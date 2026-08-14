@@ -46,6 +46,8 @@ const REVIEW_TOOLS = [
           },
           description: "Optional line range to read",
         },
+        purpose: { type: "string", description: "Why this context is needed" },
+        requiredForApproval: { type: "boolean", description: "True if this dependency MUST be checked before approval can be justified. False for exploratory reads." },
       },
       required: ["path", "ref"],
     },
@@ -61,6 +63,8 @@ const REVIEW_TOOLS = [
       properties: {
         query: { type: "string", description: "Case-insensitive search query" },
         ref: { type: "string", description: "Commit SHA — must be the PR's base or head SHA" },
+        purpose: { type: "string", description: "Why this search is needed" },
+        requiredForApproval: { type: "boolean", description: "True if this search MUST succeed before approval can be justified. False for exploratory searches." },
       },
       required: ["query", "ref"],
     },
@@ -349,6 +353,27 @@ export async function runPrimaryReview({
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      // When context rounds are exhausted, make a final-answer-only turn:
+      // no tools, explicit instruction to declare any unresolved material needs.
+      const bs = broker.getBudgetState();
+      const maxRounds = bs.limits?.maxContextRounds || 4;
+      if (round > 0 && bs.contextRounds >= maxRounds) {
+        messages.push({
+          role: "user",
+          content: "Repository retrieval is now closed. Return the final structured result. If any correctness-material dependency still must be checked before approval can be justified, list it in unresolvedContextNeeds. Do not request additional tools.",
+        });
+        const finalMsg = await withDeadline(
+          anthropic.messages.create({ model, max_tokens: 4096, system: systemPrompt, messages }),
+          "LLM final answer",
+        );
+        if (finalMsg.model && !actualModel) actualModel = finalMsg.model;
+        tokensUsed += (finalMsg.usage?.input_tokens ?? 0) + (finalMsg.usage?.output_tokens ?? 0);
+        if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
+        var finalTextBlocks = Array.isArray(finalMsg.content) ? finalMsg.content.filter(b => b.type === "text") : [];
+        if (finalTextBlocks.length > 0) textParts.push(finalTextBlocks.map(b => b.text).join("\n"));
+        break;
+      }
+
       const message = await withDeadline(
         anthropic.messages.create({
           model,
@@ -415,20 +440,19 @@ export async function runPrimaryReview({
           result = { error: "unknown_tool" };
         }
 
-        // Capture any broker denial as a deterministic unresolved context
-        // request. These block approval evidence completeness.
+        // Capture broker denials as unresolved context requests ONLY when
+        // the model declared the request as requiredForApproval. Exploratory
+        // denials stay in the retrieval trace for audit but do not
+        // automatically invalidate approval evidence.
         if (result && typeof result === "object") {
-          if (result.error && result.error !== "unknown_tool") {
+          var isDenied = (result.error && result.error !== "unknown_tool") ||
+                         (result.truncated && (!result.results || result.results.length === 0) && result.reason);
+          if (isDenied && block.input?.requiredForApproval === true) {
             unresolvedBrokerRequests.push({
               tool: block.name,
               target: block.input?.path || block.input?.query || null,
-              reason: result.error,
-            });
-          } else if (result.truncated && (!result.results || result.results.length === 0) && result.reason) {
-            unresolvedBrokerRequests.push({
-              tool: block.name,
-              target: block.input?.query || null,
-              reason: result.reason,
+              reason: result.error || result.reason,
+              purpose: block.input?.purpose || null,
             });
           }
         }

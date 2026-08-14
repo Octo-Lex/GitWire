@@ -278,7 +278,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           var { validateFindings } = await import("./findingValidator.js");
           var revalidated = validateFindings(refinedV2, v2EvidenceResult);
           v2PrimaryFindings = revalidated.valid;
-          tokensUsed += challenge.tokensUsed;
+          tokensUsed += challenge.tokensUsed + (defense ? defense.tokensUsed : 0);
 
           logger.info({
             pr: pr.number, adversarialMeta: adversarialMeta,
