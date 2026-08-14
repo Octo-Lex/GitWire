@@ -1,21 +1,21 @@
 [
   {
-    "fixture": "RI-04",
+    "fixture": "RI-02",
     "variant": "broken",
     "arm": "C",
-    "timestamp": "2026-08-14T16:52:16.388Z",
+    "timestamp": "2026-08-14T17:07:36.133Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
     "findingCount": 0,
     "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
+    "v2VerifierStatus": "incomplete",
     "requestedModel": "glm-5.3",
     "actualModel": "glm-5.3",
     "modelMatch": true,
-    "invalid": "fixture_gap:(blob 35ab5a2a4c)",
+    "invalid": null,
     "defectDetected": false,
-    "tokensUsed": 55990,
-    "latencyMs": 222985,
+    "tokensUsed": 69587,
+    "latencyMs": 342994,
     "primaryMeta": {
       "actualModel": "glm-5.3",
       "promptVersion": "v2-primary-r1",
@@ -25,43 +25,36 @@
       "retrievalTrace": [
         {
           "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 330,
-            "endLine": 420
-          },
+          "path": "docs/phase-0-spec.md",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "blobSha": "77a9847924a044cf13609a4189553f77068ebfda",
+          "contentDigest": "sha256:5d26fb562821169745a9a39666dde56436ce1a171365a25c5a6fa33f97e9b5ac",
+          "range": null,
           "truncated": false,
-          "contentLength": 4578,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 640,
-            "endLine": 711
-          },
-          "truncated": false,
-          "contentLength": 2126,
+          "contentLength": 34854,
           "result": "ok",
           "round": 1
         },
         {
           "type": "repo_search",
-          "query": "auto_comment",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "resultCount": 1,
-          "charsConsumed": 412,
+          "query": "reopened",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "resultCount": 3,
+          "charsConsumed": 1224,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "gate:0",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "resultCount": 6,
+          "charsConsumed": 2289,
           "result": "ok_truncated",
           "truncated": true,
           "reason": "max_retrieved_chars_exceeded",
@@ -69,53 +62,67 @@
         },
         {
           "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 440,
-            "endLine": 620
-          },
+          "path": "README.md",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "blobSha": "3dec226bcb6e227d359aceac56aba4701289c29e",
+          "contentDigest": "sha256:53c6565ce84c4e3146cb405ff1d180dadf7371c6b6a3112159421228c2fa111c",
+          "range": null,
           "truncated": false,
-          "contentLength": 8109,
+          "contentLength": 4670,
           "result": "ok",
           "round": 2
         },
         {
           "type": "file_read",
-          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
-          "contentDigest": "sha256:384cbdbe81c548dbbfe3ef3c644860aa5a544a68760630eba84be52f17aa88b2",
+          "path": "docs/constitution.md",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "blobSha": "5fe09be65faa108006fe3cdebc85068c997037d1",
+          "contentDigest": "sha256:f2c00edc3522dbb2f4e0c6219e331486bdbc231695fd46ef95812e45b4b37e7a",
+          "range": {
+            "startLine": 55,
+            "endLine": 90
+          },
+          "truncated": false,
+          "contentLength": 1943,
+          "result": "ok",
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": ".github/workflows/ci.yml",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "blobSha": "a1becef651adc2f0299a30150530a111ccc8fd21",
+          "contentDigest": "sha256:38bd7e133ff1c50cab7f2c561e39b98797584842cdfb7eb12dcd40a6aba06d87",
+          "range": null,
+          "truncated": false,
+          "contentLength": 1654,
+          "result": "ok",
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": "docs/backlog.md",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "blobSha": "6f08e0de2bfa154c6af1c09094b9aed524eb2db2",
+          "contentDigest": "sha256:ac1d56f05d5303124b6b007ed56fcb605f9c03cfa9e6c6c9547cf325465e4e3d",
           "range": {
             "startLine": 1,
-            "endLine": 140
+            "endLine": 63
           },
-          "truncated": false,
-          "contentLength": 13415,
-          "result": "ok",
-          "round": 2
-        },
-        {
-          "type": "repo_search",
-          "query": "Post triage summary as comment",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "resultCount": 1,
-          "charsConsumed": 430,
-          "result": "ok_truncated",
           "truncated": true,
-          "reason": "max_retrieved_chars_exceeded",
+          "contentLength": 3366,
+          "result": "ok_truncated",
           "round": 2
         }
       ],
       "budgetState": {
-        "fileReads": 4,
+        "fileReads": 5,
         "searches": 2,
-        "retrievedChars": 29070,
+        "retrievedChars": 50000,
         "contextRounds": 2,
         "currentRound": 0,
         "limits": {
@@ -127,16 +134,491 @@
           "maxBlobsScanned": 50,
           "maxSearchBytes": 200000
         },
-        "exhausted": false
+        "exhausted": true
       },
-      "error": "Failed to parse primary review response",
-      "rawTextSnippet": "I'll review this PR. The core change makes the triage comment post for every issue (not just needs_more_info/duplicate_hint), and changes the footer text. I need to check the surrounding code paths, the marker machinery, the PR-side triage flow, and any docs/config contracts for `auto_comment`.\n\nThe core change looks correct so far. `postMarkedComment` args confirm the test's index assumptions (index 5 = markerId `${repository.id}:${issue.number}` → \"999:42\", index 6 = body). Now I need to check",
+      "error": null,
+      "rawTextSnippet": "The spec at HEAD still has a \"REOPENED\" marker near the end, and unchanged README.md + constitution.md still declare Phase 0.0 reopened. Let me confirm the extent of these contradictions and check CI/backlog referenced by the new status claims.",
       "unresolvedContextRequests": [],
       "submissionDiagnostics": {
         "stopReason": "max_tokens",
-        "usedSubmitTool": false,
+        "usedSubmitTool": true,
         "textTail": null,
         "outputTokens": 8192
+      }
+    },
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "arm": "C",
+    "timestamp": "2026-08-14T17:10:47.749Z",
+    "verdict": "needs_discussion",
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Phase 0.5 exit gate now requires proving Host-owned Agent-replacement semantics,"
+      }
+    ],
+    "v2VerifierStatus": "not_run",
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "modelMatch": true,
+    "invalid": null,
+    "defectDetected": null,
+    "tokensUsed": 73308,
+    "latencyMs": 234602,
+    "primaryMeta": {
+      "actualModel": "glm-5.3",
+      "promptVersion": "v2-primary-r1",
+      "promptHash": "5be7acd28b8873d0",
+      "rawFindings": [
+        {
+          "affectedPaths": [
+            "docs/phase-0-spec.md",
+            "docs/roadmap.md"
+          ],
+          "category": "docs_gap",
+          "claim": "Phase 0.5 exit gate now requires proving Host-owned Agent-replacement semantics, but the phase's scope, deliverables, and required tests define no Host/Agent-Protocol work",
+          "confidence": 0.85,
+          "description": "This PR edits the authoritative §0.5 exit gate in docs/phase-0-spec.md to require that 'Agent replacement/restart does not invalidate Host-owned execution identity or durable state — the Host supervises the Agent, so replacing or restarting the Agent process preserves operation identity, session state, and canonical events.' However, the rest of §0.5 was left in the old framing: its implementation scope is only the extensions/cognition adapter + packages/cognition-runtime coordinator split, lifecycle mapping, and agent-callable tools; its deliverables and required tests (integration, crash, concurrency) contain no Host supervisor, Agent Protocol, agent process restart, or Host-owned execution identity items. The 'Host' control-plane concept is defined only in the new docs/roadmap.md, which itself declares that 'the executable specification with authoritative gate definitions lives in phase-0-spec.md' and that the Agent Protocol 'starts here' at 0.5. Per docs/rules.md and constitution principle 10, a gate is passed only when its executable command emits status:'passed' — so the authoritative gate now embeds a check whose subject (Host supervision, agent replacement) is not built, tested, or even defined within the authoritative spec. When gate:0.5 is implemented it will be undefined what operationally proves this clause, or the clause will be silently unenforceable. Fix by either adding the Host supervision/Agent-restart scope and test items to §0.5, or moving this clause out of the executable gate text.",
+          "evidenceRefs": [
+            "changed:docs/phase-0-spec.md@HEAD:541-551",
+            "repo-read:docs/phase-0-spec.md@HEAD:535-539",
+            "changed:docs/roadmap.md@HEAD:195-215",
+            "changed:docs/roadmap.md@HEAD:1-5"
+          ],
+          "proof": {
+            "summary": "Static trace: read §0.5 in full at HEAD — exit gate (changed lines 541-551) references 'Host-owned execution identity' and Agent process replacement, while the section's implementation scope, deliverables, and required tests (ending at line 539) contain no Host/Agent-replacement work items; a repo-wide search for 'Host owns' matches only docs/roadmap.md (line 197), the non-authoritative orientation doc.",
+            "type": "static_trace"
+          },
+          "severity": "P2"
+        },
+        {
+          "affectedPaths": [
+            "README.md"
+          ],
+          "category": "docs_gap",
+          "claim": "README 'Read first' list has two items numbered '3.' after roadmap.md was inserted, and later items are not renumbered",
+          "confidence": 0.95,
+          "description": "The diff inserted docs/roadmap.md as item 2 and renumbered phase-0-spec.md to item 3, but the following event-contract.md entry was left numbered '3.' as well, so the ordered list source reads 1, 2, 3, 3, 4, 5, 6 for seven entries. Renderers that honor literal numbering (and any reader of the raw markdown) see a duplicate '3.'; the intended numbering 1–7 is broken in source. Trivial fix: renumber event-contract through backlog to 4–6→4–7.",
+          "evidenceRefs": [
+            "changed:README.md@HEAD:16-21"
+          ],
+          "proof": {
+            "summary": "Verified by reading README.md at HEAD: lines 16-21 contain '1. constitution / 2. roadmap / 3. phase-0-spec / 3. event-contract / 4. rules / 5. non-goals / 6. backlog' — duplicate '3.' with no renumbering of subsequent items.",
+            "type": "static_trace"
+          },
+          "severity": "P3"
+        }
+      ],
+      "validatedCount": 1,
+      "retrievalTrace": [
+        {
+          "type": "file_read",
+          "path": "README.md",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "f35e29412e4949e41f87fd794d4d63bfbd74d104",
+          "contentDigest": "sha256:b4ab2353f352a89bffcbfc835b3431635bfa5cb84d56a16f9540a39d1925d19d",
+          "range": null,
+          "truncated": false,
+          "contentLength": 4553,
+          "result": "ok",
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "reopened",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 0,
+          "charsConsumed": 0,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "gate:0.2",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 5,
+          "charsConsumed": 1739,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "GateReceipt",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 4,
+          "charsConsumed": 1599,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 1
+        },
+        {
+          "type": "file_read",
+          "path": "docs/constitution.md",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "7867491b4b5235dab38624055f0c06b45241de39",
+          "contentDigest": "sha256:11da23e66921475ce260dec18e5a25915aad2b36a105c425408847521e26ef85",
+          "range": null,
+          "truncated": false,
+          "contentLength": 5036,
+          "result": "ok",
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": "docs/phase-0-spec.md",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
+          "range": {
+            "startLine": 1,
+            "endLine": 130
+          },
+          "truncated": false,
+          "contentLength": 5312,
+          "result": "ok",
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": "docs/phase-0-spec.md",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
+          "range": {
+            "startLine": 300,
+            "endLine": 560
+          },
+          "truncated": false,
+          "contentLength": 11821,
+          "result": "ok",
+          "round": 2
+        },
+        {
+          "type": "repo_search",
+          "query": "worktree_id",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 4,
+          "charsConsumed": 1644,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 2
+        },
+        {
+          "type": "repo_search",
+          "query": "Host owns",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 1,
+          "charsConsumed": 409,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "docs/phase-0-spec.md",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
+          "range": {
+            "startLine": 560,
+            "endLine": 760
+          },
+          "truncated": false,
+          "contentLength": 8523,
+          "result": "ok",
+          "round": 4
+        }
+      ],
+      "budgetState": {
+        "fileReads": 5,
+        "searches": 5,
+        "retrievedChars": 40636,
+        "contextRounds": 4,
+        "currentRound": 0,
+        "limits": {
+          "maxFileReads": 20,
+          "maxSearches": 6,
+          "maxSearchResults": 10,
+          "maxRetrievedChars": 50000,
+          "maxContextRounds": 4,
+          "maxBlobsScanned": 50,
+          "maxSearchBytes": 200000
+        },
+        "exhausted": true
+      },
+      "error": null,
+      "rawTextSnippet": "I'll review this documentation-heavy PR. The key claims to verify: (1) that the repo actually contains evidence for \"Phases 0.0, 0.1A, 0.2 closed\", (2) that referenced files exist and links resolve, (3) internal consistency (numbering, stale status mentions), and (4) whether the new Host framing contradicts the frozen constitution principles.\n\nThe repo does contain executable gate infrastructure (`package.json` gate scripts, CI running `pnpm gate:0.2`), so the \"closed\" status claim has backing. ",
+      "unresolvedContextRequests": [
+        {
+          "source": "broker_budget",
+          "tool": "read_repo_file",
+          "target": "docs/phase-0-spec.md",
+          "reason": "invalid_ref"
+        }
+      ],
+      "submissionDiagnostics": {
+        "stopReason": "tool_use",
+        "usedSubmitTool": true,
+        "textTail": null,
+        "outputTokens": 6031
+      }
+    },
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "arm": "C",
+    "timestamp": "2026-08-14T17:15:07.345Z",
+    "verdict": "needs_discussion",
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Triage decision log can now report decision:'skipped' for issues where the worke"
+      },
+      {
+        "severity": "P3",
+        "claim": "New test 'uses marker-backed comment so retry updates rather than duplicates' do"
+      }
+    ],
+    "v2VerifierStatus": "not_run",
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "modelMatch": true,
+    "invalid": null,
+    "defectDetected": false,
+    "tokensUsed": 78141,
+    "latencyMs": 259593,
+    "primaryMeta": {
+      "actualModel": "glm-5.3",
+      "promptVersion": "v2-primary-r1",
+      "promptHash": "5be7acd28b8873d0",
+      "rawFindings": [
+        {
+          "severity": "P3",
+          "category": "maintainability",
+          "claim": "Triage decision log can now report decision:'skipped' for issues where the worker actually acted (posted a comment and created a managed add-comment action)",
+          "description": "The PR changes the comment gate from `needs_more_info || duplicate_hint` to `auto_comment !== false`, so every successfully triaged issue now posts a comment and runs the propose/approve/execute/succeed action-state-machine sequence. However, the decision log written just before the comment block still derives its `decision` value solely from `labelsToApply.length` ('acted'/'dry_run' only when labels were applied, otherwise 'skipped') and its `conditions`/`configUsed` only mention `auto_label` — `auto_comment` is never recorded. Before this change the inconsistency was limited to needs_more_info/duplicate issues with no matching labels; after this change every issue that gets labels filtered out (or has auto_label:false, e.g. test 6 in the new test file) will be logged as 'skipped / no labels to apply' even though a public GitHub comment and a managed add-comment action were created. This weakens the audit trail this repo otherwise maintains rigorously (cf. wave2 writer audit, decision-log attribution work). Not a functional break, but worth aligning the decision log with the new always-comment behavior.",
+          "affectedPaths": [
+            "packages/web/src/workers/triageWorker.js"
+          ],
+          "evidenceRefs": [
+            "changed:packages/web/src/workers/triageWorker.js@HEAD:349-358",
+            "repo-read:packages/web/src/workers/triageWorker.js@HEAD:337",
+            "repo-read:packages/web/src/workers/triageWorker.js@HEAD:345"
+          ],
+          "proof": {
+            "type": "static_trace",
+            "summary": "Verified at HEAD: the logDecision block (lines ~334-347) computes decision from labelsToApply.length only and records configUsed { auto_label } with no auto_comment entry, while the immediately following block (lines 349-414) now unconditionally posts a comment and creates a managed action when auto_comment !== false. Line 340 (conditions[0]) and 345 (configUsed) were confirmed by direct read; 337 (decision line) derived from the same verified anchor."
+          },
+          "confidence": 0.7
+        },
+        {
+          "severity": "P3",
+          "category": "test_gap",
+          "claim": "New test 'uses marker-backed comment so retry updates rather than duplicates' does not actually simulate a retry",
+          "description": "Test 5 in the new triage-auto-comment.test.js claims to cover the retry/update path but only stubs postMarkedComment to return {action:'updated'} on a single fresh invocation and asserts one call plus the marker id '999:42'. It never re-invokes triageIssue a second time, so the 'exactly one comment, updated not duplicated' retry contract advertised in the new code comment is not exercised end-to-end (including the re-propose of actionKey triage:comment:issue:N on retry). The happy path coverage is otherwise solid (normal issue posts comment, auto_comment:false suppresses it, needs_more_info section present, dry-run suppresses, footer truthful).",
+          "affectedPaths": [
+            "packages/web/tests/unit/triage-auto-comment.test.js"
+          ],
+          "evidenceRefs": [
+            "changed:packages/web/tests/unit/triage-auto-comment.test.js@HEAD:262-276",
+            "changed:packages/web/src/workers/triageWorker.js@HEAD:349-358"
+          ],
+          "proof": {
+            "type": "inference",
+            "summary": "Test body issues a single triageIssue call with postMarkedComment mocked to resolve {action:'updated'}; no second invocation exists, so no retry/idempotency behavior is actually asserted."
+          },
+          "confidence": 0.75
+        }
+      ],
+      "validatedCount": 2,
+      "retrievalTrace": [
+        {
+          "type": "file_read",
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
+          "range": null,
+          "truncated": false,
+          "contentLength": 31076,
+          "result": "ok",
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "auto_comment",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "resultCount": 0,
+          "charsConsumed": 0,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "postMarkedComment",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "resultCount": 0,
+          "charsConsumed": 0,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "blobSha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
+          "contentDigest": "sha256:384cbdbe81c548dbbfe3ef3c644860aa5a544a68760630eba84be52f17aa88b2",
+          "range": null,
+          "truncated": false,
+          "contentLength": 14579,
+          "result": "ok",
+          "round": 2
+        },
+        {
+          "type": "repo_search",
+          "query": "isPillarEnabled",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "resultCount": 0,
+          "charsConsumed": 0,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
+          "range": {
+            "startLine": 340,
+            "endLine": 420
+          },
+          "truncated": false,
+          "contentLength": 3907,
+          "result": "ok",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
+          "range": {
+            "startLine": 465,
+            "endLine": 477
+          },
+          "truncated": true,
+          "contentLength": 438,
+          "result": "ok_truncated",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "result": "budget_exceeded",
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 3,
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "624732c"
+        }
+      ],
+      "budgetState": {
+        "fileReads": 4,
+        "searches": 3,
+        "retrievedChars": 50000,
+        "contextRounds": 3,
+        "currentRound": 0,
+        "limits": {
+          "maxFileReads": 20,
+          "maxSearches": 6,
+          "maxSearchResults": 10,
+          "maxRetrievedChars": 50000,
+          "maxContextRounds": 4,
+          "maxBlobsScanned": 50,
+          "maxSearchBytes": 200000
+        },
+        "exhausted": true
+      },
+      "error": null,
+      "rawTextSnippet": "The search for `auto_comment` returned empty (possibly a transient tool issue), so let me retry it and gather the other cross-file evidence in parallel.\n\nThe search tool returned empty results twice (even for strings I've verified exist in files), so it appears unreliable here. Let me test it once more and verify the audit-test line numbers directly by reading line ranges of triageWorker.js at HEAD.",
+      "unresolvedContextRequests": [
+        {
+          "source": "broker_budget",
+          "tool": "search_repo_text",
+          "target": "auto_comment",
+          "reason": "invalid_ref"
+        },
+        {
+          "source": "broker_budget",
+          "tool": "read_repo_file",
+          "target": "packages/web/src/workers/triageWorker.js",
+          "reason": "budget_exceeded"
+        },
+        {
+          "source": "model_declared",
+          "description": "Could not search the repository for pre-existing tests that assert the OLD comment gating or the OLD footer text. The search tool returned empty results for every query, including a health-check query for 'isPillarEnabled' which definitely matches triageWorker.js at HEAD (verified by direct file read), so text search was non-functional. If any existing test (unit/integration for triageWorker, comment rendering snapshots, or docs-example tests) asserts postMarkedComment is NOT called for a normal (non needs_more_info) classification, or asserts the string 'Labels applied automatically', the PR will fail CI. The PR only added a new test file and updated wave2-writer-audit.test.js.",
+          "potentialSeverity": "P1",
+          "basis": "repository_dependency"
+        },
+        {
+          "source": "model_declared",
+          "description": "Could not locate or inspect normative documentation or the .gitwire.yml config schema/reference for pillars.triage.auto_comment. The new semantics make commenting default-ON for every successfully triaged issue (auto_comment !== false), which silently changes behavior for existing repos that omit the key. If any committed config reference, JSON-schema description, README, or docs page still describes the comment as conditional (only for needs_more_info/duplicate_hint) or documents a different default, it now contradicts the code and must be updated.",
+          "potentialSeverity": "P2",
+          "basis": "changed_contract"
+        },
+        {
+          "source": "model_declared",
+          "description": "Could not read packages/web/src/services/actionStateMachine.js (retrieval budget closed) to verify propose()'s actionKey uniqueness/idempotency semantics. This PR expands execution of the unchanged comment-action block (propose with fixed actionKey 'triage:comment:issue:<N>', then approve/execute/succeed) from only needs_more_info/duplicate issues to EVERY triaged issue, including retry-after-partial-failure paths where a prior comment action row may already exist. Unlike the label action, there is no findCompletedTriageAction recovery check before this propose. If propose rejects duplicate action keys, retries after a partial failure would throw and potentially fail permanently, at much higher frequency than before.",
+          "potentialSeverity": "P2",
+          "basis": "repository_dependency"
+        }
+      ],
+      "submissionDiagnostics": {
+        "stopReason": "tool_use",
+        "usedSubmitTool": true,
+        "textTail": null,
+        "outputTokens": 7704
       }
     },
     "falseApprove": false,
@@ -146,25 +628,70 @@
     "fixture": "RI-04",
     "variant": "fixed",
     "arm": "C",
-    "timestamp": "2026-08-14T16:55:53.486Z",
+    "timestamp": "2026-08-14T17:18:36.238Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
-    "findingCount": 0,
-    "v2PrimaryFindings": [],
+    "findingCount": 1,
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Pagination makes findCommentByMarker issue ceil(totalComments/100) sequential GE"
+      }
+    ],
     "v2VerifierStatus": "not_run",
     "requestedModel": "glm-5.3",
     "actualModel": "glm-5.3",
     "modelMatch": true,
-    "invalid": "fixture_gap:(blob 35ab5a2a4c)",
+    "invalid": null,
     "defectDetected": null,
-    "tokensUsed": 69534,
-    "latencyMs": 217060,
+    "tokensUsed": 89438,
+    "latencyMs": 208892,
     "primaryMeta": {
       "actualModel": "glm-5.3",
       "promptVersion": "v2-primary-r1",
       "promptHash": "5be7acd28b8873d0",
-      "rawFindings": [],
-      "validatedCount": 0,
+      "rawFindings": [
+        {
+          "severity": "P3",
+          "category": "maintainability",
+          "claim": "findCommentByMarker's JSDoc return contract is now inaccurate: it documents { ambiguous: true, comments: [] } but the implementation returns the matched comments",
+          "description": "The rewritten findCommentByMarker returns { ambiguous: true, comments: matches } on both the new early-exit path (>= 2 matches found mid-pagination) and the post-loop tail, but the @returns JSDoc (lines 49-51 at HEAD, carried over from the base) still claims the ambiguous result contains an empty comments array. The JSDoc immediately above the new pagination prose makes this the reference contract for the changed function. The one in-repo consumer (postMarkedComment, commentMarkers.js ~line 105) relies on existing.comments.length being populated for its detail: { matchCount: existing.comments.length } payload and the triageWorker error message (triageWorker.js:385-387) prints result.detail?.matchCount, so the code depends on the array being populated while the doc says it is empty. Impact is limited to misleading API documentation for future callers, not runtime behavior.",
+          "affectedPaths": [
+            "packages/web/src/lib/commentMarkers.js"
+          ],
+          "evidenceRefs": [
+            "changed:packages/web/src/lib/commentMarkers.js@HEAD:49-51",
+            "changed:packages/web/src/lib/commentMarkers.js@HEAD:76-78",
+            "repo-read:packages/web/src/lib/commentMarkers.js@HEAD:105-112",
+            "repo-read:packages/web/src/workers/triageWorker.js@HEAD:384-387"
+          ],
+          "proof": {
+            "type": "static_trace",
+            "summary": "Static comparison of the JSDoc @returns clause against the two ambiguity return statements and the postMarkedComment consumer that reads existing.comments.length."
+          },
+          "confidence": 0.88
+        },
+        {
+          "severity": "P3",
+          "category": "maintainability",
+          "claim": "Pagination makes findCommentByMarker issue ceil(totalComments/100) sequential GET requests per call, now amplified by auto_comment posting a comment for every triaged issue",
+          "description": "The fix correctly trades API calls for correctness, but two interacting changes in this PR multiply the cost: (1) findCommentByMarker now walks every comment page until ambiguity or exhaustion instead of fetching one page, and (2) triageWorker now posts a marker-backed comment for every successfully triaged issue (triageOpts.auto_comment !== false, triageWorker.js:357 at HEAD), so findCommentByMarker runs on essentially every triage job rather than only needs_more_info/duplicate_hint cases. On issues with thousands of comments this turns each triage from 1 GET into dozens of sequential GETs, increasing latency and secondary-rate-limit exposure for the GitHub App installation. The early-exit at >= 2 matches bounds the worst case for the ambiguous path but not the common no-match/update path. This is an accepted-cost observation, not a defect; the update path stops as soon as the marker is found only if it appears before the last page.",
+          "affectedPaths": [
+            "packages/web/src/lib/commentMarkers.js",
+            "packages/web/src/workers/triageWorker.js"
+          ],
+          "evidenceRefs": [
+            "changed:packages/web/src/lib/commentMarkers.js@HEAD:63-93",
+            "changed:packages/web/src/workers/triageWorker.js@HEAD:348-357"
+          ],
+          "proof": {
+            "type": "inference",
+            "summary": "Loop structure requires one request per 100-comment page until a short page; triageWorker now invokes postMarkedComment (and hence findCommentByMarker) on every triaged issue."
+          },
+          "confidence": 0.75
+        }
+      ],
+      "validatedCount": 1,
       "retrievalTrace": [
         {
           "type": "file_read",
@@ -187,11 +714,11 @@
           "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
-            "startLine": 300,
+            "startLine": 280,
             "endLine": 430
           },
           "truncated": false,
-          "contentLength": 6186,
+          "contentLength": 7054,
           "result": "ok",
           "round": 1
         },
@@ -200,8 +727,8 @@
           "query": "auto_comment",
           "ref": "a32a07e",
           "resolvedSha": "a32a07e",
-          "resultCount": 1,
-          "charsConsumed": 412,
+          "resultCount": 0,
+          "charsConsumed": 0,
           "result": "ok_truncated",
           "truncated": true,
           "reason": "max_retrieved_chars_exceeded",
@@ -220,18 +747,6 @@
           "round": 1
         },
         {
-          "type": "repo_search",
-          "query": "commentMarkers",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "resultCount": 0,
-          "charsConsumed": 0,
-          "result": "ok_truncated",
-          "truncated": true,
-          "reason": "max_retrieved_chars_exceeded",
-          "round": 2
-        },
-        {
           "type": "file_read",
           "path": "packages/web/src/workers/triageWorker.js",
           "ref": "a32a07e",
@@ -239,11 +754,11 @@
           "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
-            "startLine": 430,
-            "endLine": 680
+            "startLine": 150,
+            "endLine": 285
           },
           "truncated": false,
-          "contentLength": 10638,
+          "contentLength": 6303,
           "result": "ok",
           "round": 2
         },
@@ -262,7 +777,7 @@
         },
         {
           "type": "repo_search",
-          "query": "Labels applied automatically",
+          "query": "postMarkedComment",
           "ref": "a32a07e",
           "resolvedSha": "a32a07e",
           "resultCount": 0,
@@ -271,13 +786,89 @@
           "truncated": true,
           "reason": "max_retrieved_chars_exceeded",
           "round": 2
+        },
+        {
+          "type": "repo_search",
+          "query": "duplicate_hint",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "resultCount": 0,
+          "charsConsumed": 0,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
+          "range": {
+            "startLine": 430,
+            "endLine": 625
+          },
+          "truncated": false,
+          "contentLength": 8712,
+          "result": "ok",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
+          "range": {
+            "startLine": 660,
+            "endLine": 711
+          },
+          "truncated": false,
+          "contentLength": 1469,
+          "result": "ok",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/src/services/configService.js",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "blobSha": "b035da7f6a512b5b2501b0f205c64fb4d8169fda",
+          "contentDigest": "sha256:7582b672cb914cdc188aaf5a52bcb09049f44de42d046edce44112f57d716b46",
+          "range": {
+            "startLine": 1,
+            "endLine": 220
+          },
+          "truncated": true,
+          "contentLength": 6873,
+          "result": "ok_truncated",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "result": "budget_exceeded",
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 4,
+          "path": "packages/rules/src/index.js",
+          "ref": "a32a07e"
+        },
+        {
+          "type": "repo_search",
+          "result": "budget_exceeded",
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 4,
+          "query": "DEFAULT_CONFIG",
+          "ref": "a32a07e"
         }
       ],
       "budgetState": {
-        "fileReads": 4,
+        "fileReads": 7,
         "searches": 4,
-        "retrievedChars": 36825,
-        "contextRounds": 2,
+        "retrievedChars": 50000,
+        "contextRounds": 3,
         "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
@@ -288,16 +879,35 @@
           "maxBlobsScanned": 50,
           "maxSearchBytes": 200000
         },
-        "exhausted": false
+        "exhausted": true
       },
-      "error": "Failed to parse primary review response",
-      "rawTextSnippet": null,
-      "unresolvedContextRequests": [],
+      "error": null,
+      "rawTextSnippet": "I'll start by examining the core changed files and their cross-file dependencies.\n\nThe searches returned empty results, which is suspicious. Let me retry with different queries and read the key files directly.\n\nThe search tool appears to be returning empty results consistently. I'll rely on direct file reads. Now let me verify the triagePR section (for the audit line-number updates) and the buildTriageComment function, plus the config service defaults for `auto_comment`.\n\nThe audit test validate",
+      "unresolvedContextRequests": [
+        {
+          "source": "broker_budget",
+          "tool": "read_repo_file",
+          "target": "packages/rules/src/index.js",
+          "reason": "budget_exceeded"
+        },
+        {
+          "source": "model_declared",
+          "description": "The documented/default value of pillars.triage.auto_comment in @gitwire/rules DEFAULT_CONFIG (and any .gitwire.yml schema/example or README) could not be verified: the search tool returned empty results for every query and the read of packages/rules/src/index.js was rejected by the retrieval budget. The new gate `triageOpts.auto_comment !== false` (triageWorker.js:357) treats an absent/undefined key as ENABLED, and the new code comment asserts \"auto_comment is enabled (the default)\". configService.js resolves DEFAULT_CONFIG as the base layer, so if DEFAULT_CONFIG (or the normative config schema) declares auto_comment default false while omitting/omitting-with-false the key... specifically, if the schema documents opt-in (false default) but DEFAULT_CONFIG leaves the key undefined, every connected repository without an explicit auto_comment setting would start receiving bot comments after this PR — a mass behavioral regression. If DEFAULT_CONFIG sets it true (or the schema documents default-on), the change is consistent and this need is discharged.",
+          "potentialSeverity": "P1",
+          "basis": "changed_contract"
+        },
+        {
+          "source": "model_declared",
+          "description": "Existing tests outside the diff that encode the OLD auto_comment gating could not be enumerated: repo-text search returned empty results for every query (including terms verifiably present, e.g. postMarkedComment/auto_comment), and the retrieval budget was exhausted before directory enumeration. Any pre-existing triageWorker test asserting that no triage comment is posted for a normal classification (the pre-PR behavior gated behind needs_more_info || duplicate_hint) would now fail, blocking CI; the PR adds triage-auto-comment.test.js but may not have updated older triage tests. The wave2-writer-audit.test.js line-number updates were verified consistent (+4 shift) with the added lines, so that specific file is confirmed correct.",
+          "potentialSeverity": "P2",
+          "basis": "repository_dependency"
+        }
+      ],
       "submissionDiagnostics": {
-        "stopReason": "max_tokens",
-        "usedSubmitTool": false,
+        "stopReason": "tool_use",
+        "usedSubmitTool": true,
         "textTail": null,
-        "outputTokens": 8192
+        "outputTokens": 1205
       }
     },
     "falseApprove": null,

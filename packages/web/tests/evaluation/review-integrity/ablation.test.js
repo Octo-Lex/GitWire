@@ -273,7 +273,7 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
           (invalidReason ? " INVALID(" + invalidReason + ")" : "") +
           ` (${tokensUsed} tokens, ${elapsedMs}ms)`
         );
-      }, 300000);
+      }, 600000);
     }
   }
 
