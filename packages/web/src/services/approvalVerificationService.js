@@ -89,7 +89,14 @@ export function buildVerifierSystemPrompt(evidence) {
     '      "proof": { "type": "static_trace" | "counterexample" | "reproduction" | "inference", "summary": "..." }',
     "    }",
     "  ],",
-    '  "unresolvedContextNeeds": ["description of things you needed but could not retrieve"],',
+    '  "unresolvedContextNeeds": [',
+    "    {",
+    '      "description": "what could not be checked and why it matters",',
+    '      "requiredForApproval": true,',
+    '      "potentialSeverity": "P0" | "P1" | "P2",',
+    '      "basis": "repository_dependency" | "changed_contract"',
+    "    }",
+    "  ],",
     '  "coverageSatisfied": true | false',
     "}",
     "",
@@ -98,10 +105,17 @@ export function buildVerifierSystemPrompt(evidence) {
     "  no unresolved material context needs AND coverageSatisfied is true.",
     "- Use status 'material_findings' if you found any P0/P1/P2 issue.",
     "- Use status 'incomplete' if you could not complete verification due to",
-    "  budget limits, missing data, or unresolved context needs.",
+    "  missing data or genuinely unresolved material context needs. Using",
+    "  your full retrieval budget is NOT incompleteness by itself.",
     "- Every P0/P1/P2 finding MUST include at least one evidence reference",
     "  pointing to a specific file and line range in the changed files or",
     "  retrieved repository context.",
+    "- Report an unresolved context need only when the missing evidence",
+    "  could plausibly conceal a P0/P1/P2 defect introduced or exposed by",
+    "  this PR. Do not report optional completeness checks, low-confidence",
+    "  speculation, or historical/external facts that the repository is not",
+    "  expected to contain, unless a repository contract specifically",
+    "  requires that evidence to be committed or referenced.",
     "- You have a LIMITED number of file reads and searches. Use them wisely.",
   ].join("\n");
 }
@@ -240,11 +254,57 @@ export async function runApprovalVerification({
         properties: {
           query: { type: "string", description: "Case-insensitive search query" },
           ref: { type: "string", description: "Commit SHA — must be the PR's base or head SHA" },
+          purpose: { type: "string", description: "Why this search is needed" },
+          requiredForApproval: { type: "boolean", description: "True if this search MUST succeed before approval can be justified." },
         },
         required: ["query", "ref"],
       },
     },
   ];
+
+  // ── Structured final submission tool (retrieval-closed turn only) ────────
+  const SUBMIT_VERIFICATION_TOOL = {
+    name: "submit_verification_result",
+    description:
+      "Submit the final verification result. You MUST use this tool to submit your result — do not write JSON as plain text.",
+    input_schema: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["verified", "material_findings", "incomplete"] },
+        findings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              severity: { type: "string", enum: ["P0", "P1", "P2", "P3"] },
+              category: { type: "string" },
+              claim: { type: "string" },
+              description: { type: "string" },
+              affectedPaths: { type: "array", items: { type: "string" } },
+              evidenceRefs: { type: "array", items: { type: "string" } },
+              proof: { type: "object" },
+            },
+            required: ["severity", "claim"],
+          },
+        },
+        unresolvedContextNeeds: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              description: { type: "string" },
+              requiredForApproval: { type: "boolean" },
+              potentialSeverity: { type: "string", enum: ["P0", "P1", "P2"] },
+              basis: { type: "string", enum: ["repository_dependency", "changed_contract"] },
+            },
+            required: ["description", "requiredForApproval"],
+          },
+        },
+        coverageSatisfied: { type: "boolean" },
+      },
+      required: ["status"],
+    },
+  };
 
   // ── Helper: race a promise against a deadline ────────────────────────────
   const deadline = startTime + maxDurationMs;
@@ -267,25 +327,40 @@ export async function runApprovalVerification({
   const MAX_TOOL_ROUNDS = 5; // safety limit
   const MAX_TOKENS = verifierBudgets?.maxTokens || 50000;
   const verifierContextItems = []; // successful broker results for finding validation
+  const verifierDeniedRequired = []; // denied requests the model marked requiredForApproval
   let tokenBudgetExceeded = false;
+
+  let submittedResult = null; // structured final submission via tool_use
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      // When context rounds are exhausted, make a final-answer-only turn.
+      // When context rounds are exhausted, make a structured final submission
+      // turn: only the submission tool is exposed; tool_use.input is parsed
+      // directly (no free-text JSON serialization).
       const vbs = broker.getBudgetState();
       const vMaxRounds = vbs.limits?.maxContextRounds || 4;
       if (round > 0 && vbs.contextRounds >= vMaxRounds) {
         messages.push({
           role: "user",
-          content: "Repository retrieval is now closed. Return the final structured result. If any correctness-material dependency still must be checked, list it in unresolvedContextNeeds. Do not request additional tools.",
+          content: "Repository retrieval is now closed. Submit your final result using the submit_verification_result tool. If any correctness-material dependency still must be checked, include it in unresolvedContextNeeds with requiredForApproval: true. Do not request additional repository tools.",
         });
         const vFinalMsg = await withDeadline(
-          anthropic.messages.create({ model, max_tokens: 4096, system: systemPrompt, messages }),
-          "Verifier final answer",
+          anthropic.messages.create({
+            model, max_tokens: 4096, system: systemPrompt,
+            tools: [SUBMIT_VERIFICATION_TOOL],
+            messages,
+          }),
+          "Verifier final submission",
         );
         if (vFinalMsg.model && !actualModel) actualModel = vFinalMsg.model;
         tokensUsed += (vFinalMsg.usage?.input_tokens ?? 0) + (vFinalMsg.usage?.output_tokens ?? 0);
         if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
+        const vSubmitBlocks = Array.isArray(vFinalMsg.content)
+          ? vFinalMsg.content.filter(b => b.type === "tool_use" && b.name === "submit_verification_result")
+          : [];
+        if (vSubmitBlocks.length > 0) {
+          submittedResult = vSubmitBlocks[vSubmitBlocks.length - 1].input;
+        }
         var vFinalTextBlocks = Array.isArray(vFinalMsg.content) ? vFinalMsg.content.filter(b => b.type === "text") : [];
         if (vFinalTextBlocks.length > 0) textParts.push(vFinalTextBlocks.map(b => b.text).join("\n"));
         break;
@@ -361,6 +436,21 @@ export async function runApprovalVerification({
           result = { error: "unknown_tool" };
         }
 
+        // Capture broker denials as unresolved requests ONLY when the model
+        // declared the request as requiredForApproval. Exploratory denials
+        // stay in the retrieval trace for audit.
+        if (result && typeof result === "object") {
+          const isDeniedV = (result.error && result.error !== "unknown_tool") ||
+                            (result.truncated && (!result.results || result.results.length === 0) && result.reason);
+          if (isDeniedV && block.input?.requiredForApproval === true) {
+            verifierDeniedRequired.push({
+              tool: block.name,
+              target: block.input?.path || block.input?.query || null,
+              reason: result.error || result.reason,
+            });
+          }
+        }
+
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
@@ -381,14 +471,18 @@ export async function runApprovalVerification({
     return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "Token budget exceeded: " + tokensUsed + " > " + MAX_TOKENS, actualModel);
   }
 
-  // ── Parse: try each accumulated text part (model may produce JSON in an
-  //    earlier tool-use round and a summary in the final round). ───────────
+  // ── Parse: prefer the structured submission; fall back to text cascade ──
   const rawText = textParts.join("\n\n");
-  let parsed = parseVerifierResult(rawText.trim());
-  if (!parsed) {
-    for (let i = textParts.length - 1; i >= 0; i--) {
-      parsed = parseVerifierResult(textParts[i].trim());
-      if (parsed) break;
+  let parsed = null;
+  if (submittedResult && typeof submittedResult === "object") {
+    parsed = submittedResult;
+  } else {
+    parsed = parseVerifierResult(rawText.trim());
+    if (!parsed) {
+      for (let i = textParts.length - 1; i >= 0; i--) {
+        parsed = parseVerifierResult(textParts[i].trim());
+        if (parsed) break;
+      }
     }
   }
   if (!parsed) {
@@ -406,9 +500,34 @@ export async function runApprovalVerification({
   // The frozen contract has contextRequests and unresolvedContextRequests.
   // Support both names for compatibility.
   const contextRequests = parsed.contextRequests || [];
-  const unresolvedContextNeeds = parsed.unresolvedContextNeeds || parsed.unresolvedContextRequests || [];
   const coverageSatisfied = parsed.coverageSatisfied === true;
   const modelDeclaredStatus = parsed.status;
+
+  // Material unresolved needs: broker-denied REQUIRED requests plus
+  // model-declared entries that are material. A structured entry counts
+  // only when requiredForApproval === true; a bare string (model did not
+  // follow the structured schema) is treated as material — fail closed.
+  const modelDeclared = parsed.unresolvedContextNeeds || parsed.unresolvedContextRequests || [];
+  const unresolvedMaterial = [
+    ...verifierDeniedRequired.map(function (r) {
+      return { source: "broker_budget", tool: r.tool, target: r.target, reason: r.reason };
+    }),
+    ...modelDeclared
+      .filter(function (n) {
+        if (typeof n === "string") return true;
+        if (n && typeof n === "object") return n.requiredForApproval === true;
+        return false;
+      })
+      .map(function (n) {
+        if (typeof n === "string") return { source: "model_declared", description: n };
+        return {
+          source: "model_declared",
+          description: n.description || JSON.stringify(n),
+          potentialSeverity: n.potentialSeverity || null,
+          basis: n.basis || null,
+        };
+      }),
+  ];
 
   // ── Validate findings through the evidence-bound validator ───────────────
   // Use the successful broker context items (which carry content for range
@@ -428,6 +547,9 @@ export async function runApprovalVerification({
 
   // ── Determine final status ───────────────────────────────────────────────
   // Never promote model-declared incomplete/error to verified.
+  // NOTE: consuming the full retrieval budget is NOT an incompleteness
+  // signal by itself — a verifier may use its final allowed round, receive
+  // all evidence it needed, and legitimately return verified.
   let status;
 
   if (modelDeclaredStatus === "incomplete" || modelDeclaredStatus === "error") {
@@ -438,11 +560,9 @@ export async function runApprovalVerification({
     // Model declared material findings but none survived validation.
     // Cannot confirm approval safety — fail closed to INCOMPLETE.
     status = VERIFIER_STATUS.INCOMPLETE;
-  } else if (unresolvedContextNeeds.length > 0) {
+  } else if (unresolvedMaterial.length > 0) {
     status = VERIFIER_STATUS.INCOMPLETE;
   } else if (!coverageSatisfied) {
-    status = VERIFIER_STATUS.INCOMPLETE;
-  } else if (broker.getBudgetState().exhausted && validatedFindings.length === 0) {
     status = VERIFIER_STATUS.INCOMPLETE;
   } else {
     status = VERIFIER_STATUS.VERIFIED;
@@ -453,7 +573,7 @@ export async function runApprovalVerification({
   return makeReceipt(
     status,
     validatedFindings,
-    unresolvedContextNeeds,
+    unresolvedMaterial,
     contextRequests,
     broker.getTrace(),
     coverageSatisfied,

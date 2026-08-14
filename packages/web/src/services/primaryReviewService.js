@@ -71,6 +71,52 @@ const REVIEW_TOOLS = [
   },
 ];
 
+// ── Structured final submission tool ────────────────────────────────────────
+// Exposed ONLY in the retrieval-closed final turn. Parsing tool_use.input
+// directly removes the free-text JSON serialization failure mode.
+
+const SUBMIT_REVIEW_TOOL = {
+  name: "submit_review_result",
+  description:
+    "Submit the final review result. You MUST use this tool to submit your result — do not write JSON as plain text.",
+  input_schema: {
+    type: "object",
+    properties: {
+      findings: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            severity: { type: "string", enum: ["P0", "P1", "P2", "P3"] },
+            category: { type: "string" },
+            claim: { type: "string" },
+            description: { type: "string" },
+            affectedPaths: { type: "array", items: { type: "string" } },
+            evidenceRefs: { type: "array", items: { type: "string" } },
+            proof: { type: "object" },
+            confidence: { type: "number" },
+          },
+          required: ["severity", "claim"],
+        },
+      },
+      unresolvedContextNeeds: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            requiredForApproval: { type: "boolean" },
+            potentialSeverity: { type: "string", enum: ["P0", "P1", "P2"] },
+            basis: { type: "string", enum: ["repository_dependency", "changed_contract"] },
+          },
+          required: ["description", "requiredForApproval"],
+        },
+      },
+    },
+    required: ["findings"],
+  },
+};
+
 // ── System prompt ────────────────────────────────────────────────────────────
 
 /**
@@ -155,7 +201,14 @@ export function buildPrimarySystemPrompt(evidence) {
     '      "confidence": 0.0',
     "    }",
     "  ],",
-    '  "unresolvedContextNeeds": ["description of correctness-material dependencies you needed but could not check"]',
+    '  "unresolvedContextNeeds": [',
+    "    {",
+    '      "description": "what could not be checked and why it matters",',
+    '      "requiredForApproval": true,',
+    '      "potentialSeverity": "P0" | "P1" | "P2",',
+    '      "basis": "repository_dependency" | "changed_contract"',
+    "    }",
+    "  ]",
     "}",
     "",
     "## Evidence reference format",
@@ -189,6 +242,12 @@ export function buildPrimarySystemPrompt(evidence) {
     "  limits or missing data, report it as an unresolved context need in",
     '  "unresolvedContextNeeds" rather than omitting it or guessing.',
     "  An unresolved material dependency means approval evidence is incomplete.",
+    "- Report an unresolved context need only when the missing evidence could",
+    "  plausibly conceal a P0/P1/P2 defect introduced or exposed by this PR.",
+    "  Do not report optional completeness checks, low-confidence speculation,",
+    "  or historical/external facts that the repository is not expected to",
+    "  contain, unless a repository contract specifically requires that",
+    "  evidence to be committed or referenced.",
     "",
     "## Coverage manifest",
     "",
@@ -351,24 +410,37 @@ export async function runPrimaryReview({
   const unresolvedBrokerRequests = []; // budget_exceeded tool calls
   let tokenBudgetExceeded = false;
 
+  let submittedResult = null; // structured final submission via tool_use
+
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      // When context rounds are exhausted, make a final-answer-only turn:
-      // no tools, explicit instruction to declare any unresolved material needs.
+      // When context rounds are exhausted, make a structured final submission
+      // turn: only the submission tool is exposed, and its tool_use.input is
+      // parsed directly (no free-text JSON serialization).
       const bs = broker.getBudgetState();
       const maxRounds = bs.limits?.maxContextRounds || 4;
       if (round > 0 && bs.contextRounds >= maxRounds) {
         messages.push({
           role: "user",
-          content: "Repository retrieval is now closed. Return the final structured result. If any correctness-material dependency still must be checked before approval can be justified, list it in unresolvedContextNeeds. Do not request additional tools.",
+          content: "Repository retrieval is now closed. Submit your final result using the submit_review_result tool. If any correctness-material dependency still must be checked before approval can be justified, include it in unresolvedContextNeeds with requiredForApproval: true. Do not request additional repository tools.",
         });
         const finalMsg = await withDeadline(
-          anthropic.messages.create({ model, max_tokens: 4096, system: systemPrompt, messages }),
-          "LLM final answer",
+          anthropic.messages.create({
+            model, max_tokens: 4096, system: systemPrompt,
+            tools: [SUBMIT_REVIEW_TOOL],
+            messages,
+          }),
+          "LLM final submission",
         );
         if (finalMsg.model && !actualModel) actualModel = finalMsg.model;
         tokensUsed += (finalMsg.usage?.input_tokens ?? 0) + (finalMsg.usage?.output_tokens ?? 0);
         if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
+        const submitBlocks = Array.isArray(finalMsg.content)
+          ? finalMsg.content.filter(b => b.type === "tool_use" && b.name === "submit_review_result")
+          : [];
+        if (submitBlocks.length > 0) {
+          submittedResult = submitBlocks[submitBlocks.length - 1].input;
+        }
         var finalTextBlocks = Array.isArray(finalMsg.content) ? finalMsg.content.filter(b => b.type === "text") : [];
         if (finalTextBlocks.length > 0) textParts.push(finalTextBlocks.map(b => b.text).join("\n"));
         break;
@@ -486,18 +558,18 @@ export async function runPrimaryReview({
     );
   }
 
-  // ── Parse: try each accumulated text part (model may produce JSON in an
-  //    earlier tool-use round and a summary in the final round). ───────────
+  // ── Parse: prefer the structured submission; fall back to text cascade ──
   const rawText = textParts.join("\n\n");
   let parsed = null;
-  // Try the full concatenation first
-  parsed = parsePrimaryResult(rawText);
-  // Then try each part individually (most recent first — the model often
-  // produces its final answer in the last text round)
-  if (!parsed) {
-    for (let i = textParts.length - 1; i >= 0; i--) {
-      parsed = parsePrimaryResult(textParts[i]);
-      if (parsed) break;
+  if (submittedResult && typeof submittedResult === "object") {
+    parsed = submittedResult;
+  } else {
+    parsed = parsePrimaryResult(rawText);
+    if (!parsed) {
+      for (let i = textParts.length - 1; i >= 0; i--) {
+        parsed = parsePrimaryResult(textParts[i]);
+        if (parsed) break;
+      }
     }
   }
   if (!parsed) {
@@ -527,16 +599,30 @@ export async function runPrimaryReview({
     }
   }
 
-  // Merge model-declared and broker-detected unresolved context requests.
-  // Both sources block approval evidence completeness.
+  // Merge broker-denied REQUIRED requests with model-declared MATERIAL
+  // unresolved needs. A structured entry blocks only when
+  // requiredForApproval === true; a bare string (model did not follow the
+  // structured schema) is treated as material — fail closed.
   const modelUnresolved = parsed.unresolvedContextNeeds || parsed.unresolvedContextRequests || [];
   const allUnresolved = [
     ...unresolvedBrokerRequests.map(function (r) {
       return { source: "broker_budget", tool: r.tool, target: r.target, reason: r.reason };
     }),
-    ...modelUnresolved.map(function (n) {
-      return { source: "model_declared", description: typeof n === "string" ? n : (n.description || JSON.stringify(n)) };
-    }),
+    ...modelUnresolved
+      .filter(function (n) {
+        if (typeof n === "string") return true;
+        if (n && typeof n === "object") return n.requiredForApproval === true;
+        return false;
+      })
+      .map(function (n) {
+        if (typeof n === "string") return { source: "model_declared", description: n };
+        return {
+          source: "model_declared",
+          description: n.description || JSON.stringify(n),
+          potentialSeverity: n.potentialSeverity || null,
+          basis: n.basis || null,
+        };
+      }),
   ];
 
   return makePrimaryReceipt(
