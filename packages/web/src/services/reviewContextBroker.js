@@ -22,7 +22,11 @@ export const DEFAULT_BUDGETS = Object.freeze({
   maxFileReads:        20,    // max readRepoFile calls per review
   maxSearches:         6,     // max searchRepoText calls per review (provisional: 5→6)
   maxSearchResults:    10,    // max results returned per search
-  maxRetrievedChars:   50000, // max total characters retrieved across all calls
+  // DIAGNOSTIC CANDIDATE (one bounded calibration from evidence, not yet
+  // the frozen production value): 50K saturated while reviewers still
+  // requested correctness-material content; 90K ≈ one additional
+  // spec-sized dependency (~35K chars) of headroom.
+  maxRetrievedChars:   90000,
   maxContextRounds:    4,     // max distinct retrieval rounds (provisional: 3→4)
   maxBlobsScanned:     50,    // max blobs fetched+decoded during a single search
   maxSearchBytes:      200000, // max raw bytes inspected during a single search
@@ -335,6 +339,7 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
       const matches = [];
       let searchCharsConsumed = 0;
       let budgetTerminated = false;
+      let terminatedReason = null; // actual budget that caused termination
       let blobsScanned = 0;
       let bytesInspected = 0;
       const maxBlobs = effectiveBudgets.maxBlobsScanned ?? 50;
@@ -346,18 +351,21 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
         // Hard limit on blobs scanned during this search
         if (blobsScanned >= maxBlobs) {
           budgetTerminated = true;
+          terminatedReason = "max_blobs_scanned";
           break;
         }
 
         // Hard limit on bytes inspected during this search
         if (bytesInspected >= maxBytes) {
           budgetTerminated = true;
+          terminatedReason = "max_search_bytes";
           break;
         }
 
         // Check budget before fetching each blob content
         if (retrievedChars + searchCharsConsumed >= effectiveBudgets.maxRetrievedChars) {
           budgetTerminated = true;
+          terminatedReason = "max_retrieved_chars_exceeded";
           break;
         }
 
@@ -372,6 +380,7 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
           // Check blob size before decoding to prevent overshooting byte ceiling
           if (blobData.size && bytesInspected + blobData.size > maxBytes) {
             budgetTerminated = true;
+            terminatedReason = "max_search_bytes";
             break;
           }
 
@@ -392,6 +401,7 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
             // Hard budget check: stop if this fragment would exceed budget
             if (retrievedChars + searchCharsConsumed + fragment.length > effectiveBudgets.maxRetrievedChars) {
               budgetTerminated = true;
+              terminatedReason = "max_retrieved_chars_exceeded";
               break;
             }
             searchCharsConsumed += fragment.length;
@@ -426,7 +436,7 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
         charsConsumed: searchCharsConsumed,
         result: budgetTerminated ? "ok_truncated" : "ok",
         truncated: budgetTerminated,
-        reason: budgetTerminated ? "max_retrieved_chars_exceeded" : undefined,
+        reason: terminatedReason || undefined,
         round: currentRound,
       });
 

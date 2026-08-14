@@ -365,6 +365,46 @@ describe("RI-3: searchRepoText (exact-SHA tree search)", () => {
     expect(searchTrace.truncated).toBe(true);
     expect(searchTrace.reason).toBe("max_retrieved_chars_exceeded");
   });
+
+  it("attributes search termination to max_blobs_scanned, not chars", async () => {
+    const tree = Array.from({ length: 5 }, (_, i) => ({ path: "f" + i + ".js", type: "blob", sha: "sha_" + i }));
+    const blobs = new Map(tree.map(e => [e.sha, "no match here ".repeat(50)]));
+    const { broker } = makeBroker(new Map(), new Map([[HEAD_SHA, tree]]), blobs, {
+      maxSearches: 5, maxSearchResults: 10, maxRetrievedChars: 100000,
+      maxBlobsScanned: 2, maxSearchBytes: 200000,
+    });
+
+    const result = await broker.searchRepoText("nomatch", HEAD_SHA);
+    expect(result.truncated).toBe(true);
+
+    const searchTrace = broker.getTrace().find(t => t.type === "repo_search");
+    expect(searchTrace.result).toBe("ok_truncated");
+    expect(searchTrace.reason).toBe("max_blobs_scanned");
+  });
+
+  it("attributes search termination to max_search_bytes, not chars", async () => {
+    const tree = [
+      { path: "big1.js", type: "blob", sha: "sha_big1" },
+      { path: "big2.js", type: "blob", sha: "sha_big2" },
+      { path: "big3.js", type: "blob", sha: "sha_big3" },
+    ];
+    const blobs = new Map([
+      ["sha_big1", "x".repeat(3000)], // 3000 bytes each, no match
+      ["sha_big2", "x".repeat(3000)],
+      ["sha_big3", "x".repeat(3000)],
+    ]);
+    const { broker } = makeBroker(new Map(), new Map([[HEAD_SHA, tree]]), blobs, {
+      maxSearches: 5, maxSearchResults: 10, maxRetrievedChars: 100000,
+      maxBlobsScanned: 50, maxSearchBytes: 5000,
+    });
+
+    const result = await broker.searchRepoText("nomatch", HEAD_SHA);
+    expect(result.truncated).toBe(true);
+
+    const searchTrace = broker.getTrace().find(t => t.type === "repo_search");
+    expect(searchTrace.result).toBe("ok_truncated");
+    expect(searchTrace.reason).toBe("max_search_bytes");
+  });
 });
 
 // ── Constructor validation ───────────────────────────────────────────────────
