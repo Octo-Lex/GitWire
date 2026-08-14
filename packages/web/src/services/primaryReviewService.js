@@ -412,6 +412,7 @@ export async function runPrimaryReview({
 
   let submittedResult = null; // structured final submission via tool_use
   let submissionAttempted = false; // one submission turn per invocation
+  let submissionDiagnostics = null; // what the submission turn actually returned
 
   try {
     // Structured submission turn: only the submission tool is exposed and
@@ -422,11 +423,11 @@ export async function runPrimaryReview({
       submissionAttempted = true;
       messages.push({
         role: "user",
-        content: "Repository retrieval is now closed. Submit your final result using the submit_review_result tool. If any correctness-material dependency still must be checked before approval can be justified, include it in unresolvedContextNeeds with requiredForApproval: true. Do not request additional repository tools.",
+        content: "Repository retrieval is now closed. Call the submit_review_result tool NOW with your complete final result — do not write any preamble or narrative text first. If any correctness-material dependency still must be checked before approval can be justified, include it in unresolvedContextNeeds with requiredForApproval: true.",
       });
       const finalMsg = await withDeadline(
         anthropic.messages.create({
-          model, max_tokens: 4096, system: systemPrompt,
+          model, max_tokens: 8192, system: systemPrompt,
           tools: [SUBMIT_REVIEW_TOOL],
           messages,
         }),
@@ -442,7 +443,16 @@ export async function runPrimaryReview({
         submittedResult = submitBlocks[submitBlocks.length - 1].input;
       }
       const finalTextBlocks = Array.isArray(finalMsg.content) ? finalMsg.content.filter(b => b.type === "text") : [];
-      if (finalTextBlocks.length > 0) textParts.push(finalTextBlocks.map(b => b.text).join("\n"));
+      const finalText = finalTextBlocks.map(b => b.text).join("\n");
+      if (finalText) textParts.push(finalText);
+      // Capture what the submission turn returned for diagnosis when the
+      // model refuses the tool — stop_reason and the TAIL of its text.
+      submissionDiagnostics = {
+        stopReason: finalMsg.stop_reason || null,
+        usedSubmitTool: submitBlocks.length > 0,
+        textTail: finalText ? finalText.slice(-300) : null,
+        outputTokens: finalMsg.usage?.output_tokens ?? 0,
+      };
     }
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
@@ -656,12 +666,13 @@ export async function runPrimaryReview({
     actualModel,
     rawText.slice(0, 500),
     allUnresolved,
+    submissionDiagnostics,
   );
 }
 
 // ── Receipt builder ─────────────────────────────────────────────────────────
 
-function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText, unresolvedContextRequests) {
+function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText, unresolvedContextRequests, submissionDiagnostics) {
   return {
     findings: validatedFindings,
     rawFindings: rawFindings || [],
@@ -672,6 +683,7 @@ function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budg
     error: error || undefined,
     rawTextSnippet: rawText ? rawText.slice(0, 500) : undefined,
     unresolvedContextRequests: unresolvedContextRequests || [],
+    submissionDiagnostics: submissionDiagnostics || null,
     promptVersion: PROMPT_VERSION,
     promptHash: PROMPT_HASH,
     actualModel: actualModel || null,

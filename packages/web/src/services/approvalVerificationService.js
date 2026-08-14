@@ -332,6 +332,7 @@ export async function runApprovalVerification({
 
   let submittedResult = null; // structured final submission via tool_use
   let submissionAttempted = false; // one submission turn per invocation
+  let submissionDiagnostics = null; // what the submission turn actually returned
 
   try {
     // Structured submission turn: only the submission tool is exposed and its
@@ -341,11 +342,11 @@ export async function runApprovalVerification({
       submissionAttempted = true;
       messages.push({
         role: "user",
-        content: "Repository retrieval is now closed. Submit your final result using the submit_verification_result tool. If any correctness-material dependency still must be checked, include it in unresolvedContextNeeds with requiredForApproval: true. Do not request additional repository tools.",
+        content: "Repository retrieval is now closed. Call the submit_verification_result tool NOW with your complete final result — do not write any preamble or narrative text first. If any correctness-material dependency still must be checked, include it in unresolvedContextNeeds with requiredForApproval: true.",
       });
       const vFinalMsg = await withDeadline(
         anthropic.messages.create({
-          model, max_tokens: 4096, system: systemPrompt,
+          model, max_tokens: 8192, system: systemPrompt,
           tools: [SUBMIT_VERIFICATION_TOOL],
           messages,
         }),
@@ -361,7 +362,14 @@ export async function runApprovalVerification({
         submittedResult = vSubmitBlocks[vSubmitBlocks.length - 1].input;
       }
       const vFinalTextBlocks = Array.isArray(vFinalMsg.content) ? vFinalMsg.content.filter(b => b.type === "text") : [];
-      if (vFinalTextBlocks.length > 0) textParts.push(vFinalTextBlocks.map(b => b.text).join("\n"));
+      const vFinalText = vFinalTextBlocks.map(b => b.text).join("\n");
+      if (vFinalText) textParts.push(vFinalText);
+      submissionDiagnostics = {
+        stopReason: vFinalMsg.stop_reason || null,
+        usedSubmitTool: vSubmitBlocks.length > 0,
+        textTail: vFinalText ? vFinalText.slice(-300) : null,
+        outputTokens: vFinalMsg.usage?.output_tokens ?? 0,
+      };
     }
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
@@ -587,7 +595,7 @@ export async function runApprovalVerification({
 
   const durationMs = Date.now() - startTime;
 
-  return makeReceipt(
+  const finalReceipt = makeReceipt(
     status,
     validatedFindings,
     unresolvedMaterial,
@@ -602,6 +610,8 @@ export async function runApprovalVerification({
     broker.getBudgetState(),
     rawFindings,
   );
+  finalReceipt.submissionDiagnostics = submissionDiagnostics;
+  return finalReceipt;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
