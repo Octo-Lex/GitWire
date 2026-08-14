@@ -29,7 +29,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -491,6 +491,146 @@ function buildRi04() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Faithful repository surfaces (RI-9 evaluation-integrity correction)
+//
+// The Context Broker performs arbitrary bounded reads/searches at the exact
+// base/head SHAs. A curated contextFiles[] surface manufactures false 404s
+// for every other path (RI-02 fixed proved this: the reviewer was told
+// package.json / CI / gate scripts do not exist).
+//
+// Surface snapshots capture the ACTUAL immutable repository:
+//   snapshots/repos/<repoKey>-<sha>.tree.json — full recursive tree
+//     (path, blob sha, size) at that commit
+//   snapshots/repos/<repoKey>-blobs.json — deduped UTF-8 text blobs
+//     (blob sha → content) for text files ≤ MAX_BLOB_BYTES across all
+//     captured SHAs of that repository
+//
+// A path present in the tree but whose blob is NOT stored (binary or above
+// the size cap) is a FIXTURE GAP: the evaluation run must be invalidated,
+// never served to the reviewer as not_found. A path absent from the tree is
+// a genuine 404.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const REPOS_DIR = join(SNAPSHOTS_DIR, "repos");
+const MAX_BLOB_BYTES = 65536;
+
+const TEXT_EXT = new Set([
+  ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json", ".md", ".mdx",
+  ".yml", ".yaml", ".sql", ".sh", ".bash", ".html", ".css", ".scss",
+  ".txt", ".svg", ".xml", ".example", ".gitignore", ".editorconfig",
+  ".npmrc", ".nvmrc", ".lock", ".properties", ".conf", ".cfg", ".toml",
+  ".gradle", ".kt", ".java", ".py", ".rb", ".go", ".rs", ".c", ".h",
+  ".cpp", ".hpp", ".env", ".prettierrc", ".eslintrc", ".dockerfile",
+]);
+
+function isTextLikePath(pathname, size) {
+  if (size > MAX_BLOB_BYTES) return false;
+  const base = pathname.split("/").pop();
+  const dot = base.lastIndexOf(".");
+  if (dot === -1) return base.startsWith("."); // dotfiles like .gitignore
+  return TEXT_EXT.has(base.slice(dot).toLowerCase());
+}
+
+/** Derive { repoKey → Set<sha> } from the 8 fixture snapshots. */
+function collectSurfaceShas() {
+  const byRepo = new Map();
+  for (const name of [
+    "ri01-broken.json", "ri01-fixed.json", "ri02-broken.json", "ri02-fixed.json",
+    "ri03-broken.json", "ri03-fixed.json", "ri04-broken.json", "ri04-fixed.json",
+  ]) {
+    const p = join(SNAPSHOTS_DIR, name);
+    if (!existsSync(p)) continue;
+    const snap = JSON.parse(readFileSync(p, "utf8"));
+    const repoKey = snap.source?.repo?.includes("AlCode") ? "alcode" : "gitwire";
+    if (!byRepo.has(repoKey)) byRepo.set(repoKey, new Set());
+    byRepo.get(repoKey).add(snap.prMetadata.base);
+    byRepo.get(repoKey).add(snap.prMetadata.head);
+  }
+  return byRepo;
+}
+
+/** GitWire: full recursive tree at a local commit → [{ path, sha, size }]. */
+function gitwireTree(sha) {
+  const out = run(`git -C "${GITWIRE_REPO_ROOT}" ls-tree -r -l ${sha}`);
+  return out.split("\n").filter(Boolean).map((line) => {
+    const m = line.match(/^\d+ \w+ ([0-9a-f]+)\s+(\d+|-)\t(.+)$/);
+    if (!m) return null;
+    return { path: m[3], sha: m[1], size: m[2] === "-" ? 0 : parseInt(m[2], 10) };
+  }).filter(Boolean);
+}
+
+/** GitWire: blob content by blob sha. */
+function gitwireBlob(blobSha) {
+  return run(`git -C "${GITWIRE_REPO_ROOT}" cat-file blob ${blobSha}`, {
+    maxBuffer: MAX_BLOB_BYTES * 2,
+  });
+}
+
+/** AlCode: full recursive tree via gh api. */
+function alcodeTree(sha) {
+  const raw = run(`gh api "repos/${ALCODE_REPO}/git/trees/${sha}?recursive=1" --jq ".tree"`);
+  return JSON.parse(raw)
+    .filter((e) => e.type === "blob")
+    .map((e) => ({ path: e.path, sha: e.sha, size: e.size ?? 0 }));
+}
+
+/** AlCode: blob content by blob sha via gh api (base64 → UTF-8). */
+function alcodeBlob(blobSha) {
+  const b64 = run(`gh api "repos/${ALCODE_REPO}/git/blobs/${blobSha}" --jq ".content"`);
+  const clean = b64.replace(/\s+/g, "");
+  return Buffer.from(clean, "base64").toString("utf8");
+}
+
+/** Capture surfaces for one repository. Idempotent per output file. */
+function buildRepoSurface(repoKey, shas) {
+  if (!existsSync(REPOS_DIR)) mkdirSync(REPOS_DIR, { recursive: true });
+
+  const blobStore = new Map(); // blob sha → utf8 text
+  const blobPathIndex = new Map(); // blob sha → first path seen (for logs)
+
+  for (const sha of shas) {
+    const treeFile = join(REPOS_DIR, `${repoKey}-${sha}.tree.json`);
+    if (existsSync(treeFile)) {
+      console.log(`  skip (exists): ${treeFile}`);
+      continue;
+    }
+    console.log(`  capturing ${repoKey} tree @ ${sha}...`);
+    const tree = repoKey === "gitwire" ? gitwireTree(sha) : alcodeTree(sha);
+
+    for (const entry of tree) {
+      if (!isTextLikePath(entry.path, entry.size)) continue;
+      if (blobStore.has(entry.sha)) continue;
+      try {
+        const text = repoKey === "gitwire" ? gitwireBlob(entry.sha) : alcodeBlob(entry.sha);
+        if (text.includes("\0")) continue; // binary despite extension
+        blobStore.set(entry.sha, text);
+        blobPathIndex.set(entry.sha, entry.path);
+      } catch (_e) {
+        console.log(`    WARN: could not read blob ${entry.sha.slice(0, 10)} (${entry.path})`);
+      }
+    }
+
+    writeFileSync(treeFile, JSON.stringify({ repo: repoKey, sha, tree }, null, 1), "utf8");
+    console.log(`    wrote ${treeFile} (${tree.length} entries)`);
+  }
+
+  const blobsFile = join(REPOS_DIR, `${repoKey}-blobs.json`);
+  if (!existsSync(blobsFile)) {
+    console.log(`  writing ${blobsFile} (${blobStore.size} blobs)...`);
+    writeFileSync(blobsFile, JSON.stringify(Object.fromEntries(blobStore)), "utf8");
+  } else {
+    console.log(`  skip (exists): ${blobsFile}`);
+  }
+}
+
+function buildRepoSurfaces() {
+  const byRepo = collectSurfaceShas();
+  for (const [repoKey, shas] of byRepo) {
+    buildRepoSurface(repoKey, [...shas]);
+  }
+}
+
 // Main
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -509,7 +649,10 @@ function main() {
     .flat()
     .every((name) => existsSync(join(SNAPSHOTS_DIR, name)));
   if (allPresent) {
-    console.log("All 8 snapshot files already present — nothing to do.");
+    console.log("All 8 snapshot files already present.");
+    console.log("[surfaces] Capturing repository surfaces (idempotent per file)...");
+    buildRepoSurfaces();
+    console.log("Done.");
     return;
   }
 
@@ -526,6 +669,9 @@ function main() {
   console.log("");
   console.log("[4/4] RI-04 (GitWire PR #124)");
   buildRi04();
+  console.log("");
+  console.log("[surfaces] Capturing repository surfaces (idempotent per file)...");
+  buildRepoSurfaces();
   console.log("");
   console.log("Done.");
 }

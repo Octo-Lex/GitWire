@@ -24,8 +24,21 @@
 // Context files are ref-bound: each contextFile may specify which refs it
 // is available at. A request at a different ref returns 404.
 
+import {
+  hasSurface, resolveSurfacePath, resolveSurfaceBlob, surfaceTree, repoKeyForFixture,
+} from "./fixtures/repoSurface.js";
+// (import must be top-of-file for the Jest resolver — hoisted below)
+
 /**
  * Build a mock Octokit for a given fixture.
+ *
+ * The surface is FAITHFUL to the actual immutable repository when a surface
+ * snapshot exists (snapshots/repos/): any path in the real tree serves its
+ * real content, any path outside it is a genuine 404. A path that exists in
+ * the real tree but has no stored blob (binary / size cap) records a
+ * FIXTURE GAP on `octokit.fixtureGaps` and rejects — evaluation harnesses
+ * must invalidate the run when fixtureGaps is non-empty. Curated
+ * changed/context files keep precedence (byte-identical to the bundle).
  *
  * @param {object} fixture — a fixture with prMetadata, changedFiles, contextFiles
  * @param {object} opts — { prNumber, owner, repo }
@@ -34,6 +47,7 @@
 export function buildFixtureOctokit(fixture, opts = {}) {
   const { prNumber = 42, owner = "org", repo = "repo" } = opts;
   const calls = [];
+  const fixtureGaps = []; // snapshot-coverage holes — invalidate the run if non-empty
 
   // Build content lookup maps.
   // Changed files: head content available at the head SHA, base content at the base SHA.
@@ -231,6 +245,31 @@ export function buildFixtureOctokit(fixture, opts = {}) {
             },
           });
         }
+
+        // Curated miss → faithful repository surface (when snapshotted)
+        const repoKey = repoKeyForFixture(fixture);
+        if (hasSurface(repoKey, ref)) {
+          const resolved = resolveSurfacePath(repoKey, ref, filePath);
+          if (resolved.status === "served") {
+            return Promise.resolve({
+              data: {
+                type: "file",
+                encoding: "base64",
+                content: Buffer.from(resolved.content, "utf8").toString("base64"),
+                path: filePath,
+                sha: resolved.blobSha,
+                size: resolved.size,
+              },
+            });
+          }
+          if (resolved.status === "gap") {
+            fixtureGaps.push({ kind: "content", path: filePath, ref, blobSha: resolved.blobSha, size: resolved.size });
+            return Promise.reject(new Error(
+              "FIXTURE GAP: no stored blob for real tree path " + filePath + " @ " + ref +
+              " (" + resolved.size + " bytes — over snapshot cap or binary). Run is INVALID."));
+          }
+          // genuine repository 404 — the path truly does not exist at this commit
+        }
         return Promise.reject(new Error("404 Not Found: " + filePath + " at ref " + ref));
       }
 
@@ -254,12 +293,39 @@ export function buildFixtureOctokit(fixture, opts = {}) {
         if (blobIndex.has(match.sha)) {
           return Promise.resolve({ data: blobIndex.get(match.sha) });
         }
+        // Faithful surface (search blobs resolve by blob sha)
+        const repoKeyB = repoKeyForFixture(fixture);
+        for (const ref of [headSha, baseSha]) {
+          if (!hasSurface(repoKeyB, ref)) continue;
+          const resolved = resolveSurfaceBlob(repoKeyB, ref, match.sha);
+          if (resolved.status === "served") {
+            return Promise.resolve({
+              data: {
+                encoding: "base64",
+                content: Buffer.from(resolved.content, "utf8").toString("base64"),
+                size: Buffer.byteLength(resolved.content, "utf8"),
+              },
+            });
+          }
+          if (resolved.status === "gap") {
+            fixtureGaps.push({ kind: "blob", blobSha: match.sha, ref });
+            return Promise.reject(new Error(
+              "FIXTURE GAP: real blob " + match.sha.slice(0, 10) + " has no stored content. Run is INVALID."));
+          }
+        }
         return Promise.reject(new Error("404 Blob not found: " + match.sha));
       }
 
       case "tree": {
         const sha = match.sha;
         const recursive = params.recursive === "1" || params.recursive === 1;
+        // Faithful full tree when snapshotted — searches must walk reality
+        const repoKeyT = repoKeyForFixture(fixture);
+        if (hasSurface(repoKeyT, sha)) {
+          return Promise.resolve({
+            data: { sha, tree: surfaceTree(repoKeyT, sha), truncated: false },
+          });
+        }
         if (treeIndex.has(sha)) {
           return Promise.resolve({
             data: {
@@ -297,8 +363,8 @@ export function buildFixtureOctokit(fixture, opts = {}) {
     }
   };
 
-  // Expose calls for audit
+  // Expose calls for audit; fixtureGaps must be empty for a valid evaluation
   requestFn.mock = { calls };
   requestFn.calls = calls;
-  return { request: requestFn };
+  return { request: requestFn, fixtureGaps };
 }

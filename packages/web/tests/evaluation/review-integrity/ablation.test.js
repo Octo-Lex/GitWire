@@ -132,26 +132,11 @@ function makePR(fixture, arm) {
   return pr;
 }
 
-// ── Defect detection (same criteria as live-after) ──────────────────────────
+// ── Defect detection: strict expected-defect scoring (shared module) ────────
+// A run counts as detected ONLY when a canonical P0/P1/P2 finding matches
+// the fixture's expected defect. Unresolved context needs never count.
 
-function checkDefect(caseId, text) {
-  const t = text.toLowerCase();
-  switch (caseId) {
-    case "RI-01":
-      return (t.includes("synchron") || t.includes("stale") || t.includes("contradict") || t.includes("inconsisten")) &&
-        (t.includes("status") || t.includes("phase") || t.includes("declaration") || t.includes("readme") || t.includes("constitution"));
-    case "RI-02":
-      return (t.includes("gate") || t.includes("exit")) &&
-        (t.includes("agent") || t.includes("replace") || t.includes("restart"));
-    case "RI-03":
-      return t.includes("basepath") || t.includes("base path") || t.includes("/dashboard") ||
-        (t.includes("url") && (t.includes("path") || t.includes("config")));
-    case "RI-04":
-      return t.includes("paginat") || t.includes("duplicate comment") ||
-        (t.includes("page") && t.includes("comment"));
-    default: return false;
-  }
-}
+import { detectExpectedDefect } from "./expected-defect.js";
 
 // ── Results ──────────────────────────────────────────────────────────────────
 
@@ -224,22 +209,33 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
 
         // V2 evidence (arm C only)
         const v2PrimaryFindings = v2Capture?.manifest?.primaryFindings || [];
-        const v2VerifierFindings = v2Capture?.verifierReceipt?.findings || [];
-        const v2VerifierStatus = v2Capture?.verifierReceipt?.status || "not_run";
+        const v2VerifierReceipt = v2Capture?.verifierReceipt || null;
+        const v2VerifierStatus = v2VerifierReceipt?.status || "not_run";
 
-        // Combined finding text for defect detection
-        const combinedText = [
-          ...(result?.findings || []).map(f => ((f.title || "") + " " + (f.description || "")).toLowerCase()),
-          ...v2PrimaryFindings.map(f => (f.claim || "").toLowerCase()),
-          ...v2VerifierFindings.map(f => (f.claim || "").toLowerCase()),
-        ].join(" ");
-
+        // Strict expected-defect scoring: canonical P0/P1/P2 findings only
         const defectDetected = fixture.expectedFinding
-          ? checkDefect(fixture.caseId, combinedText)
+          ? detectExpectedDefect(fixture, { result, v2PrimaryFindings, v2VerifierReceipt })
           : null;
 
         const legacyMaterial = (result?.findings || []).some(f => ["critical", "high", "medium"].includes(f.severity));
-        const v2Material = [...v2PrimaryFindings, ...v2VerifierFindings].some(f => ["P0", "P1", "P2"].includes(f.severity));
+        const v2Material = [
+          ...v2PrimaryFindings,
+          ...(v2VerifierReceipt?.findings || []),
+        ].some(f => ["P0", "P1", "P2"].includes(f.severity));
+
+        // Model-identity pinning: the run is invalid if the served model is
+        // not the requested candidate.
+        const requestedModel = currentConfig.model;
+        const actualModel = result?.primaryMeta?.actualModel
+          || v2VerifierReceipt?.actualModel
+          || null;
+        const modelMatch = arm !== "C" ? null : (actualModel === requestedModel);
+
+        // Fixture-surface validity: any snapshot-coverage hole invalidates
+        const gaps = octokit.fixtureGaps || [];
+        const invalidReason = gaps.length > 0
+          ? "fixture_gap:" + gaps[0].path
+          : (modelMatch === false ? "model_identity_mismatch" : null);
 
         const record = {
           fixture: fixture.caseId,
@@ -251,6 +247,10 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
           findingCount: result?.findings?.length || 0,
           v2PrimaryFindings: v2PrimaryFindings.map(f => ({ severity: f.severity, claim: (f.claim || "").slice(0, 80) })),
           v2VerifierStatus,
+          requestedModel,
+          actualModel,
+          modelMatch,
+          invalid: invalidReason,
           defectDetected,
           tokensUsed,
           latencyMs: elapsedMs,
@@ -263,7 +263,9 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
 
         console.log(
           `  ${fixture.caseId} ${fixture.variant} arm ${arm}: verdict=${record.verdict} ` +
-          `defect=${defectDetected} (${tokensUsed} tokens, ${elapsedMs}ms)`
+          `defect=${defectDetected} model=${actualModel || "n/a"}` +
+          (invalidReason ? " INVALID(" + invalidReason + ")" : "") +
+          ` (${tokensUsed} tokens, ${elapsedMs}ms)`
         );
       }, 300000);
     }

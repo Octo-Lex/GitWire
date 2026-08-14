@@ -145,41 +145,9 @@ function makeV2PR(fixture) {
   };
 }
 
-// ── Expected-defect detection (evaluated against COMBINED evidence) ──────────
+// ── Expected-defect detection: strict scoring (shared module) ────────────────
 
-function checkExpectedDefect(caseId, combinedFindingText) {
-  switch (caseId) {
-    case "RI-01":
-      return (
-        (combinedFindingText.includes("synchron") || combinedFindingText.includes("stale") ||
-         combinedFindingText.includes("contradict") || combinedFindingText.includes("inconsisten")) &&
-        (combinedFindingText.includes("status") || combinedFindingText.includes("phase") ||
-         combinedFindingText.includes("declaration") || combinedFindingText.includes("readme") ||
-         combinedFindingText.includes("constitution"))
-      );
-    case "RI-02":
-      return (
-        (combinedFindingText.includes("gate") || combinedFindingText.includes("exit")) &&
-        (combinedFindingText.includes("agent") || combinedFindingText.includes("replace") ||
-         combinedFindingText.includes("restart"))
-      );
-    case "RI-03":
-      return (
-        combinedFindingText.includes("basepath") || combinedFindingText.includes("base path") ||
-        combinedFindingText.includes("/dashboard") ||
-        (combinedFindingText.includes("url") &&
-         (combinedFindingText.includes("path") || combinedFindingText.includes("config")))
-      );
-    case "RI-04":
-      return (
-        combinedFindingText.includes("paginat") ||
-        combinedFindingText.includes("duplicate comment") ||
-        (combinedFindingText.includes("page") && combinedFindingText.includes("comment"))
-      );
-    default:
-      return false;
-  }
-}
+import { detectExpectedDefect } from "./expected-defect.js";
 
 // ── Results collector ────────────────────────────────────────────────────────
 
@@ -256,20 +224,14 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
 
         // ── Capture the COMPLETE v2 evidence set ───────────────────────────
         const v2PrimaryFindings = v2Capture?.manifest?.primaryFindings || [];
-        const v2VerifierFindings = v2Capture?.verifierReceipt?.findings || [];
-        const v2VerifierStatus = v2Capture?.verifierReceipt?.status || "not_run";
+        const v2VerifierReceipt = v2Capture?.verifierReceipt || null;
+        const v2VerifierFindings = v2VerifierReceipt?.findings || [];
+        const v2VerifierStatus = v2VerifierReceipt?.status || "not_run";
 
-        // Build combined finding text for defect detection — includes
-        // legacy result.findings AND v2 primary claims AND verifier claims
-        const combinedFindingText = [
-          ...(result?.findings || []).map(f =>
-            ((f.title || "") + " " + (f.description || f.body || "")).toLowerCase()),
-          ...v2PrimaryFindings.map(f => (f.claim || "").toLowerCase()),
-          ...v2VerifierFindings.map(f => (f.claim || "").toLowerCase()),
-        ].join(" ");
-
+        // Strict expected-defect scoring: canonical P0/P1/P2 findings only.
+        // Unresolved needs satisfy the third-run abstain allowance, never detection.
         const expectedDefectDetected = fixture.expectedFinding
-          ? checkExpectedDefect(fixture.caseId, combinedFindingText)
+          ? detectExpectedDefect(fixture, { result, v2PrimaryFindings, v2VerifierReceipt })
           : null;
 
         // Material-finding check across BOTH legacy and v2 severity scales
@@ -278,11 +240,25 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
         const v2Material = [...v2PrimaryFindings, ...v2VerifierFindings].some(f =>
           ["P0", "P1", "P2"].includes(f.severity));
 
+        // Model-identity pinning
+        const requestedModel = BASE_CONFIG.model;
+        const actualModel = result?.primaryMeta?.actualModel || v2VerifierReceipt?.actualModel || null;
+        const modelMatch = actualModel === requestedModel;
+
+        // Fixture-surface validity
+        const gaps = octokit.fixtureGaps || [];
+        const invalidReason = gaps.length > 0
+          ? "fixture_gap:" + gaps[0].path
+          : (modelMatch ? null : "model_identity_mismatch");
+
         const record = {
           fixture: fixture.caseId,
           variant: fixture.variant,
           run,
-          model: BASE_CONFIG.model,
+          requestedModel,
+          actualModel,
+          modelMatch,
+          invalid: invalidReason,
           v2Mode: "live",
           timestamp: new Date().toISOString(),
           verdict: result?.verdict || "null",
@@ -309,9 +285,15 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
         console.log(
           `  ${fixture.caseId} ${fixture.variant} run ${run}: verdict=${record.verdict} ` +
           `checkState=${record.checkState || "n/a"} v2Verifier=${v2VerifierStatus} ` +
-          `defect=${expectedDefectDetected} (${record.tokensUsed} tokens, ${record.latencyMs}ms)`
+          `defect=${expectedDefectDetected} model=${actualModel || "n/a"}` +
+          (invalidReason ? " INVALID(" + invalidReason + ")" : "") +
+          ` (${record.tokensUsed} tokens, ${record.latencyMs}ms)`
         );
       }
+
+      // ── Run validity: fixture gaps and model-identity mismatches invalidate ──
+      const invalidRuns = runs.filter(r => r.invalid);
+      expect(invalidRuns).toEqual([]);
 
       // ── Enforce frozen per-fixture thresholds ──────────────────────────
       if (fixture.variant === "broken") {
@@ -319,9 +301,16 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
         const falseApproves = runs.filter(r => r.verdict === "approved").length;
         expect(falseApproves).toBe(0);
 
-        // Frozen requirement: detect expected material defect in ≥2/3 runs
+        // Frozen requirement: strict expected-defect detection in ≥2/3 runs
+        // (canonical P0/P1/P2 findings only — unresolved needs never count)
         const detections = runs.filter(r => r.expectedDefectDetected === true).length;
         expect(detections).toBeGreaterThanOrEqual(2);
+
+        // Frozen third-run allowance: every non-detecting run must detect OR
+        // abstain (review_incomplete) — a silent clean miss is not allowed
+        const silentMisses = runs.filter(r =>
+          r.expectedDefectDetected !== true && r.checkState !== "review_incomplete");
+        expect(silentMisses).toEqual([]);
       } else {
         // Each fixed fixture must produce zero false P0/P1/P2 AND APPROVE in ≥2/3
         const falsePositives = runs.filter(r => r.falsePositive === true).length;
