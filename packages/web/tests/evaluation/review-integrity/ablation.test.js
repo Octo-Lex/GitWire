@@ -26,6 +26,11 @@ const FIXTURE_FILTER = process.env.ABLATION_FIXTURES
   ? new Set(process.env.ABLATION_FIXTURES.split(",").map(s => s.trim()))
   : null;
 
+// Variant filter for exactly-specified diagnostic cases (e.g. "fixed" or "broken,fixed")
+const VARIANT_FILTER = process.env.ABLATION_VARIANTS
+  ? new Set(process.env.ABLATION_VARIANTS.split(",").map(s => s.trim()))
+  : null;
+
 // ── Mocks (same surface as live-after, @anthropic-ai/sdk stays real) ────────
 
 const mockDbQuery = jest.fn();
@@ -177,6 +182,7 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
 
   for (const fixture of fixtures) {
     if (FIXTURE_FILTER && !FIXTURE_FILTER.has(fixture.caseId)) continue;
+    if (VARIANT_FILTER && !VARIANT_FILTER.has(fixture.variant)) continue;
     for (const arm of arms) {
       it(`${fixture.caseId} ${fixture.variant} arm ${arm}`, async () => {
         currentConfig = makeConfig(arm);
