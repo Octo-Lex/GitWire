@@ -217,6 +217,19 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
         const v2PrimaryFindings = v2Capture?.manifest?.primaryFindings || [];
         const v2VerifierReceipt = v2Capture?.verifierReceipt || null;
         const v2VerifierStatus = v2VerifierReceipt?.status || "not_run";
+        // Full verifier diagnostics for attribution (reviewer capture list):
+        // unresolved needs, budget, trace, error — not just the status.
+        const v2VerifierDetail = v2VerifierReceipt ? {
+          status: v2VerifierReceipt.status,
+          coverageSatisfied: v2VerifierReceipt.coverageSatisfied,
+          unresolvedContextRequests: v2VerifierReceipt.unresolvedContextRequests || [],
+          budgetState: v2VerifierReceipt.budgetState || null,
+          contextTraceOps: (v2VerifierReceipt.contextTrace || []).length,
+          contextTrace: (v2VerifierReceipt.contextTrace || []).map(t => ({
+            type: t.type, target: (t.path || t.query || null), result: t.result, reason: t.reason || undefined,
+          })),
+          error: v2VerifierReceipt.error || undefined,
+        } : null;
 
         // Strict expected-defect scoring: canonical P0/P1/P2 findings only
         const defectDetected = fixture.expectedFinding
@@ -253,6 +266,7 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
           findingCount: result?.findings?.length || 0,
           v2PrimaryFindings: v2PrimaryFindings.map(f => ({ severity: f.severity, claim: (f.claim || "").slice(0, 80) })),
           v2VerifierStatus,
+          v2VerifierDetail,
           requestedModel,
           actualModel,
           modelMatch,
