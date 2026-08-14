@@ -100,7 +100,7 @@ function makeConfig(arm) {
     max_files_to_review: 30, max_lines_to_review: 2000,
     ignore_patterns: ["*.lock", "package-lock.json"],
     engine: "claude", model: overrideModel || "claude-sonnet-4-20250514",
-    max_duration_seconds: 300, bundle_max_chars: 180000, require_file_scope: true,
+    max_duration_seconds: 480, bundle_max_chars: 180000, require_file_scope: true,
     adversarial_review: false,
   };
 
