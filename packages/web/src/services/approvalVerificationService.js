@@ -331,38 +331,45 @@ export async function runApprovalVerification({
   let tokenBudgetExceeded = false;
 
   let submittedResult = null; // structured final submission via tool_use
+  let submissionAttempted = false; // one submission turn per invocation
 
   try {
+    // Structured submission turn: only the submission tool is exposed and its
+    // tool_use.input is parsed directly. Runs when retrieval closes — either
+    // by budget exhaustion OR by the model naturally stopping tool use.
+    async function runSubmissionTurn() {
+      submissionAttempted = true;
+      messages.push({
+        role: "user",
+        content: "Repository retrieval is now closed. Submit your final result using the submit_verification_result tool. If any correctness-material dependency still must be checked, include it in unresolvedContextNeeds with requiredForApproval: true. Do not request additional repository tools.",
+      });
+      const vFinalMsg = await withDeadline(
+        anthropic.messages.create({
+          model, max_tokens: 4096, system: systemPrompt,
+          tools: [SUBMIT_VERIFICATION_TOOL],
+          messages,
+        }),
+        "Verifier final submission",
+      );
+      if (vFinalMsg.model && !actualModel) actualModel = vFinalMsg.model;
+      tokensUsed += (vFinalMsg.usage?.input_tokens ?? 0) + (vFinalMsg.usage?.output_tokens ?? 0);
+      if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
+      const vSubmitBlocks = Array.isArray(vFinalMsg.content)
+        ? vFinalMsg.content.filter(b => b.type === "tool_use" && b.name === "submit_verification_result")
+        : [];
+      if (vSubmitBlocks.length > 0) {
+        submittedResult = vSubmitBlocks[vSubmitBlocks.length - 1].input;
+      }
+      const vFinalTextBlocks = Array.isArray(vFinalMsg.content) ? vFinalMsg.content.filter(b => b.type === "text") : [];
+      if (vFinalTextBlocks.length > 0) textParts.push(vFinalTextBlocks.map(b => b.text).join("\n"));
+    }
+
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      // When context rounds are exhausted, make a structured final submission
-      // turn: only the submission tool is exposed; tool_use.input is parsed
-      // directly (no free-text JSON serialization).
+      // Budget exhaustion → close retrieval and take the structured submission
       const vbs = broker.getBudgetState();
       const vMaxRounds = vbs.limits?.maxContextRounds || 4;
       if (round > 0 && vbs.contextRounds >= vMaxRounds) {
-        messages.push({
-          role: "user",
-          content: "Repository retrieval is now closed. Submit your final result using the submit_verification_result tool. If any correctness-material dependency still must be checked, include it in unresolvedContextNeeds with requiredForApproval: true. Do not request additional repository tools.",
-        });
-        const vFinalMsg = await withDeadline(
-          anthropic.messages.create({
-            model, max_tokens: 4096, system: systemPrompt,
-            tools: [SUBMIT_VERIFICATION_TOOL],
-            messages,
-          }),
-          "Verifier final submission",
-        );
-        if (vFinalMsg.model && !actualModel) actualModel = vFinalMsg.model;
-        tokensUsed += (vFinalMsg.usage?.input_tokens ?? 0) + (vFinalMsg.usage?.output_tokens ?? 0);
-        if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
-        const vSubmitBlocks = Array.isArray(vFinalMsg.content)
-          ? vFinalMsg.content.filter(b => b.type === "tool_use" && b.name === "submit_verification_result")
-          : [];
-        if (vSubmitBlocks.length > 0) {
-          submittedResult = vSubmitBlocks[vSubmitBlocks.length - 1].input;
-        }
-        var vFinalTextBlocks = Array.isArray(vFinalMsg.content) ? vFinalMsg.content.filter(b => b.type === "text") : [];
-        if (vFinalTextBlocks.length > 0) textParts.push(vFinalTextBlocks.map(b => b.text).join("\n"));
+        await runSubmissionTurn();
         break;
       }
 
@@ -401,8 +408,10 @@ export async function runApprovalVerification({
         textParts.push(textBlocks.map(b => b.text).join("\n"));
       }
 
-      // If no tool-use, the model is done — extract the final text
+      // If no tool-use, the model is done — keep the assistant turn in the
+      // conversation so the submission instruction follows a valid user turn.
       if (message.stop_reason !== "tool_use" || toolUseBlocks.length === 0) {
+        messages.push({ role: "assistant", content: message.content });
         break;
       }
 
@@ -460,6 +469,14 @@ export async function runApprovalVerification({
 
       messages.push({ role: "user", content: toolResults });
       broker.endRound();
+    }
+
+    // Natural stop: the model ended tool use before the budget boundary.
+    // Take the structured submission turn so the result never depends on
+    // free-text JSON. (Skipped after token exhaustion — that path fails
+    // closed without another call.)
+    if (!submittedResult && !submissionAttempted && !tokenBudgetExceeded) {
+      await runSubmissionTurn();
     }
   } catch (err) {
     // Timeout, API failure, or SDK error → incomplete

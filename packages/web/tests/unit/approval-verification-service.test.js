@@ -161,7 +161,9 @@ describe("RI-5: runApprovalVerification", () => {
     expect(receipt.status).toBe(VERIFIER_STATUS.VERIFIED);
     expect(receipt.approvalSafe).toBe(true);
     expect(receipt.findings).toHaveLength(0);
-    expect(receipt.tokensUsed).toBe(3500);
+    // Two calls: natural-stop turn + the structured submission turn (protocol
+    // since the final-submission correction) — each mocked at 3500 tokens.
+    expect(receipt.tokensUsed).toBe(7000);
     expect(receipt.durationMs).toBeGreaterThanOrEqual(0);
   });
 

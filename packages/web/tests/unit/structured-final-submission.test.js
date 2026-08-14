@@ -248,6 +248,35 @@ describe("Primary: structured final submission", () => {
     expect(receipt.unresolvedContextRequests[0].potentialSeverity).toBe("P2");
   });
 
+  it("natural stop takes the structured submission turn (no prose JSON dependency)", async () => {
+    const anthropic = makeAnthropic([
+      // Round 0: model stops naturally with narration — no tool call at all
+      textMsg("I have reviewed the changed files and I am confident about my conclusions now."),
+      // Submission turn must then run and arrive structured
+      toolUseMsg([{
+        name: "submit_review_result",
+        input: { findings: [], unresolvedContextNeeds: [] },
+      }]),
+    ]);
+
+    const receipt = await runPrimaryReview({
+      evidence: EVIDENCE,
+      octokit: makeBrokerOctokit(), owner: "org", repo: "repo",
+      anthropic,
+      primaryBudgets: { contextBroker: { maxContextRounds: 1 } },
+      maxDurationMs: 10000,
+    });
+
+    expect(receipt.error).toBeUndefined();
+    expect(receipt.findings).toEqual([]);
+    expect(receipt.unresolvedContextRequests).toEqual([]);
+    // The second call was the submission turn with only the submit tool
+    expect(anthropic.calls).toHaveLength(2);
+    expect(anthropic.calls[1].tools.map(t => t.name)).toEqual(["submit_review_result"]);
+    // The submission instruction followed an assistant turn (valid alternation)
+    expect(anthropic.calls[1].messages.map(m => m.role)).toEqual(["user", "assistant", "user"]);
+  });
+
   it("malformed/missing submission remains fail-closed", async () => {
     const anthropic = makeAnthropic([
       toolUseMsg([{ name: "search_repo_text", input: { query: "marker", ref: HEAD } }]),

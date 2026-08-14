@@ -3,64 +3,21 @@
     "fixture": "RI-02",
     "variant": "broken",
     "arm": "C",
-    "timestamp": "2026-08-14T04:30:53.095Z",
+    "timestamp": "2026-08-14T11:22:08.491Z",
     "verdict": "needs_discussion",
-    "checkState": "review_blocked",
-    "findingCount": 1,
-    "v2PrimaryFindings": [
-      {
-        "severity": "P2",
-        "claim": "Phase 0.0 status still marked REOPENED in the \"estimated total range\" block, con"
-      }
-    ],
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "v2PrimaryFindings": [],
     "v2VerifierStatus": "not_run",
     "defectDetected": false,
-    "tokensUsed": 41944,
-    "latencyMs": 52587,
+    "tokensUsed": 54175,
+    "latencyMs": 186015,
     "primaryMeta": {
-      "actualModel": "glm-5.2",
+      "actualModel": "glm-5.3",
       "promptVersion": "v2-primary-r1",
       "promptHash": "5be7acd28b8873d0",
-      "rawFindings": [
-        {
-          "severity": "P2",
-          "category": "docs_gap",
-          "claim": "Phase 0.0 status still marked REOPENED in the \"estimated total range\" block, contradicting the header and per-phase CLOSED updates",
-          "description": "The PR's stated goal is a stale-status fix that closes Phases 0.0, 0.1A, and 0.2. It updates the file header (line 3) to 'Phases 0.0, 0.1A, 0.2 closed' and the Phase 0.0 section heading (line ~119) to 'Architecture foundation (CLOSED)'. However, the 'Phase 0 estimated total range' code block near the bottom of phase-0-spec.md still contains '0.0  Architecture foundation (REOPENED):'. This is exactly the kind of stale status the PR is meant to eliminate and it is now internally contradictory: the same file declares Phase 0.0 both CLOSED (header + section heading) and REOPENED (estimates block). This is a normative status declaration inconsistency, not a style issue.",
-          "affectedPaths": [
-            "docs/phase-0-spec.md"
-          ],
-          "evidenceRefs": [
-            "changed:docs/phase-0-spec.md@HEAD:L3-L3",
-            "repo-read:docs/phase-0-spec.md@HEAD:L740-L744"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "Header (line 3, in diff) says '0.0...closed'; Phase 0.0 heading (line ~119, in diff) says 'CLOSED'; but the estimates block (unchanged, ~line 740) still says '0.0 Architecture foundation (REOPENED)'. The unchanged line falls outside the diff hunks, so the stale status was missed by the PR."
-          },
-          "confidence": 0.95
-        },
-        {
-          "severity": "P3",
-          "category": "docs_gap",
-          "claim": "roadmap.md document-roles list omits event-contract.md and non-goals.md that phase-0-spec.md references",
-          "description": "The new roadmap.md ends with a 'Document roles' section that enumerates phase-0-spec.md, constitution.md, rules.md, and backlog.md. phase-0-spec.md's own References list (lines 13-17) additionally cites docs/event-contract.md (the event envelope/producer/identity/versioning contract) and docs/non-goals.md. Because roadmap.md positions itself as the orientation document and explicitly enumerates the sibling docs, the omission of two contract-bearing documents is a minor inconsistency. Low severity since phase-0-spec.md remains the authoritative reference list and roadmap.md does not claim its list is exhaustive.",
-          "affectedPaths": [
-            "docs/roadmap.md",
-            "docs/phase-0-spec.md"
-          ],
-          "evidenceRefs": [
-            "changed:docs/roadmap.md@HEAD:L380-L385",
-            "repo-read:docs/phase-0-spec.md@HEAD:L13-L17"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "phase-0-spec.md References (line 13-17, unchanged) list event-contract.md and non-goals.md; roadmap.md document-roles (line 380-385, in diff) lists neither."
-          },
-          "confidence": 0.7
-        }
-      ],
-      "validatedCount": 1,
+      "rawFindings": [],
+      "validatedCount": 0,
       "retrievalTrace": [
         {
           "type": "file_read",
@@ -77,58 +34,47 @@
         },
         {
           "type": "repo_search",
-          "query": "roadmap.md",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "resultCount": 2,
-          "charsConsumed": 766,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "REOPENED",
+          "query": "reopened",
           "ref": "0181b19f00dc",
           "resolvedSha": "0181b19f00dc",
           "resultCount": 2,
           "charsConsumed": 691,
           "result": "ok",
           "truncated": false,
-          "round": 2
+          "round": 1
         },
         {
           "type": "repo_search",
-          "query": "0.2 green",
+          "query": "roadmap",
           "ref": "0181b19f00dc",
           "resolvedSha": "0181b19f00dc",
-          "resultCount": 1,
-          "charsConsumed": 312,
+          "resultCount": 2,
+          "charsConsumed": 569,
+          "result": "ok",
+          "truncated": false,
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "gate:0.2",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "resultCount": 2,
+          "charsConsumed": 714,
           "result": "ok",
           "truncated": false,
           "round": 2
         },
         {
           "type": "repo_search",
-          "query": "Phase 0.0 reopened",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "resultCount": 1,
-          "charsConsumed": 283,
-          "result": "ok",
-          "truncated": false,
-          "round": 3
-        },
-        {
-          "type": "repo_search",
-          "query": "docs/constitution.md",
+          "query": "worktree_id",
           "ref": "0181b19f00dc",
           "resolvedSha": "0181b19f00dc",
           "resultCount": 3,
-          "charsConsumed": 1220,
+          "charsConsumed": 1233,
           "result": "ok",
           "truncated": false,
-          "round": 3
+          "round": 2
         },
         {
           "type": "repo_search",
@@ -139,13 +85,56 @@
           "charsConsumed": 330,
           "result": "ok",
           "truncated": false,
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": "package.json",
+          "ref": "0181b19f00dc",
+          "result": "not_found",
+          "error": "404 Not Found: package.json at ref 0181b19f00dc",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "docs/backlog.md",
+          "ref": "0181b19f00dc",
+          "result": "not_found",
+          "error": "404 Not Found: docs/backlog.md at ref 0181b19f00dc",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "docs/constitution.md",
+          "ref": "0181b19f00dc",
+          "result": "not_found",
+          "error": "404 Not Found: docs/constitution.md at ref 0181b19f00dc",
+          "round": 3
+        },
+        {
+          "type": "repo_search",
+          "query": "backlog",
+          "ref": "0181b19f00dc",
+          "resolvedSha": "0181b19f00dc",
+          "resultCount": 3,
+          "charsConsumed": 1221,
+          "result": "ok",
+          "truncated": false,
           "round": 4
+        },
+        {
+          "type": "repo_search",
+          "result": "budget_exceeded",
+          "reason": "max_searches_exceeded",
+          "round": 4,
+          "query": "alcode",
+          "ref": "0181b19f00dc"
         }
       ],
       "budgetState": {
-        "fileReads": 1,
+        "fileReads": 4,
         "searches": 6,
-        "retrievedChars": 38456,
+        "retrievedChars": 39612,
         "contextRounds": 4,
         "currentRound": 0,
         "limits": {
@@ -159,14 +148,9 @@
         },
         "exhausted": true
       },
-      "error": null,
-      "rawTextSnippet": "I'll review this documentation-only PR for correctness, focusing on cross-file consistency between the two changed files and the documents they reference.\n\nI found an important inconsistency: the phase-0-spec.md status line was updated to say \"Phases 0.0, 0.1A, 0.2 closed\" and \"gate:0.2 green on main\", but at the bottom the \"Phase 0 estimated total range\" still shows `0.0 Architecture foundation (REOPENED)`. Let me also verify the gate reference commit is accurate and check the original status t",
-      "unresolvedContextRequests": [
-        {
-          "source": "model_declared",
-          "description": "Could not verify that docs/constitution.md, docs/rules.md, docs/backlog.md, docs/event-contract.md, and docs/non-goals.md actually exist at HEAD (only their mention in phase-0-spec.md references and roadmap.md document-roles was confirmed). If any are missing, the relative links in the new roadmap.md would be broken. Recommend a quick existence check before merge, but this is low-likelihood since phase-0-spec.md already referenced them."
-        }
-      ]
+      "error": "Failed to parse primary review response",
+      "rawTextSnippet": "I'll review this documentation PR. The key correctness risks are: (1) internal consistency of status declarations in the spec, (2) whether the new roadmap's cross-references (gate names, spec sections, sibling docs) actually exist, and (3) stale status claims in other unchanged docs.\n\nThe spec read already reveals a key internal inconsistency (the bottom summary table still says `0.0 Architecture foundation (REOPENED)`). Now I need to verify: (1) whether the repo actually contains the scaffold/i",
+      "unresolvedContextRequests": []
     },
     "falseApprove": false,
     "falsePositive": null
@@ -175,93 +159,82 @@
     "fixture": "RI-02",
     "variant": "fixed",
     "arm": "C",
-    "timestamp": "2026-08-14T04:31:54.584Z",
+    "timestamp": "2026-08-14T11:25:59.703Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
-    "findingCount": 3,
-    "v2PrimaryFindings": [
-      {
-        "severity": "P3",
-        "claim": "README 'Read first' list has two items numbered '3' after roadmap.md was inserte"
-      },
-      {
-        "severity": "P3",
-        "claim": "Phase 0.1A estimated range contradicts itself between the spec's per-phase body "
-      },
-      {
-        "severity": "P3",
-        "claim": "Normative 'gate:0.2 green on main (dd07fb2)' claim in the executable spec is unv"
-      }
-    ],
+    "findingCount": 0,
+    "v2PrimaryFindings": [],
     "v2VerifierStatus": "not_run",
     "defectDetected": null,
-    "tokensUsed": 22084,
-    "latencyMs": 61455,
+    "tokensUsed": 62193,
+    "latencyMs": 231180,
     "primaryMeta": {
-      "actualModel": "glm-5.2",
+      "actualModel": "glm-5.3",
       "promptVersion": "v2-primary-r1",
       "promptHash": "5be7acd28b8873d0",
-      "rawFindings": [
-        {
-          "severity": "P2",
-          "category": "docs_gap",
-          "claim": "README 'Read first' list has two items numbered '3' after roadmap.md was inserted as item 2",
-          "description": "The diff inserted `docs/roadmap.md` as the new item 2 in the 'Read first' ordered list but did not renumber the subsequent items. The resulting list reads: 1. constitution.md, 2. roadmap.md, 3. phase-0-spec.md, 3. event-contract.md, 4. rules.md, 5. non-goals.md, 6. backlog.md. This is a malformed ordered list (duplicate '3') introduced directly by this PR's edit. Markdown renderers will produce a broken/ambiguous list, and the duplicated number is a visible defect in the primary entry-point document. The fix is to renumber event-contract.md (and everything after) so the sequence is 1–7.",
-          "affectedPaths": [
-            "README.md"
-          ],
-          "evidenceRefs": [
-            "changed:README.md@HEAD:19-26"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "Reading the full README.md at HEAD confirms the ordered list contains '3.' phase-0-spec.md followed immediately by '3.' event-contract.md. The diff hunk shows the new item 2 (roadmap.md) was inserted but the original item 2 (phase-0-spec.md) was relabeled to 3 while the pre-existing item 3 (event-contract.md) was not incremented, leaving two '3' entries."
-          },
-          "confidence": 0.95
-        },
-        {
-          "severity": "P3",
-          "category": "docs_gap",
-          "claim": "Phase 0.1A estimated range contradicts itself between the spec's per-phase body (3–5 days) and the spec's own total-range table and README glance table (2–4 days)",
-          "description": "docs/phase-0-spec.md §0.1A body states 'Estimated range: 3–5 days.' However, the same file's 'Phase 0 estimated total range' table (edited by this PR to add [CLOSED]) lists '0.1A Minimal agent loop + offline provider: 2–4 days'. The README 'Phase 0 at a glance' table (also edited by this PR) likewise lists 2–4 days for 0.1A. This PR edited all three locations (it retitled 0.1A to CLOSED and touched the total-range table) but left the internal numeric contradiction intact. Since estimates are explicitly described as non-binding ranges this is low severity, but it is a within-document inconsistency in an executable specification that the PR modified.",
-          "affectedPaths": [
-            "docs/phase-0-spec.md",
-            "README.md"
-          ],
-          "evidenceRefs": [
-            "changed:docs/phase-0-spec.md@HEAD:741-749",
-            "repo-read:docs/phase-0-spec.md@HEAD:258-266"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "§0.1A body in phase-0-spec.md (read in full at HEAD) states 'Estimated range: 3–5 days', while the 'Phase 0 estimated total range' table in the same file (a hunk this PR edited to add [CLOSED]) states '2–4 days' for the same phase. README 'Phase 0 at a glance' (edited by this PR) also states 2–4 days."
-          },
-          "confidence": 0.85
-        },
-        {
-          "severity": "P2",
-          "category": "docs_gap",
-          "claim": "Normative 'gate:0.2 green on main (dd07fb2)' claim in the executable spec is unverifiable from the repository contents",
-          "description": "The phase-0-spec.md status header, README status line, and constitution Status section all newly assert 'gate:0.2 green on main' / 'gate:0.2 green on main (dd07fb2)'. The phase-0-spec.md itself defines a phase as passed ONLY when its gate command emits status:'passed' AND writes a GateReceipt JSON to ~/.alcode/gate-receipts/. This PR promotes 0.0/0.1A/0.2 from REOPENED/pending to CLOSED based on that gate result, and the spec names a specific commit (dd07fb2, which equals the PR base SHA). The GateReceipt schema and storage path are defined in the same spec, so the claim is checkable in principle. I could not confirm a corresponding GateReceipt artifact or gate runner implementation in the repo before exhausting the retrieval budget. Given this is a normative status declaration in an executable specification (per the review rubric, status declarations and gate definitions are correctness material), the evidence backing the CLOSED transition should be present or referenced. If the gate receipt or runner is not in the repository, the CLOSED declarations are unsupported.",
-          "affectedPaths": [
-            "docs/phase-0-spec.md",
-            "README.md",
-            "docs/constitution.md"
-          ],
-          "evidenceRefs": [
-            "changed:docs/phase-0-spec.md@HEAD:3-3",
-            "changed:README.md@HEAD:12-14",
-            "changed:docs/constitution.md@HEAD:67-71"
-          ],
-          "proof": {
-            "type": "inference",
-            "summary": "The spec defines gate:0.2 as passed only when pnpm gate:0.2 emits status:'passed' and writes a GateReceipt. This PR asserts gate:0.2 is green at a named commit but the supporting artifact/runner could not be confirmed in the repository within the available budget, leaving the normative CLOSED declaration's evidentiary backing unverified."
-          },
-          "confidence": 0.5
-        }
-      ],
-      "validatedCount": 3,
+      "rawFindings": [],
+      "validatedCount": 0,
       "retrievalTrace": [
+        {
+          "type": "repo_search",
+          "query": "gate:0.2",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 3,
+          "charsConsumed": 1122,
+          "result": "ok",
+          "truncated": false,
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "reopened",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 0,
+          "charsConsumed": 0,
+          "result": "ok",
+          "truncated": false,
+          "round": 1
+        },
+        {
+          "type": "file_read",
+          "path": "docs/rules.md",
+          "ref": "20219bd384",
+          "result": "not_found",
+          "error": "404 Not Found: docs/rules.md at ref 20219bd384",
+          "round": 1
+        },
+        {
+          "type": "file_read",
+          "path": "docs/backlog.md",
+          "ref": "20219bd384",
+          "result": "not_found",
+          "error": "404 Not Found: docs/backlog.md at ref 20219bd384",
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "GateReceipt",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 3,
+          "charsConsumed": 1233,
+          "result": "ok",
+          "truncated": false,
+          "round": 2
+        },
+        {
+          "type": "repo_search",
+          "query": "backlog",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 3,
+          "charsConsumed": 1221,
+          "result": "ok",
+          "truncated": false,
+          "round": 2
+        },
         {
           "type": "file_read",
           "path": "README.md",
@@ -269,11 +242,14 @@
           "resolvedSha": "20219bd384",
           "blobSha": "f35e29412e4949e41f87fd794d4d63bfbd74d104",
           "contentDigest": "sha256:b4ab2353f352a89bffcbfc835b3431635bfa5cb84d56a16f9540a39d1925d19d",
-          "range": null,
+          "range": {
+            "startLine": 1,
+            "endLine": 40
+          },
           "truncated": false,
-          "contentLength": 4553,
+          "contentLength": 2132,
           "result": "ok",
-          "round": 1
+          "round": 2
         },
         {
           "type": "file_read",
@@ -282,58 +258,131 @@
           "resolvedSha": "20219bd384",
           "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
           "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
-          "range": null,
+          "range": {
+            "startLine": 490,
+            "endLine": 560
+          },
           "truncated": false,
-          "contentLength": 35102,
+          "contentLength": 3351,
           "result": "ok",
-          "round": 1
+          "round": 2
         },
         {
           "type": "file_read",
-          "path": "docs/roadmap.md",
+          "path": "package.json",
+          "ref": "20219bd384",
+          "result": "not_found",
+          "error": "404 Not Found: package.json at ref 20219bd384",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "docs/phase-0-spec.md",
           "ref": "20219bd384",
           "resolvedSha": "20219bd384",
-          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
-          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
           "range": {
-            "startLine": 1,
-            "endLine": 278
+            "startLine": 174,
+            "endLine": 268
           },
-          "truncated": true,
-          "contentLength": 10345,
-          "result": "ok_truncated",
-          "round": 1
+          "truncated": false,
+          "contentLength": 5328,
+          "result": "ok",
+          "round": 3
         },
         {
           "type": "file_read",
-          "result": "budget_exceeded",
-          "reason": "max_retrieved_chars_exceeded",
-          "round": 2,
+          "path": "docs/phase-0-spec.md",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
+          "range": {
+            "startLine": 268,
+            "endLine": 380
+          },
+          "truncated": false,
+          "contentLength": 5381,
+          "result": "ok",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "docs/event-contract.md",
+          "ref": "20219bd384",
+          "result": "not_found",
+          "error": "404 Not Found: docs/event-contract.md at ref 20219bd384",
+          "round": 3
+        },
+        {
+          "type": "repo_search",
+          "query": "pnpm",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 3,
+          "charsConsumed": 1212,
+          "result": "ok",
+          "truncated": false,
+          "round": 4
+        },
+        {
+          "type": "file_read",
+          "path": "LICENSE",
+          "ref": "20219bd384",
+          "result": "not_found",
+          "error": "404 Not Found: LICENSE at ref 20219bd384",
+          "round": 4
+        },
+        {
+          "type": "repo_search",
+          "query": "Host",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "resultCount": 4,
+          "charsConsumed": 1521,
+          "result": "ok",
+          "truncated": false,
+          "round": 4
+        },
+        {
+          "type": "file_read",
+          "path": "docs/phase-0-spec.md",
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
+          "range": {
+            "startLine": 120,
+            "endLine": 173
+          },
+          "truncated": false,
+          "contentLength": 2744,
+          "result": "ok",
+          "round": 4
+        },
+        {
+          "type": "file_read",
           "path": "docs/constitution.md",
-          "ref": "20219bd384"
-        },
-        {
-          "type": "repo_search",
-          "result": "budget_exceeded",
-          "reason": "max_retrieved_chars_exceeded",
-          "round": 2,
-          "query": "docs/rules.md",
-          "ref": "20219bd384"
-        },
-        {
-          "type": "repo_search",
-          "result": "budget_exceeded",
-          "reason": "max_retrieved_chars_exceeded",
-          "round": 2,
-          "query": "Estimated range",
-          "ref": "20219bd384"
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "7867491b4b5235dab38624055f0c06b45241de39",
+          "contentDigest": "sha256:11da23e66921475ce260dec18e5a25915aad2b36a105c425408847521e26ef85",
+          "range": {
+            "startLine": 55,
+            "endLine": 80
+          },
+          "truncated": false,
+          "contentLength": 1325,
+          "result": "ok",
+          "round": 4
         }
       ],
       "budgetState": {
-        "fileReads": 3,
-        "searches": 0,
-        "retrievedChars": 50000,
-        "contextRounds": 1,
+        "fileReads": 11,
+        "searches": 6,
+        "retrievedChars": 26570,
+        "contextRounds": 4,
         "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
@@ -346,28 +395,9 @@
         },
         "exhausted": true
       },
-      "error": null,
-      "rawTextSnippet": "I'll review this documentation-focused PR. Let me start by examining the key claims and cross-references, since the PR makes factual assertions (e.g., \"gate:0.2 green on `main`\", commit `dd07fb2`) and adds a new file with many links.\n\nLet me verify the critical cross-file references and consistency claims.\n\nI've found a clear defect already (duplicate list numbering). Let me verify a few more things: the constitution file consistency, the §0.1A estimated range inconsistency between README and sp",
-      "unresolvedContextRequests": [
-        {
-          "source": "broker_budget",
-          "tool": "read_repo_file",
-          "target": "docs/constitution.md",
-          "reason": "budget_exceeded"
-        },
-        {
-          "source": "model_declared",
-          "description": "Could not verify whether a gate runner (scripts/gate/) and a gate:0.2 GateReceipt artifact exist to back the new 'gate:0.2 green on main (dd07fb2)' CLOSED declarations (retrieval budget exhausted before searching the packages/scripts tree)."
-        },
-        {
-          "source": "model_declared",
-          "description": "Could not confirm docs/rules.md and docs/backlog.md exist, which docs/roadmap.md references in its 'Document roles' section (search budget exhausted)."
-        },
-        {
-          "source": "model_declared",
-          "description": "Could not read docs/constitution.md in full to confirm no other status/reference inconsistencies remain after the PR's Status-section edit (read budget exhausted)."
-        }
-      ]
+      "error": "Failed to parse primary review response",
+      "rawTextSnippet": "I'll review this documentation PR. The key claims to verify: (1) the status changes claim phases are closed with `gate:0.2` green on `main` — I need to check the repo actually contains that evidence; (2) the new `docs/roadmap.md` references other docs (`rules.md`, `backlog.md`) that must exist; (3) consistency of the new gate-definition text in `phase-0-spec.md` with its surroundings; (4) the README \"Read first\" list renumbering.\n\nTwo significant leads: `docs/rules.md` and `docs/backlog.md` don'",
+      "unresolvedContextRequests": []
     },
     "falseApprove": null,
     "falsePositive": false
@@ -376,17 +406,17 @@
     "fixture": "RI-04",
     "variant": "broken",
     "arm": "C",
-    "timestamp": "2026-08-14T04:32:29.501Z",
+    "timestamp": "2026-08-14T11:28:53.576Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
     "findingCount": 0,
     "v2PrimaryFindings": [],
     "v2VerifierStatus": "not_run",
     "defectDetected": false,
-    "tokensUsed": 19027,
-    "latencyMs": 34916,
+    "tokensUsed": 53110,
+    "latencyMs": 173872,
     "primaryMeta": {
-      "actualModel": "glm-5.2",
+      "actualModel": "glm-5.3",
       "promptVersion": "v2-primary-r1",
       "promptHash": "5be7acd28b8873d0",
       "rawFindings": [],
@@ -400,45 +430,13 @@
           "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
-            "startLine": 340,
-            "endLine": 420
+            "startLine": 300,
+            "endLine": 470
           },
           "truncated": false,
-          "contentLength": 3907,
+          "contentLength": 7796,
           "result": "ok",
           "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 470,
-            "endLine": 620
-          },
-          "truncated": false,
-          "contentLength": 7029,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 680,
-            "endLine": 711
-          },
-          "truncated": false,
-          "contentLength": 928,
-          "result": "ok",
-          "round": 2
         },
         {
           "type": "repo_search",
@@ -449,40 +447,18 @@
           "charsConsumed": 696,
           "result": "ok",
           "truncated": false,
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "needs_more_info",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "resultCount": 2,
+          "charsConsumed": 830,
+          "result": "ok",
+          "truncated": false,
           "round": 2
-        },
-        {
-          "type": "repo_search",
-          "query": "auto_comment: true",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "resultCount": 2,
-          "charsConsumed": 836,
-          "result": "ok",
-          "truncated": false,
-          "round": 3
-        },
-        {
-          "type": "repo_search",
-          "query": "Post triage summary as comment",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "resultCount": 0,
-          "charsConsumed": 0,
-          "result": "ok",
-          "truncated": false,
-          "round": 3
-        },
-        {
-          "type": "repo_search",
-          "query": "duplicate_detection",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "resultCount": 2,
-          "charsConsumed": 838,
-          "result": "ok",
-          "truncated": false,
-          "round": 4
         },
         {
           "type": "file_read",
@@ -492,19 +468,73 @@
           "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
-            "startLine": 380,
-            "endLine": 392
+            "startLine": 640,
+            "endLine": 711
           },
           "truncated": false,
-          "contentLength": 842,
+          "contentLength": 2126,
           "result": "ok",
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
+          "range": {
+            "startLine": 150,
+            "endLine": 300
+          },
+          "truncated": false,
+          "contentLength": 6919,
+          "result": "ok",
+          "round": 3
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "blobSha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
+          "contentDigest": "sha256:384cbdbe81c548dbbfe3ef3c644860aa5a544a68760630eba84be52f17aa88b2",
+          "range": {
+            "startLine": 1,
+            "endLine": 140
+          },
+          "truncated": false,
+          "contentLength": 13415,
+          "result": "ok",
+          "round": 3
+        },
+        {
+          "type": "repo_search",
+          "query": "triageWorker",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "resultCount": 3,
+          "charsConsumed": 1051,
+          "result": "ok",
+          "truncated": false,
+          "round": 4
+        },
+        {
+          "type": "repo_search",
+          "query": "Post triage summary",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "resultCount": 1,
+          "charsConsumed": 374,
+          "result": "ok",
+          "truncated": false,
           "round": 4
         }
       ],
       "budgetState": {
         "fileReads": 4,
         "searches": 4,
-        "retrievedChars": 15076,
+        "retrievedChars": 33207,
         "contextRounds": 4,
         "currentRound": 0,
         "limits": {
@@ -518,14 +548,9 @@
         },
         "exhausted": true
       },
-      "error": null,
-      "rawTextSnippet": "I'll review this PR carefully, starting by examining the actual changed code and its surrounding context to verify correctness of the line-number updates and logic changes.\n\nI notice the commentAction in the issue flow is at line ~384 (the `propose` call). Let me verify the exact line numbers for the audit entries and check the buildTriageComment function plus the documentation for the auto_comment contract.\n\nNow let me check the documentation/config files that describe the `auto_comment` contra",
-      "unresolvedContextRequests": [
-        {
-          "source": "model_declared",
-          "description": "Whether any normative documentation (config schema, .gitwire.yml example, README, or API contract docs) describes the auto_comment triage option. The PR test header quotes 'Post triage summary as comment' as the documented contract, suggesting such documentation exists somewhere. I searched for 'Post triage summary as comment', 'auto_comment: true', and 'duplicate_detection' but found no documentation file hits — only code and test references. If a docs file describes auto_comment with the old gating semantics or omits that it now posts for every issue, it may need updating to match the new 'always post when enabled' behavior. This could not be fully resolved within the tool budget."
-        }
-      ]
+      "error": "Failed to parse primary review response",
+      "rawTextSnippet": "I'll start by reading the main changed file and searching for related contracts.\n\nThe `auto_comment` search only found the worker and the new test. Let me check where `triageOpts` is derived, look at `buildTriageComment`, and find existing tests that may assert the old gating behavior.\n\nNow let me look at the earlier part of `triageIssue` (triageOpts derivation, label gating), the audit test, and search for other tests touching `postMarkedComment`.\n\nThe audit test validates registered call sites",
+      "unresolvedContextRequests": []
     },
     "falseApprove": false,
     "falsePositive": null
@@ -534,17 +559,17 @@
     "fixture": "RI-04",
     "variant": "fixed",
     "arm": "C",
-    "timestamp": "2026-08-14T04:33:16.575Z",
+    "timestamp": "2026-08-14T11:30:38.159Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
     "findingCount": 0,
     "v2PrimaryFindings": [],
     "v2VerifierStatus": "not_run",
     "defectDetected": null,
-    "tokensUsed": 15379,
-    "latencyMs": 47073,
+    "tokensUsed": 34098,
+    "latencyMs": 104582,
     "primaryMeta": {
-      "actualModel": "glm-5.2",
+      "actualModel": "glm-5.3",
       "promptVersion": "v2-primary-r1",
       "promptHash": "5be7acd28b8873d0",
       "rawFindings": [],
@@ -571,45 +596,24 @@
           "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
-            "startLine": 320,
-            "endLine": 420
+            "startLine": 280,
+            "endLine": 460
           },
           "truncated": false,
-          "contentLength": 5078,
+          "contentLength": 8229,
           "result": "ok",
           "round": 1
         },
         {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
+          "type": "repo_search",
+          "query": "findCommentByMarker",
           "ref": "a32a07e",
           "resolvedSha": "a32a07e",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 690,
-            "endLine": 710
-          },
-          "truncated": false,
-          "contentLength": 648,
+          "resultCount": 3,
+          "charsConsumed": 1132,
           "result": "ok",
-          "round": 2
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 470,
-            "endLine": 515
-          },
           "truncated": false,
-          "contentLength": 2247,
-          "result": "ok",
-          "round": 2
+          "round": 1
         },
         {
           "type": "repo_search",
@@ -620,7 +624,42 @@
           "charsConsumed": 696,
           "result": "ok",
           "truncated": false,
-          "round": 3
+          "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "postMarkedComment",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "resultCount": 4,
+          "charsConsumed": 1578,
+          "result": "ok",
+          "truncated": false,
+          "round": 2
+        },
+        {
+          "type": "repo_search",
+          "query": "Labels applied automatically",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "resultCount": 1,
+          "charsConsumed": 428,
+          "result": "ok",
+          "truncated": false,
+          "round": 2
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "blobSha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
+          "contentDigest": "sha256:384cbdbe81c548dbbfe3ef3c644860aa5a544a68760630eba84be52f17aa88b2",
+          "range": null,
+          "truncated": false,
+          "contentLength": 14579,
+          "result": "ok",
+          "round": 2
         },
         {
           "type": "file_read",
@@ -630,47 +669,20 @@
           "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
-            "startLine": 380,
-            "endLine": 390
+            "startLine": 460,
+            "endLine": 620
           },
           "truncated": false,
-          "contentLength": 704,
+          "contentLength": 7379,
           "result": "ok",
-          "round": 3
-        },
-        {
-          "type": "repo_search",
-          "query": "Post triage summary as comment",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "resultCount": 0,
-          "charsConsumed": 0,
-          "result": "ok",
-          "truncated": false,
-          "round": 4
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "blobSha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
-          "contentDigest": "sha256:384cbdbe81c548dbbfe3ef3c644860aa5a544a68760630eba84be52f17aa88b2",
-          "range": {
-            "startLine": 1,
-            "endLine": 60
-          },
-          "truncated": false,
-          "contentLength": 7225,
-          "result": "ok",
-          "round": 4
+          "round": 2
         }
       ],
       "budgetState": {
-        "fileReads": 6,
-        "searches": 2,
-        "retrievedChars": 21608,
-        "contextRounds": 4,
+        "fileReads": 4,
+        "searches": 4,
+        "retrievedChars": 39031,
+        "contextRounds": 2,
         "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
@@ -681,10 +693,10 @@
           "maxBlobsScanned": 50,
           "maxSearchBytes": 200000
         },
-        "exhausted": true
+        "exhausted": false
       },
       "error": "Failed to parse primary review response",
-      "rawTextSnippet": "I'll analyze this PR carefully. The key changes are:\n1. Pagination added to `findCommentByMarker`\n2. Triage comment gating changed from `needs_more_info || duplicate_hint` to always-post-when-enabled\n3. Comment footer text changed\n4. New tests added\n5. Audit test line numbers shifted\n\nLet me verify the critical dependencies.\n\nThe pagination logic looks correct. Now let me check the `postMarkedComment` action result contract — the test for the ambiguous case checks `result.reason === \"marker_ambi",
+      "rawTextSnippet": "I'll review this PR starting with the core changed files and their dependencies.\n\nI have the core helper and worker flow. Now let me check callers, the audit test mechanics, and any existing tests/docs that might contradict the new behavior.",
       "unresolvedContextRequests": []
     },
     "falseApprove": null,

@@ -411,38 +411,46 @@ export async function runPrimaryReview({
   let tokenBudgetExceeded = false;
 
   let submittedResult = null; // structured final submission via tool_use
+  let submissionAttempted = false; // one submission turn per invocation
 
   try {
+    // Structured submission turn: only the submission tool is exposed and
+    // its tool_use.input is parsed directly (no free-text JSON dependency).
+    // Runs when retrieval closes — either by budget exhaustion OR by the
+    // model naturally stopping tool use.
+    async function runSubmissionTurn() {
+      submissionAttempted = true;
+      messages.push({
+        role: "user",
+        content: "Repository retrieval is now closed. Submit your final result using the submit_review_result tool. If any correctness-material dependency still must be checked before approval can be justified, include it in unresolvedContextNeeds with requiredForApproval: true. Do not request additional repository tools.",
+      });
+      const finalMsg = await withDeadline(
+        anthropic.messages.create({
+          model, max_tokens: 4096, system: systemPrompt,
+          tools: [SUBMIT_REVIEW_TOOL],
+          messages,
+        }),
+        "LLM final submission",
+      );
+      if (finalMsg.model && !actualModel) actualModel = finalMsg.model;
+      tokensUsed += (finalMsg.usage?.input_tokens ?? 0) + (finalMsg.usage?.output_tokens ?? 0);
+      if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
+      const submitBlocks = Array.isArray(finalMsg.content)
+        ? finalMsg.content.filter(b => b.type === "tool_use" && b.name === "submit_review_result")
+        : [];
+      if (submitBlocks.length > 0) {
+        submittedResult = submitBlocks[submitBlocks.length - 1].input;
+      }
+      const finalTextBlocks = Array.isArray(finalMsg.content) ? finalMsg.content.filter(b => b.type === "text") : [];
+      if (finalTextBlocks.length > 0) textParts.push(finalTextBlocks.map(b => b.text).join("\n"));
+    }
+
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      // When context rounds are exhausted, make a structured final submission
-      // turn: only the submission tool is exposed, and its tool_use.input is
-      // parsed directly (no free-text JSON serialization).
+      // Budget exhaustion → close retrieval and take the structured submission
       const bs = broker.getBudgetState();
       const maxRounds = bs.limits?.maxContextRounds || 4;
       if (round > 0 && bs.contextRounds >= maxRounds) {
-        messages.push({
-          role: "user",
-          content: "Repository retrieval is now closed. Submit your final result using the submit_review_result tool. If any correctness-material dependency still must be checked before approval can be justified, include it in unresolvedContextNeeds with requiredForApproval: true. Do not request additional repository tools.",
-        });
-        const finalMsg = await withDeadline(
-          anthropic.messages.create({
-            model, max_tokens: 4096, system: systemPrompt,
-            tools: [SUBMIT_REVIEW_TOOL],
-            messages,
-          }),
-          "LLM final submission",
-        );
-        if (finalMsg.model && !actualModel) actualModel = finalMsg.model;
-        tokensUsed += (finalMsg.usage?.input_tokens ?? 0) + (finalMsg.usage?.output_tokens ?? 0);
-        if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
-        const submitBlocks = Array.isArray(finalMsg.content)
-          ? finalMsg.content.filter(b => b.type === "tool_use" && b.name === "submit_review_result")
-          : [];
-        if (submitBlocks.length > 0) {
-          submittedResult = submitBlocks[submitBlocks.length - 1].input;
-        }
-        var finalTextBlocks = Array.isArray(finalMsg.content) ? finalMsg.content.filter(b => b.type === "text") : [];
-        if (finalTextBlocks.length > 0) textParts.push(finalTextBlocks.map(b => b.text).join("\n"));
+        await runSubmissionTurn();
         break;
       }
 
@@ -480,6 +488,9 @@ export async function runPrimaryReview({
       }
 
       if (message.stop_reason !== "tool_use" || toolUseBlocks.length === 0) {
+        // Natural stop — keep the assistant turn in the conversation so the
+        // submission instruction that follows lands on a valid user turn.
+        messages.push({ role: "assistant", content: message.content });
         break;
       }
 
@@ -538,6 +549,15 @@ export async function runPrimaryReview({
 
       messages.push({ role: "user", content: toolResults });
       broker.endRound();
+    }
+
+    // Natural stop: the model ended tool use before the budget boundary
+    // (stop_reason end_turn). Retrieval is closed — take the structured
+    // submission turn here too, so the result never depends on the model
+    // serializing JSON into free text. (Skipped after token exhaustion —
+    // that path fails closed without another call.)
+    if (!submittedResult && !submissionAttempted && !tokenBudgetExceeded) {
+      await runSubmissionTurn();
     }
   } catch (err) {
     return makePrimaryReceipt(
