@@ -47,6 +47,12 @@ export function buildVerifierSystemPrompt(evidence) {
     "their coverage states, and the coverage manifest. You also have read and",
     "search tools to inspect repository files at the exact base and head commit SHAs.",
     "",
+    "## Immutable commit SHAs",
+    "",
+    "Use these exact SHA values for all read_repo_file and search_repo_text calls:",
+    "- BASE (old version, before the PR): " + (evidence?.review?.baseSha || "UNKNOWN"),
+    "- HEAD (new version, after the PR): " + (evidence?.review?.headSha || "UNKNOWN"),
+    "",
     "Your objectives:",
     "1. Find missed P0/P1/P2 regressions the primary reviewer may have overlooked.",
     "2. Find stale declarations or documentation that contradict the changes.",
@@ -250,8 +256,9 @@ export async function runApprovalVerification({
   }
 
   // ── Invoke the LLM with tool-use loop ────────────────────────────────────
-  let rawText = "";
+  const textParts = []; // accumulate text from all rounds (don't overwrite)
   let tokensUsed = 0;
+  let actualModel = null;
   let messages = [{ role: "user", content: userPrompt }];
   const MAX_TOOL_ROUNDS = 5; // safety limit
   const verifierContextItems = []; // successful broker results for finding validation
@@ -269,6 +276,9 @@ export async function runApprovalVerification({
         "LLM call (round " + round + ")",
       );
 
+      // Capture actual model identity from the provider response
+      if (message.model && !actualModel) actualModel = message.model;
+
       tokensUsed += (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
 
       // Check if the model wants to use tools
@@ -279,9 +289,9 @@ export async function runApprovalVerification({
         ? message.content.filter(b => b.type === "text")
         : [];
 
-      // Accumulate text for final parsing
+      // Accumulate text from all rounds (don't overwrite)
       if (textBlocks.length > 0) {
-        rawText = textBlocks.map(b => b.text).join("\n");
+        textParts.push(textBlocks.map(b => b.text).join("\n"));
       }
 
       // If no tool-use, the model is done — extract the final text
@@ -330,19 +340,27 @@ export async function runApprovalVerification({
     }
   } catch (err) {
     // Timeout, API failure, or SDK error → incomplete
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message);
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message, actualModel);
   }
 
-  // ── Parse and validate the response ──────────────────────────────────────
-  const parsed = parseVerifierResult(rawText.trim());
+  // ── Parse: try each accumulated text part (model may produce JSON in an
+  //    earlier tool-use round and a summary in the final round). ───────────
+  const rawText = textParts.join("\n\n");
+  let parsed = parseVerifierResult(rawText.trim());
   if (!parsed) {
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Failed to parse verifier response");
+    for (let i = textParts.length - 1; i >= 0; i--) {
+      parsed = parseVerifierResult(textParts[i].trim());
+      if (parsed) break;
+    }
+  }
+  if (!parsed) {
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Failed to parse verifier response", actualModel, rawText.slice(0, 500));
   }
 
   // ── Deterministic schema validation ──────────────────────────────────────
   const schemaErrors = validateVerifierSchema(parsed);
   if (schemaErrors.length > 0) {
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Verifier schema validation failed: " + schemaErrors.join("; "));
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Verifier schema validation failed: " + schemaErrors.join("; "), actualModel);
   }
 
   // ── Extract fields ───────────────────────────────────────────────────────
@@ -403,6 +421,8 @@ export async function runApprovalVerification({
     coverageSatisfied,
     tokensUsed,
     durationMs,
+    undefined,
+    actualModel,
   );
 }
 
@@ -446,7 +466,7 @@ function buildVerifierUserPrompt(evidence) {
 /**
  * Build a verification receipt.
  */
-function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, contextTrace, coverageSatisfied, tokensUsed, durationMs, error) {
+function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, contextTrace, coverageSatisfied, tokensUsed, durationMs, error, actualModel, rawTextSnippet) {
   return {
     status,
     findings,
@@ -458,6 +478,9 @@ function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, 
     tokensUsed: tokensUsed || 0,
     durationMs: durationMs || 0,
     error: error || undefined,
+    actualModel: actualModel || null,
+    rawTextSnippet: rawTextSnippet || undefined,
+    budgetState: null, // populated by caller if broker exists
     hasMaterialFindings: findings.some(f =>
       [SEVERITY.P0, SEVERITY.P1, SEVERITY.P2].includes(f.severity)
     ),
