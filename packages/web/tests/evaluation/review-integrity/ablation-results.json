@@ -1,17 +1,21 @@
 [
   {
     "fixture": "RI-02",
-    "variant": "broken",
+    "variant": "fixed",
     "arm": "C",
-    "timestamp": "2026-08-14T12:10:50.070Z",
+    "timestamp": "2026-08-14T16:39:50.285Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
     "findingCount": 0,
     "v2PrimaryFindings": [],
     "v2VerifierStatus": "not_run",
-    "defectDetected": false,
-    "tokensUsed": 46033,
-    "latencyMs": 218098,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": "fixture_gap:undefined",
+    "defectDetected": null,
+    "tokensUsed": 59519,
+    "latencyMs": 188707,
     "primaryMeta": {
       "actualModel": "glm-5.3",
       "promptVersion": "v2-primary-r1",
@@ -22,292 +26,16 @@
         {
           "type": "file_read",
           "path": "docs/phase-0-spec.md",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "blobSha": "77a9847924a044cf13609a4189553f77068ebfda",
-          "contentDigest": "sha256:5d26fb562821169745a9a39666dde56436ce1a171365a25c5a6fa33f97e9b5ac",
-          "range": {
-            "startLine": 1,
-            "endLine": 400
-          },
+          "ref": "20219bd384",
+          "resolvedSha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
+          "range": null,
           "truncated": false,
-          "contentLength": 19177,
+          "contentLength": 35102,
           "result": "ok",
           "round": 1
         },
-        {
-          "type": "repo_search",
-          "query": "reopened",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "resultCount": 2,
-          "charsConsumed": 691,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "Phase 0.0",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "resultCount": 2,
-          "charsConsumed": 683,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "docs/phase-0-spec.md",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "blobSha": "77a9847924a044cf13609a4189553f77068ebfda",
-          "contentDigest": "sha256:5d26fb562821169745a9a39666dde56436ce1a171365a25c5a6fa33f97e9b5ac",
-          "range": {
-            "startLine": 400,
-            "endLine": 756
-          },
-          "truncated": false,
-          "contentLength": 15753,
-          "result": "ok",
-          "round": 2
-        },
-        {
-          "type": "repo_search",
-          "query": "pnpm gate:0.2",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "resultCount": 2,
-          "charsConsumed": 826,
-          "result": "ok",
-          "truncated": false,
-          "round": 2
-        },
-        {
-          "type": "file_read",
-          "path": "README.md",
-          "ref": "0181b19f00dc",
-          "result": "not_found",
-          "error": "404 Not Found: README.md at ref 0181b19f00dc",
-          "round": 2
-        },
-        {
-          "type": "file_read",
-          "path": "package.json",
-          "ref": "0181b19f00dc",
-          "result": "not_found",
-          "error": "404 Not Found: package.json at ref 0181b19f00dc",
-          "round": 3
-        },
-        {
-          "type": "file_read",
-          "path": ".github/workflows/ci.yml",
-          "ref": "0181b19f00dc",
-          "result": "not_found",
-          "error": "404 Not Found: .github/workflows/ci.yml at ref 0181b19f00dc",
-          "round": 3
-        },
-        {
-          "type": "file_read",
-          "path": "docs/backlog.md",
-          "ref": "0181b19f00dc",
-          "result": "not_found",
-          "error": "404 Not Found: docs/backlog.md at ref 0181b19f00dc",
-          "round": 3
-        },
-        {
-          "type": "file_read",
-          "path": "docs/constitution.md",
-          "ref": "0181b19f00dc",
-          "result": "not_found",
-          "error": "404 Not Found: docs/constitution.md at ref 0181b19f00dc",
-          "round": 3
-        },
-        {
-          "type": "repo_search",
-          "query": "constitution",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "resultCount": 3,
-          "charsConsumed": 1199,
-          "result": "ok",
-          "truncated": false,
-          "round": 4
-        },
-        {
-          "type": "repo_search",
-          "query": "roadmap",
-          "ref": "0181b19f00dc",
-          "resolvedSha": "0181b19f00dc",
-          "resultCount": 2,
-          "charsConsumed": 569,
-          "result": "ok",
-          "truncated": false,
-          "round": 4
-        }
-      ],
-      "budgetState": {
-        "fileReads": 7,
-        "searches": 5,
-        "retrievedChars": 38898,
-        "contextRounds": 4,
-        "currentRound": 0,
-        "limits": {
-          "maxFileReads": 20,
-          "maxSearches": 6,
-          "maxSearchResults": 10,
-          "maxRetrievedChars": 50000,
-          "maxContextRounds": 4,
-          "maxBlobsScanned": 50,
-          "maxSearchBytes": 200000
-        },
-        "exhausted": true
-      },
-      "error": null,
-      "rawTextSnippet": "I'll review this documentation PR. The key correctness concerns are: (1) internal consistency of the spec after status changes, (2) cross-document consistency (README, constitution, rules, backlog may reference phase status), and (3) whether referenced files/gates actually exist as claimed.\n\nI found one clear internal inconsistency already (line 740 still says \"REOPENED\"). Now let me check the rest of the spec (phases 0.4–0.9 gate names referenced by roadmap.md), the summary table at the end, an",
-      "unresolvedContextRequests": [
-        {
-          "source": "broker_budget",
-          "tool": "read_repo_file",
-          "target": "README.md",
-          "reason": "not_found"
-        },
-        {
-          "source": "broker_budget",
-          "tool": "read_repo_file",
-          "target": "package.json",
-          "reason": "not_found"
-        },
-        {
-          "source": "broker_budget",
-          "tool": "read_repo_file",
-          "target": ".github/workflows/ci.yml",
-          "reason": "not_found"
-        }
-      ],
-      "submissionDiagnostics": {
-        "stopReason": "max_tokens",
-        "usedSubmitTool": true,
-        "textTail": null,
-        "outputTokens": 8192
-      }
-    },
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-02",
-    "variant": "fixed",
-    "arm": "C",
-    "timestamp": "2026-08-14T12:15:19.474Z",
-    "verdict": "needs_discussion",
-    "checkState": "review_incomplete",
-    "findingCount": 3,
-    "v2PrimaryFindings": [
-      {
-        "severity": "P3",
-        "claim": "Phases 0.0/0.1A/0.2 are declared CLOSED with 'gate:0.2 green on main (dd07fb2)',"
-      },
-      {
-        "severity": "P3",
-        "claim": "README 'Read first' ordered list now contains two items numbered '3' and mis-num"
-      },
-      {
-        "severity": "P3",
-        "claim": "New docs/roadmap.md assigns normative 'Document roles' to docs/rules.md and docs"
-      }
-    ],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": null,
-    "tokensUsed": 65017,
-    "latencyMs": 269374,
-    "primaryMeta": {
-      "actualModel": "glm-5.3",
-      "promptVersion": "v2-primary-r1",
-      "promptHash": "5be7acd28b8873d0",
-      "rawFindings": [
-        {
-          "severity": "P1",
-          "category": "docs_gap",
-          "claim": "Phases 0.0/0.1A/0.2 are declared CLOSED with 'gate:0.2 green on main (dd07fb2)', but the repository at both the cited commit (dd07fb2, the PR base) and HEAD contains none of the executable scaffold the closure claims depend on",
-          "description": "This PR flips three normative status declarations (README status block, constitution 'Status' section, phase-0-spec header plus the 0.0/0.1A/0.2 phase headers and the phase table) from 'Phase 0.0 reopened — scaffold pending' to 'Phases 0.0, 0.1A, 0.2 closed — durable event/recovery spine is proven (gate:0.2 green on main)'. Verified against the repository: package.json (workspace root) returns not_found at BOTH dd07fb2 and 20219bd384; LICENSE and .github/workflows/ci.yml (both explicit Phase 0.0 deliverables) return not_found at HEAD; repo-wide searches for 'gate:0.2', 'packages/events', and 'scripts/gate' match ONLY the documentation files themselves — there is no events package, no test-provider, no gate runner, and hence no command that could emit a GateReceipt. The spec's own normative rule states 'A phase is not passed by reading documents; it is passed when its gate command emits status: \"passed\"', and frozen constitution principle 10 says a phase gate is an executable command emitting a machine-readable GateReceipt, 'not a document-reading exercise'. The citation 'gate:0.2 green on main (dd07fb2)' is directly falsifiable in-repo: dd07fb2 is this PR's base commit and demonstrably contains no gate infrastructure (the base README itself says the scaffold 'is pending' — changed:README.md@BASE:11-14). Impact: the authoritative spec, constitution, and README now assert that 0.1B/0.3/0.4 'can proceed in parallel' on a durable spine that does not exist in this repository, and the PR deletes the previously accurate 'The next action' section (finish the Phase 0.0 scaffold), removing the only correct pointer to the actual pending work. Either the closure claims are false, or the evidence lives outside this repository — in which case the spec must not cite dd07fb2 as the commit where gate:0.2 passed.",
-          "affectedPaths": [
-            "README.md",
-            "docs/constitution.md",
-            "docs/phase-0-spec.md",
-            "docs/roadmap.md",
-            "package.json",
-            "LICENSE",
-            ".github/workflows/ci.yml",
-            "scripts/gate/"
-          ],
-          "evidenceRefs": [
-            "changed:README.md@HEAD:11-13",
-            "changed:README.md@BASE:11-14",
-            "changed:docs/phase-0-spec.md@HEAD:3",
-            "changed:docs/phase-0-spec.md@HEAD:119",
-            "changed:docs/constitution.md@HEAD:68-71",
-            "repo-read:docs/constitution.md@HEAD:63-67",
-            "repo-read:package.json@20219bd384:not_found",
-            "repo-read:package.json@dd07fb2:not_found",
-            "repo-read:LICENSE@20219bd384:not_found",
-            "repo-read:.github/workflows/ci.yml@20219bd384:not_found",
-            "search:gate:0.2@20219bd384:matches-only-README.md:12,docs/constitution.md:71,docs/phase-0-spec.md:3",
-            "search:packages/events@20219bd384:matches-only-docs/phase-0-spec.md:131",
-            "search:scripts/gate@20219bd384:matches-only-docs/phase-0-spec.md:75"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "Traced every claim of executable gate evidence to the repository at the cited commit (dd07fb2) and at HEAD: the workspace root, events package, gate runners, LICENSE, and CI workflow are all absent (not_found reads) and the only references to them are inside the documentation being changed. The spec's own gate rule and frozen constitution principle 10 make executable GateReceipt emission the sole closure criterion, so the closure declarations violate the repository's documented contract."
-          },
-          "confidence": 0.88
-        },
-        {
-          "severity": "P3",
-          "category": "docs_gap",
-          "claim": "README 'Read first' ordered list now contains two items numbered '3' and mis-numbered successors after roadmap.md was inserted as item 2",
-          "description": "The diff inserts docs/roadmap.md as item 2 and renumbers phase-0-spec.md to item 3, but does not renumber the following entries: docs/event-contract.md still reads '3.' and rules/non-goals/backlog remain '4./5./6.' (they should be 4/5/6/7). The source therefore shows two items numbered 3. CommonMark renderers renumber ordered lists sequentially so rendered output is likely still 1–7, keeping this cosmetic — but the raw source of a normative reading-order document is now inconsistent.",
-          "affectedPaths": [
-            "README.md"
-          ],
-          "evidenceRefs": [
-            "changed:README.md@HEAD:21-24",
-            "repo-read:README.md@20219bd384:25-27"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "Direct read of README.md at HEAD shows the list: 1. constitution, 2. roadmap, 3. phase-0-spec, 3. event-contract, 4. rules, 5. non-goals, 6. backlog — duplicate '3.' introduced by the insertion hunk."
-          },
-          "confidence": 0.95
-        },
-        {
-          "severity": "P3",
-          "category": "docs_gap",
-          "claim": "New docs/roadmap.md assigns normative 'Document roles' to docs/rules.md and docs/backlog.md and asserts facts about the backlog, but those files (and docs/event-contract.md) were not found in the repository",
-          "description": "The new 'Document roles' section of docs/roadmap.md lists docs/rules.md ('hard rules') and docs/backlog.md ('trigger-based deferred work') as governing documents, and the 'Deliberately deferred' section asserts 'The existing backlog already follows this trigger-based philosophy'. Direct reads of docs/rules.md, docs/backlog.md, and docs/event-contract.md at HEAD all returned not_found, so the roadmap elevates documents that do not appear to exist in this repository to normative roles and makes factual claims about their content. Note these files are also referenced by the pre-existing README 'Read first' list and the spec's References section, so the absence (if genuine) is partly pre-existing; the introduced part is roadmap.md's new dependency on them. Confidence is moderated because not_found could theoretically be a retrieval artifact, though three independent probes were consistent.",
-          "affectedPaths": [
-            "docs/roadmap.md",
-            "docs/rules.md",
-            "docs/backlog.md",
-            "docs/event-contract.md"
-          ],
-          "evidenceRefs": [
-            "changed:docs/roadmap.md@HEAD:378-385",
-            "repo-read:docs/rules.md@20219bd384:not_found",
-            "repo-read:docs/backlog.md@20219bd384:not_found",
-            "repo-read:docs/event-contract.md@20219bd384:not_found",
-            "search:reactivation@20219bd384:matches-only-README.md:27-and-spec-references"
-          ],
-          "proof": {
-            "type": "inference",
-            "summary": "Direct file reads returned not_found for all three referenced documents; repo-wide searches for their distinctive content ('hard rule', 'reactivation') match only cross-references in README.md, docs/phase-0-spec.md, and docs/roadmap.md — never a file of their own."
-          },
-          "confidence": 0.65
-        }
-      ],
-      "validatedCount": 3,
-      "retrievalTrace": [
         {
           "type": "file_read",
           "path": "README.md",
@@ -323,491 +51,34 @@
         },
         {
           "type": "repo_search",
-          "query": "gate:0.2",
+          "query": "GateReceipt",
           "ref": "20219bd384",
           "resolvedSha": "20219bd384",
-          "resultCount": 3,
-          "charsConsumed": 1122,
-          "result": "ok",
-          "truncated": false,
+          "resultCount": 4,
+          "charsConsumed": 1599,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
           "round": 1
         },
         {
           "type": "repo_search",
-          "query": "packages/events",
-          "ref": "20219bd384",
-          "resolvedSha": "20219bd384",
-          "resultCount": 1,
-          "charsConsumed": 415,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "docs/phase-0-spec.md",
-          "ref": "20219bd384",
-          "resolvedSha": "20219bd384",
-          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
-          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445",
-          "range": {
-            "startLine": 1,
-            "endLine": 130
-          },
-          "truncated": false,
-          "contentLength": 5312,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "package.json",
-          "ref": "20219bd384",
-          "result": "not_found",
-          "error": "404 Not Found: package.json at ref 20219bd384",
-          "round": 2
-        },
-        {
-          "type": "file_read",
-          "path": "package.json",
-          "ref": "dd07fb2",
-          "result": "not_found",
-          "error": "404 Not Found: package.json at ref dd07fb2",
-          "round": 2
-        },
-        {
-          "type": "repo_search",
-          "query": "scripts/gate",
-          "ref": "20219bd384",
-          "resolvedSha": "20219bd384",
-          "resultCount": 1,
-          "charsConsumed": 412,
-          "result": "ok",
-          "truncated": false,
-          "round": 2
-        },
-        {
-          "type": "repo_search",
-          "query": "pnpm gate",
-          "ref": "dd07fb2",
-          "resolvedSha": "dd07fb2",
-          "resultCount": 3,
-          "charsConsumed": 1227,
-          "result": "ok",
-          "truncated": false,
-          "round": 2
-        },
-        {
-          "type": "file_read",
-          "path": "LICENSE",
-          "ref": "20219bd384",
-          "result": "not_found",
-          "error": "404 Not Found: LICENSE at ref 20219bd384",
-          "round": 3
-        },
-        {
-          "type": "file_read",
-          "path": ".github/workflows/ci.yml",
-          "ref": "20219bd384",
-          "result": "not_found",
-          "error": "404 Not Found: .github/workflows/ci.yml at ref 20219bd384",
-          "round": 3
-        },
-        {
-          "type": "file_read",
-          "path": "docs/rules.md",
-          "ref": "20219bd384",
-          "result": "not_found",
-          "error": "404 Not Found: docs/rules.md at ref 20219bd384",
-          "round": 3
-        },
-        {
-          "type": "file_read",
-          "path": "docs/backlog.md",
-          "ref": "20219bd384",
-          "result": "not_found",
-          "error": "404 Not Found: docs/backlog.md at ref 20219bd384",
-          "round": 3
-        },
-        {
-          "type": "repo_search",
-          "query": "hard rule",
+          "query": "pnpm gate:0.2",
           "ref": "20219bd384",
           "resolvedSha": "20219bd384",
           "resultCount": 2,
-          "charsConsumed": 687,
-          "result": "ok",
-          "truncated": false,
-          "round": 4
-        },
-        {
-          "type": "repo_search",
-          "query": "reactivation",
-          "ref": "20219bd384",
-          "resolvedSha": "20219bd384",
-          "resultCount": 1,
-          "charsConsumed": 412,
-          "result": "ok",
-          "truncated": false,
-          "round": 4
-        },
-        {
-          "type": "file_read",
-          "path": "docs/event-contract.md",
-          "ref": "20219bd384",
-          "result": "not_found",
-          "error": "404 Not Found: docs/event-contract.md at ref 20219bd384",
-          "round": 4
-        },
-        {
-          "type": "file_read",
-          "path": "docs/constitution.md",
-          "ref": "20219bd384",
-          "resolvedSha": "20219bd384",
-          "blobSha": "7867491b4b5235dab38624055f0c06b45241de39",
-          "contentDigest": "sha256:11da23e66921475ce260dec18e5a25915aad2b36a105c425408847521e26ef85",
-          "range": {
-            "startLine": 60,
-            "endLine": 75
-          },
-          "truncated": false,
-          "contentLength": 659,
-          "result": "ok",
-          "round": 4
+          "charsConsumed": 627,
+          "result": "ok_truncated",
+          "truncated": true,
+          "reason": "max_retrieved_chars_exceeded",
+          "round": 1
         }
       ],
       "budgetState": {
-        "fileReads": 10,
-        "searches": 6,
-        "retrievedChars": 14799,
-        "contextRounds": 4,
-        "currentRound": 0,
-        "limits": {
-          "maxFileReads": 20,
-          "maxSearches": 6,
-          "maxSearchResults": 10,
-          "maxRetrievedChars": 50000,
-          "maxContextRounds": 4,
-          "maxBlobsScanned": 50,
-          "maxSearchBytes": 200000
-        },
-        "exhausted": true
-      },
-      "error": null,
-      "rawTextSnippet": "I'll review this documentation PR. The key claims to verify: (1) the \"phases closed / gate:0.2 green\" status declarations are backed by actual repo state, (2) internal consistency of the docs (numbering, links), (3) referenced files exist.\n\nThe README \"Read first\" list now has two items numbered \"3\" (the inserted phase-0-spec entry and the unchanged event-contract entry), and items 4–6 are misaligned. More critically, my search for `gate:0.2` only matched the three changed docs — no gate runner,",
-      "unresolvedContextRequests": [
-        {
-          "source": "model_declared",
-          "description": "Whether an executable ALCODE workspace (package.json, packages/events, test-provider, scripts/gate runner, LICENSE, CI) exists on some other branch or repository that substantiates the 'gate:0.2 green' closure claims. All in-repo evidence (not_found reads at dd07fb2 and HEAD, and repo-wide searches matching only documentation) indicates no such code exists in this repository at the cited commit, which makes the spec's citation 'gate:0.2 green on main (dd07fb2)' false as written. If the gate evidence genuinely lives elsewhere, the status declarations must at minimum stop citing dd07fb2 and reference the actual evidence location/receipt; if it does not, the phase-closure declarations themselves are false and must be reverted. Approval of this PR hinges on resolving which case holds.",
-          "potentialSeverity": "P1",
-          "basis": "repository_dependency"
-        }
-      ],
-      "submissionDiagnostics": {
-        "stopReason": "tool_use",
-        "usedSubmitTool": true,
-        "textTail": null,
-        "outputTokens": 6227
-      }
-    },
-    "falseApprove": null,
-    "falsePositive": false
-  },
-  {
-    "fixture": "RI-04",
-    "variant": "broken",
-    "arm": "C",
-    "timestamp": "2026-08-14T12:19:51.276Z",
-    "verdict": "needs_discussion",
-    "checkState": "review_incomplete",
-    "findingCount": 1,
-    "v2PrimaryFindings": [
-      {
-        "severity": "P3",
-        "claim": "Comment-posting errors now fail the entire triage job for every issue, not just "
-      }
-    ],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": true,
-    "tokensUsed": 56281,
-    "latencyMs": 271801,
-    "primaryMeta": {
-      "actualModel": "glm-5.3",
-      "promptVersion": "v2-primary-r1",
-      "promptHash": "5be7acd28b8873d0",
-      "rawFindings": [
-        {
-          "severity": "P2",
-          "category": "regression",
-          "claim": "Comment-posting errors now fail the entire triage job for every issue, not just needs_more_info/duplicate_hint issues",
-          "description": "By removing the needs_more_info || duplicate_hint gate, the postMarkedComment call (and its propose/approve/execute/succeed ledger chain) now runs for 100% of successfully triaged issues instead of a small subset. Any failure inside this block — GitHub 403 (app lacks issue-comment permission, locked issue), secondary rate limits, 5xx — propagates out of triageIssue: the outer catch abandons the operation lease and rethrows, so the job goes to BullMQ retry/failure. In repos where triage previously completed successfully (labels applied + DB persisted), triage will now fail wholesale whenever the comment API call fails. Labels already applied are idempotent on retry and the marker prevents duplicate comments, so there is no data loss, but the failure blast radius of comment errors is expanded from a rare path to every issue, and labels/DB/telegram effects get re-executed on each retry. Consider isolating the comment step (or classifying comment failures as non-blocking) since the operation-complete marker is never written when only the comment step fails.",
-          "affectedPaths": [
-            "packages/web/src/workers/triageWorker.js"
-          ],
-          "evidenceRefs": [
-            "changed:packages/web/src/workers/triageWorker.js@HEAD:349-358",
-            "repo-read:packages/web/src/workers/triageWorker.js@HEAD:364",
-            "repo-read:packages/web/src/workers/triageWorker.js@HEAD:442"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "Verified at HEAD: triageOpts = repoConfig.pillars?.triage || {} (line ~240) makes auto_comment !== false default-true, so the new gate at line 358 admits every issue; the postMarkedComment/propose/succeed block has no try/catch isolation and sits inside triageIssue's outer try, whose catch abandons the lease and rethrows (verified in the 300-470 read). Previously only needs_more_info/duplicate_hint classifications entered this path."
-          },
-          "confidence": 0.6
-        },
-        {
-          "severity": "P3",
-          "category": "test_gap",
-          "claim": "New test file does not cover the ambiguous-marker (result.action === \"blocked\") throw path",
-          "description": "The implementation and its comments treat an ambiguous comment marker (multiple existing marker matches) as a blocking processing error that throws and retries, yet the new triage-auto-comment.test.js only asserts happy paths and config gating (auto_comment true/false, dry-run, marker scoping, footer truthfulness). There is no test that mockPostMarkedComment resolves { action: \"blocked\", detail: { matchCount: 2 } } and asserts the job throws and no new comment is created. Since this invariant is now load-bearing for every issue (the gate was widened), a regression here would silently duplicate comments on retries.",
-          "affectedPaths": [
-            "packages/web/tests/unit/triage-auto-comment.test.js",
-            "packages/web/src/workers/triageWorker.js"
-          ],
-          "evidenceRefs": [
-            "changed:packages/web/tests/unit/triage-auto-comment.test.js@HEAD:299-340",
-            "repo-read:packages/web/src/workers/triageWorker.js@HEAD:374"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "The blocked branch (triageWorker.js ~line 374-379) throws on result.action === \"blocked\"; the new test file contains six tests, none of which exercise a blocked result."
-          },
-          "confidence": 0.8
-        },
-        {
-          "severity": "P3",
-          "category": "maintainability",
-          "claim": "Comment action lacks the findCompletedTriageAction recovery check the label path has, and its actionKey is not repo-scoped unlike the comment marker id",
-          "description": "The label path performs a findCompletedTriageAction dedup/recovery lookup before proposing a new action (triageWorker.js ~line 253-258), but the comment path proposes a fresh add-comment action on every attempt with actionKey `triage:comment:issue:${issue.number}` (no repository.id component), even though the comment marker id is repo-scoped (`${repository.id}:${issue.number}`). With this PR running the comment path for every triaged issue, retries after a partial failure will each add a new ledger row, and if actionStateMachine enforces actionKey uniqueness globally (rather than per repoFullName/repoId), cross-repo issue-number collisions or retry conflicts could surface. The exact uniqueness semantics of propose() could not be inspected within the read budget (see unresolved context needs).",
-          "affectedPaths": [
-            "packages/web/src/workers/triageWorker.js"
-          ],
-          "evidenceRefs": [
-            "repo-read:packages/web/src/workers/triageWorker.js@HEAD:253",
-            "repo-read:packages/web/src/workers/triageWorker.js@HEAD:384",
-            "changed:packages/web/src/workers/triageWorker.js@HEAD:349-358"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "Static comparison of the two action paths in triageWorker.js at HEAD: label path (lines ~249-258) does findCompletedTriageAction recovery before propose; comment path (lines ~381-395) proposes unconditionally with a non-repo-scoped actionKey."
-          },
-          "confidence": 0.7
-        }
-      ],
-      "validatedCount": 1,
-      "retrievalTrace": [
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 1,
-            "endLine": 200
-          },
-          "truncated": false,
-          "contentLength": 8821,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 300,
-            "endLine": 470
-          },
-          "truncated": false,
-          "contentLength": 7796,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 200,
-            "endLine": 300
-          },
-          "truncated": false,
-          "contentLength": 4677,
-          "result": "ok",
-          "round": 2
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 640,
-            "endLine": 711
-          },
-          "truncated": false,
-          "contentLength": 2126,
-          "result": "ok",
-          "round": 2
-        }
-      ],
-      "budgetState": {
-        "fileReads": 4,
-        "searches": 0,
-        "retrievedChars": 23420,
-        "contextRounds": 2,
-        "currentRound": 0,
-        "limits": {
-          "maxFileReads": 20,
-          "maxSearches": 6,
-          "maxSearchResults": 10,
-          "maxRetrievedChars": 50000,
-          "maxContextRounds": 4,
-          "maxBlobsScanned": 50,
-          "maxSearchBytes": 200000
-        },
-        "exhausted": false
-      },
-      "error": null,
-      "rawTextSnippet": "I'll start by reading the main changed file to understand the full context of the change.\n\nNow let me look at how `triageOpts` is built and the label action path, plus the `buildTriageComment` function.",
-      "unresolvedContextRequests": [
-        {
-          "source": "model_declared",
-          "description": "actionStateMachine.propose()/findCompletedTriageAction() semantics for the comment actionKey `triage:comment:issue:${issue.number}` could not be read: whether actionKey uniqueness is enforced per-repo (repoFullName/repoId) or globally, and whether a retry after a partially-completed comment action (comment posted on GitHub, then execute/succeed failed) hits a unique-constraint conflict or creates duplicate ledger rows. This PR widens the comment path from a rare subset to every triaged issue, so a conflict here would turn previously-recoverable retries into permanent triage failures.",
-          "potentialSeverity": "P1",
-          "basis": "repository_dependency"
-        },
-        {
-          "source": "model_declared",
-          "description": "Repository-wide references to the old semantics could not be searched: (a) any existing test asserting the removed footer string \"Labels applied automatically\" (would now fail), (b) any documentation or config schema (.gitwire.yml docs, README, @gitwire/rules) describing the triage comment as conditional on needs_more_info/duplicate_hint rather than posted for every issue. Stale assertions are a broken test (P2); stale gating docs are a docs_gap contradicting the new default-on behavior.",
-          "potentialSeverity": "P2",
-          "basis": "changed_contract"
-        }
-      ],
-      "submissionDiagnostics": {
-        "stopReason": "tool_use",
-        "usedSubmitTool": true,
-        "textTail": null,
-        "outputTokens": 7237
-      }
-    },
-    "falseApprove": false,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-04",
-    "variant": "fixed",
-    "arm": "C",
-    "timestamp": "2026-08-14T12:23:18.755Z",
-    "verdict": "needs_discussion",
-    "checkState": "review_incomplete",
-    "findingCount": 0,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": null,
-    "tokensUsed": 63198,
-    "latencyMs": 207478,
-    "primaryMeta": {
-      "actualModel": "glm-5.3",
-      "promptVersion": "v2-primary-r1",
-      "promptHash": "5be7acd28b8873d0",
-      "rawFindings": [],
-      "validatedCount": 0,
-      "retrievalTrace": [
-        {
-          "type": "file_read",
-          "path": "packages/web/src/lib/commentMarkers.js",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "blobSha": "9a4ce631180da2aca15405e961e05ab1b65e098e",
-          "contentDigest": "sha256:651903cfc26adef47884faf423cebef9e008d0ef7824692870633401b8468573",
-          "range": null,
-          "truncated": false,
-          "contentLength": 5010,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 250,
-            "endLine": 711
-          },
-          "truncated": false,
-          "contentLength": 20050,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "findCommentByMarker",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "resultCount": 3,
-          "charsConsumed": 1132,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "auto_comment",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "resultCount": 2,
-          "charsConsumed": 696,
-          "result": "ok",
-          "truncated": false,
-          "round": 2
-        },
-        {
-          "type": "repo_search",
-          "query": "Labels applied automatically",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "resultCount": 1,
-          "charsConsumed": 428,
-          "result": "ok",
-          "truncated": false,
-          "round": 2
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
-          "ref": "a32a07e",
-          "resolvedSha": "a32a07e",
-          "blobSha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
-          "contentDigest": "sha256:384cbdbe81c548dbbfe3ef3c644860aa5a544a68760630eba84be52f17aa88b2",
-          "range": {
-            "startLine": 1,
-            "endLine": 45
-          },
-          "truncated": false,
-          "contentLength": 4740,
-          "result": "ok",
-          "round": 2
-        }
-      ],
-      "budgetState": {
-        "fileReads": 3,
-        "searches": 3,
-        "retrievedChars": 32056,
-        "contextRounds": 2,
+        "fileReads": 2,
+        "searches": 2,
+        "retrievedChars": 41881,
+        "contextRounds": 1,
         "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
@@ -821,9 +92,14 @@
         "exhausted": false
       },
       "error": "Failed to parse primary review response",
-      "rawTextSnippet": "I've verified the core helper and worker changes. Now let me check cross-file dependencies: documentation of `auto_comment` semantics, other references to the old footer text, and how the audit test uses those line numbers.",
+      "rawTextSnippet": null,
       "unresolvedContextRequests": [],
-      "submissionDiagnostics": null
+      "submissionDiagnostics": {
+        "stopReason": "max_tokens",
+        "usedSubmitTool": false,
+        "textTail": null,
+        "outputTokens": 8192
+      }
     },
     "falseApprove": null,
     "falsePositive": false

@@ -308,7 +308,7 @@ export function buildFixtureOctokit(fixture, opts = {}) {
             });
           }
           if (resolved.status === "gap") {
-            fixtureGaps.push({ kind: "blob", blobSha: match.sha, ref });
+            fixtureGaps.push({ kind: "blob", path: "(blob " + match.sha.slice(0, 10) + ")", blobSha: match.sha, ref });
             return Promise.reject(new Error(
               "FIXTURE GAP: real blob " + match.sha.slice(0, 10) + " has no stored content. Run is INVALID."));
           }

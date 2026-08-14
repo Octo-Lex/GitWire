@@ -513,7 +513,14 @@ function buildRi04() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const REPOS_DIR = join(SNAPSHOTS_DIR, "repos");
-const MAX_BLOB_BYTES = 65536;
+// Blob storage caps. The broker can legally consume ~200KB of a single
+// blob in one search plus 64KB reads, so GitWire blobs ≤256KB are all
+// servable-faithfully. AlCode is tiny — store every text blob regardless
+// of size so no legal access can gap.
+const MAX_BLOB_BYTES = {
+  gitwire: 262144,
+  alcode: Number.MAX_SAFE_INTEGER,
+};
 
 const TEXT_EXT = new Set([
   ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json", ".md", ".mdx",
@@ -524,12 +531,12 @@ const TEXT_EXT = new Set([
   ".cpp", ".hpp", ".env", ".prettierrc", ".eslintrc", ".dockerfile",
 ]);
 
-function isTextLikePath(pathname, size) {
-  if (size > MAX_BLOB_BYTES) return false;
-  const base = pathname.split("/").pop();
-  const dot = base.lastIndexOf(".");
-  if (dot === -1) return base.startsWith("."); // dotfiles like .gitignore
-  return TEXT_EXT.has(base.slice(dot).toLowerCase());
+function isTextLikePath(pathname, size, repoKey) {
+  // Store EVERY blob up to the cap — the broker fetches any blob during
+  // tree-walk searches on real GitHub, and its base64→utf-8 decoding is
+  // reproduced identically from stored text. Extension filtering would
+  // leave legal-access gaps.
+  return size <= MAX_BLOB_BYTES[repoKey];
 }
 
 /** Derive { repoKey → Set<sha> } from the 8 fixture snapshots. */
@@ -563,7 +570,7 @@ function gitwireTree(sha) {
 /** GitWire: blob content by blob sha. */
 function gitwireBlob(blobSha) {
   return run(`git -C "${GITWIRE_REPO_ROOT}" cat-file blob ${blobSha}`, {
-    maxBuffer: MAX_BLOB_BYTES * 2,
+    maxBuffer: MAX_BLOB_BYTES.gitwire * 2,
   });
 }
 
@@ -586,41 +593,49 @@ function alcodeBlob(blobSha) {
 function buildRepoSurface(repoKey, shas) {
   if (!existsSync(REPOS_DIR)) mkdirSync(REPOS_DIR, { recursive: true });
 
+  // Base the blob store on any existing store, then extend to full coverage
+  const blobsFile = join(REPOS_DIR, `${repoKey}-blobs.json`);
   const blobStore = new Map(); // blob sha → utf8 text
   const blobPathIndex = new Map(); // blob sha → first path seen (for logs)
+  if (existsSync(blobsFile)) {
+    for (const [sha, text] of Object.entries(JSON.parse(readFileSync(blobsFile, "utf8")))) {
+      blobStore.set(sha, text);
+    }
+  }
 
   for (const sha of shas) {
     const treeFile = join(REPOS_DIR, `${repoKey}-${sha}.tree.json`);
+    let tree;
     if (existsSync(treeFile)) {
-      console.log(`  skip (exists): ${treeFile}`);
-      continue;
+      tree = JSON.parse(readFileSync(treeFile, "utf8")).tree;
+      console.log(`  tree (exists): ${treeFile}`);
+    } else {
+      console.log(`  capturing ${repoKey} tree @ ${sha}...`);
+      tree = repoKey === "gitwire" ? gitwireTree(sha) : alcodeTree(sha);
+      writeFileSync(treeFile, JSON.stringify({ repo: repoKey, sha, tree }, null, 1), "utf8");
+      console.log(`    wrote ${treeFile} (${tree.length} entries)`);
     }
-    console.log(`  capturing ${repoKey} tree @ ${sha}...`);
-    const tree = repoKey === "gitwire" ? gitwireTree(sha) : alcodeTree(sha);
 
     for (const entry of tree) {
-      if (!isTextLikePath(entry.path, entry.size)) continue;
+      if (!isTextLikePath(entry.path, entry.size, repoKey)) continue;
       if (blobStore.has(entry.sha)) continue;
       try {
         const text = repoKey === "gitwire" ? gitwireBlob(entry.sha) : alcodeBlob(entry.sha);
-        if (text.includes("\0")) continue; // binary despite extension
+        // No NUL/binary skip: the broker decodes every fetched blob through
+        // base64→utf-8 on real GitHub, so stored mangled text is byte-faithful
         blobStore.set(entry.sha, text);
         blobPathIndex.set(entry.sha, entry.path);
       } catch (_e) {
         console.log(`    WARN: could not read blob ${entry.sha.slice(0, 10)} (${entry.path})`);
       }
     }
-
-    writeFileSync(treeFile, JSON.stringify({ repo: repoKey, sha, tree }, null, 1), "utf8");
-    console.log(`    wrote ${treeFile} (${tree.length} entries)`);
   }
 
-  const blobsFile = join(REPOS_DIR, `${repoKey}-blobs.json`);
-  if (!existsSync(blobsFile)) {
-    console.log(`  writing ${blobsFile} (${blobStore.size} blobs)...`);
+  if (blobPathIndex.size > 0 || !existsSync(blobsFile)) {
+    console.log(`  writing ${blobsFile} (${blobStore.size} blobs, +${blobPathIndex.size} new)...`);
     writeFileSync(blobsFile, JSON.stringify(Object.fromEntries(blobStore)), "utf8");
   } else {
-    console.log(`  skip (exists): ${blobsFile}`);
+    console.log(`  blobs complete: ${blobsFile} (${blobStore.size})`);
   }
 }
 
