@@ -67,3 +67,4 @@ packages/demo-dashboard/node_modules/
 # ChatGPT collaboration binding (account-specific, never committed)
 /.chatgpt-collaboration.json
 /.chatgpt-collaboration.json.*
+repos/.ouroboros/
