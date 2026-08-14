@@ -454,14 +454,31 @@ export async function runPrimaryReview({
         role: "user",
         content: "Repository retrieval is now closed. Call the submit_review_result tool NOW with your complete final result — do not write any preamble or narrative text first. If any correctness-material dependency still must be checked before approval can be justified, include it in unresolvedContextNeeds with requiredForApproval: true.",
       });
-      const finalMsg = await withDeadline(
-        anthropic.messages.create({
-          model, max_tokens: 8192, system: systemPrompt,
-          tools: [SUBMIT_REVIEW_TOOL],
-          messages,
-        }),
-        "LLM final submission",
-      );
+      // FORCE the tool call. Requesting it is not enough: GLM-5.3 was observed
+      // narrating past the 8192 output cap without ever emitting the tool_use.
+      // tool_choice makes the structured submission deterministic; if the
+      // provider rejects the parameter, retry once without it (prior behavior).
+      let finalMsg;
+      try {
+        finalMsg = await withDeadline(
+          anthropic.messages.create({
+            model, max_tokens: 8192, system: systemPrompt,
+            tools: [SUBMIT_REVIEW_TOOL],
+            tool_choice: { type: "tool", name: "submit_review_result" },
+            messages,
+          }),
+          "LLM final submission",
+        );
+      } catch (_tcErr) {
+        finalMsg = await withDeadline(
+          anthropic.messages.create({
+            model, max_tokens: 8192, system: systemPrompt,
+            tools: [SUBMIT_REVIEW_TOOL],
+            messages,
+          }),
+          "LLM final submission (no tool_choice fallback)",
+        );
+      }
       if (finalMsg.model && !actualModel) actualModel = finalMsg.model;
       tokensUsed += (finalMsg.usage?.input_tokens ?? 0) + (finalMsg.usage?.output_tokens ?? 0);
       if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;

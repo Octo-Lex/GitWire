@@ -277,6 +277,57 @@ describe("Primary: structured final submission", () => {
     expect(anthropic.calls[1].messages.map(m => m.role)).toEqual(["user", "assistant", "user"]);
   });
 
+  it("forces the submission via tool_choice and falls back if the provider rejects it", async () => {
+    const submitInput = { findings: [], unresolvedContextNeeds: [] };
+    let callCount = 0;
+    const anthropic = {
+      messages: {
+        create: async function (params) {
+          callCount++;
+          if (params.tool_choice) {
+            // First submission attempt: provider rejects the forced-tool parameter
+            throw new Error("tool_choice is not supported by this proxy");
+          }
+          if (callCount === 1) {
+            return toolUseMsg([{ name: "search_repo_text", input: { query: "m", ref: HEAD } }]);
+          }
+          // callCount 2 = fallback submission without tool_choice
+          return toolUseMsg([{ name: "submit_review_result", input: submitInput }]);
+        },
+      },
+    };
+
+    const receipt = await runPrimaryReview({
+      evidence: EVIDENCE,
+      octokit: makeBrokerOctokit(), owner: "org", repo: "repo",
+      anthropic,
+      primaryBudgets: { contextBroker: { maxContextRounds: 1 } },
+      maxDurationMs: 10000,
+    });
+
+    expect(receipt.error).toBeUndefined();
+    expect(receipt.findings).toEqual([]);
+    // Call 1: round-0 exploration. Call 2: submission WITH forced tool_choice
+    // (provider rejects). Call 3: fallback without tool_choice → structured.
+    expect(callCount).toBe(3);
+  });
+
+  it("submission turn sends tool_choice forcing submit_review_result", async () => {
+    const anthropic = makeAnthropic([
+      toolUseMsg([{ name: "search_repo_text", input: { query: "m", ref: HEAD } }]),
+      toolUseMsg([{ name: "submit_review_result", input: { findings: [], unresolvedContextNeeds: [] } }]),
+    ]);
+    await runPrimaryReview({
+      evidence: EVIDENCE,
+      octokit: makeBrokerOctokit(), owner: "org", repo: "repo",
+      anthropic,
+      primaryBudgets: { contextBroker: { maxContextRounds: 1 } },
+      maxDurationMs: 10000,
+    });
+    const finalCall = anthropic.calls[anthropic.calls.length - 1];
+    expect(finalCall.tool_choice).toEqual({ type: "tool", name: "submit_review_result" });
+  });
+
   it("malformed/missing submission remains fail-closed", async () => {
     const anthropic = makeAnthropic([
       toolUseMsg([{ name: "search_repo_text", input: { query: "marker", ref: HEAD } }]),

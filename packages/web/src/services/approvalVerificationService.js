@@ -344,14 +344,30 @@ export async function runApprovalVerification({
         role: "user",
         content: "Repository retrieval is now closed. Call the submit_verification_result tool NOW with your complete final result — do not write any preamble or narrative text first. If any correctness-material dependency still must be checked, include it in unresolvedContextNeeds with requiredForApproval: true.",
       });
-      const vFinalMsg = await withDeadline(
-        anthropic.messages.create({
-          model, max_tokens: 8192, system: systemPrompt,
-          tools: [SUBMIT_VERIFICATION_TOOL],
-          messages,
-        }),
-        "Verifier final submission",
-      );
+      // FORCE the tool call (same rationale as the primary: narration must
+      // not be able to displace the structured submission). Provider-reject
+      // fallback retries once without tool_choice.
+      let vFinalMsg;
+      try {
+        vFinalMsg = await withDeadline(
+          anthropic.messages.create({
+            model, max_tokens: 8192, system: systemPrompt,
+            tools: [SUBMIT_VERIFICATION_TOOL],
+            tool_choice: { type: "tool", name: "submit_verification_result" },
+            messages,
+          }),
+          "Verifier final submission",
+        );
+      } catch (_tcErr) {
+        vFinalMsg = await withDeadline(
+          anthropic.messages.create({
+            model, max_tokens: 8192, system: systemPrompt,
+            tools: [SUBMIT_VERIFICATION_TOOL],
+            messages,
+          }),
+          "Verifier final submission (no tool_choice fallback)",
+        );
+      }
       if (vFinalMsg.model && !actualModel) actualModel = vFinalMsg.model;
       tokensUsed += (vFinalMsg.usage?.input_tokens ?? 0) + (vFinalMsg.usage?.output_tokens ?? 0);
       if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
