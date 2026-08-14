@@ -199,11 +199,16 @@ export function createReviewMutationManager({
       return { reviewId: existing.reviewId, action: "recovered" };
     }
 
-    // ── Step 2: Attempt recovery from PLANNED, SUBMITTED, or FAILED ────────
-    // A FAILED state means a previous POST may have succeeded on GitHub's side
-    // but the client lost the response (timeout, crash). An ambiguous transport
-    // failure must never be treated as proof that GitHub created nothing.
-    if (existing && (existing.state === MUTATION_STATE.PLANNED || existing.state === MUTATION_STATE.SUBMITTED || existing.state === MUTATION_STATE.FAILED)) {
+    // ── Step 2: Attempt marker recovery before any possible POST ──────────
+    // A previous POST may have succeeded on GitHub's side but the client lost
+    // the response (timeout, crash). An ambiguous transport failure must never
+    // be treated as proof that GitHub created nothing.
+    //
+    // When Redis state exists in PLANNED/SUBMITTED/FAILED: try recovery.
+    // When NO Redis state exists (first invocation or TTL-expired retry):
+    // also try recovery — the key may have expired after a POST that GitHub
+    // accepted but the client never confirmed.
+    if (!existing || existing.state === MUTATION_STATE.PLANNED || existing.state === MUTATION_STATE.SUBMITTED || existing.state === MUTATION_STATE.FAILED) {
       const recoveredId = await tryRecoverReview();
       if (recoveredId) {
         // Recovery found the review. Persist CONFIRMED — fail closed
@@ -329,9 +334,12 @@ export function createReviewMutationManager({
         page++;
       }
 
-      return null;
-    } catch (_e) {
-      return null;
+      return null; // definitively no matching review found
+    } catch (err) {
+      // Recovery error — cannot determine if a review exists. Fail closed:
+      // do NOT proceed to POST, as a prior review may already be on GitHub.
+      throw new Error("Review marker recovery failed: " + (err.message || err) + " — cannot safely POST without confirming no prior review exists");
+    }
     }
   }
 

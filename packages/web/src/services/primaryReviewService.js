@@ -330,10 +330,13 @@ export async function runPrimaryReview({
   let actualModel = null;
   let messages = [{ role: "user", content: userPrompt }];
   const MAX_TOOL_ROUNDS = 8;
+  const MAX_TOKENS = primaryBudgets?.maxTokens || 100000;
   const primaryContextItems = [];
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      // Token ceiling — stop the loop if exceeded, parse whatever we have
+      if (tokensUsed > MAX_TOKENS) break;
       const message = await withDeadline(
         anthropic.messages.create({
           model,

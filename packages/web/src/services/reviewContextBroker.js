@@ -369,6 +369,12 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
 
           if (!blobData || blobData.encoding !== "base64") continue;
 
+          // Check blob size before decoding to prevent overshooting byte ceiling
+          if (blobData.size && bytesInspected + blobData.size > maxBytes) {
+            budgetTerminated = true;
+            break;
+          }
+
           blobsScanned++;
           const content = Buffer.from(blobData.content, "base64").toString("utf-8");
           bytesInspected += content.length;

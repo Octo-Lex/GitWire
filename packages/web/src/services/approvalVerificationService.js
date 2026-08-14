@@ -261,10 +261,13 @@ export async function runApprovalVerification({
   let actualModel = null;
   let messages = [{ role: "user", content: userPrompt }];
   const MAX_TOOL_ROUNDS = 5; // safety limit
+  const MAX_TOKENS = verifierBudgets?.maxTokens || 50000;
   const verifierContextItems = []; // successful broker results for finding validation
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      // Token ceiling — stop the loop if exceeded, parse whatever we have
+      if (tokensUsed > MAX_TOKENS) break;
       const message = await withDeadline(
         anthropic.messages.create({
           model,
