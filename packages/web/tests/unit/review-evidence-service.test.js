@@ -21,7 +21,7 @@ function makeFile(filename, overrides = {}) {
     status: "modified",
     additions: 10,
     deletions: 3,
-    patch: "@@ -1,3 +1,5 @@\n+new line\n",
+    patch: "@@ -1,4 +1,11 @@\n ctx\n-old1\n-old2\n-old3\n+n1\n+n2\n+n3\n+n4\n+n5\n+n6\n+n7\n+n8\n+n9\n+n10\n",
     sha: "blob_" + filename,
     ...overrides,
   };
@@ -209,6 +209,7 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
 
     const evidence = await buildReviewEvidence({
       allFiles: [makeFile("src/app.js"), makeFile("src/utils.js")],
+      paginatedFully: true,
       review: REVIEW_ROOT,
       octokit, owner: "org", repo: "repo",
     });
@@ -348,7 +349,7 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
     const evidence = await buildReviewEvidence({
       allFiles: [
         makeFile("src/app.js"),
-        makeFile("src/deleted.js", { status: "removed", additions: 0, deletions: 50 }),
+        makeFile("src/deleted.js", { status: "removed", additions: 0, deletions: 3, patch: "@@ -1,3 +0,0 @@\n-old1\n-old2\n-old3\n" }),
       ],
       review: REVIEW_ROOT,
       octokit, owner: "org", repo: "repo",
@@ -392,6 +393,7 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
         makeFile("logo.png"),
         makeFile("dist/bundle.js"),
       ],
+      paginatedFully: true,
       review: REVIEW_ROOT,
       octokit, owner: "org", repo: "repo",
     });
@@ -432,7 +434,7 @@ describe("RI-2: buildReviewEvidence (coverage preflight)", () => {
   });
 
   it("marks files as UNAVAILABLE when file limit is exceeded", async () => {
-    const files = Array.from({ length: 35 }, (_, i) => makeFile("file" + i + ".js", { additions: 1, deletions: 0 }));
+    const files = Array.from({ length: 35 }, (_, i) => makeFile("file" + i + ".js", { additions: 1, deletions: 0, patch: "@@ -1,1 +1,2 @@\n ctx\n+new\n" }));
     const octokit = makeOctokit([]);
     // Set content for all files
     for (const f of files) {

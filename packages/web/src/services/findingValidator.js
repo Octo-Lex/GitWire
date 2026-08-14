@@ -126,9 +126,9 @@ export function validateFinding(finding, evidence, contextItems = []) {
     validRefs.push(parsed);
   }
 
-  // Material findings (P0/P1/P2) with any invalid evidence refs must downgrade or reject.
-  // If ALL refs are invalid → downgrade to P3 (if refs were provided) or reject (no refs).
-  // If SOME refs are valid but some are invalid → downgrade to P3.
+  // Material findings (P0/P1/P2) with invalid evidence refs:
+  //   ALL refs invalid → downgrade to P3 (if refs were provided) or reject (no refs).
+  //   SOME valid, some invalid → keep severity, discard only invalid refs.
   if (isMaterial && invalidRefs.length > 0) {
     if (validRefs.length === 0) {
       if (evidenceRefs.length > 0) {
@@ -141,11 +141,10 @@ export function validateFinding(finding, evidence, contextItems = []) {
         return { valid: false, finding: result, errors, warnings, downgraded };
       }
     } else {
-      // Some valid, some invalid — still downgrade
-      warnings.push("Contains invalid evidence references — downgraded from " + result.severity + " to P3");
-      result.severity = SEVERITY.P3;
-      result.downgradeReason = invalidRefs.length + " evidence reference(s) were invalid";
-      downgraded = true;
+      // Some valid, some invalid — keep severity, discard only invalid refs
+      const invalidRefStrings = new Set(invalidRefs.map(r => r.ref));
+      result.evidenceRefs = evidenceRefs.filter(ref => !invalidRefStrings.has(ref));
+      warnings.push(invalidRefs.length + " invalid evidence reference(s) discarded — severity retained with " + validRefs.length + " valid ref(s)");
     }
   }
 

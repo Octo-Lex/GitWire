@@ -159,13 +159,14 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       });
 
       // Acquire ALL changed files (paginated, reconciled against changed_files count)
-      const { allFiles: v2AllFiles } = await acquireChangedFiles(
+      const { allFiles: v2AllFiles, paginatedFully: v2PaginatedFully } = await acquireChangedFiles(
         octokit, owner, repo, pr.number, pr.changed_files || 1,
       );
 
       // Build ReviewEvidence — changed files with coverage states and side identity
       const v2EvidenceResult = await buildReviewEvidence({
         allFiles: v2AllFiles,
+        paginatedFully: v2PaginatedFully,
         ignorePatterns: cfg.ignore_patterns || [],
         maxFiles: cfg.max_files_to_review || 30,
         maxLines: cfg.max_lines_to_review || 2000,
@@ -474,11 +475,12 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
             additions: f.added, deletions: f.removed,
             patch: f.patch, sha: f.sha,
           }));
-          const { allFiles: v2All } = await acquireChangedFiles(
+          const { allFiles: v2All, paginatedFully: legacyPaginatedFully } = await acquireChangedFiles(
             octokit, owner, repo, pr.number, pr.changed_files || v2Files.length,
           );
           v2Evidence = await buildReviewEvidence({
             allFiles: v2All,
+            paginatedFully: legacyPaginatedFully,
             ignorePatterns: cfg.ignore_patterns || [],
             maxFiles: cfg.max_files_to_review || 30,
             maxLines: cfg.max_lines_to_review || 2000,
@@ -553,6 +555,28 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           verdict = "approved";
         } else {
           verdict = "needs_discussion";
+        }
+
+        // Construct canonical finding collection with provenance.
+        // Primary findings already in `findings` (legacy format). Add verifier
+        // findings and tag each with source for the GitHub body, ai_reviews,
+        // check output, and audit — everywhere findings appear downstream.
+        {
+          var SEV2LEGACY = { P0: "critical", P1: "high", P2: "medium", P3: "low" };
+          var verifierV2Findings = (v2Verifier?.findings || []);
+          for (const f of findings) { if (!f.source) f.source = "primary"; }
+          findings = findings.concat(verifierV2Findings.map(function (f) {
+            return {
+              severity: SEV2LEGACY[f.severity] || "low",
+              title: f.claim || "Untitled",
+              description: f.description || f.claim || "",
+              file: (f.affectedPaths || [])[0] || null,
+              line: null,
+              suggestion: "",
+              category: f.category,
+              source: "approval_verifier",
+            };
+          }));
         }
 
         logger.info({

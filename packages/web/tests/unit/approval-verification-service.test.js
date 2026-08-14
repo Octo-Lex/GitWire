@@ -313,7 +313,8 @@ describe("RI-5: runApprovalVerification", () => {
 
     expect(receipt.findings).toHaveLength(1);
     expect(receipt.findings[0].severity).toBe("P3");
-    expect(receipt.status).toBe(VERIFIER_STATUS.VERIFIED);
+    // Model declared material_findings but no P0/P1/P2 survived validation → INCOMPLETE
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
   });
 });
 

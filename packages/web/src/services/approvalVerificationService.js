@@ -378,6 +378,10 @@ export async function runApprovalVerification({
     status = VERIFIER_STATUS.INCOMPLETE;
   } else if (materialFindings.length > 0) {
     status = VERIFIER_STATUS.MATERIAL_FINDINGS;
+  } else if (modelDeclaredStatus === "material_findings") {
+    // Model declared material findings but none survived validation.
+    // Cannot confirm approval safety — fail closed to INCOMPLETE.
+    status = VERIFIER_STATUS.INCOMPLETE;
   } else if (unresolvedContextNeeds.length > 0) {
     status = VERIFIER_STATUS.INCOMPLETE;
   } else if (!coverageSatisfied) {

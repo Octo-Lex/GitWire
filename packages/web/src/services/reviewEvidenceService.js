@@ -379,7 +379,7 @@ export async function acquireChangedFiles(octokit, owner, repo, prNumber, expect
  */
 export async function buildReviewEvidence({
   allFiles,
-  paginatedFully = true,
+  paginatedFully,
   ignorePatterns = [],
   maxFiles = 30,
   maxLines = 2000,
@@ -388,6 +388,12 @@ export async function buildReviewEvidence({
   owner,
   repo,
 }) {
+  // paginatedFully is mandatory — without explicit confirmation from
+  // acquireChangedFiles, we cannot prove completeness. Fail closed.
+  if (typeof paginatedFully !== "boolean") {
+    paginatedFully = false;
+  }
+
   const changedFiles = [];
   let totalAdded = 0;
   let totalRemoved = 0;
@@ -470,8 +476,9 @@ export async function buildReviewEvidence({
       continue;
     }
 
-    // No patch on a non-exempt, non-removed file — fail-closed as unavailable
-    if (!file.patch && file.status !== "removed") {
+    // No patch on ANY non-exempt file (including removed) — fail-closed as unavailable.
+    // A removed file without a patch cannot have its deletion verified.
+    if (!file.patch) {
       changedFiles.push({
         path: filename,
         previousPath: file.previous_filename || null,
@@ -479,7 +486,26 @@ export async function buildReviewEvidence({
         additions,
         deletions,
         coverage: COVERAGE.UNAVAILABLE,
-        coverageReason: "No text diff available (binary or large file) — cannot verify content",
+        coverageReason: "No text diff available (binary, large, or truncated file) — cannot verify content",
+        policyExemption: null,
+        patch: null,
+        base, head,
+        representedLines: 0,
+      });
+      continue;
+    }
+
+    // Verify that the patch accounts for its advertised additions/deletions.
+    // A truncated patch (from GitHub's large-file limit) will not match.
+    if (!verifyPatchAccounting(file.patch, additions, deletions)) {
+      changedFiles.push({
+        path: filename,
+        previousPath: file.previous_filename || null,
+        status: file.status,
+        additions,
+        deletions,
+        coverage: COVERAGE.UNAVAILABLE,
+        coverageReason: "Patch does not account for advertised additions/deletions — likely truncated",
         policyExemption: null,
         patch: null,
         base, head,
@@ -634,4 +660,28 @@ function truncatePatchToLines(patch, maxChangedLines) {
   }
 
   return kept.join("\n");
+}
+
+/**
+ * Verify that a unified diff patch accounts for its advertised additions and deletions.
+ * Counts actual +/- lines (excluding +++ and --- headers) and compares to the
+ * file's advertised counts. Mismatch means the patch is truncated or corrupt.
+ *
+ * @param {string} patch - unified diff patch text
+ * @param {number} advertisedAdditions
+ * @param {number} advertisedDeletions
+ * @returns {boolean} true if the patch line counts match the advertised counts
+ */
+function verifyPatchAccounting(patch, advertisedAdditions, advertisedDeletions) {
+  if (!patch || typeof patch !== "string") return false;
+  const lines = patch.split("\n");
+  let patchAdditions = 0;
+  let patchDeletions = 0;
+  for (const line of lines) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) patchAdditions++;
+    else if (line.startsWith("-")) patchDeletions++;
+  }
+  return patchAdditions === (advertisedAdditions ?? 0)
+    && patchDeletions === (advertisedDeletions ?? 0);
 }
