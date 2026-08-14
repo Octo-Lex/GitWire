@@ -107,8 +107,8 @@ function makeConfig(arm) {
     // Prompt correction only — legacy path with cross-file framing
     return { ...base, _reviewPromptVariant: "cross_file" };
   }
-  // Arm C: full production candidate — v2 live
-  return { ...base, review_integrity_v2: "live" };
+  // Arm C: full production candidate — v2 live + adversarial enabled (frozen target)
+  return { ...base, review_integrity_v2: "live", adversarial_review: true };
 }
 
 function makeRepo() {
