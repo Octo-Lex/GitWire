@@ -199,8 +199,11 @@ export function createReviewMutationManager({
       return { reviewId: existing.reviewId, action: "recovered" };
     }
 
-    // ── Step 2: Attempt recovery from PLANNED or SUBMITTED ─────────────────
-    if (existing && (existing.state === MUTATION_STATE.PLANNED || existing.state === MUTATION_STATE.SUBMITTED)) {
+    // ── Step 2: Attempt recovery from PLANNED, SUBMITTED, or FAILED ────────
+    // A FAILED state means a previous POST may have succeeded on GitHub's side
+    // but the client lost the response (timeout, crash). An ambiguous transport
+    // failure must never be treated as proof that GitHub created nothing.
+    if (existing && (existing.state === MUTATION_STATE.PLANNED || existing.state === MUTATION_STATE.SUBMITTED || existing.state === MUTATION_STATE.FAILED)) {
       const recoveredId = await tryRecoverReview();
       if (recoveredId) {
         // Recovery found the review. Persist CONFIRMED — fail closed

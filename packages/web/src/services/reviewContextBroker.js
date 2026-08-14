@@ -24,6 +24,8 @@ export const DEFAULT_BUDGETS = Object.freeze({
   maxSearchResults:    10,    // max results returned per search
   maxRetrievedChars:   50000, // max total characters retrieved across all calls
   maxContextRounds:    3,     // max distinct retrieval rounds
+  maxBlobsScanned:     50,    // max blobs fetched+decoded during a single search
+  maxSearchBytes:      200000, // max raw bytes inspected during a single search
 });
 
 // ── Path safety ──────────────────────────────────────────────────────────────
@@ -333,9 +335,25 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
       const matches = [];
       let searchCharsConsumed = 0;
       let budgetTerminated = false;
+      let blobsScanned = 0;
+      let bytesInspected = 0;
+      const maxBlobs = effectiveBudgets.maxBlobsScanned ?? 50;
+      const maxBytes = effectiveBudgets.maxSearchBytes ?? 200000;
 
       for (const blob of blobs) {
         if (matches.length >= effectiveBudgets.maxSearchResults) break;
+
+        // Hard limit on blobs scanned during this search
+        if (blobsScanned >= maxBlobs) {
+          budgetTerminated = true;
+          break;
+        }
+
+        // Hard limit on bytes inspected during this search
+        if (bytesInspected >= maxBytes) {
+          budgetTerminated = true;
+          break;
+        }
 
         // Check budget before fetching each blob content
         if (retrievedChars + searchCharsConsumed >= effectiveBudgets.maxRetrievedChars) {
@@ -351,7 +369,9 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
 
           if (!blobData || blobData.encoding !== "base64") continue;
 
+          blobsScanned++;
           const content = Buffer.from(blobData.content, "base64").toString("utf-8");
+          bytesInspected += content.length;
           const contentLower = content.toLowerCase();
           const matchIndex = contentLower.indexOf(queryLower);
 

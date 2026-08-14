@@ -337,6 +337,7 @@ export async function runApprovalVerification({
       }
 
       messages.push({ role: "user", content: toolResults });
+      broker.endRound();
     }
   } catch (err) {
     // Timeout, API failure, or SDK error → incomplete

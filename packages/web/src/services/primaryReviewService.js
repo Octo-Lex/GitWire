@@ -402,6 +402,7 @@ export async function runPrimaryReview({
       }
 
       messages.push({ role: "user", content: toolResults });
+      broker.endRound();
     }
   } catch (err) {
     return makePrimaryReceipt(
