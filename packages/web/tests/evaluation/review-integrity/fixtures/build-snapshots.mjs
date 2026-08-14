@@ -518,7 +518,10 @@ const REPOS_DIR = join(SNAPSHOTS_DIR, "repos");
 // servable-faithfully. AlCode is tiny — store every text blob regardless
 // of size so no legal access can gap.
 const MAX_BLOB_BYTES = {
-  gitwire: 262144,
+  // Unlimited for both: any unstored blob is a gap that invalidates runs,
+  // and tree-ordered searches reach the big binary files early
+  // (.github/banner.png is literally the first tree entry in GitWire).
+  gitwire: Number.MAX_SAFE_INTEGER,
   alcode: Number.MAX_SAFE_INTEGER,
 };
 
@@ -569,9 +572,7 @@ function gitwireTree(sha) {
 
 /** GitWire: blob content by blob sha. */
 function gitwireBlob(blobSha) {
-  return run(`git -C "${GITWIRE_REPO_ROOT}" cat-file blob ${blobSha}`, {
-    maxBuffer: MAX_BLOB_BYTES.gitwire * 2,
-  });
+  return run(`git -C "${GITWIRE_REPO_ROOT}" cat-file blob ${blobSha}`);
 }
 
 /** AlCode: full recursive tree via gh api. */
