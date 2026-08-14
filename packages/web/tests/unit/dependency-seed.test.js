@@ -196,6 +196,135 @@ describe("RI-9 seed planner: deterministic seeding", () => {
   });
 });
 
+// ── Planner allocation accounting (unified 45K: windows + seeds) ────────────
+
+describe("RI-9 seed planner: unified allocation accounting", () => {
+
+  it("counts import-window reads toward the planner allocation (never exceeds 45K)", async () => {
+    // Large changed files: window reads alone approach the allocation.
+    const bigContent = ("// padding line of substantial length for accounting test 0123456789\n").repeat(400);
+    const files = { "src/big.js": bigContent, "src/big2.js": bigContent, "src/big3.js": bigContent };
+    const evidence = makeEvidence([
+      srcFile("src/big.js", bigContent, ""),
+      srcFile("src/big2.js", bigContent, ""),
+      srcFile("src/big3.js", bigContent, ""),
+    ]);
+    const result = await planAndSeedDependencies({ evidence, octokit: makeOctokit(files), owner: "org", repo: "repo" });
+
+    expect(result.plannerCharsUsed).toBeLessThanOrEqual(45000);
+    expect(result.broker.getBudgetState().retrievedChars).toBeLessThanOrEqual(45000);
+  });
+
+  it("counts dependency seed reads toward the same allocation — total never exceeds 45K", async () => {
+    // Many sizable dependencies; the final seed must not overshoot.
+    const depContent = "export function d() { /* " + "x".repeat(9000) + " */ }\n";
+    const files = { "src/app.js": "" };
+    let importLines = "";
+    for (let i = 0; i < 10; i++) {
+      files["src/lib/dep" + i + ".js"] = depContent;
+      importLines += 'import { d' + i + ' } from "./lib/dep' + i + '.js";\n';
+    }
+    files["src/app.js"] = importLines + "export function run() { return 1; }\n";
+    const evidence = makeEvidence([srcFile("src/app.js", files["src/app.js"], "")]);
+
+    const result = await planAndSeedDependencies({ evidence, octokit: makeOctokit(files), owner: "org", repo: "repo" });
+
+    expect(result.plannerCharsUsed).toBeLessThanOrEqual(45000);
+    expect(result.plannerCharsUsed).toBeGreaterThan(40000); // allocation genuinely used
+    // No overshoot: the capped last seed fits exactly within the ceiling
+    expect(result.broker.getBudgetState().retrievedChars).toBeLessThanOrEqual(45000);
+  });
+
+  it("REQUIRED dependencies claim the allocation before OPTIONAL ones", async () => {
+    // Long lines so each 250-line seed window is ~30K chars: the REQUIRED
+    // module consumes most of the 45K allocation; the OPTIONAL one (sorting
+    // later) can only receive the truncated remainder or be skipped.
+    const pad = (label) => ("// pad " + label + " " + "y".repeat(120) + "\n").repeat(300);
+    const files = {
+      "src/app.js": 'import { required } from "./lib/a-first.js";\nimport { opt } from "./lib/z-second.js";\nexport function run() { return required(opt); }\n',
+      "src/lib/a-first.js": "export function required(x) { return x; }\n" + pad("a"),
+      "src/lib/z-second.js": "export function opt() { return 1; }\n" + pad("z"),
+    };
+    const patch = "@@ -1,2 +1,2 @@\n-old\n+return required(opt);";
+    const evidence = makeEvidence([srcFile("src/app.js", files["src/app.js"], patch)]);
+
+    const result = await planAndSeedDependencies({
+      evidence, octokit: makeOctokit(files), owner: "org", repo: "repo",
+    });
+
+    const req = result.seededItems.find(s => s.path === "src/lib/a-first.js");
+    expect(req).toBeDefined();
+    expect(req.tier).toBe("required");
+    expect(req.content.length).toBeGreaterThan(20000); // full 250-line claim, not squeezed out
+    const opt = result.seededItems.find(s => s.path === "src/lib/z-second.js");
+    if (opt) {
+      // Hard ceiling: the optional seed got only the truncated remainder —
+      // window + required + optional together stay inside the allocation
+      expect(opt.truncated).toBe(true);
+      expect(result.plannerCharsUsed).toBeLessThanOrEqual(45000);
+      expect(opt.content.length).toBeLessThanOrEqual(45000 - req.content.length);
+    } else {
+      expect(result.skipped.some(s => s.path === "src/lib/z-second.js" && s.reason === "seed_budget")).toBe(true);
+    }
+    expect(result.plannerCharsUsed).toBeLessThanOrEqual(45000);
+  });
+
+  it("a REQUIRED dependency that cannot fit is an explicit required failure", async () => {
+    // The import window itself (120 long lines ≈ 18K) plus a first big
+    // required dep exhaust the allocation; the second required dep cannot fit.
+    const longPad = ("// window padding " + "z".repeat(150) + "\n").repeat(120);
+    const files = {
+      "src/app.js": 'import { r1 } from "./lib/one.js";\nimport { r2 } from "./lib/two.js";\nexport function run() { return r1(r2(1)); }\n' + longPad,
+      "src/lib/one.js": "export function r1(x) { return x; }\n" + ("// one " + "a".repeat(120) + "\n").repeat(300),
+      "src/lib/two.js": "export function r2(x) { return x; }\n" + ("// two " + "b".repeat(120) + "\n").repeat(300),
+    };
+    const patch = "@@ -1,2 +1,2 @@\n-old\n+return r1(r2(1));";
+    const evidence = makeEvidence([srcFile("src/app.js", files["src/app.js"], patch)]);
+    const result = await planAndSeedDependencies({
+      evidence, octokit: makeOctokit(files), owner: "org", repo: "repo",
+    });
+
+    expect(result.requiredFailures.length).toBeGreaterThanOrEqual(1);
+    expect(result.requiredFailures[0].reason).toBe("planner_allocation_exhausted");
+    const applied = applySeedResultsToEvidence(evidence, result);
+    expect(applied.coverage.approvalEvidenceComplete).toBe(false);
+    expect(applied.coverage.unresolvedContextRequests.some(u => u.source === "seed_required")).toBe(true);
+  });
+
+  it("each planned dependency appears at most once and REQUIRED wins over OPTIONAL", async () => {
+    // Two changed files import the SAME module; only the second references it in its patch.
+    const files = {
+      "src/one.js": 'import { shared } from "./lib/shared.js";\nexport function a() { return shared; }\n',
+      "src/two.js": 'import { shared } from "./lib/shared.js";\nexport function b() { return shared(2); }\n',
+      "src/lib/shared.js": "export function shared(x) { return x; }\n",
+    };
+    const evidence = makeEvidence([
+      srcFile("src/one.js", files["src/one.js"], "unrelated patch text"),
+      srcFile("src/two.js", files["src/two.js"], "@@ -1,2 +1,2 @@\n-old\n+return shared(2);"),
+    ]);
+    const result = await planAndSeedDependencies({ evidence, octokit: makeOctokit(files), owner: "org", repo: "repo" });
+
+    const sharedEntries = result.planned.filter(p => p.path === "src/lib/shared.js");
+    expect(sharedEntries).toHaveLength(1);
+    expect(sharedEntries[0].tier).toBe("required");
+    const seededShared = result.seededItems.find(s => s.path === "src/lib/shared.js");
+    expect(seededShared.tier).toBe("required");
+    expect(seededShared.retrievalReason).toBe("local_call_dependency");
+  });
+
+  it("the primary begins with ≥45K retrieval remaining after planning", async () => {
+    const files = {
+      "src/app.js": 'import { validate } from "./lib/validate.js";\nexport function run(v) { return validate(v); }\n',
+      "src/lib/validate.js": "export function validate(v) { return v > 0; }\n",
+      "src/app.test.js": "import { run } from \"./app.js\";\ntest('runs', () => {});\n",
+    };
+    const evidence = makeEvidence([srcFile("src/app.js", files["src/app.js"], "+return validate(v);")]);
+    const result = await planAndSeedDependencies({ evidence, octokit: makeOctokit(files), owner: "org", repo: "repo" });
+    const remaining = result.broker.getBudgetState().limits.maxRetrievedChars - result.broker.getBudgetState().retrievedChars;
+    expect(remaining).toBeGreaterThanOrEqual(45000);
+  });
+});
+
 // ── RI-04 regression: commentMarkers.js must be seeded naturally ────────────
 
 describe("RI-9 seed planner: RI-04 regression (natural, not special-cased)", () => {

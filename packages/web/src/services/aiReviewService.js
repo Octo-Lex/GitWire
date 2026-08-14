@@ -132,6 +132,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     let v2PrimaryError = null;
     let v2PrimaryMeta = null;
     let v2SeedFailures = []; // REQUIRED seeded dependencies denied by hard boundaries
+    let v2SeedPlanChars = 0; // planner chars (import windows + seeds) — must stay ≤45K
 
     // Legacy/shared variables
     let files = [], totalAdded = 0, totalRemoved = 0;
@@ -193,6 +194,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       applySeedResultsToEvidence(v2EvidenceResult, seedPlan);
       v2EvidenceResult.seededDependencies = seedPlan.seededItems;
       v2SeedFailures = seedPlan.requiredFailures;
+      v2SeedPlanChars = seedPlan.plannerCharsUsed;
 
       logger.info({
         pr: pr.number,
@@ -330,6 +332,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           blobSha: s.blobSha, truncated: s.truncated, importedBy: s.importedBy,
         })),
         seedFailures: v2SeedFailures,
+        seedPlanChars: v2SeedPlanChars,
+        primaryStartRemainingChars: 90000 - v2SeedPlanChars,
         submissionDiagnostics: primaryReceipt.submissionDiagnostics || null,
       };
       strategy = "v2_evidence_bound";

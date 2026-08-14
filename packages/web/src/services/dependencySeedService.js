@@ -43,7 +43,10 @@ import { createContextBroker, DEFAULT_BUDGETS } from "./reviewContextBroker.js";
 
 export const SEED_BOUNDS = Object.freeze({
   importWindowLines: 120, // top-of-file window parsed for imports
-  seedCharBudget: 45000,  // chars seeds may consume from the shared budget
+  // ONE allocation for import-discovery windows AND dependency seeds —
+  // measured from the first planner read, hard-capped per read. Leaves
+  // ≥45K of the 90K broker budget for model exploration.
+  plannerCharBudget: 45000,
   maxSeedFiles: 16,
   seedMaxLines: 250,      // per-seed content cap (lines)
 });
@@ -231,17 +234,29 @@ export async function planAndSeedDependencies({ evidence, octokit, owner, repo, 
   }
 
   const changedPaths = new Set((evidence?.changedFiles || []).map(f => f.path));
-  const required = new Map(); // path -> reason detail
-  const optional = new Map(); // path -> reason detail
-  const tests = new Map(); // path -> reason detail
+  const required = new Map(); // path -> reason detail (patch-referenced callees)
+  const optional = new Map(); // path -> reason detail (plain local imports)
+  const tests = new Map(); // path -> reason detail (associated test files)
+
+  // ONE planner allocation covering import-discovery windows AND dependency
+  // seeds alike, measured from before the FIRST planner read. The primary
+  // must still find ≥45K of the 90K broker budget available after planning.
+  const plannerStartChars = broker.getBudgetState().retrievedChars;
+  const plannerConsumed = () => broker.getBudgetState().retrievedChars - plannerStartChars;
+  const plannerRemaining = () => SEED_BOUNDS.plannerCharBudget - plannerConsumed();
 
   // 1. Window-read each changed source file at HEAD and parse its imports.
   for (const cf of (evidence?.changedFiles || [])) {
     if (cf.status === "removed" || !isSourcePath(cf.path)) continue;
 
+    // Import discovery also consumes the planner allocation (hard-capped
+    // per read so a large window cannot overshoot it).
+    const windowAllowance = plannerRemaining();
+    if (windowAllowance <= 0) break; // allocation exhausted before this file
     const windowRead = await broker.readRepoFile(cf.path, headSha, {
       range: { startLine: 1, endLine: SEED_BOUNDS.importWindowLines },
       reason: "seed_import_window",
+      maxChars: windowAllowance,
     });
     if (!windowRead || windowRead.error || !windowRead.content) continue;
 
@@ -259,18 +274,25 @@ export async function planAndSeedDependencies({ evidence, octokit, owner, repo, 
       if (!resolvedPath) continue;
 
       const patchReferenced = bindings.some(b => b && patchText.includes(b));
-      const target = patchReferenced ? required : optional;
-      if (!target.has(resolvedPath)) {
-        target.set(resolvedPath, {
+      // Each dependency appears in the plan AT MOST ONCE, and REQUIRED wins:
+      // a patch-referenced import promotes the path out of optional.
+      if (patchReferenced) {
+        if (!required.has(resolvedPath)) {
+          optional.delete(resolvedPath);
+          required.set(resolvedPath, {
+            importedBy: cf.path,
+            specifier,
+            bindings,
+            patchReferenced: true,
+          });
+        }
+      } else if (!required.has(resolvedPath) && !optional.has(resolvedPath)) {
+        optional.set(resolvedPath, {
           importedBy: cf.path,
           specifier,
           bindings,
-          patchReferenced,
+          patchReferenced: false,
         });
-      } else if (patchReferenced) {
-        // promote to required if any importer references it in its patch
-        const prev = optional.get(resolvedPath);
-        if (prev) { optional.delete(resolvedPath); required.set(resolvedPath, prev); }
       }
     }
 
@@ -292,27 +314,38 @@ export async function planAndSeedDependencies({ evidence, octokit, owner, repo, 
       .map(([path, info]) => ({ path, tier: "test", reason: "associated_test", info })),
   ];
 
-  const startChars = broker.getBudgetState().retrievedChars;
   const seededItems = [];
   const requiredFailures = [];
   const skipped = [];
   let filesSeeded = 0;
 
   for (const entry of plan) {
-    const bs = broker.getBudgetState();
-    const seedCharsUsed = bs.retrievedChars - startChars;
-    if (seedCharsUsed >= SEED_BOUNDS.seedCharBudget) {
-      skipped.push({ path: entry.path, reason: "seed_budget" });
-      continue;
-    }
     if (filesSeeded >= SEED_BOUNDS.maxSeedFiles) {
       skipped.push({ path: entry.path, reason: "seed_cap" });
+      continue;
+    }
+
+    // The allocation covers windows + seeds alike and is a HARD ceiling:
+    // each read is capped to the remaining allowance so no seed can
+    // overshoot it.
+    const remaining = plannerRemaining();
+    if (remaining <= 0) {
+      if (entry.tier === "required") {
+        requiredFailures.push({
+          path: entry.path,
+          reason: "planner_allocation_exhausted",
+          importedBy: entry.info.importedBy,
+        });
+      } else {
+        skipped.push({ path: entry.path, reason: "seed_budget" });
+      }
       continue;
     }
 
     const item = await broker.readRepoFile(entry.path, headSha, {
       range: { startLine: 1, endLine: SEED_BOUNDS.seedMaxLines },
       reason: entry.reason,
+      maxChars: remaining,
     });
 
     if (!item || item.error) {
@@ -342,6 +375,7 @@ export async function planAndSeedDependencies({ evidence, octokit, owner, repo, 
     seededItems,
     requiredFailures,
     skipped,
+    plannerCharsUsed: plannerConsumed(),
     planned: plan.map(e => ({ path: e.path, tier: e.tier, reason: e.reason, importedBy: e.info.importedBy || e.info.associatedWith || null })),
   };
 }

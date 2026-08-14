@@ -210,6 +210,17 @@ export function createContextBroker({ octokit, owner, repo, baseSha, headSha, bu
         range = { startLine: start + 1, endLine: end };
       }
 
+      // Apply optional per-read char cap (RI-9 planner allocation): the caller
+      // can bound this single read so a large file cannot overshoot its
+      // allocation. Bounded-partial with recomputed range, same as the
+      // global-budget truncation below.
+      if (typeof opts.maxChars === "number" && content.length > opts.maxChars) {
+        content = content.slice(0, opts.maxChars);
+        truncated = true;
+        const cappedEnd = (range ? range.startLine : 1) + content.split("\n").length - 1;
+        range = { startLine: range ? range.startLine : 1, endLine: cappedEnd };
+      }
+
       // Check if this content would exceed the char budget.
       // If it would, truncate to fit and mark as bounded-partial.
       // If remaining budget is zero or negative, deny.
