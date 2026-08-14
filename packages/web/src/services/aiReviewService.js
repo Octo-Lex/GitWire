@@ -225,14 +225,38 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
             repoName: repository.full_name,
             model: cfg.adversarial_model || undefined,
           });
-          var refined = refineFindings(legacyForAdv, challenge.challenges, challenge.missedRisks);
+
+          // Defense pass — dynamic trigger (full precision pipeline)
+          var defenseMode = cfg.adversarial_defense || "auto";
+          var defenseTriggers = cfg.adversarial_defense_triggers || ["dropped_findings", "critical_downgraded", "new_criticals"];
+          var triggerResult = shouldRunDefense(defenseMode, defenseTriggers, legacyForAdv, challenge.challenges, challenge.missedRisks);
+
+          var defense = null;
+          if (triggerResult.run) {
+            defense = await runDefensePass(legacyForAdv, challenge.challenges, {
+              prTitle: pr.title || "",
+              repoName: repository.full_name,
+              model: cfg.adversarial_defense_model || cfg.adversarial_model || undefined,
+            });
+          }
+
+          var refined = defense
+            ? refineWithDefense(legacyForAdv, challenge.challenges, defense.defenses, challenge.missedRisks, defense.additionalMissed)
+            : refineFindings(legacyForAdv, challenge.challenges, challenge.missedRisks);
 
           adversarialMeta = {
             dropped: refined.dropped.length,
             downgraded: legacyForAdv.length - refined.dropped.length - refined.upheld.length,
             missedRisks: refined.missed.length,
-            tokensUsed: challenge.tokensUsed,
-            turns: 2,
+            tokensUsed: challenge.tokensUsed + (defense ? defense.tokensUsed : 0),
+            turns: defense ? 3 : 2,
+            defenseTrigger: triggerResult.reason,
+            defended: defense
+              ? (defense.defenses || []).filter(function (d) { return d.action === "defend" || d.action === "upgrade"; }).length
+              : 0,
+            accepted: defense
+              ? (defense.defenses || []).filter(function (d) { return d.action === "accept"; }).length
+              : 0,
           };
 
           // Match refined findings back to original v2 findings by claim/title
@@ -277,6 +301,17 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         rawTextSnippet: primaryReceipt.rawTextSnippet || null,
       };
       strategy = "v2_evidence_bound";
+
+      // Merge primary's unresolved context requests into evidence coverage.
+      // Implements the frozen hard-budget contract: any unfulfilled material
+      // evidence need (broker budget_exceeded or model-declared) makes
+      // approval evidence incomplete. This prevents the RI-04 false-APPROVE
+      // path where budget exhaustion silently omits a check.
+      if (primaryReceipt.unresolvedContextRequests && primaryReceipt.unresolvedContextRequests.length > 0) {
+        v2EvidenceResult.coverage.contextRequests = primaryReceipt.unresolvedContextRequests;
+        v2EvidenceResult.coverage.unresolvedContextRequests = primaryReceipt.unresolvedContextRequests;
+        v2EvidenceResult.coverage.approvalEvidenceComplete = false;
+      }
 
       // Convert v2 findings to legacy format for shared steps 10-13
       // Use the POST-REFINEMENT v2PrimaryFindings (adversarial-dropped

@@ -123,6 +123,15 @@ export function buildPrimarySystemPrompt(evidence) {
     "You have a LIMITED number of reads and searches. Prioritize checking",
     "cross-file dependencies before style concerns.",
     "",
+    "## Dependency traversal priority",
+    "",
+    "When a change expands when, where, or how often an existing helper or",
+    "callee executes, inspect that helper's implementation and assumptions",
+    "at HEAD before broad repository exploration. Follow directly involved",
+    "imports and callees first. If you cannot resolve a correctness-material",
+    "dependency within the available budget, report it as an unresolved",
+    "context need rather than declaring the review complete.",
+    "",
     "## Finding schema",
     "",
     "Produce your response as a JSON object:",
@@ -141,7 +150,8 @@ export function buildPrimarySystemPrompt(evidence) {
     '      "proof": { "type": "static_trace" | "counterexample" | "reproduction" | "inference", "summary": "..." },',
     '      "confidence": 0.0',
     "    }",
-    "  ]",
+    "  ],",
+    '  "unresolvedContextNeeds": ["description of correctness-material dependencies you needed but could not check"]',
     "}",
     "",
     "## Evidence reference format",
@@ -171,8 +181,10 @@ export function buildPrimarySystemPrompt(evidence) {
     "- Omit low-confidence speculation. If you are not confident enough to",
     "  provide evidence, do not include the finding.",
     "- Do not invent evidence references for lines you did not verify.",
-    "- If you could not check something due to budget limits, omit it rather",
-    "  than guessing.",
+    "- If you could not check a correctness-material dependency due to budget",
+    "  limits or missing data, report it as an unresolved context need in",
+    '  "unresolvedContextNeeds" rather than omitting it or guessing.',
+    "  An unresolved material dependency means approval evidence is incomplete.",
     "",
     "## Coverage manifest",
     "",
@@ -332,6 +344,7 @@ export async function runPrimaryReview({
   const MAX_TOOL_ROUNDS = 8;
   const MAX_TOKENS = primaryBudgets?.maxTokens || 100000;
   const primaryContextItems = [];
+  const unresolvedBrokerRequests = []; // budget_exceeded tool calls
   let tokenBudgetExceeded = false;
 
   try {
@@ -400,6 +413,16 @@ export async function runPrimaryReview({
           }
         } else {
           result = { error: "unknown_tool" };
+        }
+
+        // Capture budget-exceeded tool calls as deterministic unresolved
+        // context requests. These block approval evidence completeness.
+        if (result && (result.error === "budget_exceeded" || (result.truncated && result.reason && result.reason.includes("budget")))) {
+          unresolvedBrokerRequests.push({
+            tool: block.name,
+            target: block.input?.path || block.input?.query || null,
+            reason: result.reason || result.error || "budget_exceeded",
+          });
         }
 
         toolResults.push({
@@ -472,6 +495,18 @@ export async function runPrimaryReview({
     }
   }
 
+  // Merge model-declared and broker-detected unresolved context requests.
+  // Both sources block approval evidence completeness.
+  const modelUnresolved = parsed.unresolvedContextNeeds || parsed.unresolvedContextRequests || [];
+  const allUnresolved = [
+    ...unresolvedBrokerRequests.map(function (r) {
+      return { source: "broker_budget", tool: r.tool, target: r.target, reason: r.reason };
+    }),
+    ...modelUnresolved.map(function (n) {
+      return { source: "model_declared", description: typeof n === "string" ? n : (n.description || JSON.stringify(n)) };
+    }),
+  ];
+
   return makePrimaryReceipt(
     rawFindings,
     validatedFindings,
@@ -482,12 +517,13 @@ export async function runPrimaryReview({
     undefined,
     actualModel,
     rawText.slice(0, 500),
+    allUnresolved,
   );
 }
 
 // ── Receipt builder ─────────────────────────────────────────────────────────
 
-function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText) {
+function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText, unresolvedContextRequests) {
   return {
     findings: validatedFindings,
     rawFindings: rawFindings || [],
@@ -497,6 +533,7 @@ function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budg
     durationMs: durationMs || 0,
     error: error || undefined,
     rawTextSnippet: rawText ? rawText.slice(0, 500) : undefined,
+    unresolvedContextRequests: unresolvedContextRequests || [],
     promptVersion: PROMPT_VERSION,
     promptHash: PROMPT_HASH,
     actualModel: actualModel || null,

@@ -53,6 +53,9 @@ export async function persistIntegrityReceipt({
       evidenceRefs: f.evidenceRefs || [],
       proofType: f.proof?.type || null,
     })),
+    rawFindings: (verifierReceipt.rawFindings || []).map(f => ({
+      severity: f.severity, claim: (f.claim || "").slice(0, 120),
+    })),
     hasMaterialFindings: verifierReceipt.hasMaterialFindings || false,
     materialFindingCount: verifierReceipt.materialFindingCount || 0,
     coverageSatisfied: verifierReceipt.coverageSatisfied,
@@ -64,6 +67,10 @@ export async function persistIntegrityReceipt({
       ref: t.ref || t.resolvedSha || null, round: t.round || null,
       truncated: t.truncated || false, reason: t.reason || undefined,
     })),
+    actualModel: verifierReceipt.actualModel || null,
+    budgetState: verifierReceipt.budgetState || null,
+    error: verifierReceipt.error || undefined,
+    rawTextSnippet: verifierReceipt.rawTextSnippet || undefined,
   } : null;
 
   await db.query(

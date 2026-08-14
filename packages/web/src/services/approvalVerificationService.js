@@ -64,6 +64,8 @@ export function buildVerifierSystemPrompt(evidence) {
     "7. Re-evaluate whether apparent P3 risks are really P2+.",
     "8. Identify unresolved evidence needs — things you needed to check but",
     "   could not due to budget limits or missing data.",
+    "9. Follow dependency chains: when a changed path calls a helper, verify",
+    "   that helper's implementation at HEAD before broad exploration.",
     "",
     "Coverage manifest:",
     "  Total changed files: " + evidence.coverage.totalChangedFiles,

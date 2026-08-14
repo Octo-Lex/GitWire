@@ -586,6 +586,8 @@ export async function buildReviewEvidence({
     policyExemptFiles: changedFiles.filter(f => f.coverage === COVERAGE.POLICY_EXEMPT).length,
     partialFiles: changedFiles.filter(f => f.coverage === COVERAGE.PARTIAL).length,
     unavailableFiles: changedFiles.filter(f => f.coverage === COVERAGE.UNAVAILABLE).length,
+    contextRequests: [],
+    unresolvedContextRequests: [],
 
     changedLinesTotal: totalAdded + totalRemoved,
     changedLinesRepresented: changedLinesConsumed,

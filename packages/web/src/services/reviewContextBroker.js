@@ -20,10 +20,10 @@ import { createHash } from "node:crypto";
 
 export const DEFAULT_BUDGETS = Object.freeze({
   maxFileReads:        20,    // max readRepoFile calls per review
-  maxSearches:         5,     // max searchRepoText calls per review
+  maxSearches:         6,     // max searchRepoText calls per review (provisional: 5→6)
   maxSearchResults:    10,    // max results returned per search
   maxRetrievedChars:   50000, // max total characters retrieved across all calls
-  maxContextRounds:    3,     // max distinct retrieval rounds
+  maxContextRounds:    4,     // max distinct retrieval rounds (provisional: 3→4)
   maxBlobsScanned:     50,    // max blobs fetched+decoded during a single search
   maxSearchBytes:      200000, // max raw bytes inspected during a single search
 });
