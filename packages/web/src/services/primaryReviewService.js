@@ -415,14 +415,22 @@ export async function runPrimaryReview({
           result = { error: "unknown_tool" };
         }
 
-        // Capture budget-exceeded tool calls as deterministic unresolved
-        // context requests. These block approval evidence completeness.
-        if (result && (result.error === "budget_exceeded" || (result.truncated && result.reason && result.reason.includes("budget")))) {
-          unresolvedBrokerRequests.push({
-            tool: block.name,
-            target: block.input?.path || block.input?.query || null,
-            reason: result.reason || result.error || "budget_exceeded",
-          });
+        // Capture any broker denial as a deterministic unresolved context
+        // request. These block approval evidence completeness.
+        if (result && typeof result === "object") {
+          if (result.error && result.error !== "unknown_tool") {
+            unresolvedBrokerRequests.push({
+              tool: block.name,
+              target: block.input?.path || block.input?.query || null,
+              reason: result.error,
+            });
+          } else if (result.truncated && (!result.results || result.results.length === 0) && result.reason) {
+            unresolvedBrokerRequests.push({
+              tool: block.name,
+              target: block.input?.query || null,
+              reason: result.reason,
+            });
+          }
         }
 
         toolResults.push({
