@@ -196,6 +196,74 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 
       v2PrimaryFindings = primaryReceipt.findings;
       v2PrimaryError = primaryReceipt.error || null;
+
+      // ── Adversarial/precision refinement (live-v2 path) ────────────────
+      // The frozen architecture requires: primary findings → adversarial
+      // refinement → revalidation → approval candidate. This was missing
+      // from the live-v2 path. The adversarial pass drops false positives
+      // and downgrades inflated severities. Surviving findings keep their
+      // original v2 evidence references; revalidation ensures they still
+      // satisfy RI-4. Refinement failure must not create an approval shortcut.
+      if (cfg.adversarial_review !== false && v2PrimaryFindings.length > 0) {
+        try {
+          var SEV2LEG_A = { P0: "critical", P1: "high", P2: "medium", P3: "low" };
+          var LEG2V2_A = { critical: "P0", high: "P1", medium: "P2", low: "P3" };
+
+          var legacyForAdv = v2PrimaryFindings.map(function (f) {
+            return {
+              severity: SEV2LEG_A[f.severity] || "low",
+              title: f.claim || "Untitled",
+              description: f.description || f.claim || "",
+              file: (f.affectedPaths || [])[0] || null,
+              category: f.category || "bug",
+            };
+          });
+
+          var challenge = await runAdversarialChallenge(legacyForAdv, {
+            prTitle: pr.title || "",
+            repoName: repository.full_name,
+            model: cfg.adversarial_model || undefined,
+          });
+          var refined = refineFindings(legacyForAdv, challenge.challenges, challenge.missedRisks);
+
+          adversarialMeta = {
+            dropped: refined.dropped.length,
+            downgraded: legacyForAdv.length - refined.dropped.length - refined.upheld.length,
+            missedRisks: refined.missed.length,
+            tokensUsed: challenge.tokensUsed,
+            turns: 2,
+          };
+
+          // Match refined findings back to original v2 findings by claim/title
+          // to preserve evidence refs from the primary review. Apply any
+          // severity changes from the adversarial pass.
+          var refinedByTitle = new Map();
+          for (var ri = 0; ri < refined.refined.length; ri++) {
+            refinedByTitle.set(refined.refined[ri].title || "", refined.refined[ri]);
+          }
+          var refinedV2 = v2PrimaryFindings
+            .filter(function (f) { return refinedByTitle.has(f.claim || ""); })
+            .map(function (f) {
+              var r = refinedByTitle.get(f.claim || "");
+              var newSev = LEG2V2_A[r.severity] || f.severity;
+              return Object.assign({}, f, { severity: newSev });
+            });
+
+          // Revalidate surviving findings through RI-4
+          var { validateFindings } = await import("./findingValidator.js");
+          var revalidated = validateFindings(refinedV2, v2EvidenceResult);
+          v2PrimaryFindings = revalidated.valid;
+          tokensUsed += challenge.tokensUsed;
+
+          logger.info({
+            pr: pr.number, adversarialMeta: adversarialMeta,
+            originalFindings: primaryReceipt.findings.length,
+            refinedFindings: v2PrimaryFindings.length,
+          }, "AI review: adversarial refinement complete (v2 live path)");
+        } catch (advErr) {
+          logger.warn({ err: advErr.message, pr: pr.number }, "AI review: adversarial pass failed, using original v2 findings");
+        }
+      }
       v2PrimaryMeta = {
         actualModel: primaryReceipt.actualModel,
         promptVersion: primaryReceipt.promptVersion,
@@ -530,6 +598,13 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           evidence: v2Evidence,
         });
 
+        // Enrich evidence with primary retrieval data for durable auditability.
+        // This ensures every primary repo-read citation is reconstructable
+        // from the persisted receipt by immutable SHA/blob/digest/range.
+        if (v2PrimaryMeta?.retrievalTrace) {
+          v2Evidence.retrievalTrace = v2PrimaryMeta.retrievalTrace;
+        }
+
         // Persist v2 receipt FIRST — required in live mode (must throw on
         // failure to guarantee auditability before the GitHub mutation).
         // Only after persistence succeeds do we mark the decision as computed
@@ -542,6 +617,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           decision: computedDecision,
           primaryFindings: v2Primary,
           invocationId: v2InvocationId,
+          budgetState: v2PrimaryMeta?.budgetState || null,
         });
 
         // Receipt persisted — safe to expose the decision to downstream steps

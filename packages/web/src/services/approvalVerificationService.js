@@ -424,6 +424,9 @@ export async function runApprovalVerification({
     durationMs,
     undefined,
     actualModel,
+    undefined,
+    broker.getBudgetState(),
+    rawFindings,
   );
 }
 
@@ -467,10 +470,11 @@ function buildVerifierUserPrompt(evidence) {
 /**
  * Build a verification receipt.
  */
-function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, contextTrace, coverageSatisfied, tokensUsed, durationMs, error, actualModel, rawTextSnippet) {
+function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, contextTrace, coverageSatisfied, tokensUsed, durationMs, error, actualModel, rawTextSnippet, budgetState, rawFindings) {
   return {
     status,
     findings,
+    rawFindings: rawFindings || [],
     unresolvedContextNeeds,
     unresolvedContextRequests: unresolvedContextNeeds, // frozen contract field name
     contextRequests: contextRequests || [],
@@ -481,6 +485,7 @@ function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, 
     error: error || undefined,
     actualModel: actualModel || null,
     rawTextSnippet: rawTextSnippet || undefined,
+    budgetState: budgetState || null,
     budgetState: null, // populated by caller if broker exists
     hasMaterialFindings: findings.some(f =>
       [SEVERITY.P0, SEVERITY.P1, SEVERITY.P2].includes(f.severity)
