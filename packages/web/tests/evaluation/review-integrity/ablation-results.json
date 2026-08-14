@@ -2,59 +2,25 @@
   {
     "fixture": "RI-03",
     "variant": "broken",
-    "arm": "A",
-    "timestamp": "2026-08-13T10:56:48.222Z",
-    "verdict": "approved",
-    "checkState": null,
-    "findingCount": 3,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": false,
-    "tokensUsed": 7798,
-    "latencyMs": 16819,
-    "primaryMeta": null,
-    "falseApprove": true,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-03",
-    "variant": "broken",
-    "arm": "B",
-    "timestamp": "2026-08-13T10:56:55.096Z",
-    "verdict": "approved",
-    "checkState": null,
-    "findingCount": 0,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": false,
-    "tokensUsed": 7432,
-    "latencyMs": 6744,
-    "primaryMeta": null,
-    "falseApprove": true,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-03",
-    "variant": "broken",
     "arm": "C",
-    "timestamp": "2026-08-13T10:58:48.819Z",
+    "timestamp": "2026-08-14T00:22:09.458Z",
     "verdict": "needs_discussion",
-    "checkState": "review_blocked",
+    "checkState": "review_incomplete",
     "findingCount": 2,
     "v2PrimaryFindings": [
       {
-        "severity": "P2",
-        "claim": "Finalizer would render false 'success' check for any future skipped reason other"
+        "severity": "P3",
+        "claim": "No test verifies phase4 worker handles the new {skipped:true} reviewPR return va"
       },
       {
         "severity": "P3",
-        "claim": "reviewPR config-skip now returns a truthy object, diverging from its documented "
+        "claim": "getEffectiveReviewState does double DB/config lookup vs reviewPR's own loadRevie"
       }
     ],
-    "v2VerifierStatus": "not_run",
+    "v2VerifierStatus": "incomplete",
     "defectDetected": true,
-    "tokensUsed": 20241,
-    "latencyMs": 113722,
+    "tokensUsed": 16080,
+    "latencyMs": 73699,
     "primaryMeta": {
       "actualModel": "glm-5.2",
       "promptVersion": "v2-primary-r1",
@@ -62,39 +28,39 @@
       "rawFindings": [
         {
           "severity": "P2",
-          "category": "bug",
-          "claim": "Finalizer would render false 'success' check for any future skipped reason other than not_activated",
-          "description": "checkRunFinalizer.js adds a new branch for `reviewResult.skipped && reviewResult.reason === \"not_activated\"` placed BEFORE the existing `!reviewResult` branch. This is correct for the current code. However, the branch ordering creates a latent defect: the skip object `{ skipped: true, reason: ... }` is truthy, so if reviewPR ever returns a skip with a different reason (e.g. a future 'pillar_disabled' skip added to reviewPR, or any new structured-skip reason), it will NOT match the new branch, will NOT match `!reviewResult` (object is truthy), will NOT match `reviewResult.blocked`, and will fall into the final `else` (success) branch — which accesses `reviewResult.verdict` and `reviewResult.findings` (both undefined on a skip object). This would post a GitHub Check Run titled 'GitWire — review passed' with 'Verdict: undefined, undefined finding(s).' — a false success on a skipped review. Today reviewPR only emits reason 'not_activated', so this is not triggered yet, but the dual-gate architecture (getEffectiveReviewState already distinguishes 'pillar_disabled') makes it likely a future change adds that reason to reviewPR without updating the finalizer. The guard should match on `reviewResult.skipped` generically rather than a specific reason string.",
+          "category": "test_gap",
+          "claim": "No test verifies phase4 worker handles the new {skipped:true} reviewPR return value",
+          "description": "reviewPR() now returns { skipped: true, reason: 'not_activated', activationUrl } instead of null when the DB config gate fails. This is a truthy object where null was previously returned. The phase4 worker (the primary production caller of reviewPR, separate from the manual-run handler which now does a preflight) receives this value and passes it to finalizeGitwireCheck. While the finalizer was updated with a dedicated branch for this case (correctly placed before the null check), there is no unit test for the phase4 worker verifying that (a) it forwards the structured skip to the finalizer correctly, and (b) it does not access reviewResult.findings/verdict/blocked on this object elsewhere in the worker body before calling the finalizer. If the worker has any code path that treats a truthy reviewResult as a completed review (e.g., logging 'review completed with N findings' or accessing reviewResult.verdict), it will throw on undefined property access or produce misleading telemetry. The manual-run preflight prevents enqueueing in this case, but the worker is still the path for automatic webhook-triggered reviews where preflight is not applied. I could not verify the worker body due to budget limits.",
           "affectedPaths": [
+            "packages/web/src/services/aiReviewService.js",
             "packages/web/src/services/checkRunFinalizer.js"
           ],
           "evidenceRefs": [
-            "changed:packages/web/src/services/checkRunFinalizer.js@HEAD:L92-L100",
-            "repo-read:packages/web/src/services/checkRunFinalizer.js@BASE:L84-L101"
+            "changed:packages/web/src/services/aiReviewService.js@HEAD:79-82",
+            "repo-read:packages/web/src/services/checkRunFinalizer.js@HEAD:93-101"
           ],
           "proof": {
             "type": "static_trace",
-            "summary": "If reviewPR returns { skipped: true, reason: 'pillar_disabled' }, the finalizer's new branch tests reason === 'not_activated' (false), the !reviewResult branch tests falsiness (false, object is truthy), the blocked branch tests .blocked (undefined), and execution reaches the else(success) branch reading reviewResult.verdict → undefined, rendering a false success check."
+            "summary": "reviewPR returns a truthy {skipped:true} object instead of null. The finalizer handles it, but the phase4 worker (unreachable due to budget) is the other major consumer whose handling of this new truthy value is unverified by any test in the PR."
           },
-          "confidence": 0.72
+          "confidence": 0.55
         },
         {
           "severity": "P3",
           "category": "maintainability",
-          "claim": "reviewPR config-skip now returns a truthy object, diverging from its documented 'returns null on skip' contract for other skip paths",
-          "description": "reviewPR's config-gate skip now returns { skipped: true, reason: 'not_activated', activationUrl } while all other skip paths (bot author at line ~71, no reviewable files) still return bare null. This creates an inconsistent return contract: callers must now handle BOTH null AND a truthy skip object to distinguish 'not configured' from other skips. Any caller that previously treated a truthy return as 'a completed review with verdict/findings' (like the finalizer's success branch) is now at risk if new skip reasons are added. The PR correctly updates the finalizer and tests, but the asymmetry (some skips are null, one is structured) is a maintainability hazard. Consider making all skip paths return a consistent structured shape, or documenting the contract explicitly. This is not a current bug since all callers are updated, but it increases the chance of a future regression.",
+          "claim": "getEffectiveReviewState does double DB/config lookup vs reviewPR's own loadReviewConfig",
+          "description": "getEffectiveReviewState() calls getConfigForRepo(repoFullName) AND loadReviewConfig(repoId). When reviewPR() later runs in the enqueued job (the runnable path), it calls loadReviewConfig(repoId) again independently. This is not a correctness bug — the preflight and the actual review are decoupled by design (preflight is a best-effort gate before enqueue). But it does mean two DB queries for loadReviewConfig on the happy path. This is acceptable given the design intent (preflight is in the webhook handler, review is in the worker), but worth noting for awareness.",
           "affectedPaths": [
             "packages/web/src/services/aiReviewService.js"
           ],
           "evidenceRefs": [
-            "changed:packages/web/src/services/aiReviewService.js@HEAD:L78-L82",
-            "repo-read:packages/web/src/services/aiReviewService.js@BASE:L71-L79"
+            "changed:packages/web/src/services/aiReviewService.js@HEAD:820-836"
           ],
           "proof": {
             "type": "inference",
-            "summary": "The function header comment and existing skip paths return null; only the config gate now returns a structured object. Callers must special-case both shapes."
+            "summary": "getEffectiveReviewState and reviewPR both call loadReviewConfig independently; on the runnable path both execute."
           },
-          "confidence": 0.65
+          "confidence": 0.6
         }
       ],
       "validatedCount": 2,
@@ -102,172 +68,123 @@
         {
           "type": "file_read",
           "path": "packages/web/src/services/aiReviewService.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "99eefab547828565bc9d623f954dd9db604f0499",
-          "contentDigest": "sha256:3c62ed499521357599fa7ae8e38f304762da246d9bfa5c711fd0b789ee01a83a",
+          "ref": "ef071ff",
+          "resolvedSha": "ef071ff",
+          "blobSha": "c42743c4fd6c01c62a28a47fdc5c67b67407063a",
+          "contentDigest": "sha256:367b2d9554dc43c82cb61b58348ca305f951b26915e53de58561baf34171c0ab",
           "range": {
-            "startLine": 1,
-            "endLine": 120
+            "startLine": 50,
+            "endLine": 130
           },
           "truncated": false,
-          "contentLength": 5042,
+          "contentLength": 3560,
           "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "531cffefb9f2ca3006e3fd48cc447ca30c39eddf",
-          "contentDigest": "sha256:0401d6de85be2f88bc484669c7820025845315675c1dc51664a64cf0ed23eed6",
-          "range": {
-            "startLine": 1,
-            "endLine": 174
-          },
-          "truncated": false,
-          "contentLength": 7614,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "getEffectiveReviewState",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "resultCount": 0,
-          "charsConsumed": 0,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "result.blocked",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "resultCount": 1,
-          "charsConsumed": 414,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "getEffectiveReviewState",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "resultCount": 0,
-          "charsConsumed": 0,
-          "result": "ok",
-          "truncated": false,
           "round": 1
         },
         {
           "type": "file_read",
           "path": "packages/web/src/services/checkRunFinalizer.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "4f9c55ce156d5acb77b00213cba3b85a5ef7c714",
-          "contentDigest": "sha256:2338e8b9326e317e3eadf9c83335a658c0cccfd1f55e2eeaf00239a0111d5134",
+          "ref": "ef071ff",
+          "resolvedSha": "ef071ff",
+          "blobSha": "15ce0ab42a95b7e2c04784f8da9e43b916841bf2",
+          "contentDigest": "sha256:bac970cfa3cab773617a31467a52641e63e485171ff72e6e9f3b75e2eb7cd746",
           "range": {
-            "startLine": 75,
-            "endLine": 120
+            "startLine": 60,
+            "endLine": 140
           },
           "truncated": false,
-          "contentLength": 2038,
+          "contentLength": 3783,
           "result": "ok",
           "round": 1
+        },
+        {
+          "type": "repo_search",
+          "query": "reviewPR(",
+          "ref": "ef071ff",
+          "resolvedSha": "ef071ff",
+          "resultCount": 3,
+          "charsConsumed": 1227,
+          "result": "ok",
+          "truncated": false,
+          "round": 2
+        },
+        {
+          "type": "repo_search",
+          "query": "reviewResult",
+          "ref": "ef071ff",
+          "resolvedSha": "ef071ff",
+          "resultCount": 2,
+          "charsConsumed": 824,
+          "result": "ok",
+          "truncated": false,
+          "round": 2
         },
         {
           "type": "repo_search",
           "query": "reviewPR",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "resultCount": 3,
-          "charsConsumed": 1224,
+          "ref": "ef071ff",
+          "resolvedSha": "ef071ff",
+          "resultCount": 4,
+          "charsConsumed": 1632,
           "result": "ok",
           "truncated": false,
-          "round": 1
+          "round": 3
         },
         {
           "type": "repo_search",
           "query": "finalizeGitwireCheck",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
+          "ref": "ef071ff",
+          "resolvedSha": "ef071ff",
           "resultCount": 2,
           "charsConsumed": 840,
           "result": "ok",
           "truncated": false,
-          "round": 1
+          "round": 3
         },
         {
           "type": "repo_search",
           "result": "budget_exceeded",
-          "reason": "max_searches_exceeded",
-          "round": 1,
-          "query": "phase4Queue",
-          "ref": "5f48600"
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
+          "query": "import reviewPR",
+          "ref": "ef071ff"
         },
         {
           "type": "repo_search",
           "result": "budget_exceeded",
-          "reason": "max_searches_exceeded",
-          "round": 1,
-          "query": "ai-review",
-          "ref": "5f48600"
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
+          "query": "aiReviewService",
+          "ref": "ef071ff"
         },
         {
           "type": "file_read",
+          "result": "budget_exceeded",
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
           "path": "packages/web/src/services/aiReviewService.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "99eefab547828565bc9d623f954dd9db604f0499",
-          "contentDigest": "sha256:3c62ed499521357599fa7ae8e38f304762da246d9bfa5c711fd0b789ee01a83a",
-          "range": {
-            "startLine": 78,
-            "endLine": 100
-          },
-          "truncated": false,
-          "contentLength": 896,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/services/checkRunFinalizer.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "4f9c55ce156d5acb77b00213cba3b85a5ef7c714",
-          "contentDigest": "sha256:2338e8b9326e317e3eadf9c83335a658c0cccfd1f55e2eeaf00239a0111d5134",
-          "range": {
-            "startLine": 84,
-            "endLine": 105
-          },
-          "truncated": false,
-          "contentLength": 883,
-          "result": "ok",
-          "round": 1
+          "ref": "ef071ff"
         }
       ],
       "budgetState": {
-        "fileReads": 5,
-        "searches": 5,
-        "retrievedChars": 18951,
-        "contextRounds": 1,
-        "currentRound": 1,
+        "fileReads": 2,
+        "searches": 4,
+        "retrievedChars": 11866,
+        "contextRounds": 3,
+        "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
           "maxSearches": 5,
           "maxSearchResults": 10,
           "maxRetrievedChars": 50000,
-          "maxContextRounds": 3
+          "maxContextRounds": 3,
+          "maxBlobsScanned": 50,
+          "maxSearchBytes": 200000
         },
         "exhausted": true
       },
       "error": null,
-      "rawTextSnippet": "I'll analyze this PR systematically, checking cross-file dependencies and contract consistency.\n\nLet me start by examining the key changed files and their callers/dependencies.\n\nInteresting — the head SHA version I'm reading doesn't show the diff changes. Let me check the actual diff — the PR diff shows changes but the head SHA file shows the OLD version. Let me re-read the HEAD commit more carefully.\n\nThe search results show the search is working against the BASE commit (5f48600 is the base, th"
+      "rawTextSnippet": "I'll analyze this PR systematically, checking cross-file dependencies and contract consistency.\n\nLet me start by examining the key files and their callers.\n\nNow let me check all the callers of `reviewPR` to verify they handle the new `{skipped: true, ...}` return value correctly.\n\nLet me find all the places where `reviewPR` is called (the workers) to check how they handle the return value.\n\nNow let me find the workers that call `reviewPR` and `finalizeGitwireCheck` - these are the critical calle"
     },
     "falseApprove": false,
     "falsePositive": null
@@ -275,187 +192,64 @@
   {
     "fixture": "RI-03",
     "variant": "fixed",
-    "arm": "A",
-    "timestamp": "2026-08-13T10:59:01.120Z",
-    "verdict": "approved",
-    "checkState": null,
-    "findingCount": 1,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": null,
-    "tokensUsed": 6419,
-    "latencyMs": 12300,
-    "primaryMeta": null,
-    "falseApprove": null,
-    "falsePositive": false
-  },
-  {
-    "fixture": "RI-03",
-    "variant": "fixed",
-    "arm": "B",
-    "timestamp": "2026-08-13T10:59:06.446Z",
-    "verdict": "approved",
-    "checkState": null,
-    "findingCount": 0,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": null,
-    "tokensUsed": 6062,
-    "latencyMs": 5325,
-    "primaryMeta": null,
-    "falseApprove": null,
-    "falsePositive": false
-  },
-  {
-    "fixture": "RI-03",
-    "variant": "fixed",
     "arm": "C",
-    "timestamp": "2026-08-13T11:00:56.814Z",
+    "timestamp": "2026-08-14T00:22:52.218Z",
     "verdict": "needs_discussion",
-    "checkState": "review_incomplete",
+    "checkState": "review_blocked",
     "findingCount": 1,
     "v2PrimaryFindings": [
       {
-        "severity": "P3",
-        "claim": "HEAD commit 5f48600 does not contain any of the described source changes — the d"
+        "severity": "P2",
+        "claim": "Finalizer test uses inconsistent activation URL (/intelligence instead of /dashb"
       }
     ],
-    "v2VerifierStatus": "incomplete",
+    "v2VerifierStatus": "not_run",
     "defectDetected": null,
-    "tokensUsed": 19159,
-    "latencyMs": 110367,
+    "tokensUsed": 14520,
+    "latencyMs": 42723,
     "primaryMeta": {
       "actualModel": "glm-5.2",
       "promptVersion": "v2-primary-r1",
       "promptHash": "5be7acd28b8873d0",
       "rawFindings": [
         {
-          "severity": "P1",
-          "category": "regression",
-          "claim": "HEAD commit 5f48600 does not contain any of the described source changes — the diff is not applied",
-          "description": "Reading the HEAD SHA (5f48600) for all three source files shows the BASE (pre-change) version of the code, not the modified version described in the diff. Specifically: (1) aiReviewService.js line 79 still reads `if (!cfg?.enabled) return null;` with no structured skip object and no getEffectiveReviewState function; (2) checkRunFinalizer.js lines 88-102 still have the original if/else chain with no `reviewResult.skipped` branch; (3) handleManualRun.js still calls `postAcknowledgment(payload, parsed, action, dispatched, ctx)` with 5 args (no `blocked`) and handlePRManualRun returns `dispatched` directly. This means the PR branch was either not committed, the head SHA is wrong, or the changes were reverted. If this PR is merged as-is, zero functional changes land — the activation URL fix, the preflight gate, and the ack improvements are all absent. The test files, however, DO appear updated (e.g., service-ai-review.test.js expects `toEqual({ skipped: true, reason: 'not_activated' ...})`), which means the tests will FAIL against the actual HEAD source code.",
+          "severity": "P2",
+          "category": "docs_gap",
+          "claim": "Finalizer test uses inconsistent activation URL (/intelligence instead of /dashboard/intelligence)",
+          "description": "The new finalizer test in service-check-run-finalizer.test.js uses reviewResult.activationUrl = 'https://gitwire.erlab.uk/intelligence' (missing the /dashboard segment), while the production URL builder reviewActivationUrl() produces APP_BASE_URL + '/dashboard/intelligence', and the sibling preflight test uses 'https://gitwire.erlab.uk/dashboard/intelligence'. Because the finalizer just interpolates reviewResult.activationUrl verbatim into the summary, the test passes (it asserts the exact passed-in string is present). However, the test does not verify that a REAL activationUrl produced by reviewPR() would render correctly — it would silently pass even if the production URL were malformed, since the test supplies its own URL. This weakens the test's value as a guard against the very defect being fixed (the title is 'correct activation URL to /dashboard/intelligence').",
           "affectedPaths": [
-            "packages/web/src/services/aiReviewService.js",
-            "packages/web/src/services/checkRunFinalizer.js",
-            "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
-            "packages/web/tests/unit/service-ai-review.test.js"
+            "packages/web/tests/unit/service-check-run-finalizer.test.js",
+            "packages/web/src/services/checkRunFinalizer.js"
           ],
           "evidenceRefs": [
-            "repo-read:packages/web/src/services/aiReviewService.js@HEAD:79",
-            "repo-read:packages/web/src/services/checkRunFinalizer.js@HEAD:88-102",
-            "repo-read:packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js@HEAD:52",
-            "repo-read:packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js@HEAD:155"
+            "changed:packages/web/tests/unit/service-check-run-finalizer.test.js@HEAD:L84-L100",
+            "changed:packages/web/src/services/aiReviewService.js@HEAD:L804-L810"
           ],
           "proof": {
             "type": "static_trace",
-            "summary": "At HEAD SHA 5f48600: aiReviewService.js:79 returns bare null (not the structured {skipped, reason, activationUrl} object the diff claims). checkRunFinalizer.js:88-102 has no not_activated branch. handleManualRun.js:52 calls postAcknowledgment with 5 args and :155 returns bare dispatched array. The test file service-ai-review.test.js at HEAD expects the structured object, so tests will fail."
+            "summary": "reviewActivationUrl() builds baseUrl + '/dashboard/intelligence'; the finalizer interpolates reviewResult.activationUrl verbatim; the test passes 'https://gitwire.erlab.uk/intelligence' (no /dashboard) and asserts that exact string is present, so it would pass even if production produced a different path."
           },
-          "confidence": 0.95
+          "confidence": 0.78
         }
       ],
       "validatedCount": 1,
       "retrievalTrace": [
         {
-          "type": "file_read",
-          "path": "packages/web/src/services/aiReviewService.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "99eefab547828565bc9d623f954dd9db604f0499",
-          "contentDigest": "sha256:3c62ed499521357599fa7ae8e38f304762da246d9bfa5c711fd0b789ee01a83a",
-          "range": {
-            "startLine": 1,
-            "endLine": 120
-          },
-          "truncated": false,
-          "contentLength": 5042,
+          "type": "repo_search",
+          "query": "reviewPR",
+          "ref": "67908f7",
+          "resolvedSha": "67908f7",
+          "resultCount": 4,
+          "charsConsumed": 1632,
           "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "531cffefb9f2ca3006e3fd48cc447ca30c39eddf",
-          "contentDigest": "sha256:0401d6de85be2f88bc484669c7820025845315675c1dc51664a64cf0ed23eed6",
-          "range": {
-            "startLine": 1,
-            "endLine": 80
-          },
           "truncated": false,
-          "contentLength": 3662,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/services/checkRunFinalizer.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "4f9c55ce156d5acb77b00213cba3b85a5ef7c714",
-          "contentDigest": "sha256:2338e8b9326e317e3eadf9c83335a658c0cccfd1f55e2eeaf00239a0111d5134",
-          "range": {
-            "startLine": 60,
-            "endLine": 140
-          },
-          "truncated": false,
-          "contentLength": 3632,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/services/checkRunFinalizer.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "4f9c55ce156d5acb77b00213cba3b85a5ef7c714",
-          "contentDigest": "sha256:2338e8b9326e317e3eadf9c83335a658c0cccfd1f55e2eeaf00239a0111d5134",
-          "range": {
-            "startLine": 88,
-            "endLine": 110
-          },
-          "truncated": false,
-          "contentLength": 1035,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "531cffefb9f2ca3006e3fd48cc447ca30c39eddf",
-          "contentDigest": "sha256:0401d6de85be2f88bc484669c7820025845315675c1dc51664a64cf0ed23eed6",
-          "range": {
-            "startLine": 34,
-            "endLine": 75
-          },
-          "truncated": false,
-          "contentLength": 1826,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/services/aiReviewService.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "99eefab547828565bc9d623f954dd9db604f0499",
-          "contentDigest": "sha256:3c62ed499521357599fa7ae8e38f304762da246d9bfa5c711fd0b789ee01a83a",
-          "range": {
-            "startLine": 75,
-            "endLine": 95
-          },
-          "truncated": false,
-          "contentLength": 788,
-          "result": "ok",
           "round": 1
         },
         {
           "type": "repo_search",
           "query": "reviewResult",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
+          "ref": "67908f7",
+          "resolvedSha": "67908f7",
           "resultCount": 2,
           "charsConsumed": 824,
           "result": "ok",
@@ -464,154 +258,111 @@
         },
         {
           "type": "repo_search",
+          "query": "await reviewPR",
+          "ref": "67908f7",
+          "resolvedSha": "67908f7",
+          "resultCount": 2,
+          "charsConsumed": 828,
+          "result": "ok",
+          "truncated": false,
+          "round": 2
+        },
+        {
+          "type": "repo_search",
           "query": "finalizeGitwireCheck",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
+          "ref": "67908f7",
+          "resolvedSha": "67908f7",
           "resultCount": 2,
           "charsConsumed": 840,
           "result": "ok",
           "truncated": false,
-          "round": 1
+          "round": 2
         },
         {
           "type": "repo_search",
-          "query": "postAcknowledgment",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "resultCount": 1,
-          "charsConsumed": 418,
+          "query": "reviewPR({",
+          "ref": "67908f7",
+          "resolvedSha": "67908f7",
+          "resultCount": 3,
+          "charsConsumed": 1230,
           "result": "ok",
           "truncated": false,
-          "round": 1
+          "round": 3
         },
         {
           "type": "repo_search",
-          "query": "reviewPR(",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "resultCount": 2,
-          "charsConsumed": 818,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
+          "result": "budget_exceeded",
+          "reason": "max_searches_exceeded",
+          "round": 3,
+          "query": "from \"./aiReviewService",
+          "ref": "67908f7"
+        },
+        {
+          "type": "repo_search",
+          "result": "budget_exceeded",
+          "reason": "max_searches_exceeded",
+          "round": 4,
+          "query": "aiReviewService",
+          "ref": "67908f7"
         },
         {
           "type": "file_read",
-          "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "blobSha": "531cffefb9f2ca3006e3fd48cc447ca30c39eddf",
-          "contentDigest": "sha256:0401d6de85be2f88bc484669c7820025845315675c1dc51664a64cf0ed23eed6",
-          "range": {
-            "startLine": 88,
-            "endLine": 165
-          },
-          "truncated": false,
-          "contentLength": 3437,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "reviewResult.skipped",
-          "ref": "5f48600",
-          "resolvedSha": "5f48600",
-          "resultCount": 0,
-          "charsConsumed": 0,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
           "result": "budget_exceeded",
-          "reason": "max_searches_exceeded",
-          "round": 1,
-          "query": "skipped: true",
-          "ref": "5f48600"
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
+          "path": "packages/web/src/services/checkRunFinalizer.js",
+          "ref": "67908f7"
         },
         {
-          "type": "repo_search",
+          "type": "file_read",
           "result": "budget_exceeded",
-          "reason": "max_searches_exceeded",
-          "round": 1,
-          "query": "reviewPR",
-          "ref": "5f48600"
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
+          "path": "packages/web/src/services/aiReviewService.js",
+          "ref": "67908f7"
         }
       ],
       "budgetState": {
-        "fileReads": 7,
+        "fileReads": 0,
         "searches": 5,
-        "retrievedChars": 22322,
-        "contextRounds": 1,
-        "currentRound": 1,
+        "retrievedChars": 5354,
+        "contextRounds": 3,
+        "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
           "maxSearches": 5,
           "maxSearchResults": 10,
           "maxRetrievedChars": 50000,
-          "maxContextRounds": 3
+          "maxContextRounds": 3,
+          "maxBlobsScanned": 50,
+          "maxSearchBytes": 200000
         },
         "exhausted": true
       },
       "error": null,
-      "rawTextSnippet": "I'll analyze this PR systematically, checking cross-file dependencies and contracts. Let me start by examining the key changes and their integration points.\n\nI found a critical issue. The diff for `checkRunFinalizer.js` shows the new `else if` block being added, but the HEAD version I'm reading does NOT contain it. Let me verify the actual current state and check other critical aspects.\n\nI've confirmed a critical issue. The HEAD SHA (5f48600) does NOT contain the changes described in the diff. T"
+      "rawTextSnippet": "I'll analyze this PR systematically, starting by examining the key changes and their cross-file dependencies.\n\nLet me first understand the changes to `reviewPR`'s return contract, since multiple callers depend on it.\n\nNow let me check for all callers of `reviewPR` and the finalizer to see if any unchanged code treats the return value as a boolean or expects null.\n\nThe tests don't show me the production callers. Let me search for where `reviewPR` is actually invoked in the worker source code (not"
     },
     "falseApprove": null,
-    "falsePositive": false
-  },
-  {
-    "fixture": "RI-04",
-    "variant": "broken",
-    "arm": "A",
-    "timestamp": "2026-08-13T11:01:05.694Z",
-    "verdict": "approved",
-    "checkState": null,
-    "findingCount": 1,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": false,
-    "tokensUsed": 4335,
-    "latencyMs": 8880,
-    "primaryMeta": null,
-    "falseApprove": true,
-    "falsePositive": null
-  },
-  {
-    "fixture": "RI-04",
-    "variant": "broken",
-    "arm": "B",
-    "timestamp": "2026-08-13T11:01:15.192Z",
-    "verdict": "needs_discussion",
-    "checkState": null,
-    "findingCount": 1,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": false,
-    "tokensUsed": 4567,
-    "latencyMs": 9496,
-    "primaryMeta": null,
-    "falseApprove": false,
-    "falsePositive": null
+    "falsePositive": true
   },
   {
     "fixture": "RI-04",
     "variant": "broken",
     "arm": "C",
-    "timestamp": "2026-08-13T11:02:44.670Z",
+    "timestamp": "2026-08-14T00:24:02.494Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
     "findingCount": 1,
     "v2PrimaryFindings": [
       {
         "severity": "P3",
-        "claim": "Normative documentation describing auto_comment semantics may need updating to r"
+        "claim": "triagePR comment logic was not checked for the same gating inconsistency this PR"
       }
     ],
     "v2VerifierStatus": "incomplete",
     "defectDetected": false,
-    "tokensUsed": 14748,
-    "latencyMs": 89478,
+    "tokensUsed": 11607,
+    "latencyMs": 70275,
     "primaryMeta": {
       "actualModel": "glm-5.2",
       "promptVersion": "v2-primary-r1",
@@ -619,52 +370,24 @@
       "rawFindings": [
         {
           "severity": "P3",
-          "category": "docs_gap",
-          "claim": "Normative documentation describing auto_comment semantics may need updating to reflect that comments are now posted for every issue",
-          "description": "The PR changes the runtime contract of pillars.triage.auto_comment: previously the comment was only posted when needs_more_info || duplicate_hint was true; now it is posted for every successfully triaged issue. The test file comment references that 'auto_comment:true was documented as Post triage summary as comment', indicating normative documentation (e.g., a config schema, .gitwire.yml template, or README describing the triage pillar options) exists. If such documentation described the gating condition or only mentioned needs_more_info/duplicate_hint triggering comments, it should be updated to describe the new unconditional behavior so the documented contract matches the code. I was unable to verify the exact documentation files due to tool budget limits, so this is a reminder to confirm docs consistency rather than a confirmed defect.",
+          "category": "maintainability",
+          "claim": "triagePR comment logic was not checked for the same gating inconsistency this PR fixes for triageIssue",
+          "description": "This PR fixes triageIssue so that auto_comment posts a summary for every issue (removing the needs_more_info || duplicate_hint gate). The triagePR function (referenced in the audit at lines 480-610) handles PR triage in the same file and may contain a parallel comment-posting path. If triagePR has the same defect (gating its comment behind classification fields while auto_comment is meant to be a general 'post summary' toggle), this PR would leave an inconsistent behavior between issues and PRs. I could not fully read triagePR due to tool budget limits, so this is a flag for the author to verify rather than a confirmed bug.",
           "affectedPaths": [
             "packages/web/src/workers/triageWorker.js"
           ],
           "evidenceRefs": [
-            "changed:packages/web/src/workers/triageWorker.js@HEAD:349-355",
-            "changed:packages/web/tests/unit/triage-auto-comment.test.js@HEAD:1-7"
+            "changed:packages/web/src/workers/triageWorker.js@HEAD:355-358"
           ],
           "proof": {
             "type": "inference",
-            "summary": "The gating condition was removed so auto_comment now posts unconditionally; documentation that previously described (or omitted) this behavior should be checked for consistency with the new semantics."
+            "summary": "The PR scope is explicitly the issue triage path (triageIssue). The sibling triagePR function in the same file was not modified; if it shares the old gating pattern, the fix is incomplete and behavior diverges between issues and PRs."
           },
-          "confidence": 0.3
+          "confidence": 0.4
         }
       ],
       "validatedCount": 1,
       "retrievalTrace": [
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
-          "range": {
-            "startLine": 340,
-            "endLine": 410
-          },
-          "truncated": false,
-          "contentLength": 3534,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "auto_comment",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "resultCount": 1,
-          "charsConsumed": 412,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
         {
           "type": "file_read",
           "path": "packages/web/src/workers/triageWorker.js",
@@ -673,11 +396,11 @@
           "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
-            "startLine": 340,
-            "endLine": 410
+            "startLine": 330,
+            "endLine": 420
           },
           "truncated": false,
-          "contentLength": 3535,
+          "contentLength": 4578,
           "result": "ok",
           "round": 1
         },
@@ -694,25 +417,36 @@
         },
         {
           "type": "repo_search",
-          "query": "Post triage summary as comment",
+          "query": "triageOpts",
           "ref": "624732c",
           "resolvedSha": "624732c",
-          "resultCount": 0,
-          "charsConsumed": 0,
+          "resultCount": 1,
+          "charsConsumed": 410,
           "result": "ok",
           "truncated": false,
-          "round": 1
+          "round": 2
         },
         {
           "type": "repo_search",
-          "query": "triagePR comment",
+          "query": "Post triage summary",
           "ref": "624732c",
           "resolvedSha": "624732c",
-          "resultCount": 0,
-          "charsConsumed": 0,
+          "resultCount": 1,
+          "charsConsumed": 374,
           "result": "ok",
           "truncated": false,
-          "round": 1
+          "round": 2
+        },
+        {
+          "type": "repo_search",
+          "query": "buildTriageComment",
+          "ref": "624732c",
+          "resolvedSha": "624732c",
+          "resultCount": 1,
+          "charsConsumed": 418,
+          "result": "ok",
+          "truncated": false,
+          "round": 2
         },
         {
           "type": "file_read",
@@ -723,82 +457,68 @@
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
             "startLine": 670,
-            "endLine": 711
+            "endLine": 710
           },
           "truncated": false,
-          "contentLength": 1198,
+          "contentLength": 1197,
           "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 460,
-            "endLine": 615
-          },
-          "truncated": false,
-          "contentLength": 7064,
-          "result": "ok",
-          "round": 1
+          "round": 3
         },
         {
           "type": "repo_search",
-          "query": "needs_more_info duplicate_hint",
+          "query": "auto_comment config",
           "ref": "624732c",
           "resolvedSha": "624732c",
           "resultCount": 0,
           "charsConsumed": 0,
           "result": "ok",
           "truncated": false,
-          "round": 1
+          "round": 3
         },
         {
           "type": "repo_search",
           "result": "budget_exceeded",
           "reason": "max_searches_exceeded",
-          "round": 1,
-          "query": "auto_comment triage",
-          "ref": "624732c"
-        },
-        {
-          "type": "repo_search",
-          "result": "budget_exceeded",
-          "reason": "max_searches_exceeded",
-          "round": 1,
-          "query": "needs_more_info",
+          "round": 3,
+          "query": "needs_more_info duplicate_hint",
           "ref": "624732c"
         },
         {
           "type": "file_read",
-          "path": "packages/web/src/services/configService.js",
-          "ref": "624732c",
-          "result": "not_found",
-          "error": "404 Not Found: packages/web/src/services/configService.js at ref 624732c",
-          "round": 1
+          "result": "budget_exceeded",
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "624732c"
+        },
+        {
+          "type": "file_read",
+          "result": "budget_exceeded",
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "624732c"
         }
       ],
       "budgetState": {
-        "fileReads": 5,
+        "fileReads": 2,
         "searches": 5,
-        "retrievedChars": 16439,
-        "contextRounds": 1,
-        "currentRound": 1,
+        "retrievedChars": 7673,
+        "contextRounds": 3,
+        "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
           "maxSearches": 5,
           "maxSearchResults": 10,
           "maxRetrievedChars": 50000,
-          "maxContextRounds": 3
+          "maxContextRounds": 3,
+          "maxBlobsScanned": 50,
+          "maxSearchBytes": 200000
         },
         "exhausted": true
       },
       "error": null,
-      "rawTextSnippet": "I'll analyze this PR carefully. The change removes the `needs_more_info || duplicate_hint` gating condition so every triaged issue gets a comment when `auto_comment` is enabled. Let me verify the cross-file dependencies and contracts.\n\nI see the base ref shows the OLD code. The search at HEAD `b8ccfb8` returned the OLD code at line 354 - this is the base SHA. Let me re-read with the correct head ref. Let me check the PR metadata: \"b8ccfb8 ← feature\" - `b8ccfb8` is the base. I need the head SHA.\n"
+      "rawTextSnippet": "I'll analyze this PR carefully. The change removes the gating condition (`needs_more_info || duplicate_hint`) from the triage comment posting logic, making comments post for every issue. Let me verify cross-file dependencies and documentation consistency.\n\nLet me look at how `triageOpts` is computed and check documentation/schema files for the `auto_comment` contract.\n\nLet me check documentation/schema files for the `auto_comment` config contract, and look at the full `buildTriageComment` functi"
     },
     "falseApprove": false,
     "falsePositive": null
@@ -806,50 +526,16 @@
   {
     "fixture": "RI-04",
     "variant": "fixed",
-    "arm": "A",
-    "timestamp": "2026-08-13T11:02:56.378Z",
-    "verdict": "approved",
-    "checkState": null,
-    "findingCount": 2,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": null,
-    "tokensUsed": 6329,
-    "latencyMs": 11707,
-    "primaryMeta": null,
-    "falseApprove": null,
-    "falsePositive": true
-  },
-  {
-    "fixture": "RI-04",
-    "variant": "fixed",
-    "arm": "B",
-    "timestamp": "2026-08-13T11:03:05.145Z",
-    "verdict": "approved",
-    "checkState": null,
-    "findingCount": 0,
-    "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
-    "defectDetected": null,
-    "tokensUsed": 6209,
-    "latencyMs": 8765,
-    "primaryMeta": null,
-    "falseApprove": null,
-    "falsePositive": false
-  },
-  {
-    "fixture": "RI-04",
-    "variant": "fixed",
     "arm": "C",
-    "timestamp": "2026-08-13T11:04:17.122Z",
+    "timestamp": "2026-08-14T00:25:22.443Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
-    "findingCount": 0,
+    "findingCount": 1,
     "v2PrimaryFindings": [],
-    "v2VerifierStatus": "not_run",
+    "v2VerifierStatus": "incomplete",
     "defectDetected": null,
-    "tokensUsed": 21082,
-    "latencyMs": 71977,
+    "tokensUsed": 17197,
+    "latencyMs": 79948,
     "primaryMeta": {
       "actualModel": "glm-5.2",
       "promptVersion": "v2-primary-r1",
@@ -857,6 +543,51 @@
       "rawFindings": [],
       "validatedCount": 0,
       "retrievalTrace": [
+        {
+          "type": "file_read",
+          "path": "packages/web/src/lib/commentMarkers.js",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "blobSha": "9a4ce631180da2aca15405e961e05ab1b65e098e",
+          "contentDigest": "sha256:651903cfc26adef47884faf423cebef9e008d0ef7824692870633401b8468573",
+          "range": null,
+          "truncated": false,
+          "contentLength": 5010,
+          "result": "ok",
+          "round": 1
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
+          "range": {
+            "startLine": 340,
+            "endLine": 420
+          },
+          "truncated": false,
+          "contentLength": 3907,
+          "result": "ok",
+          "round": 1
+        },
+        {
+          "type": "file_read",
+          "path": "packages/web/src/workers/triageWorker.js",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
+          "range": {
+            "startLine": 380,
+            "endLine": 410
+          },
+          "truncated": false,
+          "contentLength": 1524,
+          "result": "ok",
+          "round": 2
+        },
         {
           "type": "file_read",
           "path": "packages/web/src/lib/commentMarkers.js",
@@ -868,217 +599,71 @@
           "truncated": false,
           "contentLength": 4226,
           "result": "ok",
-          "round": 1
+          "round": 2
         },
         {
           "type": "file_read",
           "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
           "range": {
-            "startLine": 340,
-            "endLine": 420
+            "startLine": 680,
+            "endLine": 711
           },
           "truncated": false,
-          "contentLength": 3937,
+          "contentLength": 928,
           "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
-          "range": {
-            "startLine": 460,
-            "endLine": 520
-          },
-          "truncated": false,
-          "contentLength": 2711,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
-          "range": {
-            "startLine": 690,
-            "endLine": 707
-          },
-          "truncated": false,
-          "contentLength": 532,
-          "result": "ok",
-          "round": 1
+          "round": 3
         },
         {
           "type": "repo_search",
-          "query": "A maintainer will review shortly",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "resultCount": 1,
-          "charsConsumed": 267,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "Paginate until we run out of pages",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "resultCount": 0,
-          "charsConsumed": 0,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
-          "range": {
-            "startLine": 595,
-            "endLine": 690
-          },
-          "truncated": false,
-          "contentLength": 3561,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
-          "range": {
-            "startLine": 668,
-            "endLine": 695
-          },
-          "truncated": false,
-          "contentLength": 855,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "postMarkedComment",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
+          "query": "auto_comment",
+          "ref": "a32a07e",
+          "resolvedSha": "a32a07e",
           "resultCount": 2,
-          "charsConsumed": 834,
+          "charsConsumed": 696,
           "result": "ok",
           "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "auto_comment",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "resultCount": 1,
-          "charsConsumed": 412,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
-        },
-        {
-          "type": "repo_search",
-          "query": "auto_comment",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "resultCount": 1,
-          "charsConsumed": 412,
-          "result": "ok",
-          "truncated": false,
-          "round": 1
+          "round": 3
         },
         {
           "type": "repo_search",
           "result": "budget_exceeded",
-          "reason": "max_searches_exceeded",
-          "round": 1,
-          "query": "Post triage summary as comment",
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
+          "query": "buildTriageComment",
+          "ref": "a32a07e"
+        },
+        {
+          "type": "repo_search",
+          "result": "budget_exceeded",
+          "reason": "max_context_rounds_exceeded",
+          "round": 4,
+          "query": "needs_more_info || classification.duplicate_hint",
           "ref": "b8ccfb8"
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
-          "range": {
-            "startLine": 1,
-            "endLine": 50
-          },
-          "truncated": false,
-          "contentLength": 2314,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
-          "range": {
-            "startLine": 100,
-            "endLine": 180
-          },
-          "truncated": false,
-          "contentLength": 3827,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "b8ccfb8",
-          "resolvedSha": "b8ccfb8",
-          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
-          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01",
-          "range": {
-            "startLine": 195,
-            "endLine": 260
-          },
-          "truncated": false,
-          "contentLength": 2765,
-          "result": "ok",
-          "round": 1
         }
       ],
       "budgetState": {
-        "fileReads": 9,
-        "searches": 5,
-        "retrievedChars": 26653,
-        "contextRounds": 1,
-        "currentRound": 1,
+        "fileReads": 5,
+        "searches": 1,
+        "retrievedChars": 16291,
+        "contextRounds": 3,
+        "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
           "maxSearches": 5,
           "maxSearchResults": 10,
           "maxRetrievedChars": 50000,
-          "maxContextRounds": 3
+          "maxContextRounds": 3,
+          "maxBlobsScanned": 50,
+          "maxSearchBytes": 200000
         },
         "exhausted": true
       },
-      "error": "Failed to parse primary review response",
-      "rawTextSnippet": "I'll analyze this PR by examining the changed files and their cross-file dependencies. Let me start by reading the key source files and checking for consistency.\n\nInteresting — the base ref `b8ccfb8` appears to contain the OLD code (before changes), which is unexpected since `b8ccfb8` is listed as the branch head. Let me check the PR metadata more carefully. The base SHA might be different. Let me search for what the actual head and base SHAs are by looking at the diff context. The branch notati"
+      "error": null,
+      "rawTextSnippet": "I'll analyze this PR systematically, starting with cross-file dependencies.\n\nNow let me check the `postMarkedComment` return value contract — the test asserts `result.action === \"blocked\"` but the code returns `action: \"blocked\"` with `reason: \"marker_ambiguous\"`. Let me also check how the blocked result is handled and look at the duplicate detection comment path.\n\nThe `postMarkedComment` contract is consistent. Now let me check the marker ID consistency: in triageWorker the comment marker ID is"
     },
     "falseApprove": null,
     "falsePositive": false
