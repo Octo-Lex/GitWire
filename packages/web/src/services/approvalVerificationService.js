@@ -263,11 +263,10 @@ export async function runApprovalVerification({
   const MAX_TOOL_ROUNDS = 5; // safety limit
   const MAX_TOKENS = verifierBudgets?.maxTokens || 50000;
   const verifierContextItems = []; // successful broker results for finding validation
+  let tokenBudgetExceeded = false;
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      // Token ceiling — stop the loop if exceeded, parse whatever we have
-      if (tokensUsed > MAX_TOKENS) break;
       const message = await withDeadline(
         anthropic.messages.create({
           model,
@@ -283,6 +282,12 @@ export async function runApprovalVerification({
       if (message.model && !actualModel) actualModel = message.model;
 
       tokensUsed += (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
+
+      // Token ceiling — fail closed, do not parse budget-exhausted output
+      if (tokensUsed > MAX_TOKENS) {
+        tokenBudgetExceeded = true;
+        break;
+      }
 
       // Check if the model wants to use tools
       const toolUseBlocks = Array.isArray(message.content)
@@ -345,6 +350,11 @@ export async function runApprovalVerification({
   } catch (err) {
     // Timeout, API failure, or SDK error → incomplete
     return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message, actualModel);
+  }
+
+  // Token budget exceeded — fail closed to INCOMPLETE
+  if (tokenBudgetExceeded) {
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "Token budget exceeded: " + tokensUsed + " > " + MAX_TOKENS, actualModel);
   }
 
   // ── Parse: try each accumulated text part (model may produce JSON in an
@@ -427,7 +437,7 @@ export async function runApprovalVerification({
     durationMs,
     undefined,
     actualModel,
-    undefined,
+    rawText.slice(0, 500),
     broker.getBudgetState(),
     rawFindings,
   );
@@ -489,7 +499,6 @@ function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, 
     actualModel: actualModel || null,
     rawTextSnippet: rawTextSnippet || undefined,
     budgetState: budgetState || null,
-    budgetState: null, // populated by caller if broker exists
     hasMaterialFindings: findings.some(f =>
       [SEVERITY.P0, SEVERITY.P1, SEVERITY.P2].includes(f.severity)
     ),

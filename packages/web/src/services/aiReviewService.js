@@ -196,6 +196,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 
       v2PrimaryFindings = primaryReceipt.findings;
       v2PrimaryError = primaryReceipt.error || null;
+      tokensUsed = primaryReceipt.tokensUsed;
 
       // ── Adversarial/precision refinement (live-v2 path) ────────────────
       // The frozen architecture requires: primary findings → adversarial
@@ -269,18 +270,19 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         promptVersion: primaryReceipt.promptVersion,
         promptHash: primaryReceipt.promptHash,
         rawFindings: primaryReceipt.rawFindings,
-        validatedCount: primaryReceipt.findings.length,
+        validatedCount: v2PrimaryFindings.length,
         retrievalTrace: primaryReceipt.retrievalTrace,
         budgetState: primaryReceipt.budgetState,
         error: primaryReceipt.error || null,
         rawTextSnippet: primaryReceipt.rawTextSnippet || null,
       };
-      tokensUsed = primaryReceipt.tokensUsed;
       strategy = "v2_evidence_bound";
 
       // Convert v2 findings to legacy format for shared steps 10-13
+      // Use the POST-REFINEMENT v2PrimaryFindings (adversarial-dropped
+      // findings must not appear in GitHub output, DB, check, or audit)
       var SEVERITY_TO_LEGACY = { P0: "critical", P1: "high", P2: "medium", P3: "low" };
-      findings = primaryReceipt.findings.map(function (f) {
+      findings = v2PrimaryFindings.map(function (f) {
         return {
           severity: SEVERITY_TO_LEGACY[f.severity] || "low",
           title: f.claim || "Untitled",
@@ -597,6 +599,13 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           verifierReceipt: v2Verifier,
           evidence: v2Evidence,
         });
+
+        // Total invocation budget: primary + adversarial + verifier.
+        // Exceeding this limit must fail closed — no approval from budget-exhausted evidence.
+        var totalInvocationTokens = tokensUsed + (v2Verifier?.tokensUsed || 0);
+        if (totalInvocationTokens > (cfg.max_total_tokens || 200000)) {
+          throw new Error("Total invocation token budget exceeded: " + totalInvocationTokens + " > " + (cfg.max_total_tokens || 200000));
+        }
 
         // Enrich evidence with primary retrieval data for durable auditability.
         // This ensures every primary repo-read citation is reconstructable

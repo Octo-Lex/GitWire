@@ -501,7 +501,13 @@ describe("RI-7: exactly one review per invocation", () => {
   it("records FAILED state when POST fails", async () => {
     const invocationId = computeInvocationId({ repoId: 999, prNumber: 42, headSha: "abc", logicalInvocation: "automatic" });
     const octokit = {
-      request: jest.fn().mockRejectedValue(new Error("GitHub API error")),
+      request: jest.fn().mockImplementation(function(route) {
+        // Recovery lookup succeeds (finds nothing); POST fails
+        if (route.includes("GET") && route.includes("/reviews")) {
+          return Promise.resolve({ data: [] });
+        }
+        return Promise.reject(new Error("GitHub API error"));
+      }),
     };
     const redis = makeMockRedis();
     const manager = createReviewMutationManager({

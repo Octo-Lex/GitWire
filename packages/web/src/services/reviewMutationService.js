@@ -340,7 +340,6 @@ export function createReviewMutationManager({
       // do NOT proceed to POST, as a prior review may already be on GitHub.
       throw new Error("Review marker recovery failed: " + (err.message || err) + " — cannot safely POST without confirming no prior review exists");
     }
-    }
   }
 
   /**

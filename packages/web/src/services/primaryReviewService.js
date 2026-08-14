@@ -332,11 +332,10 @@ export async function runPrimaryReview({
   const MAX_TOOL_ROUNDS = 8;
   const MAX_TOKENS = primaryBudgets?.maxTokens || 100000;
   const primaryContextItems = [];
+  let tokenBudgetExceeded = false;
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      // Token ceiling — stop the loop if exceeded, parse whatever we have
-      if (tokensUsed > MAX_TOKENS) break;
       const message = await withDeadline(
         anthropic.messages.create({
           model,
@@ -352,6 +351,12 @@ export async function runPrimaryReview({
       if (message.model && !actualModel) actualModel = message.model;
 
       tokensUsed += (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
+
+      // Token ceiling — fail closed, do not parse budget-exhausted output
+      if (tokensUsed > MAX_TOKENS) {
+        tokenBudgetExceeded = true;
+        break;
+      }
 
       const toolUseBlocks = Array.isArray(message.content)
         ? message.content.filter(b => b.type === "tool_use")
@@ -411,6 +416,17 @@ export async function runPrimaryReview({
     return makePrimaryReceipt(
       [], [], broker?.getTrace() || [], broker?.getBudgetState() || null,
       tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message,
+      actualModel,
+    );
+  }
+
+  // Token budget exceeded — fail closed. Do not parse budget-exhausted
+  // output into an approval-eligible primary result.
+  if (tokenBudgetExceeded) {
+    return makePrimaryReceipt(
+      [], [], broker?.getTrace() || [], broker?.getBudgetState() || null,
+      tokensUsed, Date.now() - startTime,
+      "Token budget exceeded: " + tokensUsed + " > " + MAX_TOKENS,
       actualModel,
     );
   }

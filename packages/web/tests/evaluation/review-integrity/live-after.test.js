@@ -125,7 +125,7 @@ const BASE_CONFIG = {
   ignore_patterns: ["*.lock", "package-lock.json"],
   engine: "claude", model: process.env.ABLATION_MODEL || "glm-5.2",
   max_duration_seconds: 300, bundle_max_chars: 180000, require_file_scope: true,
-  adversarial_review: false,
+    // adversarial_review intentionally omitted — frozen target enables it
   review_integrity_v2: "live",
 };
 
