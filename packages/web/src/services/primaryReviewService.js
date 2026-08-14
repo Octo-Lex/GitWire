@@ -607,6 +607,7 @@ export async function runPrimaryReview({
       [], [], broker.getTrace(), broker.getBudgetState(),
       tokensUsed, Date.now() - startTime, "Failed to parse primary review response",
       actualModel, rawText.slice(0, 2000),
+      [], submissionDiagnostics,
     );
   }
 
@@ -616,6 +617,7 @@ export async function runPrimaryReview({
       [], [], broker.getTrace(), broker.getBudgetState(),
       tokensUsed, Date.now() - startTime, "Schema validation failed: " + schemaErrors.join("; "),
       actualModel,
+      undefined, [], submissionDiagnostics,
     );
   }
 
