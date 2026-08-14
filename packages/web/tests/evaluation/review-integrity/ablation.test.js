@@ -161,7 +161,9 @@ const allResults = [];
 
 describeOrSkip("RI A/B/C ablation — causal attribution", () => {
   const fixtures = getAllFixtures();
-  const arms = ["A", "B", "C"];
+  const arms = process.env.ABLATION_ARMS
+    ? process.env.ABLATION_ARMS.split(",")
+    : ["A", "B", "C"];
 
   beforeEach(() => {
     jest.clearAllMocks();
