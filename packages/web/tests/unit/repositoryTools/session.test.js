@@ -1,9 +1,22 @@
 // RepositorySession (RI-9 amendment Phase 1) — acquisition, identity, and
 // lifecycle tests. Runs real git; no network, no models.
 
+import { setConfig } from "@gitwire/runtime/compat/_init.js";
+import { getRuntime } from "@gitwire/runtime";
+
+setConfig({
+  LOG_LEVEL: "silent",
+  REDIS_URL: "redis://localhost:6379",
+  DATABASE_URL: "postgresql://localhost/gitops_hub",
+  GITHUB_APP_ID: "test",
+  GITHUB_PRIVATE_KEY: "test",
+});
+
 import fs from "node:fs";
 import path from "node:path";
-import { prepareRepository, validateRepoPath, RepositorySessionError } from "../../../src/lib/repositoryTools/repositorySession.js";
+import { logger } from "../../../src/lib/logger.js";
+import { prepareRepository, validateRepoPath, reportCloseFailure, RepositorySessionError } from "../../../src/lib/repositoryTools/repositorySession.js";
+
 import { buildSnapshotSource, makeOriginRepo, listFilesRecursive } from "./helpers.js";
 
 const FILES = {
@@ -244,6 +257,43 @@ describe("session lifecycle", () => {
     expect(trace).toHaveLength(1);
     expect(trace[0]).toMatchObject({ operation: "read", path: "x.txt", status: "success" });
     expect(trace[0].ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    session.close();
+  });
+
+  it("a final close-cleanup failure is LOGGED and recorded — never silent", async () => {
+    const head = await buildSnapshotSource({ "x.txt": "x\n" }, { ref: "cl" });
+    const session = await prepareRepository({
+      invocationId: "close-obs-1",
+      headSha: "cl",
+      acquire: { mode: "snapshot", headTree: head, blobs: head.blobs },
+    });
+
+    // The compat logger is a Proxy, so spy on the underlying runtime logger
+    // object the proxy delegates to. Touching the proxy first triggers the
+    // compat auto-init (setConfig above), making getRuntime() available.
+    void logger.warn;
+    const runtimeLogger = getRuntime().logger;
+    const originalWarn = runtimeLogger.warn;
+    const calls = [];
+    runtimeLogger.warn = (...args) => { calls.push(args); };
+    try {
+      const simulated = Object.assign(new Error("simulated persistent cleanup failure"), { code: "EACCES" });
+      reportCloseFailure(session, session.root, simulated);
+    } finally {
+      runtimeLogger.warn = originalWarn;
+    }
+
+    expect(calls).toHaveLength(1);
+    const [context, message] = calls[0];
+    expect(context).toMatchObject({
+      sessionId: session.id,
+      root: session.root,
+      err: "simulated persistent cleanup failure",
+      code: "EACCES",
+    });
+    expect(typeof message).toBe("string");
+    expect(message).toContain("cleanup failed");
+    expect(session.closeError).toEqual({ code: "EACCES", message: "simulated persistent cleanup failure" });
     session.close();
   });
 });
