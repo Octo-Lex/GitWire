@@ -425,3 +425,78 @@ describe("RI-3/RI-4 bridge — injected disagreement forces approvalEvidenceComp
     }).approvalEvidenceComplete).toBe(false);
   });
 });
+
+describe("omitted completeness metadata is never upgraded (fail-closed)", () => {
+  // Baseline pieces come from the real broker path above.
+  let baseline;
+
+  beforeAll(async () => {
+    baseline = await runBridgeLoop(
+      "ri04", "broken",
+      { pattern: "findCommentByMarker", literal: true, path: COMMENT_MARKERS, expect: "findCommentByMarker" }
+    );
+    expect(baseline.verdict.approvalEvidenceComplete).toBe(true);
+  }, 240000);
+
+  it("omitted range never reconciles — normalizer rejects, verifier rejects", () => {
+    const rawItem = { ...baseline.fileRead };
+    delete rawItem.range;
+    const normalized = normalizeFileRead(rawItem);
+    expect(normalized.status).toBe("error");
+    expect(normalized.error).toBe("malformed_file_read");
+    expect(verifyEvidenceReconciliation({
+      reviewerEvidence: baseline.reviewerEvidence,
+      reconstruction: normalized,
+    }).approvalEvidenceComplete).toBe(false);
+
+    // Direct hand-built served shape without the field — same verdict.
+    const handBuilt = { ...baseline.reconstruction };
+    delete handBuilt.range;
+    const verdict = verifyEvidenceReconciliation({
+      reviewerEvidence: baseline.reviewerEvidence,
+      reconstruction: handBuilt,
+    });
+    expect(verdict.dimensions.reconstructionServed).toBe(false);
+    expect(verdict.approvalEvidenceComplete).toBe(false);
+    expect(verdict.reasons).toContain("reconstructionServed");
+  });
+
+  it("omitted truncated never reconciles — normalizer rejects, verifier rejects", () => {
+    const rawItem = { ...baseline.fileRead };
+    delete rawItem.truncated;
+    const normalized = normalizeFileRead(rawItem);
+    expect(normalized.status).toBe("error");
+    expect(normalized.error).toBe("malformed_file_read");
+    expect(verifyEvidenceReconciliation({
+      reviewerEvidence: baseline.reviewerEvidence,
+      reconstruction: normalized,
+    }).approvalEvidenceComplete).toBe(false);
+
+    const handBuilt = { ...baseline.reconstruction };
+    delete handBuilt.truncated;
+    const verdict = verifyEvidenceReconciliation({
+      reviewerEvidence: baseline.reviewerEvidence,
+      reconstruction: handBuilt,
+    });
+    expect(verdict.dimensions.reconstructionServed).toBe(false);
+    expect(verdict.approvalEvidenceComplete).toBe(false);
+  });
+
+  it("a malformed range object never reconciles", () => {
+    for (const badRange of [
+      { startLine: 49 },                       // missing endLine
+      { startLine: 0, endLine: 4 },            // startLine below 1
+      { startLine: 10, endLine: 4 },           // endLine before startLine
+      { startLine: "49", endLine: 52 },        // non-integer
+      undefined,                               // present but undefined
+    ]) {
+      const rawItem = { ...baseline.fileRead, range: badRange };
+      expect(normalizeFileRead(rawItem).status).toBe("error");
+      const verdict = verifyEvidenceReconciliation({
+        reviewerEvidence: baseline.reviewerEvidence,
+        reconstruction: { ...baseline.reconstruction, range: badRange },
+      });
+      expect(verdict.approvalEvidenceComplete).toBe(false);
+    }
+  });
+});
