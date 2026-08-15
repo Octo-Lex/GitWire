@@ -155,6 +155,7 @@ export function createPiHarness({ model, runtimeApiKey, resolveRepositorySession
       let budgetFired = false;
       let providerError = null;
       let toolCallCount = 0;
+      let tokenCount = 0;
 
       const finish = (extra = {}) => {
         const assistantMessages = session.agent.state.messages.filter((m) => m.role === "assistant");
@@ -231,6 +232,16 @@ export function createPiHarness({ model, runtimeApiKey, resolveRepositorySession
                 code: "E_PROVIDER",
                 message: event.message.errorMessage ?? "provider stream error",
               };
+            }
+            tokenCount += event.message.usage?.totalTokens ?? 0;
+            const maxTotalTokens = task.budget?.maxTotalTokens;
+            if (maxTotalTokens !== undefined && tokenCount > maxTotalTokens) {
+              budgetFired = true;
+              try {
+                session.agent.abort();
+              } catch {
+                // flags decide the record
+              }
             }
           }
           if (event.type === "tool_execution_start") {
