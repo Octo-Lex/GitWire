@@ -54,6 +54,34 @@ export function constructEvidenceReference({ path, side = "HEAD", startLine, end
 }
 
 /**
+ * A reconstruction's `range` must be explicitly null (the RI-3 full-file
+ * contract) or a valid absolute window. Anything else — including an
+ * absent or malformed field — is not a well-formed reconstruction.
+ */
+function wellFormedRange(range) {
+  if (range === null) return true;
+  return (
+    range !== undefined &&
+    typeof range === "object" &&
+    Number.isInteger(range.startLine) && range.startLine >= 1 &&
+    Number.isInteger(range.endLine) && range.endLine >= range.startLine
+  );
+}
+
+/** A served reconstruction must carry explicit, well-formed completeness
+ *  metadata. Missing `range` or non-boolean `truncated` is malformed and
+ *  must never be upgraded into approval-complete evidence. */
+function wellFormedServed(x) {
+  return (
+    x.status === "served" &&
+    Object.prototype.hasOwnProperty.call(x, "range") &&
+    wellFormedRange(x.range) &&
+    Object.prototype.hasOwnProperty.call(x, "truncated") &&
+    typeof x.truncated === "boolean"
+  );
+}
+
+/**
  * Normalize an actual RI-3 readRepoFile() result into the internal
  * reconstruction shape. This is the ONLY supported way to produce a
  * "served" reconstruction — callers must not hand-build one.
@@ -62,19 +90,26 @@ export function constructEvidenceReference({ path, side = "HEAD", startLine, end
  *                  contentDigest, range, truncated, content }
  * Error object:  { error: "not_found" | "invalid_ref" | ... }
  *
+ * `range` and `truncated` are REQUIRED on success items — the real
+ * readRepoFile() always sets both explicitly. An item missing them is
+ * malformed and fails closed as a non-served reconstruction.
+ *
  * @returns {{status: "served", resolvedSha, path, blobSha, range, truncated,
  *            content, contentDigest}
  *          | {status: "not_found"|"error", error: string}}
  */
 export function normalizeFileRead(result) {
   if (result && typeof result === "object" && result.type === "file_read") {
+    if (!wellFormedServed({ status: "served", ...result })) {
+      return { status: "error", error: "malformed_file_read" };
+    }
     return {
       status: "served",
       resolvedSha: result.resolvedSha,
       path: result.path,
       blobSha: result.blobSha,
-      range: result.range ?? null,
-      truncated: result.truncated === true,
+      range: result.range,
+      truncated: result.truncated,
       content: result.content,
       contentDigest: result.contentDigest ?? null,
     };
@@ -167,10 +202,13 @@ export function verifyEvidenceReconciliation(input) {
     const x = reconstruction ?? {};
 
     dimensions.faithful = r.faithful === true;
-    dimensions.reconstructionServed = x.status === "served";
+    // Served requires explicit, well-formed completeness metadata: an
+    // absent or malformed `range`, or a non-boolean `truncated`, is a
+    // malformed reconstruction — never upgraded to agreement evidence.
+    dimensions.reconstructionServed = wellFormedServed(x);
     // A truncated reconstruction is a bounded-partial window: it can never
     // serve as complete proof, exactly like partial RepositoryTools results.
-    dimensions.reconstructionComplete = x.status === "served" && x.truncated !== true;
+    dimensions.reconstructionComplete = dimensions.reconstructionServed && x.truncated !== true;
 
     const head = expectedHead(r);
     dimensions.headBinding =
