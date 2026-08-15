@@ -459,7 +459,26 @@ function makeSession(fields) {
     close() {
       if (session._closed) return;
       session._closed = true;
-      fs.rmSync(root, { recursive: true, force: true });
+      // fs.rmSync(recursive) can transiently fail with ENOTEMPTY on Linux
+      // tmp filesystems (observed on CI runners; Node's recursive removal
+      // races with readdir). Retry briefly. A closed session never serves
+      // repository truth again, so leftover temp files are an OS-hygiene
+      // blemish — recorded on closeError, never fatal to teardown.
+      let lastError = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          fs.rmSync(root, { recursive: true, force: true });
+          lastError = null;
+          break;
+        } catch (err) {
+          lastError = err;
+          const until = Date.now() + 25;
+          while (Date.now() < until) { /* brief backoff between attempts */ }
+        }
+      }
+      if (lastError) {
+        session.closeError = { code: lastError.code ?? "E_CLOSE_FAILED", message: lastError.message };
+      }
     },
   };
 
