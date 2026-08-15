@@ -31,6 +31,48 @@ const VARIANT_FILTER = process.env.ABLATION_VARIANTS
   ? new Set(process.env.ABLATION_VARIANTS.split(",").map(s => s.trim()))
   : null;
 
+// ── Append-only run persistence (evidence-lifecycle correction) ─────────────
+// Each execution writes its own immutable file to runs/. Running a later
+// diagnostic can never destroy an earlier run's structured record — the
+// auditability standard this project enforces.
+import { execSync } from "node:child_process";
+import { mkdirSync, writeFileSync as writeRunFile } from "node:fs";
+import { randomUUID } from "node:crypto";
+
+const RUNTIME_HEAD = (() => {
+  try {
+    return execSync("git rev-parse HEAD", { cwd: join(__dirname, "..", "..", "..", "..") })
+      .toString().trim();
+  } catch (_e) {
+    return null;
+  }
+})();
+
+function persistRunRecord(record) {
+  try {
+    const runsDir = join(__dirname, "runs");
+    mkdirSync(runsDir, { recursive: true });
+    const stamp = (record.timestamp || new Date().toISOString()).replace(/[:.]/g, "-");
+    const runId = `${stamp}-${record.fixture}-${record.variant}-arm${record.arm}-${randomUUID().slice(0, 8)}`;
+    writeRunFile(
+      join(runsDir, runId + ".json"),
+      JSON.stringify({
+        runId,
+        candidateId: RUNTIME_HEAD, // runtime head this execution ran against
+        fixture: record.fixture,
+        variant: record.variant,
+        arm: record.arm,
+        timestamp: record.timestamp,
+        result: record,
+      }, null, 2),
+      "utf8"
+    );
+  } catch (_e) {
+    // Persistence failure must not silently pass: surface it loudly
+    console.error("RUN PERSISTENCE FAILED:", _e.message);
+  }
+}
+
 // ── Mocks (same surface as live-after, @anthropic-ai/sdk stays real) ────────
 
 const mockDbQuery = jest.fn();
@@ -280,6 +322,13 @@ describeOrSkip("RI A/B/C ablation — causal attribution", () => {
           falsePositive: fixture.variant === "fixed" ? (legacyMaterial || v2Material) : null,
         };
         allResults.push(record);
+
+        // APPEND-ONLY durable evidence (RI-9 evidence-lifecycle correction):
+        // every execution is persisted immediately as its own immutable file
+        // under runs/, so a later execution can never overwrite an earlier
+        // one. ablation-results.json remains a convenience copy of THIS
+        // process's runs only; runs/ is the audit record.
+        persistRunRecord(record);
 
         console.log(
           `  ${fixture.caseId} ${fixture.variant} arm ${arm}: verdict=${record.verdict} ` +
