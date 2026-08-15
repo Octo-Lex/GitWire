@@ -12,7 +12,8 @@ import http from "node:http";
  *        each turn is one of:
  *          { toolCall: { id, name, arguments } }
  *          { content: string }
- *          { error: { status: number, message: string } }  — HTTP failure
+ *          { error: { status: number, message: string } }  — STICKY HTTP failure
+ *          { hang: true }                                  — never respond
  * @param {string} [options.modelName] reported model id (default "fake-reviewer")
  * @returns {Promise<{port: number, baseUrl: string, model: object,
  *           requests: Array, close: () => Promise<void>}>}
@@ -30,6 +31,11 @@ export async function startFakeProvider({ turns, modelName = "fake-reviewer" } =
       // Error turns are STICKY: every request (including client retries)
       // fails the same way until the script advances explicitly.
       if (!turn.error) turn = pending.shift() ?? { content: "(no more scripted turns)" };
+
+      if (turn.hang) {
+        // Never respond — for deadline enforcement under a hanging provider.
+        return;
+      }
 
       if (turn.error) {
         res.writeHead(turn.error.status ?? 500, { "content-type": "application/json" });

@@ -112,9 +112,14 @@ export function createSubmitReviewTool(runContext) {
         submittedAt: new Date().toISOString(),
       };
       runContext.terminationRequested = true;
+      // terminate: true is Pi's first-class "end the agent loop after this
+      // tool result" contract (agent-loop's shouldTerminateToolBatch). This
+      // is how submission reliably ends the session — no abort races, the
+      // transcript stays complete, and no further provider turn happens.
       return {
         content: [{ type: "text", text: JSON.stringify({ status: "success", message: "Review submitted. Terminating session; no further tool calls will execute." }) }],
         details: { submitted: true },
+        terminate: true,
       };
     },
   });

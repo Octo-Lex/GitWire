@@ -246,17 +246,13 @@ export function createPiHarness({ model, runtimeApiKey, resolveRepositorySession
             }
           }
           if (event.type === "tool_execution_end" && event.toolName === "submit_review" && runContext.terminationRequested) {
-            // Terminate AFTER the tool result is recorded: the next
-            // scheduled microtask runs once the current tool-result write
-            // settles, so the submission stays in the transcript and no
-            // further provider turn happens.
-            setImmediate(() => {
-              try {
-                session.agent.abort();
-              } catch {
-                // flags decide the record
-              }
-            });
+            // Backstop only: the primary termination is the tool result's
+            // terminate:true flag (Pi's first-class loop-stop contract).
+            try {
+              session.agent.abort();
+            } catch {
+              // flags decide the record
+            }
           }
         });
 
