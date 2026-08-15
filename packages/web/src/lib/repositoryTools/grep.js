@@ -118,8 +118,13 @@ export async function grep(session, params) {
   const skippedUnfaithful = [];
   const skippedBinary = [];
   const pathspecs = [];
+  // The glob is NEVER pushed as a git pathspec: git's :(glob) scoping can be
+  // NARROWER than this contract's declared glob semantics (slash-less globs
+  // match basenames at any depth), and a narrower git-side scope would
+  // silently drop files from a search that then claims completeness. Git
+  // searches the path scope (or whole tree); the declared glob is applied
+  // as a post-filter, so the searched scope is always a superset.
   if (scopePath) pathspecs.push(scopePath);
-  if (glob) pathspecs.push(`:(glob)${glob}`);
   if (session.mode === "snapshot") {
     for (const divergent of session.identityReport.divergent) {
       const inScope = scopeContains(scopePath, divergent.path) && (glob ? matchesGlob(divergent.path, glob) : true);

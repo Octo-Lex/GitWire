@@ -95,7 +95,12 @@ function classifyDivergence(content) {
 }
 
 async function commitTree(run, workDir, ref) {
-  const add = await run(["add", "-A"]);
+  // -f: the worktree contains ONLY snapshot-written entries, but a tracked
+  // .gitignore in the snapshot itself can still match snapshot entries that
+  // were force-added upstream (e.g. `*.html` ignoring landing/index.html).
+  // Force-add guarantees the materialized tree equals the snapshot tree;
+  // the identity report verifies exactly that.
+  const add = await run(["add", "-A", "-f"]);
   if (add.code !== 0) {
     throw new RepositorySessionError("E_PREPARE_FAILED", `git add failed: ${add.stderr}`);
   }
