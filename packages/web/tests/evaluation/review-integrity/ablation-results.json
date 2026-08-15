@@ -3,16 +3,11 @@
     "fixture": "RI-04",
     "variant": "broken",
     "arm": "C",
-    "timestamp": "2026-08-14T22:18:52.314Z",
+    "timestamp": "2026-08-15T00:00:07.507Z",
     "verdict": "needs_discussion",
     "checkState": "review_incomplete",
-    "findingCount": 1,
-    "v2PrimaryFindings": [
-      {
-        "severity": "P3",
-        "claim": "New tests never exercise the default (undefined) auto_comment path, which is the"
-      }
-    ],
+    "findingCount": 0,
+    "v2PrimaryFindings": [],
     "v2VerifierStatus": "not_run",
     "v2VerifierDetail": null,
     "requestedModel": "glm-5.3",
@@ -20,33 +15,14 @@
     "modelMatch": true,
     "invalid": null,
     "defectDetected": false,
-    "tokensUsed": 43836,
-    "latencyMs": 201228,
+    "tokensUsed": 49358,
+    "latencyMs": 214097,
     "primaryMeta": {
       "actualModel": "glm-5.3",
       "promptVersion": "v2-primary-r1",
       "promptHash": "5be7acd28b8873d0",
-      "rawFindings": [
-        {
-          "severity": "P3",
-          "category": "test_gap",
-          "claim": "New tests never exercise the default (undefined) auto_comment path, which is the PR's core semantic",
-          "description": "The fix's stated contract is \"when auto_comment is enabled (the default), every successfully triaged issue receives exactly one summary comment\". However, every test in triage-auto-comment.test.js sets pillars.triage.auto_comment explicitly (true or false) via mockGetConfigForRepo, so no test covers the path where auto_comment is undefined and the effective value comes from @gitwire/rules DEFAULT_CONFIG after merge. If the shipped default ever diverges from the assumed true (or the merge shape changes), the default-on behavior — the whole point of the fix — would regress without any test failing. A test asserting a comment is posted when the triage pillar config omits auto_comment would pin the default semantics.",
-          "affectedPaths": [
-            "packages/web/tests/unit/triage-auto-comment.test.js"
-          ],
-          "evidenceRefs": [
-            "changed:packages/web/tests/unit/triage-auto-comment.test.js@HEAD:227-245",
-            "changed:packages/web/src/workers/triageWorker.js@HEAD:346-361"
-          ],
-          "proof": {
-            "type": "static_trace",
-            "summary": "In triageWorker.js the gate is `if (triageOpts.auto_comment !== false)`, so undefined defaults to enabled; in the new test file every mockGetConfigForRepo stub (beforeEach and each test) sets auto_comment to an explicit boolean, leaving the undefined/default branch untested."
-          },
-          "confidence": 0.72
-        }
-      ],
-      "validatedCount": 1,
+      "rawFindings": [],
+      "validatedCount": 0,
       "retrievalTrace": [
         {
           "type": "file_read",
@@ -185,75 +161,11 @@
           "contentDigest": "sha256:b914df35fea60794dc2d1392e1fbbebb5d03e3b6f42cede5764b02627c6a1bb8",
           "range": {
             "startLine": 1,
-            "endLine": 128
+            "endLine": 11
           },
-          "truncated": false,
-          "contentLength": 4116,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/lib/queue.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "4ccecfc8ab06f5a8c6116e9ce213f45f4f3b17d2",
-          "contentDigest": "sha256:463efea4f9234334003f15074621bb962fe4387f115afc122f670167fef76a09",
-          "range": {
-            "startLine": 1,
-            "endLine": 26
-          },
-          "truncated": false,
-          "contentLength": 546,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/services/auth/workerAdoption.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "615fcf3d1e78cc990199eec0a9f4a7f83a7c8f34",
-          "contentDigest": "sha256:f5996f77735ee252eb20a15b655d645133e6757c32553d850d537af12d9ba883",
-          "range": {
-            "startLine": 1,
-            "endLine": 112
-          },
-          "truncated": false,
-          "contentLength": 4731,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/services/configService.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "b035da7f6a512b5b2501b0f205c64fb4d8169fda",
-          "contentDigest": "sha256:7582b672cb914cdc188aaf5a52bcb09049f44de42d046edce44112f57d716b46",
-          "range": {
-            "startLine": 1,
-            "endLine": 250
-          },
-          "truncated": false,
-          "contentLength": 7976,
-          "result": "ok",
-          "round": 1
-        },
-        {
-          "type": "file_read",
-          "path": "packages/web/src/services/decisionLogService.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "6cf78fb00e84d7787d692894e02c1b58a2ae62f0",
-          "contentDigest": "sha256:20b5bf01b4d1a7d2cd834267cb297825e8b73b6f1cde264735698b44a2698065",
-          "range": {
-            "startLine": 1,
-            "endLine": 210
-          },
-          "truncated": false,
-          "contentLength": 6486,
-          "result": "ok",
+          "truncated": true,
+          "contentLength": 523,
+          "result": "ok_truncated",
           "round": 1
         },
         {
@@ -263,12 +175,9 @@
           "resolvedSha": "624732c",
           "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
           "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 1,
-            "endLine": 200
-          },
+          "range": null,
           "truncated": false,
-          "contentLength": 8821,
+          "contentLength": 31076,
           "result": "ok",
           "round": 1
         },
@@ -286,78 +195,47 @@
         },
         {
           "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
+          "path": "packages/web/src/services/duplicateDetectionService.js",
           "ref": "624732c",
           "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 200,
-            "endLine": 460
-          },
+          "blobSha": "afa0ba0f805f65b275db29d308ee83109ce98050",
+          "contentDigest": "sha256:742fcc858ffee09f3cf7e547d0d1407d9829a43497bac3dc97dc5ee6b5e4cca6",
+          "range": null,
           "truncated": false,
-          "contentLength": 11974,
+          "contentLength": 10956,
           "result": "ok",
           "round": 2
         },
         {
-          "type": "repo_search",
-          "query": "Post triage summary as comment",
+          "type": "file_read",
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
           "ref": "624732c",
           "resolvedSha": "624732c",
-          "resultCount": 0,
-          "charsConsumed": 0,
-          "result": "ok_truncated",
+          "blobSha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
+          "contentDigest": "sha256:384cbdbe81c548dbbfe3ef3c644860aa5a544a68760630eba84be52f17aa88b2",
+          "range": {
+            "startLine": 1,
+            "endLine": 37
+          },
           "truncated": true,
-          "reason": "max_search_bytes",
+          "contentLength": 2968,
+          "result": "ok_truncated",
           "round": 2
         },
         {
-          "type": "file_read",
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c",
-          "resolvedSha": "624732c",
-          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
-          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55",
-          "range": {
-            "startLine": 600,
-            "endLine": 617
-          },
-          "truncated": true,
-          "contentLength": 873,
-          "result": "ok_truncated",
-          "round": 3
-        },
-        {
           "type": "repo_search",
           "result": "budget_exceeded",
           "reason": "max_retrieved_chars_exceeded",
-          "round": 3,
-          "query": "auto_comment",
-          "ref": "624732c"
-        },
-        {
-          "type": "file_read",
-          "result": "budget_exceeded",
-          "reason": "max_retrieved_chars_exceeded",
-          "round": 4,
-          "path": "packages/web/src/workers/triageWorker.js",
-          "ref": "624732c"
-        },
-        {
-          "type": "file_read",
-          "result": "budget_exceeded",
-          "reason": "max_retrieved_chars_exceeded",
-          "round": 4,
-          "path": "packages/web/src/workers/triageWorker.js",
+          "round": 2,
+          "query": "Post triage summary",
           "ref": "624732c"
         }
       ],
       "budgetState": {
-        "fileReads": 16,
-        "searches": 2,
+        "fileReads": 12,
+        "searches": 1,
         "retrievedChars": 90000,
-        "contextRounds": 3,
+        "contextRounds": 2,
         "currentRound": 0,
         "limits": {
           "maxFileReads": 20,
@@ -371,49 +249,13 @@
         "exhausted": true
       },
       "error": null,
-      "rawTextSnippet": "I'll start by reading the main changed file to understand the full context of the triage worker.\n\nThe search returned empty oddly. Let me continue reading the worker and retry search with different queries.\n\nSearch results appear empty/truncated. Let me test with a common term and read the rest of the worker file including buildTriageComment.\n\nRead budget is being consumed. Let me read the critical `buildTriageComment` function precisely.",
+      "rawTextSnippet": "I'll review this PR, which changes the triage comment gating from needs_more_info/duplicate_hint to a simple auto_comment check. Let me inspect the full worker file at HEAD, and search for documentation of the `auto_comment` contract.\n\nI have the full worker at HEAD. Key observations: `triagePR` has no comment logic (only issues), and the triage comment marker is `gitwire:triage:${repoId}:${issueNumber}` — while `detectDuplicates` \"handles its own GitHub comment\". Since the new code now posts th",
       "unresolvedContextRequests": [
         {
           "source": "broker_budget",
           "tool": "search_repo_text",
-          "target": "auto_comment",
+          "target": "Post triage summary",
           "reason": "budget_exceeded"
-        },
-        {
-          "source": "broker_budget",
-          "tool": "read_repo_file",
-          "target": "packages/web/src/workers/triageWorker.js",
-          "reason": "invalid_ref"
-        },
-        {
-          "source": "broker_budget",
-          "tool": "read_repo_file",
-          "target": "packages/web/src/workers/triageWorker.js",
-          "reason": "budget_exceeded"
-        },
-        {
-          "source": "broker_budget",
-          "tool": "read_repo_file",
-          "target": "packages/web/src/workers/triageWorker.js",
-          "reason": "budget_exceeded"
-        },
-        {
-          "source": "model_declared",
-          "description": "Could not verify the default value of pillars.triage.auto_comment in @gitwire/rules DEFAULT_CONFIG (search budget exhausted before locating packages/rules). getConfigForRepo merges DEFAULT_CONFIG under repo/org/DB layers, so if DEFAULT_CONFIG ships auto_comment: false, the new gate `triageOpts.auto_comment !== false` never fires for repos relying purely on defaults — the PR's core claim (\"auto_comment is enabled (the default)\") would be false and the fix would have no effect for default-configured repos. If the default is true or the key is absent, the change behaves as documented.",
-          "potentialSeverity": "P2",
-          "basis": "changed_contract"
-        },
-        {
-          "source": "model_declared",
-          "description": "Could not read buildTriageComment's header/labels section (triageWorker.js approx. lines 653-703; read budget exhausted). The PR claims the comment is now 'truthful for auto_label:false repos' (test file header comment), but I could only verify the footer line change. If buildTriageComment renders `classification.labels` unconditionally (e.g. a '**Labels:** X' line), then with auto_label:false the comment would still list labels that were never applied, contradicting the PR's stated truthfulness goal. Also unverified: how the body renders when classification.triage_summary is missing, which is now reachable for every normal issue since the comment is no longer gated on needs_more_info/duplicate_hint.",
-          "potentialSeverity": "P2",
-          "basis": "changed_contract"
-        },
-        {
-          "source": "model_declared",
-          "description": "Could not search the repository (budget exhausted) for normative documentation, config schema descriptions, or dashboard UI copy describing auto_comment gating semantics (e.g. docs/, README, @gitwire/rules schema, dashboard config forms). The PR intentionally changes auto_comment from 'comment only when needs_more_info/duplicate_hint' to 'comment on every triaged issue'. Any normative doc that describes the old gating behavior must be updated in this PR; if such a doc exists unchanged, it is a docs_gap.",
-          "potentialSeverity": "P2",
-          "basis": "changed_contract"
         }
       ],
       "seededDependencies": [
@@ -462,48 +304,18 @@
           "reason": "local_import",
           "tier": "optional",
           "blobSha": "963e8cb2ba42275366d2d60eb3612f7c8b6ea98a",
-          "truncated": false,
-          "importedBy": "packages/web/src/workers/triageWorker.js"
-        },
-        {
-          "path": "packages/web/src/lib/queue.js",
-          "reason": "local_import",
-          "tier": "optional",
-          "blobSha": "4ccecfc8ab06f5a8c6116e9ce213f45f4f3b17d2",
-          "truncated": false,
-          "importedBy": "packages/web/src/workers/triageWorker.js"
-        },
-        {
-          "path": "packages/web/src/services/auth/workerAdoption.js",
-          "reason": "local_import",
-          "tier": "optional",
-          "blobSha": "615fcf3d1e78cc990199eec0a9f4a7f83a7c8f34",
-          "truncated": false,
-          "importedBy": "packages/web/src/workers/triageWorker.js"
-        },
-        {
-          "path": "packages/web/src/services/configService.js",
-          "reason": "local_import",
-          "tier": "optional",
-          "blobSha": "b035da7f6a512b5b2501b0f205c64fb4d8169fda",
-          "truncated": false,
-          "importedBy": "packages/web/src/workers/triageWorker.js"
-        },
-        {
-          "path": "packages/web/src/services/decisionLogService.js",
-          "reason": "local_import",
-          "tier": "optional",
-          "blobSha": "6cf78fb00e84d7787d692894e02c1b58a2ae62f0",
-          "truncated": false,
+          "truncated": true,
           "importedBy": "packages/web/src/workers/triageWorker.js"
         }
       ],
       "seedFailures": [],
+      "seedPlanChars": 45000,
+      "primaryStartRemainingChars": 45000,
       "submissionDiagnostics": {
-        "stopReason": "tool_use",
+        "stopReason": "max_tokens",
         "usedSubmitTool": true,
         "textTail": null,
-        "outputTokens": 2100
+        "outputTokens": 8192
       }
     },
     "falseApprove": false,
