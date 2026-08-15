@@ -59,11 +59,11 @@ async function main() {
     process.exit(2);
   }
 
-  const { prepareRepository } = await import("../../src/lib/repositoryTools/repositorySession.js");
-  const { createPiHarness } = await import("../../src/lib/reviewHarness/pi/piHarness.js");
-  const { parseEvidenceRef, validateFinding, PROOF_TYPES } = await import("../../src/services/findingValidator.js");
-  const { verifyEvidenceReconciliation, normalizeFileRead } = await import("../../src/services/evidenceReconciliationService.js");
-  const { createContextBroker } = await import("../../src/services/reviewContextBroker.js");
+  const { prepareRepository } = await import("../../../src/lib/repositoryTools/repositorySession.js");
+  const { createPiHarness } = await import("../../../src/lib/reviewHarness/pi/piHarness.js");
+  const { parseEvidenceRef, validateFinding, PROOF_TYPES } = await import("../../../src/services/findingValidator.js");
+  const { verifyEvidenceReconciliation, normalizeFileRead } = await import("../../../src/services/evidenceReconciliationService.js");
+  const { createContextBroker } = await import("../../../src/services/reviewContextBroker.js");
   const { buildFixtureOctokit } = await import("./fixtureOctokit.js");
   const { loadFixture } = await import("./fixtures/fixtureGitMaterializer.js");
 
@@ -137,6 +137,9 @@ async function main() {
   console.log("=== PI PAID PILOT (one capped invocation) ===");
   console.log("frozen:", JSON.stringify(FROZEN, null, 2));
   console.log("git HEAD:", gitHead, "| harness version:", harness.version);
+  if (harness.version === "unknown") {
+    throw new Error("Pi package version unreadable — refusing an unversioned paid run");
+  }
 
   const startedAt = new Date().toISOString();
   const execution = await harness.runReview(task);

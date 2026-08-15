@@ -29,15 +29,21 @@ import {
   PROMPT_VERSION,
 } from "./reviewPrompts.js";
 
-/** Best-effort Pi package version for the execution record. */
+/** Best-effort Pi package version for the execution record. Tries the
+ *  workspace root and the package-local node_modules (npm hoisting). */
 function readPiVersion() {
-  try {
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const candidate = path.join(here, "..", "..", "..", "..", "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
-    return JSON.parse(fs.readFileSync(candidate, "utf8")).version ?? "unknown";
-  } catch {
-    return "unknown";
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [
+    path.join(here, "..", "..", "..", "..", "..", "..", "node_modules", "@earendil-works", "pi-coding-agent", "package.json"),
+    path.join(here, "..", "..", "..", "..", "node_modules", "@earendil-works", "pi-coding-agent", "package.json"),
+  ]) {
+    try {
+      return JSON.parse(fs.readFileSync(candidate, "utf8")).version ?? "unknown";
+    } catch {
+      // try the next candidate
+    }
   }
+  return "unknown";
 }
 
 function sumUsage(assistantMessages, model) {
