@@ -29,10 +29,39 @@ import {
   PROMPT_VERSION,
 } from "./reviewPrompts.js";
 
+/**
+ * Immutable identity binding check: the ReviewTask, its reviewRoot, and the
+ * resolved repository session must declare the exact same BASE and HEAD.
+ *
+ * Snapshot sessions carry the GitHub-side snapshot refs (snapshotRefs);
+ * production remote sessions bind through their fetched full commit SHAs.
+ * Returns a mismatch description string, or null when identities agree.
+ */
+export function sessionIdentityMismatch(task, repositorySession) {
+  const sessionHead = repositorySession.snapshotRefs?.head ?? repositorySession.headSha ?? null;
+  const sessionBase = repositorySession.snapshotRefs?.base
+    ?? repositorySession.baseSha
+    ?? null;
+  const problems = [];
+  if (sessionHead === null || sessionHead !== task.headSha) {
+    problems.push(`HEAD: task=${task.headSha} session=${sessionHead ?? "(none)"}`);
+  }
+  if (sessionBase === null) {
+    problems.push(`BASE: session carries no base identity (task=${task.baseSha})`);
+  } else if (sessionBase !== task.baseSha) {
+    problems.push(`BASE: task=${task.baseSha} session=${sessionBase}`);
+  }
+  if (task.reviewRoot?.headSha !== task.headSha || task.reviewRoot?.baseSha !== task.baseSha) {
+    problems.push(
+      `reviewRoot: task={base:${task.baseSha}, head:${task.headSha}} root={base:${task.reviewRoot?.baseSha}, head:${task.reviewRoot?.headSha}}`
+    );
+  }
+  return problems.length > 0 ? problems.join("; ") : null;
+}
+
 /** Best-effort Pi package version for the execution record. Tries the
  *  workspace root and the package-local node_modules (npm hoisting). */
-function readPiVersion() {
-  const here = path.dirname(fileURLToPath(import.meta.url));
+function readPiVersion() {  const here = path.dirname(fileURLToPath(import.meta.url));
   for (const candidate of [
     path.join(here, "..", "..", "..", "..", "..", "..", "node_modules", "@earendil-works", "pi-coding-agent", "package.json"),
     path.join(here, "..", "..", "..", "..", "node_modules", "@earendil-works", "pi-coding-agent", "package.json"),
@@ -46,20 +75,43 @@ function readPiVersion() {
   return "unknown";
 }
 
+/** All-in provider cost for one usage record: every category the model
+ *  prices (input, output, cache read, cache write) counts. */
+function usageCost(usage, model) {
+  const c = model?.cost;
+  if (!c || [c.input, c.output, c.cacheRead, c.cacheWrite].some((v) => typeof v !== "number")) {
+    return null;
+  }
+  return (
+    ((usage.input ?? 0) / 1e6) * c.input +
+    ((usage.output ?? 0) / 1e6) * c.output +
+    ((usage.cacheRead ?? 0) / 1e6) * c.cacheRead +
+    ((usage.cacheWrite ?? 0) / 1e6) * c.cacheWrite
+  );
+}
+
 function sumUsage(assistantMessages, model) {
   let input = 0;
   let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
   let totalTokens = 0;
   for (const m of assistantMessages) {
     input += m.usage?.input ?? 0;
     output += m.usage?.output ?? 0;
+    cacheRead += m.usage?.cacheRead ?? 0;
+    cacheWrite += m.usage?.cacheWrite ?? 0;
     totalTokens += m.usage?.totalTokens ?? 0;
   }
-  const costUsd =
-    typeof model?.cost?.input === "number" && typeof model?.cost?.output === "number"
-      ? (input / 1_000_000) * model.cost.input + (output / 1_000_000) * model.cost.output
-      : null;
-  return { inputTokens: input, outputTokens: output, totalTokens, ...(costUsd !== null ? { costUsd } : {}) };
+  const costUsd = usageCost({ input, output, cacheRead, cacheWrite }, model);
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+    totalTokens,
+    ...(costUsd !== null ? { costUsd } : {}),
+  };
 }
 
 /**
@@ -122,6 +174,29 @@ export function createPiHarness({ model, runtimeApiKey, resolveRepositorySession
         });
       }
 
+      // Immutable session binding: the task, the review root, and the
+      // RESOLVED repository session must all declare the exact same
+      // BASE/HEAD before any tool is exposed. A stale or mis-associated
+      // session would make the prompt name one HEAD while repository tools
+      // read another — rejected here, with zero provider calls.
+      const binding = sessionIdentityMismatch(task, repositorySession);
+      if (binding) {
+        return makeReviewExecution({
+          ...requested,
+          actualHarness: "pi",
+          actualProvider: model.provider,
+          actualModel: model.id,
+          status: "error",
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: 0,
+          toolTrace: [],
+          usage: null,
+          terminationReason: "session_error",
+          error: { code: "E_IDENTITY_MISMATCH", message: binding },
+        });
+      }
+
       const startedAtMs = performance.now();
       const startedAt = new Date().toISOString();
 
@@ -162,6 +237,7 @@ export function createPiHarness({ model, runtimeApiKey, resolveRepositorySession
       let providerError = null;
       let toolCallCount = 0;
       let tokenCount = 0;
+      let costAccruedUsd = 0;
 
       const finish = (extra = {}) => {
         const assistantMessages = session.agent.state.messages.filter((m) => m.role === "assistant");
@@ -240,8 +316,14 @@ export function createPiHarness({ model, runtimeApiKey, resolveRepositorySession
               };
             }
             tokenCount += event.message.usage?.totalTokens ?? 0;
+            const turnCost = usageCost(event.message.usage, model);
+            if (turnCost !== null) costAccruedUsd += turnCost;
             const maxTotalTokens = task.budget?.maxTotalTokens;
-            if (maxTotalTokens !== undefined && tokenCount > maxTotalTokens) {
+            const maxCostUsd = task.budget?.maxCostUsd;
+            if (
+              (maxTotalTokens !== undefined && tokenCount > maxTotalTokens) ||
+              (maxCostUsd !== undefined && costAccruedUsd > maxCostUsd)
+            ) {
               budgetFired = true;
               try {
                 session.agent.abort();

@@ -26,14 +26,18 @@ const VALID_SUBMISSION = {
   approvalEvidenceComplete: false,
 };
 
-function baseTask(repositorySessionId, overrides = {}) {
+function baseTask(repositorySession, overrides = {}) {
   return {
     reviewInvocationId: "rinv-pi-1",
-    repositorySessionId,
+    repositorySessionId: repositorySession.id,
     repository: { owner: "org", name: "repo" },
-    baseSha: "base",
-    headSha: "head",
-    reviewRoot: { invocationId: "rinv-pi-1", baseSha: "base", headSha: "head" },
+    baseSha: repositorySession.snapshotRefs.base,
+    headSha: repositorySession.snapshotRefs.head,
+    reviewRoot: {
+      invocationId: "rinv-pi-1",
+      baseSha: repositorySession.snapshotRefs.base,
+      headSha: repositorySession.snapshotRefs.head,
+    },
     objective: "Review the change for correctness defects.",
     findingSchema: { name: "gitwire-findings", version: "2" },
     deadlineMs: 30000,
@@ -44,11 +48,18 @@ function baseTask(repositorySessionId, overrides = {}) {
 
 async function setup(turns) {
   const fake = await startFakeProvider({ turns });
-  const head = await buildSnapshotSource(FILES, { ref: "pi-harness" });
+  const base = await buildSnapshotSource({ "README.md": "# old\n" }, { ref: "pi-harness-base" });
+  const head = await buildSnapshotSource(FILES, { ref: "pi-harness-head" });
   const repositorySession = await prepareRepository({
     invocationId: "pi-harness-test",
-    headSha: "pi-harness",
-    acquire: { mode: "snapshot", headTree: head, blobs: head.blobs },
+    headSha: "pi-harness-head",
+    baseSha: "pi-harness-base",
+    acquire: {
+      mode: "snapshot",
+      baseTree: base,
+      headTree: head,
+      blobs: { ...base.blobs, ...head.blobs },
+    },
   });
   const harness = createPiHarness({
     model: fake.model,
@@ -116,7 +127,7 @@ describe("PiHarness.runReview", () => {
       { content: "THIS TURN MUST NEVER HAPPEN" },
     ]));
 
-    const execution = await harness.runReview(baseTask(repositorySession.id));
+    const execution = await harness.runReview(baseTask(repositorySession));
 
     expect(execution.status).toBe("completed");
     expect(execution.terminationReason).toBe("submitted");
@@ -152,7 +163,7 @@ describe("PiHarness.runReview", () => {
       { toolCall: { id: "call-good", name: "submit_review", arguments: VALID_SUBMISSION } },
     ]));
 
-    const execution = await harness.runReview(baseTask(repositorySession.id));
+    const execution = await harness.runReview(baseTask(repositorySession));
     expect(execution.status).toBe("completed");
     expect(execution.submission.payload).toEqual(VALID_SUBMISSION);
     expect(execution.submission.submitAttempts).toBe(2);
@@ -163,7 +174,7 @@ describe("PiHarness.runReview", () => {
       { toolCall: { id: "call-schema-bad", name: "submit_review", arguments: { findings: [], unresolvedContextRequests: [] } } },
       { toolCall: { id: "call-good", name: "submit_review", arguments: VALID_SUBMISSION } },
     ]));
-    const execution = await harness.runReview(baseTask(repositorySession.id));
+    const execution = await harness.runReview(baseTask(repositorySession));
     expect(execution.status).toBe("completed");
     // The schema-rejected call never invoked the tool; only the valid one counts.
     expect(execution.submission.submitAttempts).toBe(1);
@@ -173,7 +184,7 @@ describe("PiHarness.runReview", () => {
     ({ fake, repositorySession, harness } = await setup([
       { content: "I looked around and stopped." },
     ]));
-    const execution = await harness.runReview(baseTask(repositorySession.id));
+    const execution = await harness.runReview(baseTask(repositorySession));
     expect(execution.status).toBe("incomplete");
     expect(execution.terminationReason).toBe("no_submission");
     expect(execution.submission).toBeUndefined();
@@ -183,7 +194,7 @@ describe("PiHarness.runReview", () => {
     ({ fake, repositorySession, harness } = await setup([
       { content: "slow turn" },
     ]));
-    const execution = await harness.runReview(baseTask(repositorySession.id, { deadlineMs: 1 }));
+    const execution = await harness.runReview(baseTask(repositorySession, { deadlineMs: 1 }));
     expect(execution.status).toBe("incomplete");
     expect(execution.terminationReason).toBe("deadline_exceeded");
     expect(execution.submission).toBeUndefined();
@@ -193,7 +204,7 @@ describe("PiHarness.runReview", () => {
     ({ fake, repositorySession, harness } = await setup([
       { error: { status: 500, message: "scripted provider failure" } },
     ]));
-    const execution = await harness.runReview(baseTask(repositorySession.id));
+    const execution = await harness.runReview(baseTask(repositorySession));
     expect(execution.status).toBe("error");
     expect(execution.terminationReason).toBe("provider_error");
     expect(execution.error.message).toContain("scripted provider failure");
@@ -207,10 +218,53 @@ describe("PiHarness.runReview", () => {
     expect(invalid.error.code).toBe("E_INVALID_TASK");
     expect(fake.requests).toHaveLength(0);
 
-    const missing = await harness.runReview(baseTask("no-such-session"));
+    const missingTask = baseTask(repositorySession);
+    const missing = await harness.runReview({ ...missingTask, repositorySessionId: "no-such-session" });
     expect(missing.status).toBe("error");
     expect(missing.error.code).toBe("E_SESSION_UNAVAILABLE");
     expect(fake.requests).toHaveLength(0);
+  });
+
+  it("identity mismatch between task/reviewRoot/session is rejected with ZERO provider calls", async () => {
+    ({ fake, repositorySession, harness } = await setup([{ content: "unused" }]));
+    const task = baseTask(repositorySession);
+
+    // Wrong HEAD on the task (and root).
+    const wrongHead = await harness.runReview({
+      ...task,
+      headSha: "deadbeef",
+      reviewRoot: { ...task.reviewRoot, headSha: "deadbeef" },
+    });
+    expect(wrongHead.status).toBe("error");
+    expect(wrongHead.error.code).toBe("E_IDENTITY_MISMATCH");
+    expect(wrongHead.error.message).toContain("HEAD:");
+    expect(fake.requests).toHaveLength(0);
+
+    // HEAD agrees but the review root disagrees.
+    const rootMismatch = await harness.runReview({
+      ...task,
+      reviewRoot: { ...task.reviewRoot, baseSha: "deadbeef" },
+    });
+    expect(rootMismatch.error.code).toBe("E_IDENTITY_MISMATCH");
+    expect(rootMismatch.error.message).toContain("reviewRoot:");
+    expect(fake.requests).toHaveLength(0);
+
+    // Session carries no base identity at all.
+    const baseless = { ...repositorySession, snapshotRefs: { base: null, head: repositorySession.snapshotRefs.head } };
+    const harness2 = createPiHarness({
+      model: fake.model,
+      runtimeApiKey: "test-key",
+      resolveRepositorySession: (id) => (id === "baseless-session" ? baseless : null),
+    });
+    const noBaseExecution = await harness2.runReview({ ...task, repositorySessionId: "baseless-session" });
+    expect(noBaseExecution.error.code).toBe("E_IDENTITY_MISMATCH");
+    expect(noBaseExecution.error.message).toContain("BASE:");
+    expect(fake.requests).toHaveLength(0);
+
+    // A matching run still works after all these rejections.
+    const ok = await harness.runReview(task);
+    expect(ok.status).not.toBe("error");
+    expect(fake.requests).toHaveLength(1);
   });
 
   it("tool-call budget overrun aborts with budget_exceeded", async () => {
@@ -219,9 +273,49 @@ describe("PiHarness.runReview", () => {
       { toolCall: { id: "c2", name: "ls", arguments: {} } },
       { toolCall: { id: "c3", name: "ls", arguments: {} } },
     ]));
-    const execution = await harness.runReview(baseTask(repositorySession.id, { budget: { maxToolCalls: 2 } }));
+    const execution = await harness.runReview(baseTask(repositorySession, { budget: { maxToolCalls: 2 } }));
     expect(execution.status).toBe("incomplete");
     expect(execution.terminationReason).toBe("budget_exceeded");
     expect(execution.submission).toBeUndefined();
+  });
+
+  it("usage records every token category and the ALL-IN cost (input+output+cache)", async () => {
+    ({ fake, repositorySession, harness } = await setup([
+      { toolCall: { id: "c1", name: "ls", arguments: {} } },
+      { toolCall: { id: "c2", name: "submit_review", arguments: VALID_SUBMISSION } },
+    ]));
+    const execution = await harness.runReview(baseTask(repositorySession));
+    expect(execution.status).toBe("completed");
+    expect(execution.usage).toMatchObject({
+      inputTokens: expect.any(Number),
+      outputTokens: expect.any(Number),
+      cacheReadTokens: expect.any(Number),
+      cacheWriteTokens: expect.any(Number),
+      totalTokens: expect.any(Number),
+      costUsd: expect.any(Number),
+    });
+    // The fake provider reports 12 input + 6 output per turn; cost must be
+    // computed from the model's rates (which are zero in the fake).
+    expect(execution.usage.inputTokens).toBeGreaterThanOrEqual(24);
+    expect(execution.usage.costUsd).toBe(0);
+  });
+
+  it("maxCostUsd exhaustion aborts with budget_exceeded — dollars are a hard cap", async () => {
+    ({ fake, repositorySession, harness } = await setup([
+      { toolCall: { id: "c1", name: "ls", arguments: {} } },
+      { toolCall: { id: "c2", name: "ls", arguments: {} } },
+      { toolCall: { id: "c3", name: "submit_review", arguments: VALID_SUBMISSION } },
+    ]));
+    // Price the fake model like an expensive real one: $50/M input tokens.
+    // Each turn reports 12 input + 6 output → ≈$0.0006+ per turn; a cap of
+    // $0.001 is exhausted during the second turn.
+    fake.model.cost = { input: 50, output: 50, cacheRead: 5, cacheWrite: 10 };
+    const execution = await harness.runReview(
+      baseTask(repositorySession, { budget: { maxCostUsd: 0.001 } })
+    );
+    expect(execution.status).toBe("incomplete");
+    expect(execution.terminationReason).toBe("budget_exceeded");
+    expect(execution.submission).toBeUndefined();
+    expect(execution.usage.costUsd).toBeGreaterThan(0.001);
   });
 });
