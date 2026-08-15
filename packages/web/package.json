@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@earendil-works/pi-coding-agent": "^0.74.2",
     "@gitwire/core": "*",
     "@gitwire/rules": "*",
     "@gitwire/runtime": "*",
