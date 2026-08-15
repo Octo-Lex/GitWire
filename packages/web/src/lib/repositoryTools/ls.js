@@ -5,7 +5,8 @@
 
 import { makeResult, utf8Bytes, ERROR_CODES } from "./contract.js";
 import { validateRepoPath } from "./repositorySession.js";
-import { loadTrackedIndex, intParam, applyItemBudget } from "./toolShared.js";
+import { loadTrackedIndex, intParam } from "./toolShared.js";
+import { boundItems } from "./truncation.js";
 
 export const DEFAULT_LS_LIMIT = 500;
 export const DEFAULT_LS_MAX_OUTPUT_BYTES = 131072;
@@ -76,7 +77,8 @@ export async function ls(session, params = {}) {
     });
   }
 
-  const { kept, partialReasons } = applyItemBudget(entries, {
+  const bounded = boundItems({
+    items: entries,
     limit,
     maxBytes: maxOutputBytes,
     weigh: (e) => utf8Bytes(e.name) + e.sha.length,
@@ -84,11 +86,18 @@ export async function ls(session, params = {}) {
 
   return makeResult({
     operation: "ls", session,
-    status: partialReasons.length ? "partial" : "success",
+    status: bounded.partialReasons.length ? "partial" : "success",
     startedAt,
-    partialReasons,
-    data: { path: dirPath, entries: kept, totalEntries: entries.length },
-    returnedBytes: kept.reduce((sum, e) => sum + utf8Bytes(e.name) + e.sha.length, 0),
-    returnedItems: kept.length,
+    partialReasons: bounded.partialReasons,
+    data: {
+      path: dirPath,
+      entries: bounded.kept,
+      totalEntries: entries.length,
+      truncated: bounded.truncated,
+      truncatedBy: bounded.truncatedBy,
+      droppedEntries: bounded.dropped,
+    },
+    returnedBytes: bounded.outputBytes,
+    returnedItems: bounded.kept.length,
   });
 }

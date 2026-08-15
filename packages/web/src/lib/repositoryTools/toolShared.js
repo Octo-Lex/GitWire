@@ -93,35 +93,3 @@ export function intParam(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEG
   }
   return value;
 }
-
-/**
- * Apply a shared item budget: keep at most `limit` items whose cumulative
- * weight (UTF-8 bytes) stays within `maxBytes`. Stopping early produces the
- * matching partialReason — the result stays partial through every
- * downstream layer.
- *
- * @returns {{kept: Array, dropped: number, partialReasons: string[]}}
- */
-export function applyItemBudget(items, { limit, maxBytes, weigh }) {
-  const partialReasons = [];
-  let bytes = 0;
-  const kept = [];
-  let stopped = false;
-  for (const item of items) {
-    if (kept.length >= limit) {
-      partialReasons.push("result_limit");
-      stopped = true;
-      break;
-    }
-    const weight = weigh(item);
-    if (bytes + weight > maxBytes) {
-      partialReasons.push("output_bytes");
-      stopped = true;
-      break;
-    }
-    bytes += weight;
-    kept.push(item);
-  }
-  const dropped = stopped ? items.length - kept.length : 0;
-  return { kept, dropped, partialReasons };
-}

@@ -9,6 +9,7 @@
 import { makeResult, utf8Bytes, ERROR_CODES } from "./contract.js";
 import { validateRepoPath } from "./repositorySession.js";
 import { loadTrackedIndex, intParam } from "./toolShared.js";
+import { windowTextLines } from "./truncation.js";
 
 export const DEFAULT_READ_LIMIT = 2000;
 export const DEFAULT_READ_MAX_BYTES = 65536;
@@ -111,45 +112,26 @@ export async function read(session, params) {
   }
 
   const lines = splitLines(buf.toString("utf8"));
-  const totalLines = lines.length;
+  const windowed = windowTextLines({ lines, offset, limit, maxBytes, totalBytes: buf.length });
 
-  const picked = [];
-  let bytes = 0;
-  let lineNo = offset;
-  let stopReason = null;
-  while (lineNo <= totalLines && picked.length < limit) {
-    const weight = utf8Bytes(lines[lineNo - 1]) + 1;
-    if (bytes + weight > maxBytes) {
-      stopReason = "output_bytes";
-      break;
-    }
-    picked.push(lines[lineNo - 1]);
-    bytes += weight;
-    lineNo++;
-  }
-  const complete = lineNo > totalLines;
-  if (!complete && stopReason === null) {
-    stopReason = picked.length >= limit ? "output_lines" : "output_bytes";
-  }
-
-  const content = picked.join("\n");
   return makeResult({
     operation: "read", session,
-    status: complete ? "success" : "partial",
+    status: windowed.complete ? "success" : "partial",
     startedAt,
-    partialReasons: complete ? [] : [stopReason],
+    partialReasons: windowed.complete ? [] : [windowed.truncation.truncatedBy],
     data: {
       path: pathname,
       kind: "text",
       blobSha: entry.sha,
-      startLine: offset,
-      endLine: offset + picked.length - 1,
-      totalLines,
+      startLine: windowed.startLine,
+      endLine: windowed.endLine,
+      totalLines: windowed.truncation.totalLines,
       totalBytes: buf.length,
-      content,
-      nextOffset: complete ? null : lineNo,
+      content: windowed.content,
+      nextOffset: windowed.nextOffset,
+      truncation: windowed.truncation,
     },
-    returnedBytes: utf8Bytes(content),
-    returnedItems: picked.length,
+    returnedBytes: utf8Bytes(windowed.content),
+    returnedItems: windowed.outputLines,
   });
 }

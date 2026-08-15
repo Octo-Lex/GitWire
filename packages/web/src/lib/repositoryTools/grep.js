@@ -15,7 +15,8 @@
 
 import { makeResult, utf8Bytes, ERROR_CODES } from "./contract.js";
 import { validateRepoPath } from "./repositorySession.js";
-import { loadTrackedIndex, matchesGlob, validateGlob, intParam, scopeContains, applyItemBudget } from "./toolShared.js";
+import { loadTrackedIndex, matchesGlob, validateGlob, intParam, scopeContains } from "./toolShared.js";
+import { boundItems } from "./truncation.js";
 
 export const DEFAULT_GREP_LIMIT = 200;
 export const DEFAULT_GREP_MAX_OUTPUT_BYTES = 131072;
@@ -225,12 +226,8 @@ export async function grep(session, params) {
 
   const weigh = (m) => utf8Bytes(m.path) + String(m.line).length + 1 + utf8Bytes(m.text) +
     (m.context ?? []).reduce((sum, c) => sum + utf8Bytes(c.text) + String(c.line).length + 2, 0);
-  const { kept, partialReasons: budgetReasons } = applyItemBudget(matches, {
-    limit,
-    maxBytes: maxOutputBytes,
-    weigh,
-  });
-  partialReasons.push(...budgetReasons);
+  const bounded = boundItems({ items: matches, limit, maxBytes: maxOutputBytes, weigh });
+  partialReasons.push(...bounded.partialReasons);
 
   const uniqueReasons = [...new Set(partialReasons)];
   return makeResult({
@@ -239,12 +236,15 @@ export async function grep(session, params) {
     startedAt,
     partialReasons: uniqueReasons,
     data: {
-      matches: kept,
+      matches: bounded.kept,
       scope: { path: scopePath, glob },
       skippedBinary,
       skippedUnfaithful,
+      truncated: bounded.truncated,
+      truncatedBy: bounded.truncatedBy,
+      droppedMatches: bounded.dropped,
     },
-    returnedBytes: kept.reduce((sum, m) => sum + weigh(m), 0),
-    returnedItems: kept.length,
+    returnedBytes: bounded.outputBytes,
+    returnedItems: bounded.kept.length,
   });
 }

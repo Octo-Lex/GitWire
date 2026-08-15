@@ -5,7 +5,8 @@
 // the result carries explicit truncation metadata.
 
 import { makeResult, utf8Bytes, ERROR_CODES } from "./contract.js";
-import { loadTrackedIndex, matchesGlob, validateGlob, intParam, applyItemBudget } from "./toolShared.js";
+import { loadTrackedIndex, matchesGlob, validateGlob, intParam } from "./toolShared.js";
+import { boundItems } from "./truncation.js";
 
 export const DEFAULT_FIND_LIMIT = 500;
 export const DEFAULT_FIND_MAX_OUTPUT_BYTES = 131072;
@@ -40,7 +41,8 @@ export async function find(session, params = {}) {
   const allPaths = [...index.keys()].sort();
   const matched = glob ? allPaths.filter((p) => matchesGlob(p, glob)) : allPaths;
 
-  const { kept, partialReasons } = applyItemBudget(matched, {
+  const bounded = boundItems({
+    items: matched,
     limit,
     maxBytes: maxOutputBytes,
     weigh: (p) => utf8Bytes(p),
@@ -48,11 +50,18 @@ export async function find(session, params = {}) {
 
   return makeResult({
     operation: "find", session,
-    status: partialReasons.length ? "partial" : "success",
+    status: bounded.partialReasons.length ? "partial" : "success",
     startedAt,
-    partialReasons,
-    data: { paths: kept, totalMatched: matched.length, glob },
-    returnedBytes: kept.reduce((sum, p) => sum + utf8Bytes(p), 0),
-    returnedItems: kept.length,
+    partialReasons: bounded.partialReasons,
+    data: {
+      paths: bounded.kept,
+      totalMatched: matched.length,
+      glob,
+      truncated: bounded.truncated,
+      truncatedBy: bounded.truncatedBy,
+      droppedPaths: bounded.dropped,
+    },
+    returnedBytes: bounded.outputBytes,
+    returnedItems: bounded.kept.length,
   });
 }
