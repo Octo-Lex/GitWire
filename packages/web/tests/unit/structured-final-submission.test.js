@@ -328,6 +328,35 @@ describe("Primary: structured final submission", () => {
     expect(finalCall.tool_choice).toEqual({ type: "tool", name: "submit_review_result" });
   });
 
+  it("retries once at doubled output room when narration dies at max_tokens before the tool call", async () => {
+    const narrationNoTool = {
+      model: "glm-test", stop_reason: "max_tokens",
+      content: [{ type: "text", text: "Analysis part 1... " + "x".repeat(4000) }],
+      usage: { input_tokens: 100, output_tokens: 8192 },
+    };
+    const anthropic = makeAnthropic([
+      toolUseMsg([{ name: "search_repo_text", input: { query: "m", ref: HEAD } }]),
+      narrationNoTool, // first submission attempt: narration dies at cap, no tool call
+      toolUseMsg([{ name: "submit_review_result", input: { findings: [], unresolvedContextNeeds: [] } }]), // retry succeeds
+    ]);
+
+    const receipt = await runPrimaryReview({
+      evidence: EVIDENCE,
+      octokit: makeBrokerOctokit(), owner: "org", repo: "repo",
+      anthropic,
+      primaryBudgets: { contextBroker: { maxContextRounds: 1 } },
+      maxDurationMs: 10000,
+    });
+
+    expect(receipt.error).toBeUndefined();
+    expect(receipt.findings).toEqual([]);
+    expect(receipt.submissionDiagnostics.submissionRetried).toBe(true);
+    expect(receipt.submissionDiagnostics.usedSubmitTool).toBe(true);
+    // The retry used doubled output room
+    const lastCall = anthropic.calls[anthropic.calls.length - 1];
+    expect(lastCall.max_tokens).toBe(16384);
+  });
+
   it("malformed/missing submission remains fail-closed", async () => {
     const anthropic = makeAnthropic([
       toolUseMsg([{ name: "search_repo_text", input: { query: "marker", ref: HEAD } }]),

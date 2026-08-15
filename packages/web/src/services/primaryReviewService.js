@@ -454,37 +454,58 @@ export async function runPrimaryReview({
         role: "user",
         content: "Repository retrieval is now closed. Call the submit_review_result tool NOW with your complete final result — do not write any preamble or narrative text first. If any correctness-material dependency still must be checked before approval can be justified, include it in unresolvedContextNeeds with requiredForApproval: true.",
       });
+
       // FORCE the tool call. Requesting it is not enough: GLM-5.3 was observed
       // narrating past the 8192 output cap without ever emitting the tool_use.
-      // tool_choice makes the structured submission deterministic; if the
-      // provider rejects the parameter, retry once without it (prior behavior).
-      let finalMsg;
-      try {
-        finalMsg = await withDeadline(
-          anthropic.messages.create({
-            model, max_tokens: 8192, system: systemPrompt,
-            tools: [SUBMIT_REVIEW_TOOL],
-            tool_choice: { type: "tool", name: "submit_review_result" },
-            messages,
-          }),
-          "LLM final submission",
-        );
-      } catch (_tcErr) {
-        finalMsg = await withDeadline(
-          anthropic.messages.create({
-            model, max_tokens: 8192, system: systemPrompt,
-            tools: [SUBMIT_REVIEW_TOOL],
-            messages,
-          }),
-          "LLM final submission (no tool_choice fallback)",
-        );
+      // Some providers silently strip tool_choice rather than reject it, so a
+      // second defense exists below: a narration that dies at max_tokens with
+      // no tool call gets ONE retry with doubled output room and a terse
+      // final instruction.
+      const callSubmission = async (maxTokens) => {
+        try {
+          return await withDeadline(
+            anthropic.messages.create({
+              model, max_tokens: maxTokens, system: systemPrompt,
+              tools: [SUBMIT_REVIEW_TOOL],
+              tool_choice: { type: "tool", name: "submit_review_result" },
+              messages,
+            }),
+            "LLM final submission",
+          );
+        } catch (_tcErr) {
+          return await withDeadline(
+            anthropic.messages.create({
+              model, max_tokens: maxTokens, system: systemPrompt,
+              tools: [SUBMIT_REVIEW_TOOL],
+              messages,
+            }),
+            "LLM final submission (no tool_choice fallback)",
+          );
+        }
+      };
+
+      let finalMsg = await callSubmission(8192);
+      let submissionRetried = false;
+
+      const extractSubmit = (msg) => Array.isArray(msg.content)
+        ? msg.content.filter(b => b.type === "tool_use" && b.name === "submit_review_result")
+        : [];
+
+      // One bounded retry when narration died at the output cap before the
+      // tool call could appear (provider stripped the force, model stochastic).
+      if (finalMsg.stop_reason === "max_tokens" && extractSubmit(finalMsg).length === 0 && tokensUsed <= MAX_TOKENS) {
+        submissionRetried = true;
+        messages.push({
+          role: "user",
+          content: "Output limit reached. Call submit_review_result NOW with the final structured result only — no prose.",
+        });
+        finalMsg = await callSubmission(16384);
       }
+
       if (finalMsg.model && !actualModel) actualModel = finalMsg.model;
       tokensUsed += (finalMsg.usage?.input_tokens ?? 0) + (finalMsg.usage?.output_tokens ?? 0);
       if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
-      const submitBlocks = Array.isArray(finalMsg.content)
-        ? finalMsg.content.filter(b => b.type === "tool_use" && b.name === "submit_review_result")
-        : [];
+      const submitBlocks = extractSubmit(finalMsg);
       if (submitBlocks.length > 0) {
         submittedResult = submitBlocks[submitBlocks.length - 1].input;
       }
@@ -496,6 +517,7 @@ export async function runPrimaryReview({
       submissionDiagnostics = {
         stopReason: finalMsg.stop_reason || null,
         usedSubmitTool: submitBlocks.length > 0,
+        submissionRetried,
         textTail: finalText ? finalText.slice(-300) : null,
         outputTokens: finalMsg.usage?.output_tokens ?? 0,
       };

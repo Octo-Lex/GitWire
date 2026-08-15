@@ -1,5 +1,11 @@
-[
-  {
+{
+  "runId": "2026-08-15T00-25-18-160Z-RI-04-broken-armC-45e06a07",
+  "candidateId": "0795ce04082f9ef9232aeb838ea418fe08e3ee9e",
+  "fixture": "RI-04",
+  "variant": "broken",
+  "arm": "C",
+  "timestamp": "2026-08-15T00:25:18.160Z",
+  "result": {
     "fixture": "RI-04",
     "variant": "broken",
     "arm": "C",
@@ -336,4 +342,4 @@
     "falseApprove": false,
     "falsePositive": null
   }
-]
+}

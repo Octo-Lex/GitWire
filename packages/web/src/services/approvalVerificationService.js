@@ -346,34 +346,51 @@ export async function runApprovalVerification({
       });
       // FORCE the tool call (same rationale as the primary: narration must
       // not be able to displace the structured submission). Provider-reject
-      // fallback retries once without tool_choice.
-      let vFinalMsg;
-      try {
-        vFinalMsg = await withDeadline(
-          anthropic.messages.create({
-            model, max_tokens: 8192, system: systemPrompt,
-            tools: [SUBMIT_VERIFICATION_TOOL],
-            tool_choice: { type: "tool", name: "submit_verification_result" },
-            messages,
-          }),
-          "Verifier final submission",
-        );
-      } catch (_tcErr) {
-        vFinalMsg = await withDeadline(
-          anthropic.messages.create({
-            model, max_tokens: 8192, system: systemPrompt,
-            tools: [SUBMIT_VERIFICATION_TOOL],
-            messages,
-          }),
-          "Verifier final submission (no tool_choice fallback)",
-        );
+      // fallback retries without tool_choice; a narration that dies at
+      // max_tokens with no tool call gets ONE retry at doubled output room.
+      const vCallSubmission = async (maxTokens) => {
+        try {
+          return await withDeadline(
+            anthropic.messages.create({
+              model, max_tokens: maxTokens, system: systemPrompt,
+              tools: [SUBMIT_VERIFICATION_TOOL],
+              tool_choice: { type: "tool", name: "submit_verification_result" },
+              messages,
+            }),
+            "Verifier final submission",
+          );
+        } catch (_tcErr) {
+          return await withDeadline(
+            anthropic.messages.create({
+              model, max_tokens: maxTokens, system: systemPrompt,
+              tools: [SUBMIT_VERIFICATION_TOOL],
+              messages,
+            }),
+            "Verifier final submission (no tool_choice fallback)",
+          );
+        }
+      };
+
+      let vFinalMsg = await vCallSubmission(8192);
+      let vRetried = false;
+
+      const vExtract = (msg) => Array.isArray(msg.content)
+        ? msg.content.filter(b => b.type === "tool_use" && b.name === "submit_verification_result")
+        : [];
+
+      if (vFinalMsg.stop_reason === "max_tokens" && vExtract(vFinalMsg).length === 0 && tokensUsed <= MAX_TOKENS) {
+        vRetried = true;
+        messages.push({
+          role: "user",
+          content: "Output limit reached. Call submit_verification_result NOW with the final structured result only — no prose.",
+        });
+        vFinalMsg = await vCallSubmission(16384);
       }
+
       if (vFinalMsg.model && !actualModel) actualModel = vFinalMsg.model;
       tokensUsed += (vFinalMsg.usage?.input_tokens ?? 0) + (vFinalMsg.usage?.output_tokens ?? 0);
       if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
-      const vSubmitBlocks = Array.isArray(vFinalMsg.content)
-        ? vFinalMsg.content.filter(b => b.type === "tool_use" && b.name === "submit_verification_result")
-        : [];
+      const vSubmitBlocks = vExtract(vFinalMsg);
       if (vSubmitBlocks.length > 0) {
         submittedResult = vSubmitBlocks[vSubmitBlocks.length - 1].input;
       }
@@ -383,6 +400,7 @@ export async function runApprovalVerification({
       submissionDiagnostics = {
         stopReason: vFinalMsg.stop_reason || null,
         usedSubmitTool: vSubmitBlocks.length > 0,
+        submissionRetried: vRetried,
         textTail: vFinalText ? vFinalText.slice(-300) : null,
         outputTokens: vFinalMsg.usage?.output_tokens ?? 0,
       };
