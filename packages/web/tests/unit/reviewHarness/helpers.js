@@ -26,7 +26,10 @@ export async function startFakeProvider({ turns, modelName = "fake-reviewer" } =
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       requests.push(JSON.parse(body));
-      const turn = pending.shift() ?? { content: "(no more scripted turns)" };
+      let turn = pending[0] ?? { content: "(no more scripted turns)" };
+      // Error turns are STICKY: every request (including client retries)
+      // fails the same way until the script advances explicitly.
+      if (!turn.error) turn = pending.shift() ?? { content: "(no more scripted turns)" };
 
       if (turn.error) {
         res.writeHead(turn.error.status ?? 500, { "content-type": "application/json" });

@@ -19,6 +19,7 @@ export const REVIEW_EXECUTION_STATUSES = Object.freeze(["completed", "incomplete
 
 export const TERMINATION_REASONS = Object.freeze([
   "submitted",
+  "no_submission",
   "deadline_exceeded",
   "budget_exceeded",
   "provider_error",
