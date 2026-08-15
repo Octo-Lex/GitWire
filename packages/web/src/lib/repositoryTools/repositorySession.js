@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { logger } from "../logger.js";
 import { prepareSterileSkeleton, runGit } from "./gitRunner.js";
 
 export class RepositorySessionError extends Error {
@@ -395,6 +396,20 @@ async function acquireRemote(ctx) {
   });
 }
 
+/**
+ * Report a final session-close cleanup failure: structured state on the
+ * session PLUS the repo-mandated logger path — synchronous errors are
+ * never silently caught. A persistent failure (EACCES/EIO) leaving a
+ * checkout on disk must be observable operationally.
+ */
+export function reportCloseFailure(session, root, err) {
+  session.closeError = { code: err?.code ?? "E_CLOSE_FAILED", message: err?.message ?? String(err) };
+  logger.warn(
+    { sessionId: session.id, root, err: session.closeError.message, code: session.closeError.code },
+    "RepositorySession close: temp-directory cleanup failed after retries (session is closed; residue left on disk)"
+  );
+}
+
 function makeSession(fields) {
   const { id, mode, repository, invocationId, baseSha, headSha, expected, snapshotRefs, identityReport, root, workDir, home, globalConfig, hooksDir } = fields;
 
@@ -459,7 +474,26 @@ function makeSession(fields) {
     close() {
       if (session._closed) return;
       session._closed = true;
-      fs.rmSync(root, { recursive: true, force: true });
+      // fs.rmSync(recursive) can transiently fail with ENOTEMPTY on Linux
+      // tmp filesystems (observed on CI runners; Node's recursive removal
+      // races with readdir). Retry briefly. A closed session never serves
+      // repository truth again, so leftover temp files are an OS-hygiene
+      // blemish — recorded on closeError, never fatal to teardown.
+      let lastError = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          fs.rmSync(root, { recursive: true, force: true });
+          lastError = null;
+          break;
+        } catch (err) {
+          lastError = err;
+          const until = Date.now() + 25;
+          while (Date.now() < until) { /* brief backoff between attempts */ }
+        }
+      }
+      if (lastError) {
+        reportCloseFailure(session, root, lastError);
+      }
     },
   };
 
