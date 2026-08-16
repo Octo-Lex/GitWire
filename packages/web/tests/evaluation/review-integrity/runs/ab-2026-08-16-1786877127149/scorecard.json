@@ -1,0 +1,345 @@
+{
+  "scorecard": {
+    "current-gitwire": {
+      "runs": 6,
+      "converged": 3,
+      "brokenDetected": 0,
+      "brokenRuns": 3,
+      "fixedPrecise": 1,
+      "fixedRuns": 3,
+      "evidenceIntact": 3
+    },
+    "pi": {
+      "runs": 6,
+      "converged": 4,
+      "brokenDetected": 0,
+      "brokenRuns": 3,
+      "fixedPrecise": 1,
+      "fixedRuns": 3,
+      "evidenceIntact": 4
+    }
+  },
+  "decision": {
+    "outcome": "choose-pi",
+    "rationale": "Pi broken detections 0/3 vs 0/3; convergence 4/6 vs 3/6; fixed precision 1/3 vs 1/3; evidence intact 4/6 vs 3/6"
+  },
+  "scored": [
+    {
+      "arm": "current-gitwire",
+      "variant": "broken",
+      "convergence": {
+        "converged": true,
+        "terminationReason": "submitted",
+        "durationMs": 351049,
+        "toolCalls": 53,
+        "usage": {
+          "inputTokens": 119768,
+          "outputTokens": 9446,
+          "cacheReadTokens": 363968,
+          "cacheWriteTokens": 0,
+          "totalTokens": 493182,
+          "costUsd": 0.12175944
+        }
+      },
+      "effectiveness": {
+        "detected": false,
+        "onTargetFindings": []
+      },
+      "evidenceIntegrity": {
+        "intact": true,
+        "findings": []
+      }
+    },
+    {
+      "arm": "pi",
+      "variant": "broken",
+      "convergence": {
+        "converged": true,
+        "terminationReason": "submitted",
+        "durationMs": 376783,
+        "toolCalls": 39,
+        "usage": {
+          "inputTokens": 68837,
+          "outputTokens": 13694,
+          "cacheReadTokens": 669632,
+          "cacheWriteTokens": 0,
+          "totalTokens": 752163,
+          "costUsd": 0.12499956
+        }
+      },
+      "effectiveness": {
+        "detected": false,
+        "onTargetFindings": []
+      },
+      "evidenceIntegrity": {
+        "intact": true,
+        "findings": []
+      }
+    },
+    {
+      "arm": "pi",
+      "variant": "broken",
+      "convergence": {
+        "converged": true,
+        "terminationReason": "submitted",
+        "durationMs": 420876,
+        "toolCalls": 40,
+        "usage": {
+          "inputTokens": 64734,
+          "outputTokens": 14789,
+          "cacheReadTokens": 880192,
+          "cacheWriteTokens": 0,
+          "totalTokens": 959715,
+          "costUsd": 0.14179155999999998
+        }
+      },
+      "effectiveness": {
+        "detected": false,
+        "onTargetFindings": []
+      },
+      "evidenceIntegrity": {
+        "intact": true,
+        "findings": []
+      }
+    },
+    {
+      "arm": "current-gitwire",
+      "variant": "broken",
+      "convergence": {
+        "converged": false,
+        "terminationReason": "invalid_submission",
+        "durationMs": 233490,
+        "toolCalls": 52,
+        "usage": {
+          "inputTokens": 67435,
+          "outputTokens": 9164,
+          "cacheReadTokens": 422464,
+          "cacheWriteTokens": 0,
+          "totalTokens": 499063,
+          "costUsd": 0.09441892
+        }
+      },
+      "effectiveness": {
+        "detected": false,
+        "onTargetFindings": [],
+        "reason": "no_submission"
+      },
+      "evidenceIntegrity": {
+        "intact": false,
+        "reason": "no_submission"
+      }
+    },
+    {
+      "arm": "current-gitwire",
+      "variant": "broken",
+      "convergence": {
+        "converged": true,
+        "terminationReason": "submitted",
+        "durationMs": 224757,
+        "toolCalls": 53,
+        "usage": {
+          "inputTokens": 91640,
+          "outputTokens": 10388,
+          "cacheReadTokens": 463552,
+          "cacheWriteTokens": 0,
+          "totalTokens": 565580,
+          "costUsd": 0.11492176000000001
+        }
+      },
+      "effectiveness": {
+        "detected": false,
+        "onTargetFindings": []
+      },
+      "evidenceIntegrity": {
+        "intact": true,
+        "findings": []
+      }
+    },
+    {
+      "arm": "pi",
+      "variant": "broken",
+      "convergence": {
+        "converged": true,
+        "terminationReason": "submitted",
+        "durationMs": 343588,
+        "toolCalls": 31,
+        "usage": {
+          "inputTokens": 63024,
+          "outputTokens": 13899,
+          "cacheReadTokens": 590912,
+          "cacheWriteTokens": 0,
+          "totalTokens": 667835,
+          "costUsd": 0.11566516
+        }
+      },
+      "effectiveness": {
+        "detected": false,
+        "onTargetFindings": []
+      },
+      "evidenceIntegrity": {
+        "intact": true,
+        "findings": []
+      }
+    },
+    {
+      "arm": "pi",
+      "variant": "fixed",
+      "convergence": {
+        "converged": false,
+        "terminationReason": "deadline_exceeded",
+        "durationMs": 480010,
+        "toolCalls": 48,
+        "usage": {
+          "inputTokens": 133297,
+          "outputTokens": 17649,
+          "cacheReadTokens": 1339008,
+          "cacheWriteTokens": 0,
+          "totalTokens": 1489954,
+          "costUsd": 0.22592664
+        }
+      },
+      "precision": {
+        "precise": false,
+        "falseMaterialCount": null,
+        "reason": "no_submission"
+      },
+      "evidenceIntegrity": {
+        "intact": false,
+        "reason": "no_submission"
+      }
+    },
+    {
+      "arm": "current-gitwire",
+      "variant": "fixed",
+      "convergence": {
+        "converged": true,
+        "terminationReason": "submitted",
+        "durationMs": 274419,
+        "toolCalls": 54,
+        "usage": {
+          "inputTokens": 130310,
+          "outputTokens": 11343,
+          "cacheReadTokens": 384576,
+          "cacheWriteTokens": 0,
+          "totalTokens": 526229,
+          "costUsd": 0.13390668
+        }
+      },
+      "precision": {
+        "precise": true,
+        "falseMaterialCount": 0
+      },
+      "evidenceIntegrity": {
+        "intact": true,
+        "findings": []
+      }
+    },
+    {
+      "arm": "current-gitwire",
+      "variant": "fixed",
+      "convergence": {
+        "converged": false,
+        "terminationReason": "invalid_submission",
+        "durationMs": 312868,
+        "toolCalls": 54,
+        "usage": {
+          "inputTokens": 111478,
+          "outputTokens": 14260,
+          "cacheReadTokens": 441344,
+          "cacheWriteTokens": 0,
+          "totalTokens": 567082,
+          "costUsd": 0.13356632000000002
+        }
+      },
+      "precision": {
+        "precise": false,
+        "falseMaterialCount": null,
+        "reason": "no_submission"
+      },
+      "evidenceIntegrity": {
+        "intact": false,
+        "reason": "no_submission"
+      }
+    },
+    {
+      "arm": "pi",
+      "variant": "fixed",
+      "convergence": {
+        "converged": true,
+        "terminationReason": "submitted",
+        "durationMs": 420101,
+        "toolCalls": 31,
+        "usage": {
+          "inputTokens": 131690,
+          "outputTokens": 19182,
+          "cacheReadTokens": 547648,
+          "cacheWriteTokens": 0,
+          "totalTokens": 698520,
+          "costUsd": 0.16502624
+        }
+      },
+      "precision": {
+        "precise": true,
+        "falseMaterialCount": 0
+      },
+      "evidenceIntegrity": {
+        "intact": true,
+        "findings": []
+      }
+    },
+    {
+      "arm": "pi",
+      "variant": "fixed",
+      "convergence": {
+        "converged": false,
+        "terminationReason": "deadline_exceeded",
+        "durationMs": 480008,
+        "toolCalls": 45,
+        "usage": {
+          "inputTokens": 90423,
+          "outputTokens": 17139,
+          "cacheReadTokens": 1175552,
+          "cacheWriteTokens": 0,
+          "totalTokens": 1283114,
+          "costUsd": 0.18600376000000002
+        }
+      },
+      "precision": {
+        "precise": false,
+        "falseMaterialCount": null,
+        "reason": "no_submission"
+      },
+      "evidenceIntegrity": {
+        "intact": false,
+        "reason": "no_submission"
+      }
+    },
+    {
+      "arm": "current-gitwire",
+      "variant": "fixed",
+      "convergence": {
+        "converged": false,
+        "terminationReason": "invalid_submission",
+        "durationMs": 287417,
+        "toolCalls": 51,
+        "usage": {
+          "inputTokens": 111823,
+          "outputTokens": 13465,
+          "cacheReadTokens": 438528,
+          "cacheWriteTokens": 0,
+          "totalTokens": 563816,
+          "costUsd": 0.13179903999999998
+        }
+      },
+      "precision": {
+        "precise": false,
+        "falseMaterialCount": null,
+        "reason": "no_submission"
+      },
+      "evidenceIntegrity": {
+        "intact": false,
+        "reason": "no_submission"
+      }
+    }
+  ]
+}
