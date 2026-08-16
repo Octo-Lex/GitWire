@@ -62,18 +62,17 @@ export function resolvePatchAnchorLines(patch) {
 }
 
 /**
- * Build validated inline review comments from findings.
+ * Partition findings into those emitted as inline comments and those that
+ * must carry their full detail in the review body. Body-only findings are
+ * exactly the ones NOT emitted inline — because they are unanchorable
+ * (unknown file, missing/truncated patch, line absent from the RIGHT side,
+ * deleted-only line), have no usable location, or exceed the inline cap.
+ * The correction contract: a finding is never dropped; if it cannot be
+ * annotated, its description/suggestion/location go to the body.
  *
- * @param {Array} findings legacy findings ({file, line, severity, title,
- *        description, suggestion}) — findings without file+line are ignored
- * @param {Array} files the fetched changed-file entries
- *        ({filename, patch}) — patch may be "" or missing
- * @param {object} [options] { maxComments = 10 }
- * @returns {Array<{path: string, line: number, side: "RIGHT", body: string}>}
- *          ONLY anchorable comments, capped at maxComments. Unanchorable
- *          findings contribute nothing here and remain in the review body.
+ * @returns {{anchored: Array, bodyOnly: Array}}
  */
-export function buildInlineComments(findings, files, options = {}) {
+export function partitionAnchored(findings, files, options = {}) {
   const maxComments = options.maxComments ?? 10;
   const anchorsByFile = new Map();
   for (const f of files ?? []) {
@@ -82,15 +81,40 @@ export function buildInlineComments(findings, files, options = {}) {
     }
   }
 
-  const comments = [];
+  const anchored = [];
+  const bodyOnly = [];
   for (const f of findings ?? []) {
-    if (comments.length >= maxComments) break;
-    if (!f || !f.file || !f.line) continue;
-    const anchors = anchorsByFile.get(f.file);
-    // Unknown file (missing patch entry) or line absent from the RIGHT
-    // side → body-only degradation.
-    if (!anchors || !anchors.has(f.line)) continue;
-    comments.push({
+    const usable = f && f.file && f.line;
+    const anchors = usable ? anchorsByFile.get(f.file) : null;
+    const anchorable = usable && anchors !== undefined && anchors.has(f.line);
+    if (anchorable && anchored.length < maxComments) {
+      anchored.push(f);
+    } else {
+      bodyOnly.push(f);
+    }
+  }
+  return { anchored, bodyOnly };
+}
+
+/**
+ * Build validated inline review comments from findings. Delegates to
+ * partitionAnchored so the inline set and the body-only set can never
+ * disagree about which findings were emitted.
+ *
+ * @param {Array} findings legacy findings ({file, line, severity, title,
+ *        description, suggestion}) — findings without file+line are ignored
+ * @param {Array} files the fetched changed-file entries
+ *        ({filename, patch}) — patch may be "" or missing
+ * @param {object} [options] { maxComments = 10 }
+ * @returns {Array<{path: string, line: number, side: "RIGHT", body: string}>}
+ *          ONLY anchorable comments, capped at maxComments. Every finding
+ *          NOT returned here must appear in the review body's detail
+ *          section (see partitionAnchored) — never silently dropped.
+ */
+export function buildInlineComments(findings, files, options = {}) {
+  const { anchored } = partitionAnchored(findings, files, options);
+  return anchored.map(function (f) {
+    return {
       path: f.file,
       line: f.line,
       side: "RIGHT",
@@ -98,7 +122,25 @@ export function buildInlineComments(findings, files, options = {}) {
         "**[" + (f.severity || "info").toUpperCase() + "] " + (f.title || "") + "**\n\n" +
         (f.description || "") +
         (f.suggestion ? "\n\n> **Suggestion:** " + f.suggestion : ""),
-    });
+    };
+  });
+}
+
+/** Render the body-detail block for findings NOT emitted inline. The
+ *  finding is never dropped: description, suggestion, and location (where
+ *  available) always reach the review body. */
+export function renderBodyOnlyDetails(bodyOnly) {
+  const lines = [];
+  if (!bodyOnly || bodyOnly.length === 0) return lines;
+  lines.push("### Finding details (not annotatable inline)");
+  lines.push("");
+  for (const f of bodyOnly) {
+    if (!f) continue;
+    const location = f.file ? " (`" + f.file + (f.line ? ":" + f.line : "") + "`)" : "";
+    lines.push("- **[" + (f.severity || "info").toUpperCase() + "] " + (f.title || "untitled finding") + "**" + location);
+    if (f.description) lines.push("  \n  " + f.description);
+    if (f.suggestion) lines.push("  \n  > **Suggestion:** " + f.suggestion);
+    lines.push("");
   }
-  return comments;
+  return lines;
 }
