@@ -252,7 +252,21 @@ export function createPiHarness({ model, runtimeApiKey, resolveRepositorySession
         let terminationReason = "no_submission";
         let submission;
         let error;
-        if (runContext.submission !== undefined) {
+        if (budgetFired) {
+          // Budget precedence — IDENTICAL to Arm A: a crossing (whenever
+          // detected) means the run ended budget_exceeded. A submission
+          // captured on the crossing turn is preserved for audit but NEVER
+          // counts as completed, so identical terminal behavior at the same
+          // frozen budget scores identically across both A/B arms.
+          terminationReason = "budget_exceeded";
+          if (runContext.submission !== undefined) {
+            submission = {
+              ...runContext.submission,
+              submitAttempts: runContext.submitAttempts,
+              capturedOnBudgetCrossing: true,
+            };
+          }
+        } else if (runContext.submission !== undefined) {
           status = "completed";
           terminationReason = "submitted";
           submission = {
@@ -265,8 +279,6 @@ export function createPiHarness({ model, runtimeApiKey, resolveRepositorySession
           error = providerError;
         } else if (deadlineFired) {
           terminationReason = "deadline_exceeded";
-        } else if (budgetFired) {
-          terminationReason = "budget_exceeded";
         } else if (extra.error) {
           status = "error";
           terminationReason = "session_error";

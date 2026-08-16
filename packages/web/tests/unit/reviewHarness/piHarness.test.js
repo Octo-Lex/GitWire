@@ -279,6 +279,26 @@ describe("PiHarness.runReview", () => {
     expect(execution.submission).toBeUndefined();
   });
 
+  it("A TURN THAT BOTH SUBMITS AND CROSSES THE BUDGET is budget_exceeded — never completed (Arm A parity)", async () => {
+    ({ fake, repositorySession, harness } = await setup([
+      { toolCall: { id: "c1", name: "ls", arguments: {} } },
+      { toolCall: { id: "c2", name: "submit_review", arguments: VALID_SUBMISSION } },
+    ]));
+    // Each fake turn reports 18 total tokens; a 30-token cap crosses exactly
+    // on the submit turn's assistant message.
+    const execution = await harness.runReview(
+      baseTask(repositorySession, { budget: { maxTotalTokens: 30 } })
+    );
+    expect(execution.status).toBe("incomplete");
+    expect(execution.terminationReason).toBe("budget_exceeded");
+    expect(execution.status).not.toBe("completed");
+    // If the submission was captured before the loop ended, it is preserved
+    // for audit and explicitly marked as captured on the crossing.
+    if (execution.submission !== undefined) {
+      expect(execution.submission.capturedOnBudgetCrossing).toBe(true);
+    }
+  });
+
   it("usage records every token category and the ALL-IN cost (input+output+cache)", async () => {
     ({ fake, repositorySession, harness } = await setup([
       { toolCall: { id: "c1", name: "ls", arguments: {} } },
