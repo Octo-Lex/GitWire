@@ -213,10 +213,11 @@ export function createCurrentGitWireHarness({ model, runtimeApiKey, resolveRepos
         const systemPrompt = renderCurrentSystemPrompt(task);
         const repoTools = repositoryToolDescriptors();
 
-        // 2. Exploration loop (≤ 8 rounds; retrieval closes on natural
-        //    tool-stop or budget exhaustion, exactly like the current loop).
+        // 2. Exploration loop (EXACTLY at most 8 rounds — round 0..7;
+        //    retrieval closes on natural tool-stop or budget exhaustion,
+        //    exactly like the current loop).
         let retrievalClosed = false;
-        for (let round = 0; round <= CURRENT_MAX_TOOL_ROUNDS && !retrievalClosed; round++) {
+        for (let round = 0; round < CURRENT_MAX_TOOL_ROUNDS && !retrievalClosed; round++) {
           if (budgetExceeded()) { budgetFired = true; break; }
           const message = await callModel({ systemPrompt, messages, tools: repoTools });
           if (message.stopReason === "error" || message.stopReason === "aborted") break;
@@ -247,8 +248,10 @@ export function createCurrentGitWireHarness({ model, runtimeApiKey, resolveRepos
 
         // 3. Structured submission turn (forced tool_choice, provider-reject
         //    fallback, one narration-death retry — the current loop's
-        //    convergence mechanism).
-        if (!providerError && !deadlineFired) {
+        //    convergence mechanism). Budget already crossed → NO additional
+        //    provider call; a submission captured on a turn that crosses the
+        //    budget never counts as completed.
+        if (!providerError && !deadlineFired && !budgetFired) {
           submitAttempts += 1;
           messages.push({ role: "user", content: [{ type: "text", text: SUBMISSION_CLOSING_MESSAGE }] });
           const callSubmission = async (maxTokens, force) => {
@@ -289,7 +292,24 @@ export function createCurrentGitWireHarness({ model, runtimeApiKey, resolveRepos
 
           const submitBlocks = extractSubmit(finalMsg);
           const finalText = finalMsg.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
-          if (submitBlocks.length > 0) {
+          // A submission turn that crosses the budget makes the run
+          // budget_exceeded — a captured payload is preserved for audit but
+          // NEVER counts as completed.
+          if (budgetExceeded()) {
+            budgetFired = true;
+            if (submitBlocks.length > 0) {
+              const payload = submitBlocks[submitBlocks.length - 1].arguments;
+              const check = validateSubmission(payload);
+              if (check.ok) {
+                submission = {
+                  payload: JSON.parse(JSON.stringify(payload)),
+                  submittedAt: new Date().toISOString(),
+                  submitAttempts,
+                  capturedOnBudgetCrossing: true,
+                };
+              }
+            }
+          } else if (submitBlocks.length > 0) {
             const payload = submitBlocks[submitBlocks.length - 1].arguments;
             const check = validateSubmission(payload);
             if (check.ok) {
@@ -331,7 +351,12 @@ export function createCurrentGitWireHarness({ model, runtimeApiKey, resolveRepos
       let status = "incomplete";
       let terminationReason = "no_submission";
       let error;
-      if (submission !== undefined) {
+      if (budgetFired) {
+        // Budget precedence: a crossing (whenever detected) means the run
+        // ended budget_exceeded — even if a submission payload was captured
+        // on the crossing turn (kept for audit, never counted completed).
+        terminationReason = "budget_exceeded";
+      } else if (submission !== undefined) {
         status = "completed";
         terminationReason = "submitted";
       } else if (providerError) {
@@ -340,8 +365,6 @@ export function createCurrentGitWireHarness({ model, runtimeApiKey, resolveRepos
         error = providerError;
       } else if (deadlineFired) {
         terminationReason = "deadline_exceeded";
-      } else if (budgetFired) {
-        terminationReason = "budget_exceeded";
       } else if (terminationOverride === "invalid_submission") {
         terminationReason = "invalid_submission";
       }

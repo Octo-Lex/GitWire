@@ -2,8 +2,44 @@
 // outcomes — no provider, no repository access. The decision rule is the
 // manifest's predeclared rule, applied mechanically; the output is DATA
 // for the client's harness decision, not a decision executed by GitWire.
+//
+// Broken-fixture detection uses the STRICT per-fixture semantic oracle
+// (exactly equivalent to tests/evaluation/review-integrity/expected-defect.js):
+// a material finding counts only when its text matches the expected
+// defect's signature — for RI-04: marker lookup + pagination + duplicate
+// comments. Path/keyword citation alone awards no credit.
 
-import { parseEvidenceRef } from "../../services/findingValidator.js";
+function has(text, terms) {
+  return terms.some((t) => text.includes(t));
+}
+
+/** Strict per-fixture expected-defect signatures (exact equivalents of the
+ *  qualified evaluation oracle; see expected-defect.js). */
+const STRICT_SIGNATURES = {
+  "RI-01": (t) =>
+    has(t, ["synchron", "stale", "contradict", "inconsisten", "outdated", "not updated", "still says", "still declares", "still marks"]) &&
+    has(t, ["status", "phase", "declaration", "reopened", "closed", "pending"]) &&
+    has(t, ["readme", "constitution", "phase-0-spec", "roadmap", "docs/", "documentation", "spec"]),
+  "RI-02": (t) =>
+    has(t, ["gate", "exit"]) &&
+    has(t, ["agent"]) &&
+    has(t, ["replac", "restart", "swap", "resummon", "kill", "terminate", "preserv"]),
+  "RI-03": (t) =>
+    has(t, ["basepath", "base path", "/dashboard/intelligence", "dashboard basepath"]) ||
+    (has(t, ["url", "link"]) && has(t, ["basepath", "base path", "/dashboard"])),
+  "RI-04": (t) =>
+    has(t, ["findcommentbymarker", "marker lookup", "comment marker", "findcomment", "commentmarkers"]) &&
+    has(t, ["paginat", "per_page", "first page", "page 1", "single page", "one page", "only one page", "100 comments", "next page"]) &&
+    has(t, ["duplicate", "duplicat"]),
+};
+
+/** Does this finding's text match the fixture's strict expected defect? */
+export function strictExpectedDefect(caseId, finding) {
+  const signature = STRICT_SIGNATURES[caseId];
+  if (!signature) return false;
+  const text = `${finding.claim || ""} ${finding.description || ""}`.toLowerCase();
+  return signature(text);
+}
 
 /** Per-run convergence score. */
 export function scoreConvergence(record) {
@@ -17,7 +53,8 @@ export function scoreConvergence(record) {
   };
 }
 
-/** Per-run broken-fixture effectiveness: an on-target material finding. */
+/** Per-run broken-fixture effectiveness: strict-oracle on-target material
+ *  finding that ALSO survives RI-4 validation and evidence verification. */
 export function scoreBrokenEffectiveness(record, expected) {
   const submission = record.execution.submission;
   if (!submission) return { detected: false, onTargetFindings: [], reason: "no_submission" };
@@ -25,21 +62,22 @@ export function scoreBrokenEffectiveness(record, expected) {
   for (const [index, finding] of (submission.payload.findings ?? []).entries()) {
     const material = ["P0", "P1", "P2"].includes(finding.severity);
     if (!material) continue;
-    const ver = record.submissionVerification?.findings?.[index];
-    const refsTargetExpected = (finding.evidenceRefs ?? []).some((ref) => {
-      const parsed = parseEvidenceRef(ref);
-      return parsed && expected.evidencePaths.some((p) => parsed.path === p);
-    });
+    const signature = strictExpectedDefect(expected.caseId, finding);
+    if (!signature) continue;
     const ri4 = record.ri4FindingValidation?.[index]?.valid === true;
+    const ver = record.submissionVerification?.findings?.[index];
     const evidenceComplete = ver ? ver.evidenceComplete === true : false;
-    if (refsTargetExpected && ri4 && evidenceComplete) {
+    if (ri4 && evidenceComplete) {
       onTarget.push({ index, severity: finding.severity, claim: finding.claim });
     }
   }
   return { detected: onTarget.length > 0, onTargetFindings: onTarget };
 }
 
-/** Per-run fixed-fixture precision: false material findings count against. */
+/** Per-run fixed-fixture precision: a material claim on the frozen clean
+ *  fixture counts AGAINST precision unless a separately frozen adjudication
+ *  establishes it as a true material defect. RI-4 validity establishes
+ *  evidence validity, not claim truth. */
 export function scoreFixedPrecision(record) {
   const submission = record.execution.submission;
   if (!submission) return { precise: false, falseMaterialCount: null, reason: "no_submission" };
@@ -50,7 +88,13 @@ export function scoreFixedPrecision(record) {
     const ri4 = record.ri4FindingValidation?.[index]?.valid === true;
     const ver = record.submissionVerification?.findings?.[index];
     const evidenceComplete = ver ? ver.evidenceComplete === true : false;
-    if (!ri4 || !evidenceComplete) falseMaterial += 1;
+    const adjudicatedTrue = record.adjudication?.trueMaterialByIndex?.[index] === true;
+    if (adjudicatedTrue) continue; // separately adjudicated as a true defect
+    if (!ri4 || !evidenceComplete) {
+      falseMaterial += 1; // unsupported material claim
+    } else {
+      falseMaterial += 1; // supported but unadjudicated claim on the CLEAN fixture
+    }
   }
   return { precise: falseMaterial === 0, falseMaterialCount: falseMaterial };
 }
@@ -107,7 +151,13 @@ export function buildScorecard(scored) {
   return byArm;
 }
 
-/** Apply the manifest's predeclared three-way decision rule. */
+/** Apply the manifest's predeclared three-way decision rule.
+ *
+ *  "Materially better" means strict-oracle detection superiority, or a
+ *  convergence margin GREATER than one run — a single stochastic run does
+ *  not demonstrate material superiority. evidenceIntact is vacuously true
+ *  on submissions with no material findings, so it can gate (not-worse)
+ *  but cannot independently rescue a result. */
 export function applyDecisionRule(scorecard) {
   const current = scorecard["current-gitwire"];
   const pi = scorecard.pi;
@@ -120,27 +170,28 @@ export function applyDecisionRule(scorecard) {
     return {
       outcome: "keep-current",
       rationale:
-        `current converged ${current.converged}/6 with ${current.brokenDetected}/${current.brokenRuns} broken detections; Pi converged only ${pi.converged}/6`,
+        `current converged ${current.converged}/6 with ${current.brokenDetected}/${current.brokenRuns} strict-oracle broken detections; Pi converged only ${pi.converged}/6`,
     };
   }
 
-  const piBetterDetection = pi.brokenDetected > current.brokenDetected;
-  const piBetterConvergence = pi.converged > current.converged;
+  const piMateriallyBetter =
+    pi.brokenDetected > current.brokenDetected ||
+    pi.converged - current.converged > 1;
   const notWorse =
     pi.fixedPrecise >= current.fixedPrecise &&
     pi.evidenceIntact >= current.evidenceIntact &&
     pi.converged >= 1;
-  if ((piBetterDetection || piBetterConvergence) && notWorse) {
+  if (piMateriallyBetter && notWorse) {
     return {
       outcome: "choose-pi",
       rationale:
-        `Pi broken detections ${pi.brokenDetected}/${pi.brokenRuns} vs ${current.brokenDetected}/${current.brokenRuns}; convergence ${pi.converged}/6 vs ${current.converged}/6; fixed precision ${pi.fixedPrecise}/${pi.fixedRuns} vs ${current.fixedPrecise}/${current.fixedRuns}; evidence intact ${pi.evidenceIntact}/6 vs ${current.evidenceIntact}/6`,
+        `Pi materially better: strict-oracle detections ${pi.brokenDetected}/${pi.brokenRuns} vs ${current.brokenDetected}/${current.brokenRuns}, convergence margin ${pi.converged - current.converged} runs (${pi.converged}/6 vs ${current.converged}/6); fixed precision ${pi.fixedPrecise}/${pi.fixedRuns} vs ${current.fixedPrecise}/${current.fixedRuns}; evidence intact ${pi.evidenceIntact}/6 vs ${current.evidenceIntact}/6`,
     };
   }
 
   return {
     outcome: "no-winner",
     rationale:
-      `both arms failed similarly or results are materially mixed (current: converged ${current.converged}/6, detected ${current.brokenDetected}/${current.brokenRuns}; pi: converged ${pi.converged}/6, detected ${pi.brokenDetected}/${pi.brokenRuns}) — orchestration not established as the causal bottleneck; no per-arm tuning and rerun`,
+      `both arms failed similarly or results are materially mixed (current: converged ${current.converged}/6, strict-oracle detections ${current.brokenDetected}/${current.brokenRuns}; pi: converged ${pi.converged}/6, detections ${pi.brokenDetected}/${pi.brokenRuns}; convergence margin ${Math.abs(pi.converged - current.converged)} run(s) is not material) — orchestration not established as the causal bottleneck; no per-arm tuning and rerun`,
   };
 }

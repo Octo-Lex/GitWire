@@ -191,6 +191,57 @@ describe("CurrentGitWireHarness.runReview", () => {
     expect(execution.submission).toBeUndefined();
   });
 
+  it("EXACTLY eight exploration rounds — the ninth scripted turn is consumed by the submission phase, not exploration", async () => {
+    const eightToolTurns = Array.from({ length: 8 }, (_, i) => ({
+      toolCall: { id: `r${i + 1}`, name: "ls", arguments: {} },
+    }));
+    ({ fake, repositorySession, harness } = await setup([
+      ...eightToolTurns,
+      { toolCall: { id: "submit", name: "submit_review_result", arguments: VALID_SUBMISSION } },
+    ]));
+    const execution = await harness.runReview(baseTask(repositorySession));
+    // 8 exploration rounds consumed turns 1-8; the loop exited on the round
+    // cap; the submission phase consumed turn 9 (the submit call). If the
+    // loop permitted a ninth exploration round, turn 9 would execute as a
+    // tool call and the submission phase would see "(no more scripted
+    // turns)" — no submission.
+    expect(execution.status).toBe("completed");
+    expect(execution.terminationReason).toBe("submitted");
+    expect(fake.requests).toHaveLength(9);
+  });
+
+  it("budget crossed during exploration → NO submission-phase provider call at all", async () => {
+    ({ fake, repositorySession, harness } = await setup([
+      { toolCall: { id: "c1", name: "ls", arguments: {} } },
+      { toolCall: { id: "c2", name: "ls", arguments: {} } },
+      { toolCall: { id: "submit", name: "submit_review_result", arguments: VALID_SUBMISSION } },
+    ]));
+    const execution = await harness.runReview(baseTask(repositorySession, { budget: { maxToolCalls: 1 } }));
+    expect(execution.status).toBe("incomplete");
+    expect(execution.terminationReason).toBe("budget_exceeded");
+    // Two exploration requests only — the scripted submit turn was never
+    // consumed because the submission phase never ran.
+    expect(fake.requests).toHaveLength(2);
+    expect(execution.submission).toBeUndefined();
+  });
+
+  it("a submission turn that CROSSES the budget is budget_exceeded — never completed", async () => {
+    ({ fake, repositorySession, harness } = await setup([
+      { toolCall: { id: "c1", name: "ls", arguments: {} } },
+      { content: "done exploring" },
+      { toolCall: { id: "submit", name: "submit_review_result", arguments: VALID_SUBMISSION } },
+    ]));
+    // Price each turn ~$0.0009 (12 input + 6 output at $50/M); cap $0.002
+    // crosses exactly on the third call — the submission turn.
+    fake.model.cost = { input: 50, output: 50, cacheRead: 5, cacheWrite: 10 };
+    const execution = await harness.runReview(
+      baseTask(repositorySession, { budget: { maxCostUsd: 0.002 } })
+    );
+    expect(execution.status).toBe("incomplete");
+    expect(execution.terminationReason).toBe("budget_exceeded");
+    expect(execution.status).not.toBe("completed");
+  });
+
   it("usage records all four token categories with all-in cost", async () => {
     ({ fake, repositorySession, harness } = await setup([
       { content: "stop" },
