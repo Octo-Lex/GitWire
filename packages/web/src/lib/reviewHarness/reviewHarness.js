@@ -112,6 +112,7 @@ export function makeReviewExecution(fields) {
     usage = null,
     terminationReason,
     error,
+    submissionDiagnostics,
   } = fields ?? {};
 
   if (!REVIEW_EXECUTION_STATUSES.includes(status)) {
@@ -161,6 +162,7 @@ export function makeReviewExecution(fields) {
     usage,
     ...(terminationReason ? { terminationReason } : {}),
     ...(error ? { error } : {}),
+    ...(submissionDiagnostics ? { submissionDiagnostics } : {}),
   });
   return execution;
 }

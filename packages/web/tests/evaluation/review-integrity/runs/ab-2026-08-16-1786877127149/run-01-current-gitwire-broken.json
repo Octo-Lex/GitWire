@@ -1,0 +1,1050 @@
+{
+  "kind": "phase9-ab-run",
+  "manifestHash": "sha256:9b288c0af9fae6ab2cdc6c4384b5946750107cbf6a586519e334f6316fbac1be",
+  "invocation": 1,
+  "arm": "current-gitwire",
+  "variant": "broken",
+  "repetition": 1,
+  "startedAt": "2026-08-16T10:45:29.051Z",
+  "finishedAt": "2026-08-16T10:51:20.101Z",
+  "execution": {
+    "status": "completed",
+    "requestedHarness": "current-gitwire",
+    "actualHarness": "current-gitwire",
+    "requestedProvider": "zai",
+    "actualProvider": "zai",
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "startedAt": "2026-08-16T10:45:29.052Z",
+    "completedAt": "2026-08-16T10:51:20.101Z",
+    "durationMs": 351049,
+    "toolTrace": [
+      {
+        "ts": "2026-08-16T10:45:29.066Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "limit": 2000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 12.051,
+        "returnedBytes": 32525,
+        "returnedItems": 710
+      },
+      {
+        "ts": "2026-08-16T10:45:29.069Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/queue.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.321,
+        "returnedBytes": 19,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.073Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/github.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.237,
+        "returnedBytes": 20,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.076Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/githubWrapper.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 2.994,
+        "returnedBytes": 27,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.079Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/issueService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.035,
+        "returnedBytes": 31,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.082Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/duplicateDetectionService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.298,
+        "returnedBytes": 44,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.085Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/configService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.175,
+        "returnedBytes": 32,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.089Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/config/index.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.04,
+        "returnedBytes": 18,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.092Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/logger.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.074,
+        "returnedBytes": 20,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.095Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/decisionLogService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.008,
+        "returnedBytes": 37,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.098Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/idempotencyService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.191,
+        "returnedBytes": 37,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.102Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/waiverService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.136,
+        "returnedBytes": 32,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.105Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/telegramNotifyService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.03,
+        "returnedBytes": 40,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.108Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/actionStateMachine.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.322,
+        "returnedBytes": 37,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.111Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/auth/workerAdoption.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.012,
+        "returnedBytes": 38,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.114Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/triageFailureService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.107,
+        "returnedBytes": 39,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.118Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.129,
+        "returnedBytes": 28,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T10:45:29.121Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/triage-auto-comment.test.js",
+          "limit": 2000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.553,
+        "returnedBytes": 13417,
+        "returnedItems": 340
+      },
+      {
+        "ts": "2026-08-16T10:45:29.124Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+          "limit": 2000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.152,
+        "returnedBytes": 14686,
+        "returnedItems": 170
+      },
+      {
+        "ts": "2026-08-16T10:45:29.127Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/queue.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 2.884,
+        "returnedBytes": 545,
+        "returnedItems": 25
+      },
+      {
+        "ts": "2026-08-16T10:45:29.130Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/github.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 2.901,
+        "returnedBytes": 370,
+        "returnedItems": 11
+      },
+      {
+        "ts": "2026-08-16T10:45:29.133Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/githubWrapper.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 2.993,
+        "returnedBytes": 4121,
+        "returnedItems": 127
+      },
+      {
+        "ts": "2026-08-16T10:45:29.136Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/issueService.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.087,
+        "returnedBytes": 3915,
+        "returnedItems": 130
+      },
+      {
+        "ts": "2026-08-16T10:45:29.140Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/duplicateDetectionService.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.205,
+        "returnedBytes": 9795,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T10:45:29.143Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/configService.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.236,
+        "returnedBytes": 8124,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T10:45:29.152Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/config/index.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 8.646,
+        "returnedBytes": 7451,
+        "returnedItems": 206
+      },
+      {
+        "ts": "2026-08-16T10:45:29.156Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/logger.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.938,
+        "returnedBytes": 233,
+        "returnedItems": 6
+      },
+      {
+        "ts": "2026-08-16T10:45:29.159Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/decisionLogService.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.405,
+        "returnedBytes": 6487,
+        "returnedItems": 209
+      },
+      {
+        "ts": "2026-08-16T10:45:29.163Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/idempotencyService.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.421,
+        "returnedBytes": 9869,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T10:45:29.166Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/waiverService.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.475,
+        "returnedBytes": 7340,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T10:45:29.170Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/telegramNotifyService.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.489,
+        "returnedBytes": 2595,
+        "returnedItems": 106
+      },
+      {
+        "ts": "2026-08-16T10:45:29.175Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/actionStateMachine.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 4.792,
+        "returnedBytes": 10187,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T10:45:29.179Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/auth/workerAdoption.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.923,
+        "returnedBytes": 4742,
+        "returnedItems": 111
+      },
+      {
+        "ts": "2026-08-16T10:45:29.182Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/triageFailureService.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.531,
+        "returnedBytes": 6691,
+        "returnedItems": 167
+      },
+      {
+        "ts": "2026-08-16T10:45:29.185Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.195,
+        "returnedBytes": 4255,
+        "returnedItems": 130
+      },
+      {
+        "ts": "2026-08-16T10:45:42.877Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 6.847,
+        "returnedBytes": 32525,
+        "returnedItems": 710
+      },
+      {
+        "ts": "2026-08-16T10:45:42.922Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "auto_comment",
+          "path": "packages/web",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 44.014,
+        "returnedBytes": 2524,
+        "returnedItems": 20
+      },
+      {
+        "ts": "2026-08-16T10:48:22.064Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 6.951,
+        "returnedBytes": 14686,
+        "returnedItems": 170
+      },
+      {
+        "ts": "2026-08-16T10:48:22.077Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "pattern": "principalId",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 12.727,
+        "returnedBytes": 1380,
+        "returnedItems": 15
+      },
+      {
+        "ts": "2026-08-16T10:48:31.174Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "pattern": "logDecision\\(|propose\\(",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 13.068,
+        "returnedBytes": 1027,
+        "returnedItems": 14
+      },
+      {
+        "ts": "2026-08-16T10:48:31.179Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "offset": 470,
+          "limit": 70
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 4.918,
+        "returnedBytes": 3039,
+        "returnedItems": 70
+      },
+      {
+        "ts": "2026-08-16T10:48:50.181Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "auto_comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 62.51,
+        "returnedBytes": 3849,
+        "returnedItems": 29
+      },
+      {
+        "ts": "2026-08-16T10:48:50.242Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "Post triage summary|triage summary comment|summary comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 61.411,
+        "returnedBytes": 1059,
+        "returnedItems": 9
+      },
+      {
+        "ts": "2026-08-16T10:49:10.915Z",
+        "operation": "read",
+        "params": {
+          "limit": 60,
+          "offset": 1,
+          "path": "packages/rules/src/schema.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 5.73,
+        "returnedBytes": 1640,
+        "returnedItems": 60
+      },
+      {
+        "ts": "2026-08-16T10:49:10.983Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "needs_more_info|duplicate_hint",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 67.821,
+        "returnedBytes": 2110,
+        "returnedItems": 19
+      },
+      {
+        "ts": "2026-08-16T10:49:24.854Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/triage-mutation-recovery.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 5.388,
+        "returnedBytes": 14070,
+        "returnedItems": 297
+      },
+      {
+        "ts": "2026-08-16T10:49:55.004Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/rules/src",
+          "pattern": "export function (isPillarEnabled|isDryRun|shouldTrigger)",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 13.769,
+        "returnedBytes": 236,
+        "returnedItems": 3
+      },
+      {
+        "ts": "2026-08-16T10:49:55.009Z",
+        "operation": "ls",
+        "params": {
+          "path": "docs/workers"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 4.631,
+        "returnedBytes": 572,
+        "returnedItems": 10
+      },
+      {
+        "ts": "2026-08-16T10:49:55.019Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/services/embeddingService.js",
+          "pattern": "import|const .*=.*(new |process\\.env)",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 9.348,
+        "returnedBytes": 523,
+        "returnedItems": 6
+      },
+      {
+        "ts": "2026-08-16T10:50:04.971Z",
+        "operation": "read",
+        "params": {
+          "path": "docs/workers/triage-worker.md"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 5.072,
+        "returnedBytes": 1123,
+        "returnedItems": 41
+      },
+      {
+        "ts": "2026-08-16T10:50:04.975Z",
+        "operation": "read",
+        "params": {
+          "limit": 80,
+          "offset": 30,
+          "path": "docs/configuration/policy-as-code.md"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 4.479,
+        "returnedBytes": 2252,
+        "returnedItems": 80
+      },
+      {
+        "ts": "2026-08-16T10:50:23.323Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "PF-A1",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 56.932,
+        "returnedBytes": 224,
+        "returnedItems": 2
+      },
+      {
+        "ts": "2026-08-16T10:50:23.347Z",
+        "operation": "grep",
+        "params": {
+          "path": "docs",
+          "pattern": "triage comment|comment.*triage|auto_comment",
+          "ignoreCase": true,
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 23.561,
+        "returnedBytes": 1835,
+        "returnedItems": 16
+      }
+    ],
+    "submission": {
+      "payload": {
+        "findings": [
+          {
+            "severity": "P3",
+            "category": "docs_gap",
+            "claim": "Worker job-flow doc still omits the (now unconditional) triage comment step",
+            "description": "After this change, every successfully triaged issue with auto_comment enabled (the default per packages/rules/src/schema.js:14) receives a marker-backed summary comment, but docs/workers/triage-worker.md's Job Flow (steps 1-8) lists label application and duplicate detection with no comment-posting step. Pre-existing omission, now more visible since the comment is guaranteed rather than exceptional. Not a contradiction of the config contract (policy-as-code.md:65 'auto_comment: true # Post triage summary comment' is now correctly honored by the code).",
+            "affectedPaths": [
+              "docs/workers/triage-worker.md",
+              "packages/web/src/workers/triageWorker.js"
+            ],
+            "evidenceRefs": [
+              "repo-read:docs/workers/triage-worker.md@HEAD:L8-L17",
+              "changed:packages/web/src/workers/triageWorker.js@HEAD:L349-L358",
+              "repo-read:packages/rules/src/schema.js@HEAD:L10-L15"
+            ],
+            "proof": {
+              "type": "static_trace",
+              "summary": "triageWorker.js now posts the comment whenever triageOpts.auto_comment !== false (line 358), while the documented job flow ends at 'Apply labels' and 'Trigger duplicate detection' with no comment step."
+            },
+            "confidence": 0.55
+          },
+          {
+            "severity": "P3",
+            "category": "maintainability",
+            "claim": "Decision-log entry still records 'skipped' when only a comment was posted",
+            "description": "The decision logged at triageWorker.js:332-347 computes decision ('acted'/'skipped') and reason purely from labelsToApply. With the new behavior, a run that posts a triage summary comment (a GitHub mutation recorded in managed_actions) but applies no labels is recorded in decision_log as 'skipped / no labels to apply'. The comment mutation is still visible in the managed_actions ledger, so auditability is not lost, and this pattern pre-dates the PR (the old needs_more_info-gated comment path had the same gap); the change just broadens how often it occurs.",
+            "affectedPaths": [
+              "packages/web/src/workers/triageWorker.js"
+            ],
+            "evidenceRefs": [
+              "repo-read:packages/web/src/workers/triageWorker.js@HEAD:L332-L347",
+              "changed:packages/web/src/workers/triageWorker.js@HEAD:L358-L395"
+            ],
+            "proof": {
+              "type": "static_trace",
+              "summary": "decision = labelsToApply.length > 0 ? ... : 'skipped' is computed before the auto_comment block, which performs propose/approve/execute/succeed of an add-comment action regardless of label outcome."
+            },
+            "confidence": 0.5
+          }
+        ],
+        "unresolvedContextRequests": [],
+        "approvalEvidenceComplete": true
+      },
+      "submittedAt": "2026-08-16T10:51:20.101Z",
+      "submitAttempts": 1
+    },
+    "usage": {
+      "inputTokens": 119768,
+      "outputTokens": 9446,
+      "cacheReadTokens": 363968,
+      "cacheWriteTokens": 0,
+      "totalTokens": 493182,
+      "costUsd": 0.12175944
+    },
+    "terminationReason": "submitted",
+    "submissionDiagnostics": {
+      "stopReason": "toolUse",
+      "usedSubmitTool": true,
+      "submissionRetried": false,
+      "textTail": null
+    }
+  },
+  "submissionVerification": {
+    "evidenceComplete": true,
+    "findings": [
+      {
+        "claim": "Worker job-flow doc still omits the (now unconditional) triage comment step",
+        "severity": "P3",
+        "material": false,
+        "refs": [
+          {
+            "ref": "repo-read:docs/workers/triage-worker.md@HEAD:L8-L17",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 41,
+              "params": {
+                "path": "docs/workers/triage-worker.md"
+              },
+              "returnedItems": 41
+            },
+            "reproduced": {
+              "status": "success",
+              "blobSha": "2a87023d99b7059731c8a3ae01313acef37db418"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:76ed74405a94309ec0db904ae8c8c0e8c38993775868f208163dab54687eb1f8",
+                "reconstruction": "sha256:76ed74405a94309ec0db904ae8c8c0e8c38993775868f208163dab54687eb1f8"
+              }
+            }
+          },
+          {
+            "ref": "changed:packages/web/src/workers/triageWorker.js@HEAD:L349-L358",
+            "parsed": true,
+            "type": "changed",
+            "verification": "deferred_to_ri4_patch_validation"
+          },
+          {
+            "ref": "repo-read:packages/rules/src/schema.js@HEAD:L10-L15",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 60,
+              "params": {
+                "limit": 60,
+                "offset": 1,
+                "path": "packages/rules/src/schema.js"
+              },
+              "returnedItems": 60
+            },
+            "reproduced": {
+              "status": "partial",
+              "blobSha": "a9bc44e7b50d33f5023da15fcf841ebeb29e2aaf"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:790becc048dc8562c8111f3684b5f7b2f14f39751ad53689ff96bd260df7ff66",
+                "reconstruction": "sha256:790becc048dc8562c8111f3684b5f7b2f14f39751ad53689ff96bd260df7ff66"
+              }
+            }
+          }
+        ],
+        "evidenceComplete": true
+      },
+      {
+        "claim": "Decision-log entry still records 'skipped' when only a comment was posted",
+        "severity": "P3",
+        "material": false,
+        "refs": [
+          {
+            "ref": "repo-read:packages/web/src/workers/triageWorker.js@HEAD:L332-L347",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 710,
+              "params": {
+                "path": "packages/web/src/workers/triageWorker.js",
+                "limit": 2000
+              },
+              "returnedItems": 710
+            },
+            "reproduced": {
+              "status": "success",
+              "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:cbebf49946172d222678bcc9b0cb6907a9fae5ae67eba95205ae658e65521161",
+                "reconstruction": "sha256:cbebf49946172d222678bcc9b0cb6907a9fae5ae67eba95205ae658e65521161"
+              }
+            }
+          },
+          {
+            "ref": "changed:packages/web/src/workers/triageWorker.js@HEAD:L358-L395",
+            "parsed": true,
+            "type": "changed",
+            "verification": "deferred_to_ri4_patch_validation"
+          }
+        ],
+        "evidenceComplete": true
+      }
+    ]
+  },
+  "ri4FindingValidation": [
+    {
+      "claim": "Worker job-flow doc still omits the (now unconditional) triage comment step",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "downgraded": false
+    },
+    {
+      "claim": "Decision-log entry still records 'skipped' when only a comment was posted",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "downgraded": false
+    }
+  ],
+  "expectedSignature": {
+    "severityClass": "material",
+    "evidencePaths": [
+      "packages/web/src/lib/commentMarkers.js",
+      "packages/web/src/workers/triageWorker.js"
+    ]
+  },
+  "mutationOccurred": false
+}
