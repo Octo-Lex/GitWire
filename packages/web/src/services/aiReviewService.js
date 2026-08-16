@@ -37,7 +37,7 @@ import { buildReviewBundle } from "./reviewBundleService.js";
 import { validateReview } from "./reviewValidator.js";
 import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
-import { buildInlineComments } from "./reviewAnchorResolver.js";
+import { buildInlineComments, partitionAnchored, renderBodyOnlyDetails } from "./reviewAnchorResolver.js";
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
 
 const anthropic = new Anthropic({
@@ -1195,44 +1195,27 @@ function buildReviewMarkdown(findings, verdict, confidence, scopeDroppedCount, a
     (adversarialMeta ? " · Devil's Advocate" : "") + "_"
   );
 
-  var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
-  var summary = summaryLines.slice(0, 3).join(" ");
-
   // Inline comments are anchor-validated against the fetched unified
   // patches (line/side on the RIGHT side). The model's file line is NOT a
   // diff position — serializing it as `position` produced 422 "Position
-  // could not be resolved". Unanchorable findings degrade to body-only;
-  // the finding is never dropped.
-  var comments = buildInlineComments(findings, files ?? []);
+  // could not be resolved". Findings NOT emitted inline — unanchorable,
+  // no usable location, or beyond the inline cap — carry their full
+  // description, suggestion, and location in the body. The finding is
+  // never dropped.
+  var { anchored, bodyOnly } = partitionAnchored(findings, files ?? []);
+  summaryLines.push(...renderBodyOnlyDetails(bodyOnly));
+  var comments = buildInlineComments(anchored, files ?? []);
+
+  var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
+  var summary = summaryLines.slice(0, 3).join(" ");
 
   return { body, summary, comments };
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// Legacy GitHub PR Review posting (retained for non-v2 path)
-// ════════════════════════════════════════════════════════════════════════════
-
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta }) {
-  var reviewBody = buildReviewMarkdown(findings, verdict, confidence, scopeDroppedCount, adversarialMeta, files);
-  var ghVerdict =
-    verdict === "request_changes" ? "REQUEST_CHANGES" :
-    verdict === "approved"        ? "APPROVE"         : "COMMENT";
-
-  var { data: review } = await octokit.request(
-    "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
-    {
-      owner,
-      repo,
-      pull_number: pr.number,
-      commit_id:   pr.head.sha,
-      body:        reviewBody.body,
-      event:       ghVerdict,
-      comments:    reviewBody.comments,
-    }
-  );
-
-  return { reviewId: review.id, summary: reviewBody.summary };
-}
+// (The legacy postGitHubReview wrapper was removed with the delivery
+// boundary: Step 10 now performs both actual delivery paths — the legacy
+// POST and the RI-7 mutation manager — directly inside the hard boundary,
+// so the dormant wrapper with its undefined `files` reference is gone.)
 
 // ════════════════════════════════════════════════════════════════════════════
 // Check run helpers
