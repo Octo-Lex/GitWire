@@ -42,6 +42,14 @@ describe("strictExpectedDefect (RI-04 semantic oracle)", () => {
     expect(strictExpectedDefect("RI-04", { claim: "findCommentByMarker is slow" })).toBe(false);
     expect(strictExpectedDefect("RI-99", { claim: ON_TARGET })).toBe(false);
   });
+
+  it("CLAIM-ONLY equivalence: signature keywords present only in the DESCRIPTION do not score", () => {
+    const genericClaim = "triage behavior change";
+    const signatureInDescription =
+      "findCommentByMarker fetches only the first page of 100 comments so a marker beyond page 1 is missed and a duplicate comment is created";
+    expect(strictExpectedDefect("RI-04", { claim: genericClaim, description: signatureInDescription })).toBe(false);
+    expect(strictExpectedDefect("RI-04", { claim: ON_TARGET, description: "" })).toBe(true);
+  });
 });
 
 describe("scoreBrokenEffectiveness", () => {
@@ -181,5 +189,24 @@ describe("applyDecisionRule", () => {
       pi: { converged: 5, brokenDetected: 2, fixedPrecise: 1, evidenceIntact: 5 },
     }));
     expect(outcome.outcome).not.toBe("choose-pi");
+  });
+
+  it("a MATERIAL convergence advantage blocked by worse precision says so — it does not claim the margin was not material", () => {
+    const outcome = applyDecisionRule(card({
+      current: { converged: 2, fixedPrecise: 3, evidenceIntact: 2 },
+      pi: { converged: 5, fixedPrecise: 1, evidenceIntact: 5 },
+    }));
+    expect(outcome.outcome).toBe("no-winner");
+    expect(outcome.rationale).toContain("material advantage");
+    expect(outcome.rationale).toContain("worse on fixed precision");
+    expect(outcome.rationale).not.toContain("is not material");
+  });
+
+  it("the not-material clause appears ONLY when the margin genuinely is not material", () => {
+    const tied = applyDecisionRule(card({
+      current: { converged: 3, fixedPrecise: 1, evidenceIntact: 3 },
+      pi: { converged: 4, fixedPrecise: 1, evidenceIntact: 4 },
+    }));
+    expect(tied.rationale).toContain("is not material");
   });
 });

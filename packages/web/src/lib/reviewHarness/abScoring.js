@@ -33,12 +33,14 @@ const STRICT_SIGNATURES = {
     has(t, ["duplicate", "duplicat"]),
 };
 
-/** Does this finding's text match the fixture's strict expected defect? */
+/** Does this finding match the fixture's strict expected defect? EXACTLY
+ *  equivalent to the canonical oracle: v2 material-finding text is the
+ *  CLAIM ONLY — description is never consulted, so signature keywords
+ *  present only in a description cannot score. */
 export function strictExpectedDefect(caseId, finding) {
   const signature = STRICT_SIGNATURES[caseId];
   if (!signature) return false;
-  const text = `${finding.claim || ""} ${finding.description || ""}`.toLowerCase();
-  return signature(text);
+  return signature((finding.claim || "").toLowerCase());
 }
 
 /** Per-run convergence score. */
@@ -189,9 +191,21 @@ export function applyDecisionRule(scorecard) {
     };
   }
 
+  if (piMateriallyBetter && !notWorse) {
+    return {
+      outcome: "no-winner",
+      rationale:
+        `Pi showed a material advantage (strict-oracle detections ${pi.brokenDetected}/${pi.brokenRuns} vs ${current.brokenDetected}/${current.brokenRuns}, convergence ${pi.converged}/6 vs ${current.converged}/6) but was worse on fixed precision (${pi.fixedPrecise}/${pi.fixedRuns} vs ${current.fixedPrecise}/${current.fixedRuns}) or evidence integrity (${pi.evidenceIntact}/6 vs ${current.evidenceIntact}/6) — no winner`,
+    };
+  }
+
+  const margin = Math.abs(pi.converged - current.converged);
+  const detectionTied = pi.brokenDetected === current.brokenDetected;
   return {
     outcome: "no-winner",
     rationale:
-      `both arms failed similarly or results are materially mixed (current: converged ${current.converged}/6, strict-oracle detections ${current.brokenDetected}/${current.brokenRuns}; pi: converged ${pi.converged}/6, detections ${pi.brokenDetected}/${pi.brokenRuns}; convergence margin ${Math.abs(pi.converged - current.converged)} run(s) is not material) — orchestration not established as the causal bottleneck; no per-arm tuning and rerun`,
+      `both arms failed similarly or results are materially mixed (current: converged ${current.converged}/6, strict-oracle detections ${current.brokenDetected}/${current.brokenRuns}; pi: converged ${pi.converged}/6, detections ${pi.brokenDetected}/${pi.brokenRuns}` +
+      (detectionTied && margin <= 1 ? `; convergence margin of ${margin} run(s) is not material` : "") +
+      `) — orchestration not established as the causal bottleneck; no per-arm tuning and rerun`,
   };
 }
