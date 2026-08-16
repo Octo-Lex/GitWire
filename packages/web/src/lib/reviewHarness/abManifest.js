@@ -40,13 +40,12 @@ export const AB_ORDER = Object.freeze([
   { variant: "fixed", arm: "pi" }, { variant: "fixed", arm: "current-gitwire" },
 ]);
 
-/** Expected RI-04 defect signature (predeclared on-target heuristic). */
+/** Expected RI-04 defect signature: the STRICT semantic oracle (marker
+ *  lookup + pagination + duplicate comments), exactly equivalent to the
+ *  qualified evaluation oracle. Path/keyword citation alone scores nothing. */
 export const RI04_EXPECTED = Object.freeze({
-  broken: {
-    severityClass: "material",
-    evidencePaths: ["packages/web/src/lib/commentMarkers.js", "packages/web/src/workers/triageWorker.js"],
-  },
-  fixed: { severityClass: "none" },
+  broken: { caseId: "RI-04", severityClass: "material" },
+  fixed: { caseId: "RI-04", severityClass: "none" },
 });
 
 /**
@@ -72,14 +71,14 @@ export function buildAbManifest({ gitHead, provider, model, piPromptVersion, cur
     objectivePreamble: AB_OBJECTIVE_PREAMBLE,
     scoring: {
       convergence: "status=completed AND terminationReason=submitted AND submission payload structurally valid",
-      brokenEffectiveness: ">=1 material finding whose evidence refs target an expected evidence path AND survive RI-4 validation AND pass non-circular evidence verification",
-      fixedPrecision: "no material finding that fails RI-4 validation or evidence verification (clean submissions count as precise)",
-      evidenceIntegrity: "every material finding's repo-read refs verified: covering read + reproduction + RI-3 reconciliation",
+      brokenEffectiveness: ">=1 material finding matching the STRICT per-fixture semantic oracle AND surviving RI-4 validation AND passing non-circular evidence verification — path/keyword citation alone scores nothing",
+      fixedPrecision: "a material claim on the clean fixture counts against precision unless a separately frozen adjudication establishes it true; RI-4 validity is evidence validity, not claim truth",
+      evidenceIntegrity: "every material finding's repo-read refs verified: covering read + reproduction + RI-3 reconciliation (vacuously true when no material findings exist)",
       notScored: "model-generated APPROVE — RI-6 remains the decision authority",
     },
     decisionRule: {
-      choosePi: "Pi materially better on broken effectiveness or convergence WITHOUT worse fixed precision, evidence integrity, or fail-closed behavior",
-      keepCurrent: "current arm reaches valid terminal submissions in >=4/6 runs AND shows >=1 on-target broken detection while Pi submits in <=2/6",
+      choosePi: "Pi MATERIALLY better: strict-oracle detection superiority, or a convergence margin GREATER than one run — a single stochastic run is not material — without worse fixed precision or evidence integrity",
+      keepCurrent: "current arm reaches valid terminal submissions in >=4/6 runs AND shows >=1 strict-oracle broken detection while Pi submits in <=2/6",
       noWinner: "both fail similarly or results materially mixed — orchestration not established as the causal bottleneck; no per-arm tuning and rerun",
     },
     budgetSemantics: "maxCostUsd is a post-turn fail-closed crossing threshold, not a strict no-overshoot spend ceiling",
