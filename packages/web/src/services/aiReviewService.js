@@ -37,7 +37,7 @@ import { buildReviewBundle } from "./reviewBundleService.js";
 import { validateReview } from "./reviewValidator.js";
 import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
-import { buildInlineComments } from "./reviewAnchorResolver.js";
+import { buildInlineComments, partitionAnchored, renderBodyOnlyDetails } from "./reviewAnchorResolver.js";
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
 
 const anthropic = new Anthropic({
@@ -683,15 +683,16 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     (adversarialMeta ? " · Devil's Advocate" : "") + "_"
   );
 
+  // Partition BEFORE the body join: findings NOT emitted inline —
+  // unanchorable, no usable location, or beyond the inline cap — carry
+  // their full description, suggestion, and location in the body. The
+  // finding is never dropped.
+  var { anchored, bodyOnly } = partitionAnchored(findings, files);
+  summaryLines.push(...renderBodyOnlyDetails(bodyOnly));
+  var comments = buildInlineComments(anchored, files);
+
   var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
   var summary = summaryLines.slice(0, 3).join(" ");
-
-  // Build inline comments ONLY for findings whose file line is actually
-  // represented on the RIGHT side of the file's unified diff. The model's
-  // file line is NOT a diff position — serializing it as `position`
-  // produced 422 "Position could not be resolved" on GitHub. Unanchorable
-  // findings degrade to body-only; the finding is never dropped.
-  var comments = buildInlineComments(findings, files);
 
   var ghVerdict =
     verdict === "request_changes" ? "REQUEST_CHANGES" :
