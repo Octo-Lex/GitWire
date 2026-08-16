@@ -33,7 +33,13 @@ const FROZEN = Object.freeze({
   promptVersion: "pi-phase8-v1",
   deadlineMs: 480000,
   maxToolCalls: 60,
-  maxTotalTokens: 200000,
+  // Token semantics (corrected): anthropic-accounting totalTokens INCLUDES
+  // cache reads/writes. The first pilot burned 213,711 total at only ~44K
+  // fresh tokens under a 200K cap. The replacement cap stays
+  // cache-inclusive (conservative) but is calibrated to allow a full
+  // review: 800,000 total. The dollar cap is the real bound.
+  maxTotalTokens: 800000,
+  maxCostUsd: 0.5,
   maxTokensPerTurn: 8192,
 });
 
@@ -62,7 +68,6 @@ async function main() {
   const { prepareRepository } = await import("../../../src/lib/repositoryTools/repositorySession.js");
   const { createPiHarness } = await import("../../../src/lib/reviewHarness/pi/piHarness.js");
   const { parseEvidenceRef, validateFinding, PROOF_TYPES } = await import("../../../src/services/findingValidator.js");
-  const { verifyEvidenceReconciliation, normalizeFileRead } = await import("../../../src/services/evidenceReconciliationService.js");
   const { createContextBroker } = await import("../../../src/services/reviewContextBroker.js");
   const { buildFixtureOctokit } = await import("./fixtureOctokit.js");
   const { loadFixture } = await import("./fixtures/fixtureGitMaterializer.js");
@@ -131,7 +136,7 @@ async function main() {
     objective,
     findingSchema: { name: "gitwire-findings", version: "2" },
     deadlineMs: FROZEN.deadlineMs,
-    budget: { maxToolCalls: FROZEN.maxToolCalls, maxTotalTokens: FROZEN.maxTotalTokens },
+    budget: { maxToolCalls: FROZEN.maxToolCalls, maxTotalTokens: FROZEN.maxTotalTokens, maxCostUsd: FROZEN.maxCostUsd },
   };
 
   console.log("=== PI PAID PILOT (one capped invocation) ===");
@@ -145,51 +150,43 @@ async function main() {
   const execution = await harness.runReview(task);
   const finishedAt = new Date().toISOString();
 
-  // RI-4 validation of every submitted finding through the REAL path.
+  // Submission verification through the NON-CIRCULAR triple proof: the
+  // reviewer side comes from the session channel (covering read from the
+  // audit trace + reproduction via RepositoryTools), the reconstruction
+  // side from RI-3 (broker) — a fabricated reference cannot reconcile
+  // against itself.
   const octokit = buildFixtureOctokit(fixture);
   const broker = createContextBroker({ octokit, owner: "org", repo: "repo", baseSha: fixture.source.base, headSha: fixture.source.head });
-  const contextItems = [];
-  const validationResults = [];
+  const { verifySubmissionEvidence, brokerReconstruct } = await import("../../../src/services/piSubmissionVerificationService.js");
+  let verification = null;
+  const ri4FindingValidation = [];
   if (execution.submission) {
-    for (const finding of execution.submission.payload.findings) {
-      const perFinding = { claim: finding.claim, severity: finding.severity, refs: [], validation: null };
-      for (const ref of finding.evidenceRefs ?? []) {
-        const parsed = parseEvidenceRef(ref);
-        if (!parsed) {
-          perFinding.refs.push({ ref, parsed: false });
-          continue;
-        }
-        const fileRead = await broker.readRepoFile(parsed.path, fixture.source.head, {
-          range: { startLine: parsed.startLine, endLine: parsed.endLine },
-        });
-        if (fileRead.type === "file_read") contextItems.push(fileRead);
-        const verdict = verifyEvidenceReconciliation({
-          reviewerEvidence: {
-            repositorySessionId: repositorySession.id,
-            sessionHeadSha: repositorySession.headSha,
-            snapshotRef: repositorySession.snapshotRefs?.head ?? null,
-            path: parsed.path,
-            blobSha: fileRead.type === "file_read" ? fileRead.blobSha : null,
-            startLine: parsed.startLine,
-            endLine: parsed.endLine,
-            content: fileRead.type === "file_read" ? fileRead.content : null,
-            faithful: repositorySession.identityReport.faithful.includes(parsed.path),
-          },
-          reconstruction: normalizeFileRead(fileRead),
-        });
-        perFinding.refs.push({ ref, parsed: true, reconciliation: verdict });
-      }
-      validationResults.push(perFinding);
+    verification = await verifySubmissionEvidence({
+      submission: execution.submission.payload,
+      repositorySession,
+      toolTrace: execution.toolTrace,
+      reconstruct: brokerReconstruct(broker, fixture.source.head),
+    });
+    // RI-4 finding-level validation with broker-reconstructed context items
+    // for every observed repo-read reference.
+    const contextItems = [];
+    for (const ref of execution.submission.payload.findings.flatMap((f) => f.evidenceRefs ?? [])) {
+      const parsed = parseEvidenceRef(ref);
+      if (!parsed || parsed.type !== "repo-read") continue;
+      const fileRead = await broker.readRepoFile(parsed.path, fixture.source.head, {
+        range: { startLine: parsed.startLine, endLine: parsed.endLine },
+      });
+      if (fileRead.type === "file_read") contextItems.push(fileRead);
     }
-    // Whole-submission RI-4 validation with the reconstructed context items.
-    for (const [index, finding] of execution.submission.payload.findings.entries()) {
+    for (const finding of execution.submission.payload.findings) {
       const v = validateFinding(finding, { review: { headSha: fixture.source.head } }, contextItems);
-      validationResults[index].validation = {
+      ri4FindingValidation.push({
+        claim: finding.claim,
         valid: v.valid,
         errors: v.errors,
         warnings: v.warnings,
         downgraded: v.downgraded,
-      };
+      });
     }
   }
 
@@ -202,9 +199,10 @@ async function main() {
     startedAt,
     finishedAt,
     execution,
-    ri4Validation: validationResults,
+    submissionVerification: verification,
+    ri4FindingValidation,
     mutationOccurred: false,
-    notes: "submit_review is data submission only; no GitHub mutation credential exists in the adapter",
+    notes: "submit_review is data submission only; no GitHub mutation credential exists in the adapter; evidence proof is non-circular (session channel vs RI-3 reconstruction)",
   };
 
   const runsDir = path.join(__dirname, "runs");

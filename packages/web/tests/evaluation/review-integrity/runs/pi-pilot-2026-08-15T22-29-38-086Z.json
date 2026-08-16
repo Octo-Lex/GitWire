@@ -1,0 +1,568 @@
+{
+  "kind": "pi-paid-pilot",
+  "frozen": {
+    "caseId": "RI-04",
+    "variant": "broken",
+    "fixtureHead": "624732c",
+    "harness": "pi",
+    "provider": "zai",
+    "providerApi": "anthropic-messages",
+    "model": "glm-5.3",
+    "promptVersion": "pi-phase8-v1",
+    "deadlineMs": 480000,
+    "maxToolCalls": 60,
+    "maxTotalTokens": 800000,
+    "maxCostUsd": 0.5,
+    "maxTokensPerTurn": 8192
+  },
+  "gitHead": "af57177894858046a4ac1d2867cac1fd3711d585",
+  "harnessVersion": "0.74.2",
+  "promptVersion": "pi-phase8-v1",
+  "startedAt": "2026-08-15T22:25:49.133Z",
+  "finishedAt": "2026-08-15T22:29:38.081Z",
+  "execution": {
+    "status": "incomplete",
+    "requestedHarness": "pi",
+    "actualHarness": "pi",
+    "requestedProvider": "zai",
+    "actualProvider": "zai",
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "startedAt": "2026-08-15T22:25:49.134Z",
+    "completedAt": "2026-08-15T22:29:38.080Z",
+    "durationMs": 228946,
+    "toolTrace": [
+      {
+        "ts": "2026-08-15T22:26:01.312Z",
+        "operation": "ls",
+        "params": {
+          "path": "packages/web/src/workers"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 20.124,
+        "returnedBytes": 948,
+        "returnedItems": 17
+      },
+      {
+        "ts": "2026-08-15T22:26:01.314Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 17.71,
+        "returnedBytes": 32525,
+        "returnedItems": 710
+      },
+      {
+        "ts": "2026-08-15T22:26:15.321Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 9.245,
+        "returnedBytes": 14686,
+        "returnedItems": 170
+      },
+      {
+        "ts": "2026-08-15T22:26:15.376Z",
+        "operation": "grep",
+        "params": {
+          "limit": 100,
+          "pattern": "auto_comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 63.236,
+        "returnedBytes": 3849,
+        "returnedItems": 29
+      },
+      {
+        "ts": "2026-08-15T22:26:35.674Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 12.89,
+        "returnedBytes": 4255,
+        "returnedItems": 130
+      },
+      {
+        "ts": "2026-08-15T22:26:35.677Z",
+        "operation": "grep",
+        "params": {
+          "limit": 80,
+          "path": "packages/web/src/workers/triageWorker.js",
+          "pattern": "logDecision\\(|propose\\(|await approve|await execute|postMarkedComment\\(",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 16.464,
+        "returnedBytes": 1717,
+        "returnedItems": 21
+      },
+      {
+        "ts": "2026-08-15T22:26:47.672Z",
+        "operation": "grep",
+        "params": {
+          "limit": 100,
+          "pattern": "Labels applied automatically",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 63.419,
+        "returnedBytes": 243,
+        "returnedItems": 2
+      },
+      {
+        "ts": "2026-08-15T22:26:47.676Z",
+        "operation": "grep",
+        "params": {
+          "limit": 100,
+          "pattern": "needs_more_info",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 66.948,
+        "returnedBytes": 1494,
+        "returnedItems": 13
+      },
+      {
+        "ts": "2026-08-15T22:26:53.921Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/triage-mutation-recovery.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 7.23,
+        "returnedBytes": 14070,
+        "returnedItems": 297
+      },
+      {
+        "ts": "2026-08-15T22:26:59.433Z",
+        "operation": "find",
+        "params": {
+          "glob": "packages/web/tests/**/*.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 4.737,
+        "returnedBytes": 10186,
+        "returnedItems": 198
+      },
+      {
+        "ts": "2026-08-15T22:26:59.454Z",
+        "operation": "grep",
+        "params": {
+          "ignoreCase": true,
+          "limit": 60,
+          "path": "docs",
+          "pattern": "triage comment|summary comment|comment.*(needs_more_info|duplicate)",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 29.435,
+        "returnedBytes": 539,
+        "returnedItems": 6
+      },
+      {
+        "ts": "2026-08-15T22:27:06.377Z",
+        "operation": "grep",
+        "params": {
+          "limit": 80,
+          "path": "packages/web/tests",
+          "pattern": "postMarkedComment|triage comment|comment_id|/comments",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 36.05,
+        "returnedBytes": 4176,
+        "returnedItems": 29
+      },
+      {
+        "ts": "2026-08-15T22:27:13.673Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-triage-integration.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 11.549,
+        "returnedBytes": 10817,
+        "returnedItems": 228
+      },
+      {
+        "ts": "2026-08-15T22:27:13.736Z",
+        "operation": "grep",
+        "params": {
+          "limit": 60,
+          "pattern": "add-comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 75.011,
+        "returnedBytes": 2104,
+        "returnedItems": 18
+      },
+      {
+        "ts": "2026-08-15T22:27:22.295Z",
+        "operation": "read",
+        "params": {
+          "limit": 110,
+          "offset": 80,
+          "path": "packages/web/src/workers/reconciliationWorker.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 8.196,
+        "returnedBytes": 3230,
+        "returnedItems": 110
+      },
+      {
+        "ts": "2026-08-15T22:27:22.296Z",
+        "operation": "read",
+        "params": {
+          "limit": 90,
+          "offset": 40,
+          "path": "docs/architecture/reconciliation.md"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 8.994,
+        "returnedBytes": 3320,
+        "returnedItems": 89
+      },
+      {
+        "ts": "2026-08-15T22:27:32.031Z",
+        "operation": "read",
+        "params": {
+          "limit": 200,
+          "path": "packages/web/src/services/actionStateMachine.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 9.746,
+        "returnedBytes": 8079,
+        "returnedItems": 200
+      },
+      {
+        "ts": "2026-08-15T22:27:45.158Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/auth/workerAdoption.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 7.346,
+        "returnedBytes": 4742,
+        "returnedItems": 111
+      },
+      {
+        "ts": "2026-08-15T22:27:45.159Z",
+        "operation": "ls",
+        "params": {
+          "path": "packages/rules/src"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 7.953,
+        "returnedBytes": 389,
+        "returnedItems": 8
+      },
+      {
+        "ts": "2026-08-15T22:27:53.979Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/rules/src/helpers.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 10.632,
+        "returnedBytes": 10931,
+        "returnedItems": 320
+      },
+      {
+        "ts": "2026-08-15T22:27:53.980Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/rules/src/schema.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 11.549,
+        "returnedBytes": 9466,
+        "returnedItems": 276
+      },
+      {
+        "ts": "2026-08-15T22:28:14.756Z",
+        "operation": "read",
+        "params": {
+          "limit": 50,
+          "offset": 40,
+          "path": "docs/configuration/policy-as-code.md"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 9.75,
+        "returnedBytes": 1489,
+        "returnedItems": 50
+      },
+      {
+        "ts": "2026-08-15T22:28:14.823Z",
+        "operation": "grep",
+        "params": {
+          "limit": 40,
+          "pattern": "Automated triage|maintainer will review",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 75.998,
+        "returnedBytes": 424,
+        "returnedItems": 4
+      },
+      {
+        "ts": "2026-08-15T22:28:23.824Z",
+        "operation": "grep",
+        "params": {
+          "limit": 60,
+          "pattern": "triageWorker",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 67.214,
+        "returnedBytes": 9207,
+        "returnedItems": 49
+      },
+      {
+        "ts": "2026-08-15T22:28:39.153Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/dry-run-proof.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 10.879,
+        "returnedBytes": 6669,
+        "returnedItems": 212
+      },
+      {
+        "ts": "2026-08-15T22:28:39.154Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/notify-fire-and-forget-regression.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 11.575,
+        "returnedBytes": 2763,
+        "returnedItems": 70
+      },
+      {
+        "ts": "2026-08-15T22:28:47.561Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/triage-pr-guards.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 10.203,
+        "returnedBytes": 4148,
+        "returnedItems": 116
+      },
+      {
+        "ts": "2026-08-15T22:28:47.569Z",
+        "operation": "grep",
+        "params": {
+          "limit": 40,
+          "path": "packages/web/tests/e2e",
+          "pattern": "comment|auto_comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 18.119,
+        "returnedBytes": 1139,
+        "returnedItems": 9
+      },
+      {
+        "ts": "2026-08-15T22:29:02.406Z",
+        "operation": "read",
+        "params": {
+          "limit": 40,
+          "path": "packages/web/src/services/duplicateDetectionService.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 11.797,
+        "returnedBytes": 1642,
+        "returnedItems": 40
+      },
+      {
+        "ts": "2026-08-15T22:29:02.407Z",
+        "operation": "grep",
+        "params": {
+          "limit": 30,
+          "path": "packages/web/src/services/issueService.js",
+          "pattern": "^import|saveTriage",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 13.614,
+        "returnedBytes": 219,
+        "returnedItems": 2
+      },
+      {
+        "ts": "2026-08-15T22:29:26.410Z",
+        "operation": "grep",
+        "params": {
+          "limit": 20,
+          "path": "packages/web/src/services/embeddingService.js",
+          "pattern": "^import",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 16.321,
+        "returnedBytes": 357,
+        "returnedItems": 4
+      },
+      {
+        "ts": "2026-08-15T22:29:26.416Z",
+        "operation": "grep",
+        "params": {
+          "context": 4,
+          "limit": 30,
+          "path": "packages/web/src/services/duplicateDetectionService.js",
+          "pattern": "buildMarker|postMarkedComment|marker",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 22.717,
+        "returnedBytes": 0,
+        "returnedItems": 0
+      },
+      {
+        "ts": "2026-08-15T22:29:26.468Z",
+        "operation": "grep",
+        "params": {
+          "limit": 30,
+          "pattern": "adoption_location",
+          "timeoutMs": 10000
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "result_limit"
+        ],
+        "durationMs": 74.498,
+        "returnedBytes": 3782,
+        "returnedItems": 30
+      },
+      {
+        "ts": "2026-08-15T22:29:38.057Z",
+        "operation": "read",
+        "params": {
+          "limit": 60,
+          "offset": 480,
+          "path": "packages/web/src/services/auth/workerAdoptionRegistry.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 10.906,
+        "returnedBytes": 2432,
+        "returnedItems": 60
+      },
+      {
+        "ts": "2026-08-15T22:29:38.067Z",
+        "operation": "grep",
+        "params": {
+          "context": 6,
+          "limit": 50,
+          "path": "packages/web/tests/unit/wave2-worker-adoption.test.js",
+          "pattern": "triageWorker|adoption_location|readSource|line",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 20.176,
+        "returnedBytes": 1184,
+        "returnedItems": 2
+      }
+    ],
+    "usage": {
+      "inputTokens": 71607,
+      "outputTokens": 10301,
+      "cacheReadTokens": 752704,
+      "cacheWriteTokens": 0,
+      "totalTokens": 834612,
+      "costUsd": 0.12584272000000002
+    },
+    "terminationReason": "budget_exceeded"
+  },
+  "submissionVerification": null,
+  "ri4FindingValidation": [],
+  "mutationOccurred": false,
+  "notes": "submit_review is data submission only; no GitHub mutation credential exists in the adapter; evidence proof is non-circular (session channel vs RI-3 reconstruction)"
+}

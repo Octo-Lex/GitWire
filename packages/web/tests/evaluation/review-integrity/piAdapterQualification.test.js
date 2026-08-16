@@ -226,4 +226,53 @@ describe("adapter qualification — fail-closed modes", () => {
     expect(ctx.execution.terminationReason).toBe("deadline_exceeded");
     expect(ctx.execution.submission).toBeUndefined();
   }, 120000);
+
+  it("a FABRICATED reference (syntactically valid, never observed) cannot pass evidence verification", async () => {
+    // The model submits a well-formed ref without ever reading the file.
+    // The harness accepts the submission (it is data); the PILOT-side
+    // verification must then reject the evidence: no covering read exists
+    // in the audit trace, so the non-circular proof fails closed.
+    const ctx = await qualify([
+      {
+        toolCall: {
+          id: "c-fab",
+          name: "submit_review",
+          arguments: {
+            findings: [
+              {
+                severity: "P2",
+                claim: "fabricated claim citing a file I never opened",
+                evidenceRefs: ["repo-read:docs/roadmap.md@HEAD:L1-L5"],
+              },
+            ],
+            unresolvedContextRequests: [],
+            approvalEvidenceComplete: false,
+          },
+        },
+      },
+    ]);
+    fake = ctx.fake;
+    expect(ctx.execution.status).toBe("completed"); // submission accepted as DATA...
+    const { verifySubmissionEvidence, brokerReconstruct } = await import("../../../src/services/piSubmissionVerificationService.js");
+    const { createContextBroker } = await import("../../../src/services/reviewContextBroker.js");
+    const { buildFixtureOctokit } = await import("./fixtureOctokit.js");
+    const broker = createContextBroker({
+      octokit: buildFixtureOctokit(ctx.fixture),
+      owner: "org",
+      repo: "repo",
+      baseSha: ctx.fixture.source.base,
+      headSha: ctx.fixture.source.head,
+    });
+    const verification = await verifySubmissionEvidence({
+      submission: ctx.execution.submission.payload,
+      repositorySession: ctx.repositorySession,
+      toolTrace: ctx.execution.toolTrace,
+      reconstruct: brokerReconstruct(broker, ctx.fixture.source.head),
+    });
+    // ...but the evidence never verifies.
+    expect(verification.evidenceComplete).toBe(false);
+    const ref = verification.findings[0].refs[0];
+    expect(ref.evidenceIncompleteReason).toBe("no_observed_covering_read");
+    expect(ref.reconciliation).toBeUndefined();
+  }, 120000);
 });
