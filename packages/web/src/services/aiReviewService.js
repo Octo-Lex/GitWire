@@ -37,6 +37,7 @@ import { buildReviewBundle } from "./reviewBundleService.js";
 import { validateReview } from "./reviewValidator.js";
 import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
+import { buildInlineComments, partitionAnchored, renderBodyOnlyDetails } from "./reviewAnchorResolver.js";
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
 
 const anthropic = new Anthropic({
@@ -757,43 +758,74 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     let githubSummary = "";
     if (commentFindings) {
       // Build review body once (shared between legacy and v2 paths)
-      const reviewBody = buildReviewMarkdown(findings, verdict, confidence, validation.scopeDroppedCount, adversarialMeta);
+      const reviewBody = buildReviewMarkdown(findings, verdict, confidence, validation.scopeDroppedCount, adversarialMeta, files);
 
-      if (v2Mode === "live") {
-        // In v2 live mode, EVERY review mutation goes through the RI-7 mutation
-        // manager — including the fail-closed COMMENT when the v2 pipeline fails.
-        // This guarantees exactly-once semantics for all live mutations.
-        // The invocation ID was computed once before the v2 try block and is
-        // shared with the persisted receipt.
-        const { createReviewMutationManager } = await import("./reviewMutationService.js");
-        const { redis } = await import("../lib/queue.js");
-        const mutationManager = createReviewMutationManager({
-          redis, octokit, owner, repo,
-          prNumber: pr.number, headSha: pr.head.sha,
-          invocationId: v2InvocationId,
-        });
-        const mutationResult = await mutationManager.submitReview({
-          event: verdict === "approved" ? "APPROVE" : verdict === "request_changes" ? "REQUEST_CHANGES" : "COMMENT",
-          body: reviewBody.body,
-          commit_id: pr.head.sha,
-          comments: reviewBody.comments,
-        });
-        reviewId = mutationResult.reviewId;
-        githubSummary = reviewBody.summary;
-      } else {
-        var ghVerdict =
-          verdict === "request_changes" ? "REQUEST_CHANGES" :
-          verdict === "approved"        ? "APPROVE"         : "COMMENT";
-        var { data: review } = await octokit.request(
-          "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
-          {
-            owner, repo, pull_number: pr.number,
-            commit_id: pr.head.sha, body: reviewBody.body,
-            event: ghVerdict, comments: reviewBody.comments,
-          }
+      // Delivery is a hard boundary (NodeChain P1 correction): a computed
+      // review that GitHub REJECTS — through the legacy POST or the RI-7
+      // mutation manager — is a terminal delivery failure (E_REVIEW_DELIVERY):
+      // error receipt, FAILURE check, rethrow to the worker. Never finalized
+      // neutral and never returned as null-success. Anchors are prevalidated,
+      // so a rejection propagates (no automatic retry, no second POST
+      // strategy); the mutation manager's exactly-once semantics are
+      // untouched — a manager-thrown failure classifies identically.
+      try {
+        if (v2Mode === "live") {
+          // In v2 live mode, EVERY review mutation goes through the RI-7 mutation
+          // manager — including the fail-closed COMMENT when the v2 pipeline fails.
+          // This guarantees exactly-once semantics for all live mutations.
+          // The invocation ID was computed once before the v2 try block and is
+          // shared with the persisted receipt.
+          const { createReviewMutationManager } = await import("./reviewMutationService.js");
+          const { redis } = await import("../lib/queue.js");
+          const mutationManager = createReviewMutationManager({
+            redis, octokit, owner, repo,
+            prNumber: pr.number, headSha: pr.head.sha,
+            invocationId: v2InvocationId,
+          });
+          const mutationResult = await mutationManager.submitReview({
+            event: verdict === "approved" ? "APPROVE" : verdict === "request_changes" ? "REQUEST_CHANGES" : "COMMENT",
+            body: reviewBody.body,
+            commit_id: pr.head.sha,
+            comments: reviewBody.comments,
+          });
+          reviewId = mutationResult.reviewId;
+          githubSummary = reviewBody.summary;
+        } else {
+          var ghVerdict =
+            verdict === "request_changes" ? "REQUEST_CHANGES" :
+            verdict === "approved"        ? "APPROVE"         : "COMMENT";
+          var { data: review } = await octokit.request(
+            "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+            {
+              owner, repo, pull_number: pr.number,
+              commit_id: pr.head.sha, body: reviewBody.body,
+              event: ghVerdict, comments: reviewBody.comments,
+            }
+          );
+          reviewId = review.id;
+          githubSummary = reviewBody.summary;
+        }
+      } catch (deliveryErr) {
+        deliveryErr.gitwireErrorCode = "E_REVIEW_DELIVERY";
+        logger.error(
+          { err: deliveryErr.message, pr: pr.number, reviewRowId: reviewRow.id, v2Mode },
+          "AI review: GitHub delivery failed — terminal failure"
         );
-        reviewId = review.id;
-        githubSummary = reviewBody.summary;
+        await db.query(
+          "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
+          "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
+          [("GitHub review delivery failed: " + deliveryErr.message).slice(0, 500), Date.now() - startTime, reviewRow.id]
+        ).catch(function (persistErr) {
+          logger.warn({ err: persistErr.message }, "AI review: delivery-failure persist failed");
+        });
+        if (checkRunId) {
+          await finaliseCheckRun(octokit, owner, repo, checkRunId, "failure", {
+            title:   "\u274C AI review delivery failed",
+            summary: "The review was computed but GitHub rejected the review submission: " + deliveryErr.message,
+            text:    "",
+          });
+        }
+        throw deliveryErr;
       }
     }
 
@@ -899,6 +931,12 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     return { verdict, confidence, findings, blocked: shouldBlock, checkState: v2CheckState, primaryMeta: v2PrimaryMeta };
 
     } catch (err) {
+    // A delivery failure was already classified, receipted, and finalized
+    // as FAILURE by the Step-10 boundary — rethrow untouched so the worker
+    // visibly fails instead of degrading to neutral-then-null.
+    if (err && err.gitwireErrorCode === "E_REVIEW_DELIVERY") {
+      throw err;
+    }
     logger.error({ err: err.message, pr: pr.number }, "AI review: failed");
     const durationMs = Date.now() - startTime;
 
@@ -1091,7 +1129,7 @@ export function computeVerdict(findings, cfg) {
 // GitHub PR Review body building (shared between legacy POST and v2 mutation manager)
 // ════════════════════════════════════════════════════════════════════════════
 
-function buildReviewMarkdown(findings, verdict, confidence, scopeDroppedCount, adversarialMeta) {
+function buildReviewMarkdown(findings, verdict, confidence, scopeDroppedCount, adversarialMeta, files) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
@@ -1157,48 +1195,27 @@ function buildReviewMarkdown(findings, verdict, confidence, scopeDroppedCount, a
     (adversarialMeta ? " · Devil's Advocate" : "") + "_"
   );
 
+  // Inline comments are anchor-validated against the fetched unified
+  // patches (line/side on the RIGHT side). The model's file line is NOT a
+  // diff position — serializing it as `position` produced 422 "Position
+  // could not be resolved". Findings NOT emitted inline — unanchorable,
+  // no usable location, or beyond the inline cap — carry their full
+  // description, suggestion, and location in the body. The finding is
+  // never dropped.
+  var { anchored, bodyOnly } = partitionAnchored(findings, files ?? []);
+  summaryLines.push(...renderBodyOnlyDetails(bodyOnly));
+  var comments = buildInlineComments(anchored, files ?? []);
+
   var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
   var summary = summaryLines.slice(0, 3).join(" ");
-
-  var comments = findings
-    .filter(function (f) { return f.file && f.line; })
-    .slice(0, 10)
-    .map(function (f) {
-      return {
-        path:     f.file,
-        position: f.line,
-        body:     "**[" + f.severity.toUpperCase() + "] " + f.title + "**\n\n" + f.description + "\n\n> **Suggestion:** " + f.suggestion,
-      };
-    });
 
   return { body, summary, comments };
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// Legacy GitHub PR Review posting (retained for non-v2 path)
-// ════════════════════════════════════════════════════════════════════════════
-
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta }) {
-  var reviewBody = buildReviewMarkdown(findings, verdict, confidence, scopeDroppedCount, adversarialMeta);
-  var ghVerdict =
-    verdict === "request_changes" ? "REQUEST_CHANGES" :
-    verdict === "approved"        ? "APPROVE"         : "COMMENT";
-
-  var { data: review } = await octokit.request(
-    "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
-    {
-      owner,
-      repo,
-      pull_number: pr.number,
-      commit_id:   pr.head.sha,
-      body:        reviewBody.body,
-      event:       ghVerdict,
-      comments:    reviewBody.comments,
-    }
-  );
-
-  return { reviewId: review.id, summary: reviewBody.summary };
-}
+// (The legacy postGitHubReview wrapper was removed with the delivery
+// boundary: Step 10 now performs both actual delivery paths — the legacy
+// POST and the RI-7 mutation manager — directly inside the hard boundary,
+// so the dormant wrapper with its undefined `files` reference is gone.)
 
 // ════════════════════════════════════════════════════════════════════════════
 // Check run helpers
