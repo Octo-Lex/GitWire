@@ -74,7 +74,7 @@ export async function startFakeProvider({ turns, modelName = "fake-reviewer" } =
         chunk({ ...envelope(), choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
       } else {
         chunk({ ...envelope(), choices: [{ index: 0, delta: { content: turn.content ?? "" }, finish_reason: null }] });
-        chunk({ ...envelope(), choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+        chunk({ ...envelope(), choices: [{ index: 0, delta: {}, finish_reason: turn.finishReason ?? "stop" }] });
       }
       chunk({
         ...envelope(),
