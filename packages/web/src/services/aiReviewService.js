@@ -37,6 +37,7 @@ import { buildReviewBundle } from "./reviewBundleService.js";
 import { validateReview } from "./reviewValidator.js";
 import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
+import { buildInlineComments } from "./reviewAnchorResolver.js";
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
 
 const anthropic = new Anthropic({
@@ -313,16 +314,48 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 10. Post GitHub PR Review ──────────────────────────────────────────────
+    // Delivery is a hard boundary: a computed review that GitHub REJECTS is
+    // a terminal delivery failure (E_REVIEW_DELIVERY) — error receipt,
+    // FAILURE check, rethrow to the worker. Never finalized neutral and
+    // never returned as null-success. Anchors are prevalidated against the
+    // fetched patches, so a rejection means GitHub refused the review
+    // itself; it propagates (no automatic retry without comments).
     let reviewId = null;
     let githubSummary = "";
     if (commentFindings) {
-      const result = await postGitHubReview({
-        octokit, owner, repo, pr, findings, verdict, confidence, cfg,
-        scopeDroppedCount: validation.scopeDroppedCount,
-        adversarialMeta,
-      });
-      reviewId = result.reviewId;
-      githubSummary = result.summary;
+      try {
+        const result = await postGitHubReview({
+          octokit, owner, repo, pr, findings, verdict, confidence, cfg,
+          scopeDroppedCount: validation.scopeDroppedCount,
+          adversarialMeta,
+          files,
+        });
+        reviewId = result.reviewId;
+        githubSummary = result.summary;
+      } catch (deliveryErr) {
+        deliveryErr.gitwireErrorCode = "E_REVIEW_DELIVERY";
+        logger.error(
+          { err: deliveryErr.message, pr: pr.number, reviewRowId: reviewRow.id },
+          "AI review: GitHub delivery failed — terminal failure"
+        );
+        // Persist the error receipt (same shape as the broad catch).
+        await db.query(
+          "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
+          "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
+          [("GitHub review delivery failed: " + deliveryErr.message).slice(0, 500), Date.now() - startTime, reviewRow.id]
+        ).catch(function (persistErr) {
+          logger.warn({ err: persistErr.message }, "AI review: delivery-failure persist failed");
+        });
+        // Terminalize the check as FAILURE — not neutral, not success.
+        if (checkRunId) {
+          await finaliseCheckRun(octokit, owner, repo, checkRunId, "failure", {
+            title:   "\u274C AI review delivery failed",
+            summary: "The review was computed but GitHub rejected the review submission: " + deliveryErr.message,
+            text:    "",
+          });
+        }
+        throw deliveryErr;
+      }
     }
 
     // ── 11. Update check run ──────────────────────────────────────────────────
@@ -408,6 +441,12 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     return { verdict, confidence, findings, blocked: shouldBlock };
 
   } catch (err) {
+    // A delivery failure was already classified, receipted, and finalized
+    // as FAILURE by the Step-10 boundary — rethrow untouched so the worker
+    // visibly fails instead of degrading to neutral-then-null.
+    if (err && err.gitwireErrorCode === "E_REVIEW_DELIVERY") {
+      throw err;
+    }
     logger.error({ err: err.message, pr: pr.number }, "AI review: failed");
     const durationMs = Date.now() - startTime;
 
@@ -574,7 +613,7 @@ export function computeVerdict(findings, cfg) {
 // GitHub PR Review posting
 // ════════════════════════════════════════════════════════════════════════════
 
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta }) {
+async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files }) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
@@ -647,17 +686,12 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
   var summary = summaryLines.slice(0, 3).join(" ");
 
-  // Build inline comments for findings that have file + line
-  var comments = findings
-    .filter(function (f) { return f.file && f.line; })
-    .slice(0, 10)
-    .map(function (f) {
-      return {
-        path:     f.file,
-        position: f.line,
-        body:     "**[" + f.severity.toUpperCase() + "] " + f.title + "**\n\n" + f.description + "\n\n> **Suggestion:** " + f.suggestion,
-      };
-    });
+  // Build inline comments ONLY for findings whose file line is actually
+  // represented on the RIGHT side of the file's unified diff. The model's
+  // file line is NOT a diff position — serializing it as `position`
+  // produced 422 "Position could not be resolved" on GitHub. Unanchorable
+  // findings degrade to body-only; the finding is never dropped.
+  var comments = buildInlineComments(findings, files);
 
   var ghVerdict =
     verdict === "request_changes" ? "REQUEST_CHANGES" :
