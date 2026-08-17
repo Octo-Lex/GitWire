@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@earendil-works/pi-coding-agent": "^0.74.2",
     "@gitwire/core": "*",
     "@gitwire/rules": "*",
     "@gitwire/runtime": "*",
@@ -39,6 +38,7 @@
     "zod": "^3.22.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.2",
     "eslint": "^8.0.0",
     "jest": "^29.0.0",
     "nodemon": "^3.0.0",
