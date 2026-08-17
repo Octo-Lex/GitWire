@@ -131,7 +131,6 @@ export function summarizeRuntime(observations) {
   const tokens = rows.map(o => o.tokensUsed).filter(v => typeof v === "number");
   const primaryUsageTotals = rows.map(o => o.primaryProfile?.usage?.totalTokens).filter(v => typeof v === "number");
   const verifierUsageTotals = rows.map(o => o.verifierProfile?.usage?.totalTokens).filter(v => typeof v === "number");
-
   return {
     runCount: total,
     precision: {
@@ -153,10 +152,66 @@ export function summarizeRuntime(observations) {
       tokensUsed: distribution(tokens),
       primaryTokens: distribution(primaryUsageTotals),
       verifierTokens: distribution(verifierUsageTotals),
+      // Frozen Phase 10 D surface: input/output/cache tokens where known.
+      // Each category is a distribution over the reviews whose profile
+      // actually reported it; unknown categories stay null — never zeroed,
+      // never synthesized.
+      primaryUsage: usageDimensions(rows.map(o => o.primaryProfile?.usage)),
+      verifierUsage: usageDimensions(rows.map(o => o.verifierProfile?.usage)),
+      // Reported cost only. Currencies are kept separate — amounts are never
+      // summed across currencies and unknown cost is never inferred.
+      cost: costSummary(rows),
       repositoryReads: sumNullable(rows.map(o => o.repositoryReads)),
       repositorySearches: sumNullable(rows.map(o => o.repositorySearches)),
+      // Deterministic retrieval/tool-call total: Context Broker reads plus
+      // searches. Null only when no observation reported either counter.
+      repositoryToolCalls: sumNullable(rows.map(o =>
+        (o.repositoryReads !== null || o.repositorySearches !== null)
+          ? (o.repositoryReads ?? 0) + (o.repositorySearches ?? 0)
+          : null)),
     },
   };
+}
+
+/**
+ * Per-category token distributions from execution-profile usage records.
+ * Absent usage or an absent category yields null for that category.
+ */
+function usageDimensions(usages) {
+  const pick = (field) =>
+    distribution(usages.filter(Boolean).map(u => u[field]).filter(v => typeof v === "number"));
+  return {
+    inputTokens: pick("inputTokens"),
+    outputTokens: pick("outputTokens"),
+    cacheReadTokens: pick("cacheReadTokens"),
+    cacheWriteTokens: pick("cacheWriteTokens"),
+  };
+}
+
+/**
+ * Summarize reported cost entries across primary and verifier profiles.
+ * Entries with a numeric amount are counted per currency; currencies are
+ * never merged, and a missing currency lands in a distinct "unknown" bucket.
+ * Returns null when nothing reported a cost.
+ */
+function costSummary(rows) {
+  const entries = [];
+  for (const o of rows) {
+    for (const profile of [o.primaryProfile, o.verifierProfile]) {
+      if (profile?.cost && typeof profile.cost.amount === "number") {
+        entries.push({ currency: profile.cost.currency || null, amount: profile.cost.amount });
+      }
+    }
+  }
+  if (entries.length === 0) return null;
+  const byCurrency = {};
+  for (const entry of entries) {
+    const key = entry.currency || "unknown";
+    if (!byCurrency[key]) byCurrency[key] = { count: 0, total: 0 };
+    byCurrency[key].count += 1;
+    byCurrency[key].total += entry.amount;
+  }
+  return { reportedCount: entries.length, byCurrency };
 }
 
 function terminalStatesOf(observation) {

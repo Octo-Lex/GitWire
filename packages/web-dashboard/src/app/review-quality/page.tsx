@@ -8,6 +8,16 @@ import { PageHeader, StatCard, Badge, Skeleton, EmptyState } from "../../compone
 
 type Distribution = { count: number; min: number; max: number; mean: number; median: number } | null;
 
+type UsageDimensions = {
+  inputTokens: Distribution; outputTokens: Distribution;
+  cacheReadTokens: Distribution; cacheWriteTokens: Distribution;
+};
+
+type CostSummary = {
+  reportedCount: number;
+  byCurrency: Record<string, { count: number; total: number }>;
+};
+
 type Scorecard = {
   kind: string;
   presentationState: string;
@@ -31,7 +41,11 @@ type Scorecard = {
     efficiency: {
       latencyMs: Distribution; primaryLatencyMs: Distribution; verifierLatencyMs: Distribution;
       tokensUsed: Distribution; primaryTokens: Distribution; verifierTokens: Distribution;
+      primaryUsage: UsageDimensions | null;
+      verifierUsage: UsageDimensions | null;
+      cost: CostSummary | null;
       repositoryReads: number | null; repositorySearches: number | null;
+      repositoryToolCalls: number | null;
     };
   };
   evaluation: {
@@ -61,6 +75,22 @@ function pct(value: number | null | undefined): string {
 function ms(value: Distribution): string {
   if (!value) return "—";
   return Math.round(value.mean).toLocaleString() + " ms";
+}
+
+// Cache tokens: show the mean over reviews that reported the category,
+// with how many reviews that was. Unknown stays unknown.
+function cachePair(usage: UsageDimensions | null | undefined, field: "cacheReadTokens" | "cacheWriteTokens"): string {
+  const d = usage?.[field];
+  if (!d) return "not exposed";
+  return Math.round(d.mean).toLocaleString() + " (mean of " + d.count + ")";
+}
+
+// Cost: per-currency totals only. Currencies are never merged.
+function costText(cost: CostSummary | null | undefined): string {
+  if (!cost) return "not reported";
+  return Object.entries(cost.byCurrency)
+    .map(([ccy, v]) => ccy + " " + v.total.toFixed(2) + " · " + v.count + " report" + (v.count !== 1 ? "s" : ""))
+    .join(" | ");
 }
 
 function stateVariant(state: string): string {
@@ -192,16 +222,30 @@ export default function ReviewQualityPage() {
             </div>
           </div>
 
-          {/* Efficiency */}
+          {/* Efficiency — frozen Phase 10 surface: latency, tokens/cache/cost, tool calls/retrieval */}
           <div className="grid gap-4 md:grid-cols-4">
             <StatCard label="Primary latency (mean)" value={ms(sc.dimensions.efficiency.primaryLatencyMs)} sub="per primary invocation" />
             <StatCard label="Verifier latency (mean)" value={ms(sc.dimensions.efficiency.verifierLatencyMs)} sub="per verifier invocation" />
             <StatCard label="Total latency (mean)" value={ms(sc.dimensions.efficiency.latencyMs)} sub="per review" />
             <StatCard
-              label="Repository reads / searches"
-              value={`${sc.dimensions.efficiency.repositoryReads ?? "—"} / ${sc.dimensions.efficiency.repositorySearches ?? "—"}`}
-              sub="context broker totals"
+              label="Tool calls (reads + searches)"
+              value={sc.dimensions.efficiency.repositoryToolCalls ?? "—"}
+              sub={`${sc.dimensions.efficiency.repositoryReads ?? "—"} reads · ${sc.dimensions.efficiency.repositorySearches ?? "—"} searches (context broker)`}
             />
+          </div>
+          <div className="grid gap-4 md:grid-cols-4">
+            <StatCard label="Primary cache read" value={cachePair(sc.dimensions.efficiency.primaryUsage, "cacheReadTokens")} sub="mean over reporting reviews" />
+            <StatCard label="Primary cache write" value={cachePair(sc.dimensions.efficiency.primaryUsage, "cacheWriteTokens")} sub="mean over reporting reviews" />
+            <StatCard
+              label="Primary input / output tokens (mean)"
+              value={sc.dimensions.efficiency.primaryUsage?.inputTokens && sc.dimensions.efficiency.primaryUsage?.outputTokens
+                ? Math.round(sc.dimensions.efficiency.primaryUsage.inputTokens.mean).toLocaleString() + " / " + Math.round(sc.dimensions.efficiency.primaryUsage.outputTokens.mean).toLocaleString()
+                : "—"}
+              sub={`verifier: ${sc.dimensions.efficiency.verifierUsage?.inputTokens && sc.dimensions.efficiency.verifierUsage?.outputTokens
+                ? Math.round(sc.dimensions.efficiency.verifierUsage.inputTokens.mean).toLocaleString() + " / " + Math.round(sc.dimensions.efficiency.verifierUsage.outputTokens.mean).toLocaleString()
+                : "—"}`}
+            />
+            <StatCard label="Reported cost" value={costText(sc.dimensions.efficiency.cost)} sub="per currency · never merged" />
           </div>
 
           {/* Evaluation arms */}
