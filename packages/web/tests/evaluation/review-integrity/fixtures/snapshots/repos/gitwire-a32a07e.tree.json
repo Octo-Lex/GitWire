@@ -1,0 +1,4246 @@
+{
+ "repo": "gitwire",
+ "sha": "a32a07e",
+ "tree": [
+  {
+   "path": ".dockerignore",
+   "sha": "4e1dd789a80be4777ceca8acdba410a49ddfad90",
+   "size": 1074
+  },
+  {
+   "path": ".env.example",
+   "sha": "423cf7ac1a3b3439c65cf44a22dd475694466c12",
+   "size": 2648
+  },
+  {
+   "path": ".github/banner.png",
+   "sha": "35ab5a2a4cfe41d8ba0b395b16eeba4922fb7991",
+   "size": 791196
+  },
+  {
+   "path": ".github/dependabot.yml",
+   "sha": "4d537fb75a612f64fa9fc2b1de35849e64c3b111",
+   "size": 545
+  },
+  {
+   "path": ".github/pull_request_template.md",
+   "sha": "d72c31039e1c439fbe5b6ad8d3bc9c203f3d6a2c",
+   "size": 394
+  },
+  {
+   "path": ".github/workflows/ci.yml",
+   "sha": "9a93c240985d9af28a370847c91267425b6d6bc2",
+   "size": 46712
+  },
+  {
+   "path": ".github/workflows/codeql.yml",
+   "sha": "e9c96e39b4482cfd3f643fb8c39559001416999d",
+   "size": 426
+  },
+  {
+   "path": ".github/workflows/dco.yml",
+   "sha": "1c889144baa6977f22fdbb2785a711714dfc8f08",
+   "size": 2306
+  },
+  {
+   "path": ".github/workflows/deploy.yml",
+   "sha": "145d23e1a16feb35f0dd213a6438f1c9aa4fc122",
+   "size": 10444
+  },
+  {
+   "path": ".gitignore",
+   "sha": "3e1b2dce101e79f4036453a23b92460edad93ef7",
+   "size": 1185
+  },
+  {
+   "path": ".gitleaks.toml",
+   "sha": "157f5fedc58d5bc94a560ca543452389dd0641ae",
+   "size": 1798
+  },
+  {
+   "path": ".gitwire.example.yml",
+   "sha": "e4344cbd98720f811cbe9294b43cd297d6e1165e",
+   "size": 4619
+  },
+  {
+   "path": ".husky/pre-commit",
+   "sha": "6438ab7547fb11d3ab0832507b90b6ed546a142f",
+   "size": 1221
+  },
+  {
+   "path": "AGENTS.md",
+   "sha": "ac438b979dd261431b29b95756d24becd1b93391",
+   "size": 10420
+  },
+  {
+   "path": "CONTRIBUTING.md",
+   "sha": "81b1e69fbb049d9ee0403a99dc3d82d5882565e6",
+   "size": 2741
+  },
+  {
+   "path": "DEVELOPMENT.md",
+   "sha": "3dafed141c869c68509b4ff82e772db2f1bea5e2",
+   "size": 4882
+  },
+  {
+   "path": "Dockerfile",
+   "sha": "b101fbda04f31c2cafb2f9aaa33936b2ecdf1fa3",
+   "size": 2179
+  },
+  {
+   "path": "GitWire platform architecture diagram.png",
+   "sha": "7239b760fe8d57bad8c72a48ab0ba4e2f2d95191",
+   "size": 1325545
+  },
+  {
+   "path": "GitWire platform architecture diagram2.png",
+   "sha": "5de53f2af3048101fc8d087e6b45b4be49aece45",
+   "size": 1910011
+  },
+  {
+   "path": "LICENSE",
+   "sha": "f359ac3d7881be7b9e7fc833ac3bafcb0c5f7624",
+   "size": 1064
+  },
+  {
+   "path": "README.md",
+   "sha": "abbc2843b8f36e991b4f8bcfd1b74af03ffd7c76",
+   "size": 21550
+  },
+  {
+   "path": "SECURITY.md",
+   "sha": "311b116cf4159ec22d2a30e9b9167b27feeac494",
+   "size": 1580
+  },
+  {
+   "path": "TEST_CLASSIFICATION.md",
+   "sha": "1b5314530ae617237943950327db3bfb67eb2fa0",
+   "size": 4135
+  },
+  {
+   "path": "TelegramBot.png",
+   "sha": "d3fc433af3f990aba61f58af4a79e803f2345fee",
+   "size": 1679588
+  },
+  {
+   "path": "audit-exceptions.json",
+   "sha": "18a726895fc436fd66d6712ffc4a3c3e08854c7a",
+   "size": 46
+  },
+  {
+   "path": "banner.png",
+   "sha": "94ca49b9c5450c7ffa7d616ad5295b4418470f59",
+   "size": 1903879
+  },
+  {
+   "path": "docker-compose.build.yml",
+   "sha": "99d5e07e669aaba6b618d97fbebf62bbaa314860",
+   "size": 2742
+  },
+  {
+   "path": "docker-compose.yml",
+   "sha": "8e497920dfc79fea34c4750806c361b8bd0b2ad9",
+   "size": 9982
+  },
+  {
+   "path": "docker-entrypoint.sh",
+   "sha": "a1642ab0550b93fb5fd1c95368532efdc51493b2",
+   "size": 1027
+  },
+  {
+   "path": "docs/.vitepress/config.ts",
+   "sha": "adedcd582ec3c6d4c7bff77fcdda9b565260b1b9",
+   "size": 12348
+  },
+  {
+   "path": "docs/Dockerfile",
+   "sha": "3536e94c0c60a50889a70442c9e710060c45031d",
+   "size": 690
+  },
+  {
+   "path": "docs/api/audit-bundles.md",
+   "sha": "ac9c93b06ad28752eaae43d2f72a34744e779fff",
+   "size": 3188
+  },
+  {
+   "path": "docs/api/ci-runs.md",
+   "sha": "421d698506ca11ec5cc4eea9e5a1f7b5900058d3",
+   "size": 1034
+  },
+  {
+   "path": "docs/api/config-api.md",
+   "sha": "a265425362332ffd6f852a7ecdceaa88138c58f7",
+   "size": 3209
+  },
+  {
+   "path": "docs/api/decisions.md",
+   "sha": "d8c6efaf59a1b02f6e57b5526c60aceab099dbfc",
+   "size": 1514
+  },
+  {
+   "path": "docs/api/duplicates.md",
+   "sha": "0f3278533f7157c9cfa7d073651a199f290ca8d9",
+   "size": 1449
+  },
+  {
+   "path": "docs/api/enforcement.md",
+   "sha": "1b785497447fc682a60af839719d194837de0263",
+   "size": 1182
+  },
+  {
+   "path": "docs/api/fix-attempts.md",
+   "sha": "e24e070bd150c2076672e67f0a95234f716407e6",
+   "size": 921
+  },
+  {
+   "path": "docs/api/gates.md",
+   "sha": "94f488d9867b1b66a4f2352465d5fa14488da090",
+   "size": 3431
+  },
+  {
+   "path": "docs/api/heal-history.md",
+   "sha": "3ce57dcff30748c56af2094586181391d8d09fe6",
+   "size": 513
+  },
+  {
+   "path": "docs/api/insights.md",
+   "sha": "6b6fab8813f174b1c78ab04fb9ceb149e68989f5",
+   "size": 605
+  },
+  {
+   "path": "docs/api/issues.md",
+   "sha": "80de62741fd89774253a1cccbba8ee9a1ea7e80d",
+   "size": 823
+  },
+  {
+   "path": "docs/api/maintainer.md",
+   "sha": "1860a7b5a90f583306eef5f23479f8fb9b3c54c2",
+   "size": 1824
+  },
+  {
+   "path": "docs/api/phase2.md",
+   "sha": "e57bb89427b3414c1c786a9c7d5d9e69c2c07ea3",
+   "size": 1370
+  },
+  {
+   "path": "docs/api/phase3.md",
+   "sha": "d76c1e4c36db4d8f2cbe86274a6eb2b82da665ed",
+   "size": 1531
+  },
+  {
+   "path": "docs/api/phase4.md",
+   "sha": "4270018e83f49f3e08e617dce6ec28eea7c86abc",
+   "size": 1155
+  },
+  {
+   "path": "docs/api/policy-preview.md",
+   "sha": "e074029781bffc45a179c800b53c95438118d3e5",
+   "size": 9366
+  },
+  {
+   "path": "docs/api/pull-requests.md",
+   "sha": "252e97ff87be2712c98c9d594761a2c1e849a3e7",
+   "size": 616
+  },
+  {
+   "path": "docs/api/repos.md",
+   "sha": "d06a76c1edf4c1c96fe7aad974de3c0ad981b423",
+   "size": 1272
+  },
+  {
+   "path": "docs/api/rest-api-reference.md",
+   "sha": "ebe0a2dfef289eb2352a2f3d7f7a3a1ab8881dbf",
+   "size": 4003
+  },
+  {
+   "path": "docs/api/rollouts.md",
+   "sha": "21b5d3827ab8355ef25ab5315dcb47ffd35e3c44",
+   "size": 5014
+  },
+  {
+   "path": "docs/api/waivers.md",
+   "sha": "719580cf7b9c49c862321459b185a2e7b35f5ce2",
+   "size": 1638
+  },
+  {
+   "path": "docs/api/webhooks.md",
+   "sha": "bf1984442635d72ca0f215ebe503f63339822fb3",
+   "size": 1612
+  },
+  {
+   "path": "docs/architecture/action-lifecycle.md",
+   "sha": "aeb2a57fe7c4cf3f888a1e340dcf9eb8315d9709",
+   "size": 9005
+  },
+  {
+   "path": "docs/architecture/adr/0001-authority-source-of-truth.md",
+   "sha": "7788279181967734045198a2582842267f0dfee6",
+   "size": 5527
+  },
+  {
+   "path": "docs/architecture/adr/0002-principal-resource-action-model.md",
+   "sha": "f851ef1b2a54459bde55b399ae76ac66e5314a66",
+   "size": 5806
+  },
+  {
+   "path": "docs/architecture/adr/0003-evaluation-and-deny-semantics.md",
+   "sha": "2d4a3fd0bbd45633ec061a1e9887bf1899c10671",
+   "size": 5715
+  },
+  {
+   "path": "docs/architecture/adr/0004-tenancy-and-resource-inheritance.md",
+   "sha": "36247384506ccf5a9eb3f38e0bd6d0229f8e83b8",
+   "size": 5999
+  },
+  {
+   "path": "docs/architecture/adr/0005-policy-storage-and-versioning.md",
+   "sha": "cf4ed2c478943b3b363de05fefd51b750af59116",
+   "size": 6164
+  },
+  {
+   "path": "docs/architecture/adr/0006-audit-event-integrity-boundary.md",
+   "sha": "771b9d95218fa99fe4d8bce0b5aed269b35e5648",
+   "size": 9517
+  },
+  {
+   "path": "docs/architecture/adr/0007-migration-and-compatibility-strategy.md",
+   "sha": "fd99936389e0f416185d76dc4352e36d5fc4050d",
+   "size": 8134
+  },
+  {
+   "path": "docs/architecture/adr/0008-production-security-authority-retained-by-humans.md",
+   "sha": "0b537099337f842e9fc0dea0e4c0adea62a60328",
+   "size": 9005
+  },
+  {
+   "path": "docs/architecture/adr/0009-credential-rotation-secret-provider.md",
+   "sha": "711b7bf86f9a0cd99d91e2bdcc5d6b5d13c59aff",
+   "size": 4595
+  },
+  {
+   "path": "docs/architecture/adr/README.md",
+   "sha": "238e451a20f8105c9df6274cc60595b1db870e06",
+   "size": 5243
+  },
+  {
+   "path": "docs/architecture/authority/README.md",
+   "sha": "487e897e6a33e53da0fd53a95cc4402a1994795c",
+   "size": 6410
+  },
+  {
+   "path": "docs/architecture/authority/current-state-inventory.md",
+   "sha": "24645798b47d94a78276d67d2c0697ca183271d4",
+   "size": 85071
+  },
+  {
+   "path": "docs/architecture/authority/level-1-core.md",
+   "sha": "15b2ed742aade8cb7c8ed30002b12f8ee7d125c4",
+   "size": 64252
+  },
+  {
+   "path": "docs/architecture/authority/permission-model.md",
+   "sha": "4965819cf0b0fe945b60b8d8e00cda8cc84ebd4c",
+   "size": 109140
+  },
+  {
+   "path": "docs/architecture/authority/wave-validation-plan.md",
+   "sha": "72d448c8d2fb58e41175ee3c77ca7b51ec90470d",
+   "size": 14933
+  },
+  {
+   "path": "docs/architecture/data-flow.md",
+   "sha": "2aa5d5cac4d111dee03ed63e55ace39959f58e71",
+   "size": 4676
+  },
+  {
+   "path": "docs/architecture/evidence-bundles.md",
+   "sha": "b9a265915ef6ee851c1a7839210a3ce465ab7b52",
+   "size": 2264
+  },
+  {
+   "path": "docs/architecture/expression-engine.md",
+   "sha": "8c3831efc979fb0845199f0efb74d38b00f00e9e",
+   "size": 2299
+  },
+  {
+   "path": "docs/architecture/managed-actions.md",
+   "sha": "f33366f6b96b448abe6fa5c4abe19f194d6e7c98",
+   "size": 3146
+  },
+  {
+   "path": "docs/architecture/package-dependencies.md",
+   "sha": "7c38899164709ab24d05aa5caa97654f74da9fb2",
+   "size": 4886
+  },
+  {
+   "path": "docs/architecture/reconciliation.md",
+   "sha": "4798d833044b70692fc86a37d403bd962fb55687",
+   "size": 4575
+  },
+  {
+   "path": "docs/architecture/repo-reconciliation.md",
+   "sha": "dc3be3a7256baee5699a7edc13dd6fb0d106e5fc",
+   "size": 6652
+  },
+  {
+   "path": "docs/architecture/runtime-architecture.md",
+   "sha": "0b591291328ae536e47fb6aba273946273fd14e5",
+   "size": 4927
+  },
+  {
+   "path": "docs/architecture/security.md",
+   "sha": "3c3906cd8229226c67321f8d90ab3a3d02b1dc69",
+   "size": 2396
+  },
+  {
+   "path": "docs/architecture/system-architecture.md",
+   "sha": "06a631ac7c06ac30ae453f7b5020c981a00ef990",
+   "size": 4333
+  },
+  {
+   "path": "docs/architecture/v0.23-executor-service.md",
+   "sha": "0828b798ad1d63e9ecee93bb0a1b0bcecb3ac897",
+   "size": 44726
+  },
+  {
+   "path": "docs/architecture/validator-execution-model.md",
+   "sha": "e1b9eaac418d05f23756c7900969e766e44f08b5",
+   "size": 10591
+  },
+  {
+   "path": "docs/architecture/webhook-routing.md",
+   "sha": "ab485dd63b01b03f77ab45713173d20ec4bed8ff",
+   "size": 3608
+  },
+  {
+   "path": "docs/architecture/worker-events.md",
+   "sha": "541eb19b7bdbf40a75cc73043485fc75f1158bf5",
+   "size": 2690
+  },
+  {
+   "path": "docs/brand/brand-spec.md",
+   "sha": "f0d117d74071d967fd565df2b88302f692cc2257",
+   "size": 17754
+  },
+  {
+   "path": "docs/concepts/autonomous-github-management.md",
+   "sha": "2a215c214e0219213b386305fbbc84f3a9ccd623",
+   "size": 4737
+  },
+  {
+   "path": "docs/configuration/ci-conclusion.md",
+   "sha": "dbd35eb1fa734ac17578c3ab238f3f2e9c14b970",
+   "size": 713
+  },
+  {
+   "path": "docs/configuration/custom-rules-pipeline.md",
+   "sha": "5499619211cd7ff5899f1511e44d6a006818ab25",
+   "size": 3424
+  },
+  {
+   "path": "docs/configuration/custom-rules.md",
+   "sha": "0982f09ae6312e7a5f0058f318442b0d54760440",
+   "size": 2824
+  },
+  {
+   "path": "docs/configuration/decision-log.md",
+   "sha": "38af1ec4fc6527f249021532e268db50256f8531",
+   "size": 2888
+  },
+  {
+   "path": "docs/configuration/dry-run.md",
+   "sha": "a3b8932e24068d040620fa4ef27b095befc803c2",
+   "size": 3150
+  },
+  {
+   "path": "docs/configuration/expression-language.md",
+   "sha": "9d68d40a3e54f51cd40e84b1e3607c4ff9e0ec7d",
+   "size": 2977
+  },
+  {
+   "path": "docs/configuration/failure-types.md",
+   "sha": "6fffaa9c4f6388f665eaec510afd9be1fd41fe79",
+   "size": 1351
+  },
+  {
+   "path": "docs/configuration/heal-status.md",
+   "sha": "1d1454df9c1204025aa273246942efab8e684ff0",
+   "size": 726
+  },
+  {
+   "path": "docs/configuration/idempotency.md",
+   "sha": "4834fc1dc257fb6c73b07c00a3414aee7dcadb1f",
+   "size": 1447
+  },
+  {
+   "path": "docs/configuration/manual-run.md",
+   "sha": "3e01b2f4a919afb1455ec79c9922ae9f92f8850b",
+   "size": 1927
+  },
+  {
+   "path": "docs/configuration/org-config.md",
+   "sha": "faf2e15e2300bf2ab2a41fcaebc5a2cd0282b952",
+   "size": 1951
+  },
+  {
+   "path": "docs/configuration/playground.md",
+   "sha": "540725adf004bb057e66bb7b444fc13e02243108",
+   "size": 1750
+  },
+  {
+   "path": "docs/configuration/plugins.md",
+   "sha": "869966149393fcc46def0574fdfa6544d34ee727",
+   "size": 3062
+  },
+  {
+   "path": "docs/configuration/policy-as-code.md",
+   "sha": "37784101448eb35243d6f8bf3a9e7b020e60c5d3",
+   "size": 5770
+  },
+  {
+   "path": "docs/configuration/policy-waivers.md",
+   "sha": "eb617e719fd5a2e00fa771e4f00248ac9554b295",
+   "size": 3422
+  },
+  {
+   "path": "docs/configuration/pr-check-status.md",
+   "sha": "0a85402e307f95ae22957d7d72ab330c7c5d270c",
+   "size": 1401
+  },
+  {
+   "path": "docs/configuration/quality-gates.md",
+   "sha": "b15282ad4ea7a74f5b5000aeb8f205dab31824ec",
+   "size": 5240
+  },
+  {
+   "path": "docs/configuration/queues.md",
+   "sha": "39e43424114b8860b7a2bea4abfc0cbb903b4f96",
+   "size": 1255
+  },
+  {
+   "path": "docs/configuration/risk-scoring.md",
+   "sha": "5724172cd5f56659db670eb3302d0003f5de13c5",
+   "size": 3983
+  },
+  {
+   "path": "docs/configuration/triage-priority.md",
+   "sha": "2d4b7bfc7c4b599ef571574d15c83367563129a5",
+   "size": 728
+  },
+  {
+   "path": "docs/configuration/trigger-control.md",
+   "sha": "1094c5cd1b68295453c74d3240414eab40b749cc",
+   "size": 2521
+  },
+  {
+   "path": "docs/dashboard/configuration.md",
+   "sha": "4be7b555d712f505be2d5d27e1c52d3814dca804",
+   "size": 1497
+  },
+  {
+   "path": "docs/dashboard/pages.md",
+   "sha": "a0ede2e0e1cc50f68101a0db7ba1278c5790c559",
+   "size": 7908
+  },
+  {
+   "path": "docs/dashboard/web-dashboard.md",
+   "sha": "16ec4c8c2a6a9cb289973341eb60be5eeb36f79f",
+   "size": 1685
+  },
+  {
+   "path": "docs/database/automation-tables.md",
+   "sha": "5eb22de0a0b25d5aba32773d5f30a9d99138a157",
+   "size": 3008
+  },
+  {
+   "path": "docs/database/core-tables.md",
+   "sha": "ade23e18aa3614a14e285874158689128a9c92bc",
+   "size": 3880
+  },
+  {
+   "path": "docs/database/database-schema.md",
+   "sha": "6f882a9ddf0db19fbc4b5cd30396e37e6470273d",
+   "size": 2854
+  },
+  {
+   "path": "docs/database/enforcement-tables.md",
+   "sha": "6514dbbcae800c24ed32a9e285e012195925511a",
+   "size": 2003
+  },
+  {
+   "path": "docs/database/fix-tables.md",
+   "sha": "d06828eb72850be50bfd5a308a34a68bf78c5296",
+   "size": 2368
+  },
+  {
+   "path": "docs/database/governance-tables.md",
+   "sha": "acaadc55037aaefcd2c3fd5b02cc25d29c8e7de1",
+   "size": 2626
+  },
+  {
+   "path": "docs/database/maintainer-tables.md",
+   "sha": "20859a8e24ff2752a2bb838b25403216f36da98a",
+   "size": 3170
+  },
+  {
+   "path": "docs/database/trust-tables.md",
+   "sha": "20a1f76526918ecddd3a89d4bff0cecb2fc74ba3",
+   "size": 6225
+  },
+  {
+   "path": "docs/development/version-policy.md",
+   "sha": "5e06b0fcc7b49126aca74affef8bf8e4936ac659",
+   "size": 2564
+  },
+  {
+   "path": "docs/guides/audit-compliance.md",
+   "sha": "565c5f2e57bfda137de58f4af6b4f70dfaa5a2e8",
+   "size": 2152
+  },
+  {
+   "path": "docs/guides/custom-enforcement.md",
+   "sha": "e758f34f60154a31b758c2f5896f974765d313c2",
+   "size": 2151
+  },
+  {
+   "path": "docs/guides/first-ci-heal.md",
+   "sha": "bb8aebba95d69460146f9f4a37ff8dce90363c6a",
+   "size": 2092
+  },
+  {
+   "path": "docs/guides/first-contributor-fix.md",
+   "sha": "11fb0088623c7a2d1b235b194d6e4a1687cd79fa",
+   "size": 2104
+  },
+  {
+   "path": "docs/guides/first-run-onboarding.md",
+   "sha": "66fc8a0abaeb6284f49559005e5878ef0a808563",
+   "size": 10755
+  },
+  {
+   "path": "docs/guides/first-triage.md",
+   "sha": "09e461337d71e1daddb54c759478b2ec1a52ae1a",
+   "size": 1651
+  },
+  {
+   "path": "docs/guides/full-walkthrough.md",
+   "sha": "b338e6a75f056bdbfe706066b1aa7c2e37c04f7c",
+   "size": 5725
+  },
+  {
+   "path": "docs/index.md",
+   "sha": "579d0028b2a77090d2e98c66ddd8cb39f758ff51",
+   "size": 3152
+  },
+  {
+   "path": "docs/installation/backup-restore.md",
+   "sha": "7484b1f5461bc4466f53d1a7c7f37ad7b4541cdb",
+   "size": 2671
+  },
+  {
+   "path": "docs/installation/cloudflare-tunnel.md",
+   "sha": "3226d2cb651c4c47ebc234e23fd23ab78234afd9",
+   "size": 2438
+  },
+  {
+   "path": "docs/installation/deployment-runbook.md",
+   "sha": "5145d4c1c08530fb9ba39098b8f29e02c653baec",
+   "size": 30895
+  },
+  {
+   "path": "docs/installation/docker-compose.md",
+   "sha": "54f996ac90a3ab20afccf49aeca62b9e62af688f",
+   "size": 4282
+  },
+  {
+   "path": "docs/installation/environment-variables.md",
+   "sha": "568984aabe6cac2ac33c799e0f08936d9387091d",
+   "size": 4875
+  },
+  {
+   "path": "docs/installation/github-app-setup.md",
+   "sha": "cbe7fb9fe785de99ce4669eab3946f8449a88155",
+   "size": 3241
+  },
+  {
+   "path": "docs/installation/infrastructure.md",
+   "sha": "8b6d2f34c7ae227be9b832ae258ae666cc859582",
+   "size": 9285
+  },
+  {
+   "path": "docs/installation/prerequisites.md",
+   "sha": "c4c1732350bbed9d48b4010f62bbe6d9e7368ff2",
+   "size": 2968
+  },
+  {
+   "path": "docs/installation/source-of-truth-inventory.md",
+   "sha": "23e8187959107f281a56bd3ebeb9fff9ae12c328",
+   "size": 6491
+  },
+  {
+   "path": "docs/installation/v0.20.1-plan.md",
+   "sha": "4967b513cf400329dc0da7ab3f4cca79e2be9241",
+   "size": 8638
+  },
+  {
+   "path": "docs/operations/benchmark-harness.md",
+   "sha": "39fab09c5597019a5c8a7097a607efd8dcf05c7f",
+   "size": 3843
+  },
+  {
+   "path": "docs/package-lock.json",
+   "sha": "e12f65456c4a44c2c30599e9c55d7cf4aa5699c3",
+   "size": 87871
+  },
+  {
+   "path": "docs/package.json",
+   "sha": "f7e665cc993e764b5b92bce4909db65d9dae5fe7",
+   "size": 366
+  },
+  {
+   "path": "docs/pillars/ci-healing/auto-patch-prs.md",
+   "sha": "666779087ecaea97022c7e58a55f35e6d7ec016d",
+   "size": 2533
+  },
+  {
+   "path": "docs/pillars/ci-healing/failure-types.md",
+   "sha": "0fbc092e99c7bbcfd5fbe486caff7a7bb209da5d",
+   "size": 1929
+  },
+  {
+   "path": "docs/pillars/ci-healing/heal-history.md",
+   "sha": "4b34f9da7d71adbe279bde2695238c5720a1d07a",
+   "size": 1704
+  },
+  {
+   "path": "docs/pillars/ci-healing/self-healing-ci.md",
+   "sha": "b1086c137d8503d35006f19a1881371357bf6948",
+   "size": 4566
+  },
+  {
+   "path": "docs/pillars/contributor/autonomous-contributor.md",
+   "sha": "773211bbbf22a3faa3d83cbdbac3e7330f1805db",
+   "size": 2890
+  },
+  {
+   "path": "docs/pillars/contributor/file-scoring.md",
+   "sha": "58e771ca20d9461ed477e990fd5a140afc72ecbd",
+   "size": 1516
+  },
+  {
+   "path": "docs/pillars/contributor/pre-merge-validation.md",
+   "sha": "781e21cd58ff536fbdea8adddd6a446f6b4a90e3",
+   "size": 1821
+  },
+  {
+   "path": "docs/pillars/contributor/scope-guards.md",
+   "sha": "cb328ef75aca5056fc5d8a7839b9397ee06808f4",
+   "size": 1810
+  },
+  {
+   "path": "docs/pillars/enforcement/branch-enforcement.md",
+   "sha": "79a5cd6387d80fc37ab310c2f771d05d64f93c6c",
+   "size": 3234
+  },
+  {
+   "path": "docs/pillars/enforcement/config-validation.md",
+   "sha": "fc629d3be28a1b3f4ceaaa9691868c97cdfe9d96",
+   "size": 1444
+  },
+  {
+   "path": "docs/pillars/enforcement/policies.md",
+   "sha": "f2105956fa5906465bd44ff4de537d98c91d6abf",
+   "size": 2384
+  },
+  {
+   "path": "docs/pillars/enforcement/violations.md",
+   "sha": "7fc711de9273e33556fa25a7b17fe97c14bea4ab",
+   "size": 1602
+  },
+  {
+   "path": "docs/pillars/insights/multi-repo-insights.md",
+   "sha": "8d93a9746115648e94e8f2f560345fa826054560",
+   "size": 1738
+  },
+  {
+   "path": "docs/pillars/insights/sync-engine.md",
+   "sha": "67882b19f7a3404de3525db31fa50fd35418b53b",
+   "size": 1869
+  },
+  {
+   "path": "docs/pillars/maintainer/branch-cleanup.md",
+   "sha": "170b93dc18a917a5621ce8e90710a12cc67226d4",
+   "size": 1486
+  },
+  {
+   "path": "docs/pillars/maintainer/maintainer-tools.md",
+   "sha": "d840b79fd5f23c160f99bf0c010cc6708a077537",
+   "size": 4000
+  },
+  {
+   "path": "docs/pillars/maintainer/settings-api.md",
+   "sha": "7923aa69e37dc478c2d203f634f8644453c5f146",
+   "size": 1613
+  },
+  {
+   "path": "docs/pillars/maintainer/stale-management.md",
+   "sha": "fb7b5a319955bc476ac376941fdeeb9e05931ee2",
+   "size": 1627
+  },
+  {
+   "path": "docs/pillars/merge-queue/error-recovery.md",
+   "sha": "6fcc1f76eab1f59de504b73fbf18823e3573aa67",
+   "size": 1391
+  },
+  {
+   "path": "docs/pillars/merge-queue/feedback-rules.md",
+   "sha": "216d6fe86b6990cf1ec3653ce8e0572ceb3fb82a",
+   "size": 1971
+  },
+  {
+   "path": "docs/pillars/merge-queue/merge-queue.md",
+   "sha": "b666a31833c3ae717cd944dc1d2d72773cf9a250",
+   "size": 3336
+  },
+  {
+   "path": "docs/pillars/review-gate/ai-review-gate.md",
+   "sha": "1c634bdee1570c8ead26b931af3334dc5c895e17",
+   "size": 3364
+  },
+  {
+   "path": "docs/pillars/review-gate/audit-trail.md",
+   "sha": "b347069864b84229369d3aee7abb5cb12cc02cb0",
+   "size": 2435
+  },
+  {
+   "path": "docs/pillars/review-gate/compliance-reports.md",
+   "sha": "a26ecd8e06c7104c59236fb3d2427f6963c27859",
+   "size": 1924
+  },
+  {
+   "path": "docs/pillars/review-gate/review-findings.md",
+   "sha": "3dec9f80e7d31fb03c0607385a3a6ba3dfb335c9",
+   "size": 2268
+  },
+  {
+   "path": "docs/pillars/triage/ai-classification.md",
+   "sha": "18ceb6c87fdf7d7b735bfb609da6ce6e1881daaf",
+   "size": 2296
+  },
+  {
+   "path": "docs/pillars/triage/comment-commands.md",
+   "sha": "0ebeedb372ceecb8c81f1cfcb91508fde223c648",
+   "size": 3114
+  },
+  {
+   "path": "docs/pillars/triage/duplicate-detection.md",
+   "sha": "75f30c19104f352afbd06cbba75862cdef883bb5",
+   "size": 2897
+  },
+  {
+   "path": "docs/pillars/triage/issue-pr-triage.md",
+   "sha": "bd86d5ddb894f553fac592ca542a021b1086c1c5",
+   "size": 2935
+  },
+  {
+   "path": "docs/public/logo.svg",
+   "sha": "45b84cacd28d610cce44975b7050062981b4e75e",
+   "size": 503
+  },
+  {
+   "path": "docs/public/mediapackage.png",
+   "sha": "13bbb77d8326eb5fdfbf17667ee17472cfa4ff4e",
+   "size": 1780496
+  },
+  {
+   "path": "docs/roadmap.md",
+   "sha": "80b73aa278ba1039d5b442bb20df318da32e94c6",
+   "size": 53319
+  },
+  {
+   "path": "docs/superpowers/plans/2026-06-21-gap1-validator-execution-model.md",
+   "sha": "5921c693525301bbe6bf65777e56d28f629f0fc1",
+   "size": 98177
+  },
+  {
+   "path": "docs/workers/background-workers.md",
+   "sha": "3bf283789ef64162b6eb7d5b1beb79fccafc1712",
+   "size": 3468
+  },
+  {
+   "path": "docs/workers/ci-heal-worker.md",
+   "sha": "760477c0adaf195a80c799f0263990efa9f86081",
+   "size": 1251
+  },
+  {
+   "path": "docs/workers/issue-fix-worker.md",
+   "sha": "05ac1220bc6eee89228c2b7b76a6128df7c71a87",
+   "size": 4231
+  },
+  {
+   "path": "docs/workers/maintainer-worker.md",
+   "sha": "73f7b82e1ca34adb4edbdf361e3df9c61b278829",
+   "size": 1120
+  },
+  {
+   "path": "docs/workers/phase2-worker.md",
+   "sha": "db2c27d549ebcd01454628b493a8f6ffc48bf526",
+   "size": 1192
+  },
+  {
+   "path": "docs/workers/phase3-worker.md",
+   "sha": "c627b024d6ec8279333ce386484ee485986f6978",
+   "size": 1255
+  },
+  {
+   "path": "docs/workers/phase4-worker.md",
+   "sha": "4635aca661ac1be4d7255a40c70edf647cf297bb",
+   "size": 1323
+  },
+  {
+   "path": "docs/workers/sync-worker.md",
+   "sha": "a511f91eb120be66d66278b7f03e3be7f5629fbb",
+   "size": 1435
+  },
+  {
+   "path": "docs/workers/triage-worker.md",
+   "sha": "2a87023d99b7059731c8a3ae01313acef37db418",
+   "size": 1124
+  },
+  {
+   "path": "docs/workers/webhook-worker.md",
+   "sha": "faf53c56b7d21bd3b6a031c1e5f9f4610331f642",
+   "size": 3495
+  },
+  {
+   "path": "landing/Dockerfile",
+   "sha": "19f223da455239f1ee7b01f2b51a99090cc4e0be",
+   "size": 126
+  },
+  {
+   "path": "landing/banner.png",
+   "sha": "94ca49b9c5450c7ffa7d616ad5295b4418470f59",
+   "size": 1903879
+  },
+  {
+   "path": "landing/index.html",
+   "sha": "55249619e452dcf6e4ca9d750276b8626fa48c99",
+   "size": 12788
+  },
+  {
+   "path": "package-lock.json",
+   "sha": "5349d0307ff5e0431fe269b0a75edeec5d3124b0",
+   "size": 485024
+  },
+  {
+   "path": "package.json",
+   "sha": "8a349ee9ad3820c027ac5f3b820f447e8a0c008f",
+   "size": 1652
+  },
+  {
+   "path": "packages/bot/Dockerfile",
+   "sha": "b04ea60194849cd2d28af0896f64275826280851",
+   "size": 268
+  },
+  {
+   "path": "packages/bot/package.json",
+   "sha": "425d3d156ff85ab84656cdcca5c4dc7c5dfc6e24",
+   "size": 284
+  },
+  {
+   "path": "packages/bot/src/api.js",
+   "sha": "f386d17a5a3a05c85e63d489b4e774f384076d80",
+   "size": 3294
+  },
+  {
+   "path": "packages/bot/src/auth.js",
+   "sha": "dfb2911a37b79b897e599d134e724bd7b0fa0011",
+   "size": 3827
+  },
+  {
+   "path": "packages/bot/src/commands.js",
+   "sha": "4d573e5e69357f17041cf744d8e430d94c2f743f",
+   "size": 21510
+  },
+  {
+   "path": "packages/bot/src/index.js",
+   "sha": "7f897c97872e840acf31b10dc0d5425b7a9808c9",
+   "size": 3918
+  },
+  {
+   "path": "packages/bot/src/notifications.js",
+   "sha": "1b5a333e7e7829aaa2b2d57e5e774594b1d2b9c9",
+   "size": 7226
+  },
+  {
+   "path": "packages/core/jest.config.js",
+   "sha": "36022a75d5180f68d4905c260a409eb9f420525b",
+   "size": 154
+  },
+  {
+   "path": "packages/core/package.json",
+   "sha": "5cc51f527e182bcc59d05c01686a3e1224ec95b9",
+   "size": 236
+  },
+  {
+   "path": "packages/core/src/buildInfo.js",
+   "sha": "b4d9ced9e8ea5ecd9bb6048c971e6b5256d0e440",
+   "size": 878
+  },
+  {
+   "path": "packages/core/src/commandDescriptor.js",
+   "sha": "33eb6cff27094d54b3df8df00f386a121b4371d4",
+   "size": 6908
+  },
+  {
+   "path": "packages/core/src/index.js",
+   "sha": "9daa89f944565562e49365f3104d59bb16f0bed7",
+   "size": 4362
+  },
+  {
+   "path": "packages/core/src/validationPlanHash.js",
+   "sha": "33f58d442cd2e264bf133583e3ce6e7e37638a4a",
+   "size": 4766
+  },
+  {
+   "path": "packages/core/tests/commandDescriptor.test.js",
+   "sha": "87bc8cd7e68c7b1c6eda4130c256e5a8b2136a67",
+   "size": 4934
+  },
+  {
+   "path": "packages/core/tests/enforce-production-audit.test.js",
+   "sha": "d914fc3e1ea6bece061af30e9be549b74d8308e4",
+   "size": 25058
+  },
+  {
+   "path": "packages/core/tests/fixtures/production-audit-meta-vulnerability.json",
+   "sha": "9aec5a2ad1e6be54d6721aadbbb0a57336d0b016",
+   "size": 1357
+  },
+  {
+   "path": "packages/core/tests/validate-release-manifest.test.js",
+   "sha": "d1766c1c9ccc247c1336f3c177ac037b4842570d",
+   "size": 4741
+  },
+  {
+   "path": "packages/demo-dashboard/Dockerfile",
+   "sha": "4b7a96e0d2318e5f8b2d4add225943066a6583e9",
+   "size": 829
+  },
+  {
+   "path": "packages/demo-dashboard/next-env.d.ts",
+   "sha": "830fb594ca2970a827555c28a253b097367e08d8",
+   "size": 262
+  },
+  {
+   "path": "packages/demo-dashboard/next.config.ts",
+   "sha": "b00283f1151931878edd5c71c25265873223c161",
+   "size": 179
+  },
+  {
+   "path": "packages/demo-dashboard/package.json",
+   "sha": "910b3994e56358acea78051201048dc015dac6ca",
+   "size": 586
+  },
+  {
+   "path": "packages/demo-dashboard/postcss.config.mjs",
+   "sha": "3ae624eed991e8d4352781a688be09313fdf33ad",
+   "size": 145
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/actions/page.tsx",
+   "sha": "392e0b239a9e17cce01fe26c878240802806f2b0",
+   "size": 3123
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/activity/page.tsx",
+   "sha": "c971451f823ea9ad0bac5d980d7efedcbb9a1fd8",
+   "size": 1398
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/ci/page.tsx",
+   "sha": "137fb5bd522fb771153dc03db3faccee373ecea6",
+   "size": 2840
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/custom-rules/page.tsx",
+   "sha": "a8ac0d79b7880f00346429eb1832e14016692e23",
+   "size": 2720
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/decisions/page.tsx",
+   "sha": "434fb5519d4c8b5820895fa811416aa6a0d5f749",
+   "size": 1892
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/deliveries/page.tsx",
+   "sha": "9c1ecad4b9a8f0c0135ab9a2b2ded172c933e811",
+   "size": 2186
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/duplicates/page.tsx",
+   "sha": "a26ace90f3be8849d6fdd88d31d0566de87e2de9",
+   "size": 1784
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/fix-attempts/page.tsx",
+   "sha": "aa20762452bb5086d4f957bed7543ce41ed2ac5c",
+   "size": 2117
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/gates/page.tsx",
+   "sha": "afabb4d0c4008a1e1d90f59dfba41cd09cffff46",
+   "size": 1597
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/globals.css",
+   "sha": "b762b7a94983a589e0efdbcbf61c16d2c9a18e36",
+   "size": 2598
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/issues/page.tsx",
+   "sha": "4b8e04a675fbdf4fc21893fb81436d42a402d8b3",
+   "size": 3111
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/layout.tsx",
+   "sha": "0d492f8424092eb56cc1b03dca7e78a31aaf442e",
+   "size": 1231
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/page.tsx",
+   "sha": "bfb1320b4ef7b17e026c002314c5ac11d7dd172d",
+   "size": 4392
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/pull-requests/page.tsx",
+   "sha": "cfab4a6d096f8e7d37cf2c49eeace4d89fe0b6a3",
+   "size": 2530
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/readiness/page.tsx",
+   "sha": "c47562a65c29e0b1da039361eb0cc62e61338074",
+   "size": 1645
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/repos/page.tsx",
+   "sha": "68e7f2aa1ded274402e91c637f7b25617cb521e8",
+   "size": 2736
+  },
+  {
+   "path": "packages/demo-dashboard/src/app/trust/page.tsx",
+   "sha": "0f7bb656ba95bed5766d89192b27e1a938b5b6a9",
+   "size": 1785
+  },
+  {
+   "path": "packages/demo-dashboard/src/components/Sidebar.tsx",
+   "sha": "3f51db96c8323d5ee24234e419db4dade7353b91",
+   "size": 3535
+  },
+  {
+   "path": "packages/demo-dashboard/src/components/ui.tsx",
+   "sha": "5c58ed38772d4049e22b8b7929b32183663e0843",
+   "size": 8297
+  },
+  {
+   "path": "packages/demo-dashboard/src/lib/mock-data.ts",
+   "sha": "c810eb6d71393a5a2aa6d9d2592fec4d4c96b0a1",
+   "size": 19272
+  },
+  {
+   "path": "packages/demo-dashboard/tsconfig.json",
+   "sha": "b2241a848a9e7db0b1152ff3c9a454c557c3f64d",
+   "size": 567
+  },
+  {
+   "path": "packages/executor-service/Dockerfile",
+   "sha": "07bc0dc8bc5a918a0ddf69fbf4b5987e4d3e0dc5",
+   "size": 3069
+  },
+  {
+   "path": "packages/executor-service/jest.config.js",
+   "sha": "36022a75d5180f68d4905c260a409eb9f420525b",
+   "size": 154
+  },
+  {
+   "path": "packages/executor-service/package.json",
+   "sha": "2ae4a23270c055a84aa6188371425d0be2ee33d6",
+   "size": 301
+  },
+  {
+   "path": "packages/executor-service/src/commandDescriptorPolicy.js",
+   "sha": "7e35d7498e0773494d240dcccd7bc3092de155f5",
+   "size": 6237
+  },
+  {
+   "path": "packages/executor-service/src/config.js",
+   "sha": "ccc8dff202149052f86b14cefff62d91b01cef43",
+   "size": 4120
+  },
+  {
+   "path": "packages/executor-service/src/executorReportHash.js",
+   "sha": "f4ee8deb2973eea9e4ffc8c16c405e3f5a7fdaee",
+   "size": 2050
+  },
+  {
+   "path": "packages/executor-service/src/health.js",
+   "sha": "708bfe7842a959c275032c01f47ec7bf691a2095",
+   "size": 2529
+  },
+  {
+   "path": "packages/executor-service/src/index.js",
+   "sha": "9fe3aacb9d4352575d77003fc96638ed4ec9106c",
+   "size": 1504
+  },
+  {
+   "path": "packages/executor-service/src/runtimeProbe.js",
+   "sha": "27b1ec1213ea3662e9db927145dd8e2a07b91db0",
+   "size": 3861
+  },
+  {
+   "path": "packages/executor-service/src/server.js",
+   "sha": "f297c891f501ba5562e111cbc69a494e5f2003bf",
+   "size": 5972
+  },
+  {
+   "path": "packages/executor-service/src/validatorRunner.js",
+   "sha": "3b5fbc1da773ae678cceb5eaf031f11090c06da5",
+   "size": 24629
+  },
+  {
+   "path": "packages/executor-service/tests/commandDescriptorPolicy.test.js",
+   "sha": "eabd8f2bacbb05c78716c3554833165d5ed37108",
+   "size": 6597
+  },
+  {
+   "path": "packages/executor-service/tests/config.test.js",
+   "sha": "54c046e9329a8deecc1cedf95e31b746aceba884",
+   "size": 5396
+  },
+  {
+   "path": "packages/executor-service/tests/executor-report-hash.test.js",
+   "sha": "58745690ecb942a95b2dc5a2d67fcb9d82e17740",
+   "size": 4029
+  },
+  {
+   "path": "packages/executor-service/tests/health.test.js",
+   "sha": "926fe336cd3cb87fdfc95462cb90007e8fc0cfb6",
+   "size": 7941
+  },
+  {
+   "path": "packages/executor-service/tests/runtime-probe.test.js",
+   "sha": "9a3269d37e64c59d1bdd057fa9b0b524a42e0f43",
+   "size": 7357
+  },
+  {
+   "path": "packages/executor-service/tests/server.test.js",
+   "sha": "532ad38668a80a4d99ee37285401756b9665dc74",
+   "size": 2663
+  },
+  {
+   "path": "packages/executor-service/tests/validate-route.test.js",
+   "sha": "f42b2c1c1a685d44b958260dd834bbeb139dc2dd",
+   "size": 9169
+  },
+  {
+   "path": "packages/executor-service/tests/validator-runner-descriptors.test.js",
+   "sha": "5a220aef091d894f9f25001236eb684fe8f47161",
+   "size": 12340
+  },
+  {
+   "path": "packages/executor-service/tests/validator-runner.test.js",
+   "sha": "2c183966f1b5c88ac579ebf45d16ce21460965e8",
+   "size": 9212
+  },
+  {
+   "path": "packages/rules/jest.config.js",
+   "sha": "337ce3b0f662953184c5c98071ac53d70aa17e9a",
+   "size": 181
+  },
+  {
+   "path": "packages/rules/package.json",
+   "sha": "73ce5179b0990c2b6df0cc41afbcaf9722e71d34",
+   "size": 787
+  },
+  {
+   "path": "packages/rules/src/expr/builtins.js",
+   "sha": "bafb777d811e1549ad7b12f5c74faf71c2a43600",
+   "size": 3169
+  },
+  {
+   "path": "packages/rules/src/expr/evaluator.js",
+   "sha": "5af82e0710a70958a9f22296c3aa0b3e3bebd38b",
+   "size": 10347
+  },
+  {
+   "path": "packages/rules/src/expr/index.js",
+   "sha": "6534b780c051c232045ef4de3b51cd5f41f881e5",
+   "size": 1446
+  },
+  {
+   "path": "packages/rules/src/expr/lexer.js",
+   "sha": "82d4ad237dc9f134496e2b15bf7c4dfe71a58360",
+   "size": 4829
+  },
+  {
+   "path": "packages/rules/src/expr/parser.js",
+   "sha": "de29e405fa70f968b66fcd38aa1aff6f14120842",
+   "size": 5492
+  },
+  {
+   "path": "packages/rules/src/gates.js",
+   "sha": "cdfe25c0ab4207535939ad1960544c624d905247",
+   "size": 5951
+  },
+  {
+   "path": "packages/rules/src/helpers.js",
+   "sha": "95d15f9bad9637b8edaee59092c841683caefd30",
+   "size": 10932
+  },
+  {
+   "path": "packages/rules/src/index.js",
+   "sha": "5e49448dbda2c34075a86f350858de060896ff77",
+   "size": 851
+  },
+  {
+   "path": "packages/rules/src/parse.js",
+   "sha": "ec7651f3285b608d58c7bba0d1cb58b0777279a5",
+   "size": 2184
+  },
+  {
+   "path": "packages/rules/src/plugins/index.js",
+   "sha": "5da8a71df743cae2cbb7068cc7884ec6e7bbd578",
+   "size": 233
+  },
+  {
+   "path": "packages/rules/src/plugins/loader.js",
+   "sha": "54922cf8b81864885462a61f53291e12465c58c4",
+   "size": 3926
+  },
+  {
+   "path": "packages/rules/src/plugins/sandbox.js",
+   "sha": "a75298eebedd0941f953fa21f23a1fe44fe30300",
+   "size": 2043
+  },
+  {
+   "path": "packages/rules/src/reviewSchema.js",
+   "sha": "0888c922ad1b48eb8b7bdbe631e6257b840835df",
+   "size": 20556
+  },
+  {
+   "path": "packages/rules/src/schema.js",
+   "sha": "a9bc44e7b50d33f5023da15fcf841ebeb29e2aaf",
+   "size": 9467
+  },
+  {
+   "path": "packages/rules/tests/expr.test.js",
+   "sha": "095c0daf0b978d7d4a35091aa21c9553e8c016b6",
+   "size": 11268
+  },
+  {
+   "path": "packages/rules/tests/gates.test.js",
+   "sha": "37e4cc1d86ff0fe91777ff90710729754721a970",
+   "size": 9737
+  },
+  {
+   "path": "packages/rules/tests/helpers.test.js",
+   "sha": "595779df514d7b413e1119d45fd4e2c0a15e4109",
+   "size": 21100
+  },
+  {
+   "path": "packages/rules/tests/parse.test.js",
+   "sha": "9575ae8c3da9591ad7dd73d8601623fd878dfc17",
+   "size": 8429
+  },
+  {
+   "path": "packages/rules/tests/plugins.test.js",
+   "sha": "737ae74cb1b80ec3fdb230943c421c00e132e723",
+   "size": 4598
+  },
+  {
+   "path": "packages/rules/tests/reviewSchema.test.js",
+   "sha": "f3846963e5944a7cce186c00e2d936030942dda9",
+   "size": 17838
+  },
+  {
+   "path": "packages/runtime/compat/_init.js",
+   "sha": "26dd0a00d56d07d55d57aabdcd5ff9a0e2fedffe",
+   "size": 1210
+  },
+  {
+   "path": "packages/runtime/compat/db.js",
+   "sha": "64fc22789923ada8bca7012e07152940a21c5541",
+   "size": 546
+  },
+  {
+   "path": "packages/runtime/compat/github.js",
+   "sha": "0f41c76d2fe578e8f277c53e3aa00d516d961988",
+   "size": 746
+  },
+  {
+   "path": "packages/runtime/compat/logger.js",
+   "sha": "0e1a06bfc2e75847fb32d04e2b015f83f9a75678",
+   "size": 586
+  },
+  {
+   "path": "packages/runtime/compat/queue.js",
+   "sha": "4826e6f51c6bd108205c7d35e6faa61cf5d5e376",
+   "size": 3817
+  },
+  {
+   "path": "packages/runtime/jest.config.js",
+   "sha": "36022a75d5180f68d4905c260a409eb9f420525b",
+   "size": 154
+  },
+  {
+   "path": "packages/runtime/package.json",
+   "sha": "2c60302ef89e0e28b0cd4396b88c763775dfa744",
+   "size": 985
+  },
+  {
+   "path": "packages/runtime/src/create-db.js",
+   "sha": "1231efbbb7e0fee6b3aaf132577841d446b873aa",
+   "size": 1694
+  },
+  {
+   "path": "packages/runtime/src/create-github.js",
+   "sha": "efa84367c146468d0627ae85a2418d0a2b0f070e",
+   "size": 2740
+  },
+  {
+   "path": "packages/runtime/src/create-logger.js",
+   "sha": "1821b80894ccf1e5fe1ae1498654b61d55099064",
+   "size": 618
+  },
+  {
+   "path": "packages/runtime/src/create-queue.js",
+   "sha": "7ec55faa0bcc3ffdb532e7a35ee5db5e5d34ed1a",
+   "size": 2164
+  },
+  {
+   "path": "packages/runtime/src/index.js",
+   "sha": "3692e7f27320222734f2976452e94dd2c1b28aa3",
+   "size": 3009
+  },
+  {
+   "path": "packages/runtime/tests/runtime.test.js",
+   "sha": "db7d566fb4947bd47115197503b65ed985ba1cc4",
+   "size": 5635
+  },
+  {
+   "path": "packages/web-dashboard/.gitignore",
+   "sha": "5ef6a520780202a1d6addd833d800ccb1ecac0bb",
+   "size": 480
+  },
+  {
+   "path": "packages/web-dashboard/AGENTS.md",
+   "sha": "8bd0e39085d5260e7f8faffcad2fdc45e10aef33",
+   "size": 327
+  },
+  {
+   "path": "packages/web-dashboard/CLAUDE.md",
+   "sha": "43c994c2d3617f947bcb5adf1933e21dabe46bb5",
+   "size": 11
+  },
+  {
+   "path": "packages/web-dashboard/Dockerfile",
+   "sha": "0cbb7a32e05b201ca2781bc23036dcbb836064b6",
+   "size": 1402
+  },
+  {
+   "path": "packages/web-dashboard/README.md",
+   "sha": "6579e69f83f85bc93a33dadac27a7a43491ab7ff",
+   "size": 1875
+  },
+  {
+   "path": "packages/web-dashboard/eslint.config.mjs",
+   "sha": "05e726d1b4201bc8c7716d2b058279676582e8c0",
+   "size": 465
+  },
+  {
+   "path": "packages/web-dashboard/jest.config.ts",
+   "sha": "30ecbd8b1b7e6cc6c0f69f8a9250111742a72076",
+   "size": 808
+  },
+  {
+   "path": "packages/web-dashboard/next.config.ts",
+   "sha": "172c7dc584c4cb4c0077b6c8282eace52c284205",
+   "size": 155
+  },
+  {
+   "path": "packages/web-dashboard/package.json",
+   "sha": "1238ff4857f91d63f2a9d6238f9a6a62e8340eff",
+   "size": 1008
+  },
+  {
+   "path": "packages/web-dashboard/postcss.config.mjs",
+   "sha": "61e36849cf7cfa9f1f71b4a3964a4953e3e243d3",
+   "size": 94
+  },
+  {
+   "path": "packages/web-dashboard/public/file.svg",
+   "sha": "004145cddf3f9db91b57b9cb596683c8eb420862",
+   "size": 391
+  },
+  {
+   "path": "packages/web-dashboard/public/globe.svg",
+   "sha": "567f17b0d7c7fb662c16d4357dd74830caf2dccb",
+   "size": 1035
+  },
+  {
+   "path": "packages/web-dashboard/public/next.svg",
+   "sha": "5174b28c565c285e3e312ec5178be64fbeca8398",
+   "size": 1375
+  },
+  {
+   "path": "packages/web-dashboard/public/vercel.svg",
+   "sha": "77053960334e2e34dc584dea8019925c3b4ccca9",
+   "size": 128
+  },
+  {
+   "path": "packages/web-dashboard/public/window.svg",
+   "sha": "b2b2a44f6ebc70c450043c05a002e7a93ba5d651",
+   "size": 385
+  },
+  {
+   "path": "packages/web-dashboard/src/app/actions/[id]/page.tsx",
+   "sha": "49097bbda3a28e7176a0fb67dc6ebc9c8b747786",
+   "size": 8405
+  },
+  {
+   "path": "packages/web-dashboard/src/app/actions/page.tsx",
+   "sha": "6253e426c2818c2d873fe4df0cea95b7d35c1ce2",
+   "size": 9915
+  },
+  {
+   "path": "packages/web-dashboard/src/app/activity/page.tsx",
+   "sha": "2b89872bca8f08a30f68fbba84330d321fa9d4b1",
+   "size": 7697
+  },
+  {
+   "path": "packages/web-dashboard/src/app/automation/page.tsx",
+   "sha": "8563194e7074a4ab1d699b60e538c46ec6a6081e",
+   "size": 11263
+  },
+  {
+   "path": "packages/web-dashboard/src/app/ci/page.tsx",
+   "sha": "0e82d57a4b08c32ec441137e5a8ae07301de0122",
+   "size": 16918
+  },
+  {
+   "path": "packages/web-dashboard/src/app/config/page.tsx",
+   "sha": "bbaef6df22a2d36bea50902562cbb61e5393b5d5",
+   "size": 19157
+  },
+  {
+   "path": "packages/web-dashboard/src/app/config/playground/page.tsx",
+   "sha": "e833c449f92a1bb62540293290a8776e16c69973",
+   "size": 9017
+  },
+  {
+   "path": "packages/web-dashboard/src/app/custom-rules/page.tsx",
+   "sha": "c9bd35bbc8511c81d2f7223c589464c6309aa901",
+   "size": 9526
+  },
+  {
+   "path": "packages/web-dashboard/src/app/decisions/page.tsx",
+   "sha": "a051e764146e1acb71a38ddf9ca31976e7b9e474",
+   "size": 16736
+  },
+  {
+   "path": "packages/web-dashboard/src/app/deliveries/page.tsx",
+   "sha": "ece2d541eb75c1687d625541e95e063fe3072991",
+   "size": 9288
+  },
+  {
+   "path": "packages/web-dashboard/src/app/dry-run/page.tsx",
+   "sha": "ab7e7b62c7d802aa07a9e4a581c929302f987b14",
+   "size": 18143
+  },
+  {
+   "path": "packages/web-dashboard/src/app/duplicates/page.tsx",
+   "sha": "8174219e3be0608bde74b070f81ec4fd5138f47e",
+   "size": 14345
+  },
+  {
+   "path": "packages/web-dashboard/src/app/error.tsx",
+   "sha": "d7d34b8f196ff92717de8e58d1fe2ee684decef7",
+   "size": 1028
+  },
+  {
+   "path": "packages/web-dashboard/src/app/favicon.ico",
+   "sha": "718d6fea4835ec2d246af9800eddb7ffb276240c",
+   "size": 25931
+  },
+  {
+   "path": "packages/web-dashboard/src/app/fix-attempts/page.tsx",
+   "sha": "95dfa4689917ccdc353c63dac3b90f300368b1b1",
+   "size": 8446
+  },
+  {
+   "path": "packages/web-dashboard/src/app/gates/page.tsx",
+   "sha": "ca60329b5d7431ae26696faa7c4e867ae0984054",
+   "size": 20527
+  },
+  {
+   "path": "packages/web-dashboard/src/app/globals.css",
+   "sha": "f486e5e8cf69f3cece54043ec210d1a053483c7b",
+   "size": 2885
+  },
+  {
+   "path": "packages/web-dashboard/src/app/insights/page.tsx",
+   "sha": "41c0d457a7aefc474af496ed176b1b4d20973f37",
+   "size": 10804
+  },
+  {
+   "path": "packages/web-dashboard/src/app/intelligence/page.tsx",
+   "sha": "3669d1019630cd89e4b2f9fbb06a6b1336b27db8",
+   "size": 30143
+  },
+  {
+   "path": "packages/web-dashboard/src/app/issues/page.tsx",
+   "sha": "1a3b9fdb7595ff222852311dda3452117a719e49",
+   "size": 8650
+  },
+  {
+   "path": "packages/web-dashboard/src/app/layout.tsx",
+   "sha": "b8b9b8bbb12fdd7b972aa8f40cd0a5827cd97696",
+   "size": 673
+  },
+  {
+   "path": "packages/web-dashboard/src/app/login/page.tsx",
+   "sha": "bca264d0d052b68bb412d0b8d5d411be6f02352c",
+   "size": 4404
+  },
+  {
+   "path": "packages/web-dashboard/src/app/maintainer/page.tsx",
+   "sha": "cf5886da384415070a30ee1833f4c4a97c416af1",
+   "size": 37722
+  },
+  {
+   "path": "packages/web-dashboard/src/app/page.tsx",
+   "sha": "b599f0b6e470a0ac3461aceca0678e08342126cf",
+   "size": 14874
+  },
+  {
+   "path": "packages/web-dashboard/src/app/policy-preview/page.tsx",
+   "sha": "b73516d44ae17c6d9634265e29dfcdb85cf9f893",
+   "size": 43222
+  },
+  {
+   "path": "packages/web-dashboard/src/app/providers.tsx",
+   "sha": "f5b4439d29c898f1119a1050c26281dd006bca3b",
+   "size": 350
+  },
+  {
+   "path": "packages/web-dashboard/src/app/pull-requests/page.tsx",
+   "sha": "c09f0aa9b2e312305543c873cbaa61916291b9e9",
+   "size": 8314
+  },
+  {
+   "path": "packages/web-dashboard/src/app/readiness/[owner]/[repo]/page.tsx",
+   "sha": "200cad982959e337b998b1392436bee5f50b2239",
+   "size": 5063
+  },
+  {
+   "path": "packages/web-dashboard/src/app/readiness/page.tsx",
+   "sha": "a6b707cb25d216bc17fdb9789ec71b31a2579fae",
+   "size": 7209
+  },
+  {
+   "path": "packages/web-dashboard/src/app/repos/page.tsx",
+   "sha": "11926d8882379726e9e2febe9d2b3d43649b6a20",
+   "size": 8354
+  },
+  {
+   "path": "packages/web-dashboard/src/app/rollouts/page.tsx",
+   "sha": "385f431a9ad77156b6276f3ac6ec4a0c885117d2",
+   "size": 24022
+  },
+  {
+   "path": "packages/web-dashboard/src/app/trust/page.tsx",
+   "sha": "2dd1a83896c9aa0330238c2db50892eda675a508",
+   "size": 12692
+  },
+  {
+   "path": "packages/web-dashboard/src/app/waivers/page.tsx",
+   "sha": "3ca4ea1258b58289c472c5d30e77156882de3fd5",
+   "size": 21932
+  },
+  {
+   "path": "packages/web-dashboard/src/components/ErrorBoundary.tsx",
+   "sha": "5e0bef9f39f65b2db9f2c30df3013cdcce96c9f3",
+   "size": 1770
+  },
+  {
+   "path": "packages/web-dashboard/src/components/Icons.tsx",
+   "sha": "a67e9d41c6697ec76b7ffb009882a1cdd3dbb69c",
+   "size": 3073
+  },
+  {
+   "path": "packages/web-dashboard/src/components/ReconcilePanel.tsx",
+   "sha": "caa891e96dab651152ea3b962e8cc6141003e7a8",
+   "size": 6731
+  },
+  {
+   "path": "packages/web-dashboard/src/components/SetupChecklist.tsx",
+   "sha": "e75f627142ba60593ec65bda59febe31a155827e",
+   "size": 9825
+  },
+  {
+   "path": "packages/web-dashboard/src/components/Sidebar.tsx",
+   "sha": "8d4a66e6b0842040d624ccf24c11012fdae5321f",
+   "size": 5751
+  },
+  {
+   "path": "packages/web-dashboard/src/components/ui/index.tsx",
+   "sha": "c1faa4579c1ef57db5d74b316b0dfd1a148d4dd2",
+   "size": 9800
+  },
+  {
+   "path": "packages/web-dashboard/src/lib/api.ts",
+   "sha": "f7495a88453552af152dc7ce2a715219bfc45c77",
+   "size": 24365
+  },
+  {
+   "path": "packages/web-dashboard/src/lib/buildInfo.ts",
+   "sha": "3a12affde4c67a907de232aa5850285638ae6e69",
+   "size": 851
+  },
+  {
+   "path": "packages/web-dashboard/src/lib/types.ts",
+   "sha": "4ffcca8240c8d54fb71fdf3790ac5ff15a11cb82",
+   "size": 165
+  },
+  {
+   "path": "packages/web-dashboard/src/middleware.ts",
+   "sha": "dd742c69d10e7a9e48b7b64661cdb707fc853fdc",
+   "size": 2015
+  },
+  {
+   "path": "packages/web-dashboard/tests/api-fetcher.test.ts",
+   "sha": "b8e2428bee9dc8b7a095e6d18fb6067576890959",
+   "size": 1855
+  },
+  {
+   "path": "packages/web-dashboard/tests/api-mutations.test.ts",
+   "sha": "056ed9d0dea4304078b682d8f8563f66a96eeeca",
+   "size": 9329
+  },
+  {
+   "path": "packages/web-dashboard/tests/api-urls.test.ts",
+   "sha": "3bbb055d4f1d22c90efc929e232e1f968593e292",
+   "size": 2421
+  },
+  {
+   "path": "packages/web-dashboard/tests/components/error-boundary.test.tsx",
+   "sha": "b6bfd8f02313db970a4d892953628344310bbd1a",
+   "size": 1471
+  },
+  {
+   "path": "packages/web-dashboard/tests/components/sidebar.test.tsx",
+   "sha": "c4055636c0b1e60de371dd2fd4c46a45d33845cd",
+   "size": 3709
+  },
+  {
+   "path": "packages/web-dashboard/tests/helpers/__mocks__/phosphor-icons.tsx",
+   "sha": "4e37ec1ca3c806b9e41bc3479c8f19282966f895",
+   "size": 716
+  },
+  {
+   "path": "packages/web-dashboard/tests/helpers/mock-fetch.ts",
+   "sha": "f238d50e0cbb70568fb7d964a8173a628f4f088d",
+   "size": 1380
+  },
+  {
+   "path": "packages/web-dashboard/tsconfig.json",
+   "sha": "cf9c65d3e0676a0169374d827f7abb97497789ef",
+   "size": 670
+  },
+  {
+   "path": "packages/web/.env.example",
+   "sha": "d92e27b8b5f4d07de62b39b19b6139fd2406750e",
+   "size": 3529
+  },
+  {
+   "path": "packages/web/README.md",
+   "sha": "6306860beee0c12bea6424b9d59b007608abba10",
+   "size": 3688
+  },
+  {
+   "path": "packages/web/config/index.js",
+   "sha": "ad1873579e954e829abe382ee2cef15199cabc60",
+   "size": 7452
+  },
+  {
+   "path": "packages/web/db/migrations/001_initial_schema.sql",
+   "sha": "b2574ef1b60fdcc41e797e816ac78678cee82a54",
+   "size": 6060
+  },
+  {
+   "path": "packages/web/db/migrations/002_repos_deleted_at.sql",
+   "sha": "1e36989ff981c6d400f33dec5b65174b34be8cad",
+   "size": 302
+  },
+  {
+   "path": "packages/web/db/migrations/003_maintainer.sql",
+   "sha": "0e03fa9cde24e8f541666d307e14de45d7c27ec0",
+   "size": 1688
+  },
+  {
+   "path": "packages/web/db/migrations/004_issue_fix.sql",
+   "sha": "ab1767ee437a1663b74bda045ca14f24d2872fc8",
+   "size": 863
+  },
+  {
+   "path": "packages/web/db/migrations/005_governance.sql",
+   "sha": "1b5c1e00b201b663b5a3fd6d3198d185b5660bfa",
+   "size": 5119
+  },
+  {
+   "path": "packages/web/db/migrations/006_heal_prs.sql",
+   "sha": "0b0398ce2d67a77a03369baf2aa457b70e40d286",
+   "size": 1132
+  },
+  {
+   "path": "packages/web/db/migrations/007_duplicate_detection.sql",
+   "sha": "055c3c4300806e0780d2dd5a12daa6136a62ba46",
+   "size": 3104
+  },
+  {
+   "path": "packages/web/db/migrations/008_phase1_enforcement.sql",
+   "sha": "a6a0ec9e4e056fa1c95df5ee8d3758b50660b39d",
+   "size": 3771
+  },
+  {
+   "path": "packages/web/db/migrations/009_phase2_automation.sql",
+   "sha": "50b750b60d70c9ee01253a9fee8399dfb99ee45e",
+   "size": 5219
+  },
+  {
+   "path": "packages/web/db/migrations/010_phase3_trust.sql",
+   "sha": "a6d6aa2e1430486d946b907228fbd464c13bd739",
+   "size": 7392
+  },
+  {
+   "path": "packages/web/db/migrations/011_phase4_intelligence.sql",
+   "sha": "c25eaee0ee8f047cbd2e0724248650037e991111",
+   "size": 7190
+  },
+  {
+   "path": "packages/web/db/migrations/012_repo_config.sql",
+   "sha": "125d816a9b5950c56c47d54584ffa192ee5ede91",
+   "size": 573
+  },
+  {
+   "path": "packages/web/db/migrations/013_config_history.sql",
+   "sha": "3fc4300687fb72f754a6274c4458c57999dc5b6c",
+   "size": 844
+  },
+  {
+   "path": "packages/web/db/migrations/014_action_feed.sql",
+   "sha": "0fc60a22ce8c063b6cb948b46a648c737caa62dd",
+   "size": 7043
+  },
+  {
+   "path": "packages/web/db/migrations/015_managed_actions.sql",
+   "sha": "12979a59d64211033ae1c191baddd0461fa22e3a",
+   "size": 1912
+  },
+  {
+   "path": "packages/web/db/migrations/016_decision_log.sql",
+   "sha": "22797a5d0b7699666b9a9b1b38b0e3c7926bac55",
+   "size": 1718
+  },
+  {
+   "path": "packages/web/db/migrations/017_policy_waivers.sql",
+   "sha": "3bd1f180fd8241a0c2e6393f2f21ef6be4a4b9fb",
+   "size": 1423
+  },
+  {
+   "path": "packages/web/db/migrations/018_quality_gates.sql",
+   "sha": "e12bba8d72be09c38c718c41b7ae05c750eb0e10",
+   "size": 1750
+  },
+  {
+   "path": "packages/web/db/migrations/019_action_lifecycle.sql",
+   "sha": "40768105c175e2338c4642ac3747d0a3a3825327",
+   "size": 2657
+  },
+  {
+   "path": "packages/web/db/migrations/020_structured_review.sql",
+   "sha": "4fccda511cc653ce5da3831197f06121dc12639b",
+   "size": 1960
+  },
+  {
+   "path": "packages/web/db/migrations/021_action_state_machine_columns.sql",
+   "sha": "9f3bf56d3a8490c4cb06d0db517b3b8f650f45b2",
+   "size": 622
+  },
+  {
+   "path": "packages/web/db/migrations/022_action_key_nullable.sql",
+   "sha": "168a6bcf5a5fc4d8fa5d929cfe2459a40aa53c10",
+   "size": 283
+  },
+  {
+   "path": "packages/web/db/migrations/023_unify_action_lifecycle.sql",
+   "sha": "6462ea54651afe5482fc4cd4b9811b7713f8187c",
+   "size": 1541
+  },
+  {
+   "path": "packages/web/db/migrations/024_heal_outcome.sql",
+   "sha": "fa856c3885cca299c06be78470eb6b9b51245f4b",
+   "size": 547
+  },
+  {
+   "path": "packages/web/db/migrations/025_release_tracking.sql",
+   "sha": "e8307dfc71044941f91776f48b361a474250a7f7",
+   "size": 251
+  },
+  {
+   "path": "packages/web/db/migrations/026_heal_pr_outcome.sql",
+   "sha": "819633214d185dd35b1e9e849b5a97a2b7d948f0",
+   "size": 888
+  },
+  {
+   "path": "packages/web/db/migrations/027_policy_rollout_plans.sql",
+   "sha": "dac4e100b00accdcec7dca8c54e73cceab75e4e3",
+   "size": 3241
+  },
+  {
+   "path": "packages/web/db/migrations/028_rollout_approval.sql",
+   "sha": "0c9c033b3cbbe161dd01b99a1454d849c0da8d91",
+   "size": 1054
+  },
+  {
+   "path": "packages/web/db/migrations/029_rollout_promotion.sql",
+   "sha": "7e281f3f7ab09b3576ec7f49982c86e7428dc6a0",
+   "size": 176
+  },
+  {
+   "path": "packages/web/db/migrations/030_rollout_rollback.sql",
+   "sha": "2955917ea024be09b6fbc7869210bd7e72033280",
+   "size": 407
+  },
+  {
+   "path": "packages/web/db/migrations/031_repair_proposals.sql",
+   "sha": "696b840491f9a2ace218b11b29f87326aa3c558a",
+   "size": 6858
+  },
+  {
+   "path": "packages/web/db/migrations/032_repair_proposal_event_provenance.sql",
+   "sha": "51b4ad6615faa077b211dc3379899c24abf02535",
+   "size": 838
+  },
+  {
+   "path": "packages/web/db/migrations/033_patch_artifacts.sql",
+   "sha": "5def13c79bfa8f2109af5e99f5dfabaca243a57b",
+   "size": 663
+  },
+  {
+   "path": "packages/web/db/migrations/034_execution_receipts.sql",
+   "sha": "3283890c813cb541d8eb4923869a7eb05d358ae1",
+   "size": 917
+  },
+  {
+   "path": "packages/web/db/migrations/035_source_snapshots.sql",
+   "sha": "9f6f950ad589c3e478e3f12e883b11ee133b612b",
+   "size": 1099
+  },
+  {
+   "path": "packages/web/db/migrations/036_backend_isolation_evidence.sql",
+   "sha": "2e089d8fc1b687799a3934e36ed74863455572c7",
+   "size": 1467
+  },
+  {
+   "path": "packages/web/db/migrations/037_blocked_reason.sql",
+   "sha": "37e5199647c0572b2907e57b56ad65dee973ddbe",
+   "size": 736
+  },
+  {
+   "path": "packages/web/db/migrations/038_level1_schema.sql",
+   "sha": "0e005d011a6c19d82f450aead6bcc7cabdaad3ac",
+   "size": 22117
+  },
+  {
+   "path": "packages/web/db/migrations/039_level1_roles.sql",
+   "sha": "35aed4ceb7e04d5408243b3299e4d14de94911f1",
+   "size": 25636
+  },
+  {
+   "path": "packages/web/db/migrations/040_level1_seed.sql",
+   "sha": "df0c235118d523360ce26c2023e598e0051a2529",
+   "size": 8117
+  },
+  {
+   "path": "packages/web/db/migrations/041_wave2_runtime_identity.sql",
+   "sha": "1e082bfcca80ddb5869df17b46eea6001e7ee05f",
+   "size": 6779
+  },
+  {
+   "path": "packages/web/db/migrations/042_attribution_gap_evidence.sql",
+   "sha": "3d316454ace1722b9953b0cdba179334f51511bd",
+   "size": 2250
+  },
+  {
+   "path": "packages/web/db/proof/WAVE2_FINAL_REPORT.md",
+   "sha": "501a5e726f11e7888f541001ef8c2667dd096206",
+   "size": 4842
+  },
+  {
+   "path": "packages/web/db/proof/collisions.mjs",
+   "sha": "01ab55a409d27cd425efed01cab8ff7d6e7157de",
+   "size": 10598
+  },
+  {
+   "path": "packages/web/db/proof/fixtures.mjs",
+   "sha": "19cb273b3838faa0f139cfe37e05d6f29575ce64",
+   "size": 47814
+  },
+  {
+   "path": "packages/web/db/proof/rollback_level1.sql",
+   "sha": "b993944279484f0e7df81e8a02b231af31851de0",
+   "size": 5346
+  },
+  {
+   "path": "packages/web/db/proof/rollback_wave2.sql",
+   "sha": "c8d64924a0ae7efe8567a9f2a4ba5efcab5d852d",
+   "size": 2004
+  },
+  {
+   "path": "packages/web/db/proof/rollback_wave2_042.sql",
+   "sha": "41df3bb4d35b56844b7ced012075fbbc3bf8ec93",
+   "size": 762
+  },
+  {
+   "path": "packages/web/db/proof/run_ciheal_regression_proof.mjs",
+   "sha": "977b7f705466eee04d9e649505e319f7eb151cd2",
+   "size": 28265
+  },
+  {
+   "path": "packages/web/db/proof/run_docker_build_health_proof.mjs",
+   "sha": "f3c891a0f283d2bf7c23e0caf03b8629bca2fe1b",
+   "size": 7833
+  },
+  {
+   "path": "packages/web/db/proof/run_guard_pg_proof.mjs",
+   "sha": "d18df8ce1c57c5f3addaed86ee807b356db49d0a",
+   "size": 18126
+  },
+  {
+   "path": "packages/web/db/proof/run_http_route_matrix_proof.mjs",
+   "sha": "ab46fb5ac93f4f97e9151f1743e1cc16b06987db",
+   "size": 38319
+  },
+  {
+   "path": "packages/web/db/proof/run_installation_worker_adoption_proof.mjs",
+   "sha": "c649e57bee18d63089fc3e4dd2119f962e39b328",
+   "size": 9827
+  },
+  {
+   "path": "packages/web/db/proof/run_migration_042_proof.mjs",
+   "sha": "38a13b816081f25c3de6e08d74b50bf50e6b5353",
+   "size": 13179
+  },
+  {
+   "path": "packages/web/db/proof/run_migration_full_proof.mjs",
+   "sha": "9834ece0e55fa44dd36de76a5de90053863b1e10",
+   "size": 8981
+  },
+  {
+   "path": "packages/web/db/proof/run_positive_attribution_proof.mjs",
+   "sha": "c16e183a43cd567fd9ff7a09ff2387ed0acfbe1b",
+   "size": 15746
+  },
+  {
+   "path": "packages/web/db/proof/run_proof.mjs",
+   "sha": "c2d12ce306ef356fcf59d0b457774a3c3514b4cc",
+   "size": 17420
+  },
+  {
+   "path": "packages/web/db/proof/run_reconciliation_db_proof.mjs",
+   "sha": "f551b0e74341afa9a2e449a1c806b58a0aa4e848",
+   "size": 12726
+  },
+  {
+   "path": "packages/web/db/proof/run_review_regression_proof.mjs",
+   "sha": "61c4cd3b02655c3cf2c6f5a3052fd6bfb8cdb1de",
+   "size": 13556
+  },
+  {
+   "path": "packages/web/db/proof/run_scheduler_adoption_proof.mjs",
+   "sha": "01e944ebe962fb6e075ba825b267126e2f5ec246",
+   "size": 10368
+  },
+  {
+   "path": "packages/web/db/proof/run_sync_vertical_proof.mjs",
+   "sha": "72489d2022f73853f531dd07811c0241b9fe0d38",
+   "size": 16545
+  },
+  {
+   "path": "packages/web/db/proof/run_system_worker_adoption_proof.mjs",
+   "sha": "8aa19145310f49490236daaca11e797495ffe239",
+   "size": 12397
+  },
+  {
+   "path": "packages/web/db/proof/run_telegram_bot_proof.mjs",
+   "sha": "eaa048ce8cfc7bcb80def5bb421dcb71ba389866",
+   "size": 17121
+  },
+  {
+   "path": "packages/web/db/proof/run_telegram_heal_proof.mjs",
+   "sha": "2f96bc6c62d30c514f1522a95d9349892742d3af",
+   "size": 13727
+  },
+  {
+   "path": "packages/web/db/proof/run_telegram_vertical_proof.mjs",
+   "sha": "154a07e9e458fdc96ef972843ea51c88ea88fcaf",
+   "size": 16330
+  },
+  {
+   "path": "packages/web/db/proof/run_transaction_proof.mjs",
+   "sha": "bbe1e8175a4599fe4036966bbe7828fc8481cfad",
+   "size": 14296
+  },
+  {
+   "path": "packages/web/db/proof/run_triage_handler_pg_proof.mjs",
+   "sha": "35c4d6a55ae34d3e5071d60f5a8b684be0bb80b7",
+   "size": 25428
+  },
+  {
+   "path": "packages/web/db/proof/run_triage_pg_proof.mjs",
+   "sha": "c495d98df001c847f989b8ed45a1d9fcaaa06e42",
+   "size": 14137
+  },
+  {
+   "path": "packages/web/db/proof/run_wave2_proof.mjs",
+   "sha": "0dcb1e5e42253049d7e19647ea1ab131615e79a0",
+   "size": 28076
+  },
+  {
+   "path": "packages/web/db/proof/run_webhook_vertical_proof.mjs",
+   "sha": "0c3152a56d255f95bf14d898be50dfca08abc23b",
+   "size": 22265
+  },
+  {
+   "path": "packages/web/db/proof/run_webhook_worker_proof.mjs",
+   "sha": "e8cfac530cf73eaad7c352033fc5d9f056e80513",
+   "size": 19467
+  },
+  {
+   "path": "packages/web/db/proof/seed_proof.mjs",
+   "sha": "722204bee664c99d238d2cdff889b8ae3960e2ae",
+   "size": 9868
+  },
+  {
+   "path": "packages/web/docker/docker-compose.yml",
+   "sha": "92fe032ef9fb19be49d0906b9b4c3b60cf325b8c",
+   "size": 1200
+  },
+  {
+   "path": "packages/web/docker/nginx.conf",
+   "sha": "aad577b5e2485807c3a656ce708a3f40070e2216",
+   "size": 2946
+  },
+  {
+   "path": "packages/web/ecosystem.config.cjs",
+   "sha": "fdcc0cb72422723879edea9193270a7b15f00553",
+   "size": 794
+  },
+  {
+   "path": "packages/web/jest.config.js",
+   "sha": "634e4a2dc7a1eba2bed883c56f1c929ca84e85f1",
+   "size": 1075
+  },
+  {
+   "path": "packages/web/package.json",
+   "sha": "9bff6e6acfa4b478a747940ab29c5a5121d8589f",
+   "size": 1750
+  },
+  {
+   "path": "packages/web/src/app.js",
+   "sha": "8150fab48871557574f44160f6b5e442fc55138c",
+   "size": 11274
+  },
+  {
+   "path": "packages/web/src/index.js",
+   "sha": "625b47fecfce75ec93136244a00c61a675985ac2",
+   "size": 5234
+  },
+  {
+   "path": "packages/web/src/lib/artifactApplier.js",
+   "sha": "c9c4c9b04880d8a3bb3356b170d0b4fdee0a1382",
+   "size": 5093
+  },
+  {
+   "path": "packages/web/src/lib/backendEvidenceStore.js",
+   "sha": "a8e1a94a5dbce3d36ad4304c1b5736f8e0bd4b42",
+   "size": 11315
+  },
+  {
+   "path": "packages/web/src/lib/checkStatus.js",
+   "sha": "9433e481d4ff44e61d08fe0105ee5e116c7995aa",
+   "size": 5521
+  },
+  {
+   "path": "packages/web/src/lib/commentMarkers.js",
+   "sha": "9a4ce631180da2aca15405e961e05ab1b65e098e",
+   "size": 5040
+  },
+  {
+   "path": "packages/web/src/lib/commentRouter.js",
+   "sha": "e0654a43c348bf09947561e3271f31541da744be",
+   "size": 7142
+  },
+  {
+   "path": "packages/web/src/lib/db.js",
+   "sha": "0a40252c849f1be763c88dd7cf0341e8b8d86386",
+   "size": 214
+  },
+  {
+   "path": "packages/web/src/lib/delegatedRunProvider.js",
+   "sha": "2d2f61dfa42a04609813ac8d0d0537406426640a",
+   "size": 3886
+  },
+  {
+   "path": "packages/web/src/lib/deploymentInfo.js",
+   "sha": "30286cfa33149e0e81c2b835946946ea67e133e4",
+   "size": 4234
+  },
+  {
+   "path": "packages/web/src/lib/dockerExecutorBackend.js",
+   "sha": "aca4d093499dc3b102b23423f2a659fedaf451c5",
+   "size": 20237
+  },
+  {
+   "path": "packages/web/src/lib/executionReceiptStore.js",
+   "sha": "ace5c9e4e1999384a75147136249c4962ae350a0",
+   "size": 7493
+  },
+  {
+   "path": "packages/web/src/lib/executorBackend.js",
+   "sha": "a541c0597ef73efdf5fb6194305465db38f14ece",
+   "size": 7081
+  },
+  {
+   "path": "packages/web/src/lib/executorReachability.js",
+   "sha": "252a09deb1b18265d26efbc57737c1cf84cb6612",
+   "size": 22083
+  },
+  {
+   "path": "packages/web/src/lib/executorRegistry.js",
+   "sha": "268df6bbe5fb5507407b1a78a7e72b1ad6ac2f98",
+   "size": 5461
+  },
+  {
+   "path": "packages/web/src/lib/executorServiceBackend.js",
+   "sha": "5672af8ad28ae73017d62dc77e24964ab268fdd0",
+   "size": 13250
+  },
+  {
+   "path": "packages/web/src/lib/executorServiceClient.js",
+   "sha": "5bd92cb80a769ca7cd0dfbc556626558ad07c7b5",
+   "size": 10583
+  },
+  {
+   "path": "packages/web/src/lib/github.js",
+   "sha": "907a9b21ca0082d8d702da4a5043cf0efa671c4f",
+   "size": 371
+  },
+  {
+   "path": "packages/web/src/lib/githubSanitize.js",
+   "sha": "a5087a6dda71a3eb7876c1b268ed77baf040f1c5",
+   "size": 3890
+  },
+  {
+   "path": "packages/web/src/lib/githubWrapper.js",
+   "sha": "963e8cb2ba42275366d2d60eb3612f7c8b6ea98a",
+   "size": 4122
+  },
+  {
+   "path": "packages/web/src/lib/gracefulShutdown.js",
+   "sha": "687f1eb247b5b5e2e2f05bb9175537dceb985254",
+   "size": 5671
+  },
+  {
+   "path": "packages/web/src/lib/imageInspector.js",
+   "sha": "84971af9517292f1ba3641165dcb32c8ddc01b12",
+   "size": 7168
+  },
+  {
+   "path": "packages/web/src/lib/imageReference.js",
+   "sha": "81787db842fb1bee63c999f03754311263d0b9ce",
+   "size": 5095
+  },
+  {
+   "path": "packages/web/src/lib/isolationProbes.js",
+   "sha": "aaebd3815e333b3a22b389c517dd5c32eb9ec8ce",
+   "size": 10067
+  },
+  {
+   "path": "packages/web/src/lib/logger.js",
+   "sha": "f3ccad82b80b2df3989313fb15f72384d2150e77",
+   "size": 234
+  },
+  {
+   "path": "packages/web/src/lib/nodeExecutorBackend.js",
+   "sha": "9a22b7968880959b1e2c3962bc31920917bc9c72",
+   "size": 3240
+  },
+  {
+   "path": "packages/web/src/lib/patchArtifactStore.js",
+   "sha": "02d882c881b670fc403b8985e1eddba241d988ce",
+   "size": 6131
+  },
+  {
+   "path": "packages/web/src/lib/planExecutionConformance.js",
+   "sha": "2bb3e34cf5f25fee6cd1ea45305b15a9bb8560b6",
+   "size": 12065
+  },
+  {
+   "path": "packages/web/src/lib/queue.js",
+   "sha": "4ccecfc8ab06f5a8c6116e9ce213f45f4f3b17d2",
+   "size": 546
+  },
+  {
+   "path": "packages/web/src/lib/reconcileRepository.js",
+   "sha": "31d0d9925c0ff9c79314f0d4f6871280bc937d50",
+   "size": 2803
+  },
+  {
+   "path": "packages/web/src/lib/redact.js",
+   "sha": "d5020fb7bc9e11c7f0d41f84cd81ffe92b94bbf7",
+   "size": 2958
+  },
+  {
+   "path": "packages/web/src/lib/resultEligibility.js",
+   "sha": "f307341e12222af37cd7dbd930d9c0aa097ff0da",
+   "size": 5634
+  },
+  {
+   "path": "packages/web/src/lib/sandboxExecutor.js",
+   "sha": "69e89a27a3a7b58e464f07b02d6526db4b21d0d4",
+   "size": 12608
+  },
+  {
+   "path": "packages/web/src/lib/sandboxRunner.js",
+   "sha": "6325414e675d7d68794c04e90e15d608b7224398",
+   "size": 36465
+  },
+  {
+   "path": "packages/web/src/lib/sourceSnapshotProvider.js",
+   "sha": "775d566e883cac8d4f652b2bbaf05a31dcc27977",
+   "size": 4379
+  },
+  {
+   "path": "packages/web/src/lib/sourceSnapshotStore.js",
+   "sha": "4949ca18f8ccf55f3a433079ff58697e20a500e9",
+   "size": 4304
+  },
+  {
+   "path": "packages/web/src/lib/validationCommandTemplates.js",
+   "sha": "f7317406bbf554580bfd6394cf938c7467b40ebb",
+   "size": 1792
+  },
+  {
+   "path": "packages/web/src/lib/validationPlanAdapter.js",
+   "sha": "c72e708c002e4b0a6e054532cda6bbef471f346c",
+   "size": 15669
+  },
+  {
+   "path": "packages/web/src/lib/validatorImage.js",
+   "sha": "420f158766c4c0d42ecf4824d172d027bda3dffc",
+   "size": 3069
+  },
+  {
+   "path": "packages/web/src/lib/validatorReceiptGate.js",
+   "sha": "24a22933d27b4e77068e35c9406f87806f5e9aab",
+   "size": 10512
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleFixCommand.js",
+   "sha": "509594f256d195c1be82349c0381471b46ec22c6",
+   "size": 554
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
+   "sha": "75b429cbc5747d5c02b7c958d34d882102c8b15d",
+   "size": 10593
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleWaiverCommand.js",
+   "sha": "61ef12c41a83907226c5f419be7be372fe094370",
+   "size": 2058
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handleCheckSuite.js",
+   "sha": "2682d21a48e55a952dc5900539d71cf5b629bbee",
+   "size": 376
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handleInstallation.js",
+   "sha": "0a25f65dd5ede5f94ae53d3d9ad13750d9e7e454",
+   "size": 353
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handleIssueComment.js",
+   "sha": "670035225d9826b2cce00e9cb53be24efb5e3c02",
+   "size": 1968
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handleIssues.js",
+   "sha": "c144604cb12d1154f5acca7b5c0c6ca81f90b7f7",
+   "size": 891
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handlePullRequest.js",
+   "sha": "3836377f34bf79d2ca03d202e013697ee50434d7",
+   "size": 3298
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handlePullRequestReview.js",
+   "sha": "059625692a3ea75669a9bd1b3f4f4edf8dd8364c",
+   "size": 448
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handlePush.js",
+   "sha": "b5679741e3ac574f5426683894bd2a540bf4ff6e",
+   "size": 854
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handleRelease.js",
+   "sha": "5f334256c45033ada1662f5db8f7ffcd847cf0d0",
+   "size": 5418
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handleSpamGate.js",
+   "sha": "6ce611ad2549ccc2d7e2f15b7ee685802e184da7",
+   "size": 5872
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/handleWorkflowRun.js",
+   "sha": "36aa147d8cdf595af89c156d15b68b1a0bfc73b0",
+   "size": 2647
+  },
+  {
+   "path": "packages/web/src/lib/webhookHandlers/index.js",
+   "sha": "cb32b0d3ba4363eb9c0e33ed2de893df92bc073a",
+   "size": 3540
+  },
+  {
+   "path": "packages/web/src/lib/workflowCommandExtractor.js",
+   "sha": "912c34087f12ed132dd690e84906cf9823c01e7a",
+   "size": 8852
+  },
+  {
+   "path": "packages/web/src/middleware/auth.js",
+   "sha": "a4a479f1292436055302dca12b5ae059523e46b5",
+   "size": 3186
+  },
+  {
+   "path": "packages/web/src/middleware/authContext.js",
+   "sha": "c6eb7f877a41da7f77c3bd8215dc6111d983383c",
+   "size": 4681
+  },
+  {
+   "path": "packages/web/src/middleware/pagination.js",
+   "sha": "5f569dcea7ff10eb4206a9f531529e8318e5676d",
+   "size": 805
+  },
+  {
+   "path": "packages/web/src/middleware/rateLimiter.js",
+   "sha": "a70d78c5d8da0e8c23be291ea83ffa3c19a8292f",
+   "size": 1693
+  },
+  {
+   "path": "packages/web/src/middleware/routeAuthObserver.js",
+   "sha": "e319bcdc112e7c430567c6cc1e244da9e95f243a",
+   "size": 5716
+  },
+  {
+   "path": "packages/web/src/routes/actions.js",
+   "sha": "faf5e2a7d22302ef633287e4b4e698d8fdc252ac",
+   "size": 5930
+  },
+  {
+   "path": "packages/web/src/routes/activity.js",
+   "sha": "37a44b395f8c130caa26681e5b177ccf2922a51b",
+   "size": 5754
+  },
+  {
+   "path": "packages/web/src/routes/auditBundles.js",
+   "sha": "eff109fffec483dd560fffb954a10ee08bd4627c",
+   "size": 2110
+  },
+  {
+   "path": "packages/web/src/routes/auth.js",
+   "sha": "2c7df76a8fecb4805cd5c8a55ec4862d081b72ff",
+   "size": 4276
+  },
+  {
+   "path": "packages/web/src/routes/bootstrap.js",
+   "sha": "dc5e3d9daa02e4b2e6663bbab7e91c84465de8bd",
+   "size": 3959
+  },
+  {
+   "path": "packages/web/src/routes/ciRuns.js",
+   "sha": "3e99f4158213e21eeac90484d03850a48b0b6ab8",
+   "size": 7353
+  },
+  {
+   "path": "packages/web/src/routes/config.js",
+   "sha": "7ebb74969d812a3b44ce51e8994de9d72a5662f0",
+   "size": 18172
+  },
+  {
+   "path": "packages/web/src/routes/decisions.js",
+   "sha": "2c0d2a2f33987f9e43a9bc620e6574fa0f05c383",
+   "size": 1721
+  },
+  {
+   "path": "packages/web/src/routes/duplicates.js",
+   "sha": "5e0a14e04361301aff7bf2f03410231b5e45cc75",
+   "size": 10127
+  },
+  {
+   "path": "packages/web/src/routes/enforcement.js",
+   "sha": "32cdacb8a320c6ebe7ff0dbde419a4b6ff22becc",
+   "size": 14135
+  },
+  {
+   "path": "packages/web/src/routes/fix.js",
+   "sha": "274e165b7817662e2dbd7f930888f94c474571b8",
+   "size": 3892
+  },
+  {
+   "path": "packages/web/src/routes/gates.js",
+   "sha": "e79d156f35ecda3ffc085b8b9f052ee63240c263",
+   "size": 11632
+  },
+  {
+   "path": "packages/web/src/routes/githubRelay.js",
+   "sha": "6fb4ee5e0a124310b24bd5e2957d25a7ff0d16cf",
+   "size": 2077
+  },
+  {
+   "path": "packages/web/src/routes/healHistory.js",
+   "sha": "dc9733873020ed7577cc88e8f364bce15996ef1d",
+   "size": 5797
+  },
+  {
+   "path": "packages/web/src/routes/insights.js",
+   "sha": "711e945e4648a02d677bdc3ecf453edf28efe03d",
+   "size": 6880
+  },
+  {
+   "path": "packages/web/src/routes/issues.js",
+   "sha": "9ce6d23046a922cda16e971df7183f347bd73c3d",
+   "size": 4781
+  },
+  {
+   "path": "packages/web/src/routes/maintainer.js",
+   "sha": "ebc36711433ac53072117bdb9367e0daf60804c8",
+   "size": 22785
+  },
+  {
+   "path": "packages/web/src/routes/phase2.js",
+   "sha": "ea0b3fcc6ff0873e619f5dbdb80fbff11e0a347f",
+   "size": 13760
+  },
+  {
+   "path": "packages/web/src/routes/phase3.js",
+   "sha": "09c6fb8b05980d3d7387d4aeb7d173d8af0e8eb3",
+   "size": 15760
+  },
+  {
+   "path": "packages/web/src/routes/phase4.js",
+   "sha": "0cc4f5e30f7f7d13fff14e926f98a24beed00215",
+   "size": 18086
+  },
+  {
+   "path": "packages/web/src/routes/pullRequests.js",
+   "sha": "6adc8c814862913a4b8c0a1969ada36192ac1e7e",
+   "size": 4488
+  },
+  {
+   "path": "packages/web/src/routes/readiness.js",
+   "sha": "7a114d44c5bb9aacd59bd59fc4e722b6c1ece75b",
+   "size": 10016
+  },
+  {
+   "path": "packages/web/src/routes/repairs.js",
+   "sha": "49d6cf565913886e4934ad7265ddd3037d3e26e5",
+   "size": 4309
+  },
+  {
+   "path": "packages/web/src/routes/repos.js",
+   "sha": "c3b3e27fdf5517bf8ceebb4a0cc068b78944661b",
+   "size": 5089
+  },
+  {
+   "path": "packages/web/src/routes/rollouts.js",
+   "sha": "79b9a1fe76fa19c767083c85650be885fa4fe037",
+   "size": 11351
+  },
+  {
+   "path": "packages/web/src/routes/setup.js",
+   "sha": "fb553227682a95f5baccc7ee8f04b7ee3f47583e",
+   "size": 1830
+  },
+  {
+   "path": "packages/web/src/routes/transfers.js",
+   "sha": "460b2eb5d10656b108de21c70ecb8d193c8b4b7b",
+   "size": 2165
+  },
+  {
+   "path": "packages/web/src/routes/triageOperations.js",
+   "sha": "93d2f0ad979404a06347267a0b603b9112b5d52f",
+   "size": 8103
+  },
+  {
+   "path": "packages/web/src/routes/waivers.js",
+   "sha": "c7f0662cdb9f002b35354fd6b78e53bd2919b58f",
+   "size": 4019
+  },
+  {
+   "path": "packages/web/src/routes/webhookDeliveries.js",
+   "sha": "0db1bbe86b25c8597e4445d642feec41e42bd170",
+   "size": 5854
+  },
+  {
+   "path": "packages/web/src/routes/webhooks.js",
+   "sha": "283945d8f854868135d4303002a0202790e8befb",
+   "size": 10116
+  },
+  {
+   "path": "packages/web/src/services/actionStateMachine.js",
+   "sha": "8205806d9d1304f5a17670267bfd756050b1efa2",
+   "size": 18828
+  },
+  {
+   "path": "packages/web/src/services/adversarialDefense.js",
+   "sha": "9e702a2d5c8e5998b6a8364568cd9c8aa7ffcf11",
+   "size": 7996
+  },
+  {
+   "path": "packages/web/src/services/adversarialReview.js",
+   "sha": "706a44c946529f664f0cdbcca359c6d8ed57e746",
+   "size": 12880
+  },
+  {
+   "path": "packages/web/src/services/aiReviewService.js",
+   "sha": "7c71f2f3b4743d45a98d63b18670ddff44c32391",
+   "size": 36677
+  },
+  {
+   "path": "packages/web/src/services/auditBundleService.js",
+   "sha": "fbe1cdebe91b838d552d6f49e1c375d5e2759ebb",
+   "size": 10538
+  },
+  {
+   "path": "packages/web/src/services/auditTrailService.js",
+   "sha": "336c3d60526cd720d3d17107cbb4fbc819f7af23",
+   "size": 21416
+  },
+  {
+   "path": "packages/web/src/services/auth/attributionGap.js",
+   "sha": "2153e38576e13f14d7f117286c8df4ced43c880f",
+   "size": 4256
+  },
+  {
+   "path": "packages/web/src/services/auth/attributionGuard.js",
+   "sha": "70301211893d06268a69f538b8a3aa7570b622aa",
+   "size": 4159
+  },
+  {
+   "path": "packages/web/src/services/auth/authorize.js",
+   "sha": "4999ac297c8926c5a192141fd87e670ff24ef0e3",
+   "size": 6353
+  },
+  {
+   "path": "packages/web/src/services/auth/bootstrapService.js",
+   "sha": "b51302de95d8adc53bd3e3714a2eebfb3d1d8250",
+   "size": 5777
+  },
+  {
+   "path": "packages/web/src/services/auth/context.js",
+   "sha": "2edcae2b827a45900a23b5bdde887e8a54174924",
+   "size": 4766
+  },
+  {
+   "path": "packages/web/src/services/auth/credentialResolver.js",
+   "sha": "19f72eaef82a6fc4a21f11aae272db2e5f57ef02",
+   "size": 3268
+  },
+  {
+   "path": "packages/web/src/services/auth/decisionLog.js",
+   "sha": "28382921b8540eb1ff9f0eb911c58d921c25d988",
+   "size": 2994
+  },
+  {
+   "path": "packages/web/src/services/auth/declarations.js",
+   "sha": "bc77e5986d30ebca856132ff78fbd21451c44f18",
+   "size": 11697
+  },
+  {
+   "path": "packages/web/src/services/auth/denialCodes.js",
+   "sha": "d8cee968593a3980b269b46222f55606f7f2ae47",
+   "size": 2906
+  },
+  {
+   "path": "packages/web/src/services/auth/legacyKeyAdapter.js",
+   "sha": "f1b406b30cf341deeb5d338f634258cc8b5b54f6",
+   "size": 3998
+  },
+  {
+   "path": "packages/web/src/services/auth/observeAdopt.js",
+   "sha": "89108544a3bfd565c86a6975a8cc45494c38302b",
+   "size": 3904
+  },
+  {
+   "path": "packages/web/src/services/auth/principalResolver.js",
+   "sha": "56d6c55cdd8be36128f03fb23277cf221d3de8c0",
+   "size": 4646
+  },
+  {
+   "path": "packages/web/src/services/auth/protectedSurfaces.js",
+   "sha": "fc5f460c412fac818e16669ea490ed26500af13d",
+   "size": 3924
+  },
+  {
+   "path": "packages/web/src/services/auth/resourceResolver.js",
+   "sha": "a1abb1ee324f52f2d155ad26af38f930f45c60fb",
+   "size": 2706
+  },
+  {
+   "path": "packages/web/src/services/auth/sessionResolver.js",
+   "sha": "08d79b425671b8b32b6d0404b1ede12cc3842832",
+   "size": 5365
+  },
+  {
+   "path": "packages/web/src/services/auth/workerAdoption.js",
+   "sha": "615fcf3d1e78cc990199eec0a9f4a7f83a7c8f34",
+   "size": 4743
+  },
+  {
+   "path": "packages/web/src/services/auth/workerAdoptionRegistry.js",
+   "sha": "89e09acf7cf736c35e664a442daf0dffae2f83b0",
+   "size": 29467
+  },
+  {
+   "path": "packages/web/src/services/auth/workerContext.js",
+   "sha": "80ae3a11e79c3c1a1f78f6d37592dd3a52373cd8",
+   "size": 4424
+  },
+  {
+   "path": "packages/web/src/services/branchEnforcementService.js",
+   "sha": "56d1cb053209b14718236aa4a35cfeeed1c6a135",
+   "size": 15819
+  },
+  {
+   "path": "packages/web/src/services/checkRunFinalizer.js",
+   "sha": "15ce0ab42a95b7e2c04784f8da9e43b916841bf2",
+   "size": 7160
+  },
+  {
+   "path": "packages/web/src/services/ciEvidenceCollectorService.js",
+   "sha": "6a175e5ab54e3db6c04f1e4d9eb0059a4631738b",
+   "size": 19419
+  },
+  {
+   "path": "packages/web/src/services/ciService.js",
+   "sha": "3b7dbf27968539105e3421893876b260b71da27d",
+   "size": 4385
+  },
+  {
+   "path": "packages/web/src/services/configService.js",
+   "sha": "b035da7f6a512b5b2501b0f205c64fb4d8169fda",
+   "size": 13813
+  },
+  {
+   "path": "packages/web/src/services/configValidationService.js",
+   "sha": "b93d077b18b1957a4736a11633d14da60bb58b31",
+   "size": 15246
+  },
+  {
+   "path": "packages/web/src/services/conventionDetector.js",
+   "sha": "aad2c8f7b6fedd7287251ab798e718af4b0e910e",
+   "size": 6877
+  },
+  {
+   "path": "packages/web/src/services/criticWorkerService.js",
+   "sha": "e3967509c9cf9dbc77ab7fd012f956b07697b332",
+   "size": 7391
+  },
+  {
+   "path": "packages/web/src/services/customRulesService.js",
+   "sha": "53116cd2088222de56ce94ba120890fc0bb6bd9e",
+   "size": 11622
+  },
+  {
+   "path": "packages/web/src/services/decisionLogService.js",
+   "sha": "6cf78fb00e84d7787d692894e02c1b58a2ae62f0",
+   "size": 6488
+  },
+  {
+   "path": "packages/web/src/services/dependencyService.js",
+   "sha": "0f2c2d8acdcfdc4c05d2796a329406de3f686036",
+   "size": 17304
+  },
+  {
+   "path": "packages/web/src/services/diagnosisWorkerService.js",
+   "sha": "5bfdb833b96f2a49324c62389e64bd08157bd3a9",
+   "size": 9879
+  },
+  {
+   "path": "packages/web/src/services/duplicateDetectionService.js",
+   "sha": "afa0ba0f805f65b275db29d308ee83109ce98050",
+   "size": 11984
+  },
+  {
+   "path": "packages/web/src/services/embeddingService.js",
+   "sha": "b0815d07c580152d5f350cd04aceee9cef5791ee",
+   "size": 8922
+  },
+  {
+   "path": "packages/web/src/services/errorRecoveryService.js",
+   "sha": "b606a09aed2e47396fa581a72aa790da352c99c2",
+   "size": 8988
+  },
+  {
+   "path": "packages/web/src/services/feedbackService.js",
+   "sha": "bd18f867ee9f04ddc630e3d385c0593ce6c4798b",
+   "size": 9765
+  },
+  {
+   "path": "packages/web/src/services/flakyTestService.js",
+   "sha": "8c39c87ddb2006fc09d48597ea45677314ecb813",
+   "size": 14575
+  },
+  {
+   "path": "packages/web/src/services/githubCache.js",
+   "sha": "f8b7ddabecc795035c699b4110737ae9b91dde98",
+   "size": 7316
+  },
+  {
+   "path": "packages/web/src/services/githubRateLimit.js",
+   "sha": "978519bb9d623df7c40faa2cd23dce5492cb498a",
+   "size": 9194
+  },
+  {
+   "path": "packages/web/src/services/idempotencyService.js",
+   "sha": "085b4c2f300031cd699475d6c336af52e497175d",
+   "size": 13538
+  },
+  {
+   "path": "packages/web/src/services/issueService.js",
+   "sha": "c7a1630f69f1c4106cc759ef3d33099f88a149a3",
+   "size": 3916
+  },
+  {
+   "path": "packages/web/src/services/maintainerService.js",
+   "sha": "97e2698fb8d118a3d3aab40826518e78294ece6d",
+   "size": 10193
+  },
+  {
+   "path": "packages/web/src/services/managedActionService.js",
+   "sha": "9dfa87f08873395bbf63baa5658b4fc28bcc23cd",
+   "size": 12367
+  },
+  {
+   "path": "packages/web/src/services/mergeQueueService.js",
+   "sha": "451b587a014be9ae0ca3211c69f4b0b8abb79f8b",
+   "size": 14583
+  },
+  {
+   "path": "packages/web/src/services/patchWorkerService.js",
+   "sha": "aab1eb7a3fbedea83aef8c5c5ed957cc8b6a6bde",
+   "size": 17898
+  },
+  {
+   "path": "packages/web/src/services/pipelineEvents.js",
+   "sha": "797aeb5a76740a869b787b31170b6e12fb6aa2da",
+   "size": 2507
+  },
+  {
+   "path": "packages/web/src/services/policyDiffService.js",
+   "sha": "92d833c576dace91f51f3f566dec3eb79ef10f7d",
+   "size": 10201
+  },
+  {
+   "path": "packages/web/src/services/policyRecommendationService.js",
+   "sha": "2863d8ae9184b00b73dadc9c28dd9b2301c07aa5",
+   "size": 15386
+  },
+  {
+   "path": "packages/web/src/services/policyReconcilerService.js",
+   "sha": "8e0ad92ac3c1b42cd3dc296d5de293228e371ca0",
+   "size": 14900
+  },
+  {
+   "path": "packages/web/src/services/policyRolloutService.js",
+   "sha": "c0e6983b52519a86b2b36af06b760b2cc2e69d99",
+   "size": 25672
+  },
+  {
+   "path": "packages/web/src/services/policySimulationService.js",
+   "sha": "0c1696367feb721f5eb008938523df52c2197cde",
+   "size": 11001
+  },
+  {
+   "path": "packages/web/src/services/policyValidationService.js",
+   "sha": "d8adf4dda9bc70837983d608be2c32e337c00b05",
+   "size": 9592
+  },
+  {
+   "path": "packages/web/src/services/qualityGateService.js",
+   "sha": "d360605039dde2a28046684896e3f4e0539b1f5c",
+   "size": 20885
+  },
+  {
+   "path": "packages/web/src/services/repairAuthorityService.js",
+   "sha": "524cc46007e3438530d45e15345a0faccb2d5b4e",
+   "size": 6182
+  },
+  {
+   "path": "packages/web/src/services/repairProposalService.js",
+   "sha": "f3e62ed230b9979ea58bf65391e296a569e521ea",
+   "size": 125315
+  },
+  {
+   "path": "packages/web/src/services/repoService.js",
+   "sha": "66864f847d35ca030431ce9e391f40d299ccf415",
+   "size": 6442
+  },
+  {
+   "path": "packages/web/src/services/repoTransferService.js",
+   "sha": "7d61473512534563c2c6b5cdd3dc3961e962aabd",
+   "size": 8054
+  },
+  {
+   "path": "packages/web/src/services/reviewBundleService.js",
+   "sha": "b914a58f96c6e435eda0f888b4ddf5730898ee8c",
+   "size": 8538
+  },
+  {
+   "path": "packages/web/src/services/reviewHeartbeat.js",
+   "sha": "f4f0cbbc2f9ffdcc95c597475d27db841e478b9f",
+   "size": 2318
+  },
+  {
+   "path": "packages/web/src/services/reviewValidator.js",
+   "sha": "e5f992b5eb22b7379d307a610628bdb97340772a",
+   "size": 7377
+  },
+  {
+   "path": "packages/web/src/services/setupService.js",
+   "sha": "e7518b46da673662da56924a9e8765112eb5ea2f",
+   "size": 10720
+  },
+  {
+   "path": "packages/web/src/services/telegramNotifyService.js",
+   "sha": "f961d997eb03a30e30d236f9886b542b604f221a",
+   "size": 2596
+  },
+  {
+   "path": "packages/web/src/services/templateService.js",
+   "sha": "926164bd248b11bf80b22a33b83c15138644f667",
+   "size": 4651
+  },
+  {
+   "path": "packages/web/src/services/triageFailureService.js",
+   "sha": "e185fff6f1c082ec7544de6eb12677994a4a2bb1",
+   "size": 6692
+  },
+  {
+   "path": "packages/web/src/services/triageStatusService.js",
+   "sha": "96c465a083e3bd11f3131532e5914f70a970a10e",
+   "size": 5283
+  },
+  {
+   "path": "packages/web/src/services/verificationWorkerService.js",
+   "sha": "a7b1810b125494fa0e38ff640a67b0fd56a5312c",
+   "size": 9863
+  },
+  {
+   "path": "packages/web/src/services/waiverService.js",
+   "sha": "65e81b7b9e7c9e7e2f0ea2116a12f05dbe9e42c0",
+   "size": 8151
+  },
+  {
+   "path": "packages/web/src/services/workerEvents.js",
+   "sha": "3dc6a3d8b4bb753c8a11eb91132b84a807784ec7",
+   "size": 3244
+  },
+  {
+   "path": "packages/web/src/workers/ciEvidenceWorker.js",
+   "sha": "7985cc964aa6fe1c8a1aa32364f59d61ad1b0610",
+   "size": 3754
+  },
+  {
+   "path": "packages/web/src/workers/ciHealWorker.js",
+   "sha": "b6153afd4449a9aa923e9ec2c47cbf07cd3a74b2",
+   "size": 56884
+  },
+  {
+   "path": "packages/web/src/workers/criticWorker.js",
+   "sha": "6afe2857c66ea98f1ec968fc27fd804acf68f59c",
+   "size": 2293
+  },
+  {
+   "path": "packages/web/src/workers/diagnosisWorker.js",
+   "sha": "80c7c5237a4538c913b54f823df6b71dce88aedb",
+   "size": 4714
+  },
+  {
+   "path": "packages/web/src/workers/issueFix/analyze.js",
+   "sha": "c35a4517e17d4163df370b9de612bad66947996e",
+   "size": 3938
+  },
+  {
+   "path": "packages/web/src/workers/issueFix/context.js",
+   "sha": "02206eb8317a8778fe1fb34632e0dcfd0b059c80",
+   "size": 2525
+  },
+  {
+   "path": "packages/web/src/workers/issueFix/generate.js",
+   "sha": "2b0311ad621dac3ea5eb25f6ddf5cd6ec95ae1f1",
+   "size": 5850
+  },
+  {
+   "path": "packages/web/src/workers/issueFix/helpers.js",
+   "sha": "994ad1666bd39346076bf2b792b867fa48e509de",
+   "size": 3225
+  },
+  {
+   "path": "packages/web/src/workers/issueFix/pipeline.js",
+   "sha": "c6c767c620ca62accbf69c0729df28ffa067d4d5",
+   "size": 2552
+  },
+  {
+   "path": "packages/web/src/workers/issueFix/scopeGuard.js",
+   "sha": "25d50f1a5a9ca3fd17dec4afa56c4320801299b0",
+   "size": 6443
+  },
+  {
+   "path": "packages/web/src/workers/issueFix/submit.js",
+   "sha": "de8f0180cf2c75952092d5b4aacdfac1be732dac",
+   "size": 7478
+  },
+  {
+   "path": "packages/web/src/workers/issueFix/validate.js",
+   "sha": "2760b6e0153d6adf070000bbcf239968a62850c6",
+   "size": 8863
+  },
+  {
+   "path": "packages/web/src/workers/issueFixWorker.js",
+   "sha": "ec328953c07c596910bc25ade42917157963438c",
+   "size": 1729
+  },
+  {
+   "path": "packages/web/src/workers/maintainer/commands.js",
+   "sha": "31d94e4769f71dd5afdb8051f169fb84803d325b",
+   "size": 9355
+  },
+  {
+   "path": "packages/web/src/workers/maintainerWorker.js",
+   "sha": "3abd46d3dc91da4088b931526a5edb83fbee49f0",
+   "size": 17229
+  },
+  {
+   "path": "packages/web/src/workers/patchWorker.js",
+   "sha": "19b462d0ed3d4db3cde3cacabede5766600974e8",
+   "size": 2954
+  },
+  {
+   "path": "packages/web/src/workers/phase2Worker.js",
+   "sha": "36e137a3b99fc3413edd2b2a8f31f16fa8394e2b",
+   "size": 3765
+  },
+  {
+   "path": "packages/web/src/workers/phase3Worker.js",
+   "sha": "195c03af09824551fee5ed826d935fae68e6c203",
+   "size": 7404
+  },
+  {
+   "path": "packages/web/src/workers/phase4Worker.js",
+   "sha": "ac4ef41d30e6291f4c6f5e51725cd17d7fec1fab",
+   "size": 13307
+  },
+  {
+   "path": "packages/web/src/workers/reconciliationWorker.js",
+   "sha": "7156022c11e775abb80b4bcd2203416d69feb214",
+   "size": 12733
+  },
+  {
+   "path": "packages/web/src/workers/syncWorker.js",
+   "sha": "98338d647453e94647d47dc9e63611498c8a07a3",
+   "size": 12377
+  },
+  {
+   "path": "packages/web/src/workers/triageWorker.js",
+   "sha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+   "size": 32526
+  },
+  {
+   "path": "packages/web/src/workers/verificationWorker.js",
+   "sha": "97b9eca9204510eddf22f358cf9216c22f33bfcc",
+   "size": 3639
+  },
+  {
+   "path": "packages/web/src/workers/webhookWorker.js",
+   "sha": "79099ab8a5764e18589a95a65ed79ff5c63badfd",
+   "size": 3679
+  },
+  {
+   "path": "packages/web/templates/ci-healing-dry-run.yml",
+   "sha": "c11ff8e878d0c8a58a4e7a04b921110be5a321a5",
+   "size": 2416
+  },
+  {
+   "path": "packages/web/templates/open-source-maintainer.yml",
+   "sha": "7891e9ef84ce0b8ac1f057b878b2905c0c287553",
+   "size": 3716
+  },
+  {
+   "path": "packages/web/templates/starter-dry-run.yml",
+   "sha": "0682d9465d248eef12569f1b73ae1a6c8e96acc3",
+   "size": 2646
+  },
+  {
+   "path": "packages/web/templates/strict-governance.yml",
+   "sha": "78b2a2300276fbbee8cca1b55086fdf8241e01ea",
+   "size": 4248
+  },
+  {
+   "path": "packages/web/templates/triage-only.yml",
+   "sha": "e10d320d93531d2f9f89bfde6b9810a454fbb359",
+   "size": 2009
+  },
+  {
+   "path": "packages/web/tests/TEST_CLASSIFICATION.md",
+   "sha": "aa0b1468b21ff3fe13a95c76dab26fc46b5fd98b",
+   "size": 7073
+  },
+  {
+   "path": "packages/web/tests/api.ci.test.js",
+   "sha": "9449f35adb0327e008627ba7a313fbd1bb97d0c3",
+   "size": 1714
+  },
+  {
+   "path": "packages/web/tests/api.core.test.js",
+   "sha": "ad05fcc02b07542ebe2c46c11f57e16336e86d63",
+   "size": 1725
+  },
+  {
+   "path": "packages/web/tests/api.duplicates.test.js",
+   "sha": "c5982295730fbe36f13670b9ced2d31e64e311d2",
+   "size": 881
+  },
+  {
+   "path": "packages/web/tests/api.fix.test.js",
+   "sha": "0901337df970e85596c53042e726df5aaec7ffc4",
+   "size": 1156
+  },
+  {
+   "path": "packages/web/tests/api.maintainer.test.js",
+   "sha": "77dcb76dbb7f9b073b7ecaf33fd027067f804e7c",
+   "size": 1244
+  },
+  {
+   "path": "packages/web/tests/api.phase2.test.js",
+   "sha": "e32ecf3cedbb2e869ad75eee634c8bf8da417cf1",
+   "size": 2030
+  },
+  {
+   "path": "packages/web/tests/api.phase3.test.js",
+   "sha": "ab58d6e114bda2b4a873a52815e055eee2062b73",
+   "size": 1812
+  },
+  {
+   "path": "packages/web/tests/api.phase4.test.js",
+   "sha": "07475cb8155c7add737c72549c32bcc892bb413d",
+   "size": 2744
+  },
+  {
+   "path": "packages/web/tests/api.triage.test.js",
+   "sha": "8a81cf182d173af4c6c6a96a126d3c84c5924d49",
+   "size": 1337
+  },
+  {
+   "path": "packages/web/tests/e2e/ai-review.test.js",
+   "sha": "dabbc15b8efadbb8217926293a6adcf71de94759",
+   "size": 3070
+  },
+  {
+   "path": "packages/web/tests/e2e/api-actions.test.js",
+   "sha": "a0a4d83fcaaf64b0dbb3eaf2300568a6261f8a40",
+   "size": 1544
+  },
+  {
+   "path": "packages/web/tests/e2e/api-auth.test.js",
+   "sha": "3898fe993acbd8e6dd84f20effb501ec4d329b54",
+   "size": 1909
+  },
+  {
+   "path": "packages/web/tests/e2e/api-config.test.js",
+   "sha": "2b9f782a2a025be511d3482de4f4b303f6539afd",
+   "size": 980
+  },
+  {
+   "path": "packages/web/tests/e2e/api-deliveries.test.js",
+   "sha": "9f05d673717ae233ba696b6f02a794df3ff00a16",
+   "size": 1764
+  },
+  {
+   "path": "packages/web/tests/e2e/api-gates.test.js",
+   "sha": "cae85a5c224e0b812268c06af53cfee166efea3d",
+   "size": 1917
+  },
+  {
+   "path": "packages/web/tests/e2e/api-readiness.test.js",
+   "sha": "fd8c477067f86a75c967d3472cabd58adb9abfa6",
+   "size": 730
+  },
+  {
+   "path": "packages/web/tests/e2e/api-relay.test.js",
+   "sha": "13be2778fa5204db07cd92603849cdcc6e4323c0",
+   "size": 1241
+  },
+  {
+   "path": "packages/web/tests/e2e/api-transfers.test.js",
+   "sha": "b087e02ff801962f926aa09392a27895aa0b4381",
+   "size": 483
+  },
+  {
+   "path": "packages/web/tests/e2e/api-waivers.test.js",
+   "sha": "81bdf79f755f4f9c06d60fd3dc9208ae10e4ab15",
+   "size": 1620
+  },
+  {
+   "path": "packages/web/tests/e2e/ci-heal.test.js",
+   "sha": "e18c06e046f30944d8e8552704b139b3ed4ebc14",
+   "size": 3285
+  },
+  {
+   "path": "packages/web/tests/e2e/cross-cutting.test.js",
+   "sha": "65721ffd8c71602e5d549b22594909519ac23a6a",
+   "size": 3197
+  },
+  {
+   "path": "packages/web/tests/e2e/full-pipeline.test.js",
+   "sha": "cd19ad7eef69531b3d0b27aefb085b4d61531659",
+   "size": 10434
+  },
+  {
+   "path": "packages/web/tests/e2e/heal-outcome.test.js",
+   "sha": "c9aec5f0619a121bb3a902fc4f8a4334b39d8b49",
+   "size": 3859
+  },
+  {
+   "path": "packages/web/tests/e2e/helpers.js",
+   "sha": "b53fd8186b2fb579b044329961e01bc9e4fce50c",
+   "size": 4076
+  },
+  {
+   "path": "packages/web/tests/e2e/issue-fix.test.js",
+   "sha": "f45c8984e0bb20992d6da3cbf65521391b328bc3",
+   "size": 3098
+  },
+  {
+   "path": "packages/web/tests/e2e/maintainer.test.js",
+   "sha": "8bb93bd77d947e4800073642625e94c891ed970b",
+   "size": 852
+  },
+  {
+   "path": "packages/web/tests/e2e/reconciliation.test.js",
+   "sha": "21354fb213e82e9c0f67b3bc3f990c271a0eced5",
+   "size": 1160
+  },
+  {
+   "path": "packages/web/tests/e2e/sync.test.js",
+   "sha": "ef99bfe81f2d448c50367d4ec6af417c2ed2ef4b",
+   "size": 1501
+  },
+  {
+   "path": "packages/web/tests/e2e/triage-issue.test.js",
+   "sha": "c768e32e11e8d471a86d5232d3808d7cd8d8b2df",
+   "size": 1748
+  },
+  {
+   "path": "packages/web/tests/e2e/triage-pr.test.js",
+   "sha": "03c43ec60396b8ee97bbd7479e6f56d4ff4e82e2",
+   "size": 1576
+  },
+  {
+   "path": "packages/web/tests/e2e/webhook-intake.test.js",
+   "sha": "4a5c5bda356db5c06bb7f1479d20d7c1a65da4a1",
+   "size": 2590
+  },
+  {
+   "path": "packages/web/tests/fixtures/budget-child.mjs",
+   "sha": "8263f7c125151f2cb42f95a7a2f5c67350268ddb",
+   "size": 2063
+  },
+  {
+   "path": "packages/web/tests/helpers.js",
+   "sha": "4f0f252ba44802d4479ec3c48d3a1cbdbcfe1ac3",
+   "size": 14187
+  },
+  {
+   "path": "packages/web/tests/helpers/mocks.js",
+   "sha": "21549b5d8cc26bdf292a1fbb08f44bbb518659aa",
+   "size": 3713
+  },
+  {
+   "path": "packages/web/tests/integration/backend-receipt-verifier-chain.test.js",
+   "sha": "890d4a595b78c826a832842e6b03cbf48c508584",
+   "size": 11066
+  },
+  {
+   "path": "packages/web/tests/integration/plan-execution-chain.test.js",
+   "sha": "d1a8a59dc8e5716b99858a9fb4a5fc382c463063",
+   "size": 16538
+  },
+  {
+   "path": "packages/web/tests/integration/plan-execution-conformance-chain.test.js",
+   "sha": "11254465d277079f694e80cfabc3155d3d617d44",
+   "size": 7014
+  },
+  {
+   "path": "packages/web/tests/integration/quality-gate-provenance.test.js",
+   "sha": "4165b9287dab7918324fdf17afb349eaedebd41f",
+   "size": 1648
+  },
+  {
+   "path": "packages/web/tests/stress-global-teardown.js",
+   "sha": "0a853023a9d8e1224606d006fbd286284b900b3c",
+   "size": 1332
+  },
+  {
+   "path": "packages/web/tests/stress/api-flood.test.js",
+   "sha": "58b4055b3706ecabf49425185f5c27708f9d490b",
+   "size": 5117
+  },
+  {
+   "path": "packages/web/tests/stress/auth-edge-cases.test.js",
+   "sha": "4939a1db5e55af6eecae7011de0ac6f48db2b7a4",
+   "size": 5233
+  },
+  {
+   "path": "packages/web/tests/stress/burst-runner.js",
+   "sha": "89fe56619d1121ca910dee94ab82d5a39c117f5b",
+   "size": 37844
+  },
+  {
+   "path": "packages/web/tests/stress/db-concurrency.test.js",
+   "sha": "17948fca6e4b093919163f62b31cfc86cacb1a1a",
+   "size": 2712
+  },
+  {
+   "path": "packages/web/tests/stress/longevity.test.js",
+   "sha": "212a79f8afaddab62e22c3cdbb028e5efc5bbb34",
+   "size": 5147
+  },
+  {
+   "path": "packages/web/tests/stress/modules/backpressure.js",
+   "sha": "7866a02cc5c239fa0f6da851a3059c4ba79829f2",
+   "size": 4771
+  },
+  {
+   "path": "packages/web/tests/stress/modules/burst-report-validator.js",
+   "sha": "019377912e27e8eb58c1f376cf0f6df1d4c936d0",
+   "size": 40521
+  },
+  {
+   "path": "packages/web/tests/stress/modules/latency-populations.js",
+   "sha": "7600cd6f58e01866635c9d49060327d0fcef07d6",
+   "size": 9597
+  },
+  {
+   "path": "packages/web/tests/stress/modules/operation-accounting.js",
+   "sha": "febfc129dddf1b38ceb7877419061c0d4432ed7e",
+   "size": 34796
+  },
+  {
+   "path": "packages/web/tests/stress/modules/retry-policy.js",
+   "sha": "07db1d3b2c22e65cd23afdcc0dc390959528fdd6",
+   "size": 19036
+  },
+  {
+   "path": "packages/web/tests/stress/modules/scenario-harness.js",
+   "sha": "4ddadffe34ef0839f444203b9971022e4d17625d",
+   "size": 20424
+  },
+  {
+   "path": "packages/web/tests/stress/mutation-enforcement.test.js",
+   "sha": "8119ef0a3a2a1b23d6b62de8e08cbd3ab5fb633a",
+   "size": 1034
+  },
+  {
+   "path": "packages/web/tests/stress/mutation-maintainer.test.js",
+   "sha": "6177bd1518346c583c008d4407f0ef6d6463289f",
+   "size": 3236
+  },
+  {
+   "path": "packages/web/tests/stress/mutation-phase2.test.js",
+   "sha": "54c26f9ada9c6450737c5a1fe37a088d1fdba96d",
+   "size": 2119
+  },
+  {
+   "path": "packages/web/tests/stress/mutation-phase3.test.js",
+   "sha": "bc2514eea85dc6a931b806eee2ab8dc9dd07c842",
+   "size": 2976
+  },
+  {
+   "path": "packages/web/tests/stress/mutation-phase4.test.js",
+   "sha": "51bf6b1e4990f15e52296b42ca20294de2c511fa",
+   "size": 1596
+  },
+  {
+   "path": "packages/web/tests/stress/mutation-repos-sync-fix.test.js",
+   "sha": "769f4686d28eccac67e0013ccfa25e653b01b409",
+   "size": 2625
+  },
+  {
+   "path": "packages/web/tests/stress/mutation-webhook-ingest.test.js",
+   "sha": "d49f9d85a42f1cd0eab51de7db9d2fbe4f3c7140",
+   "size": 1571
+  },
+  {
+   "path": "packages/web/tests/stress/pagination-boundary.test.js",
+   "sha": "67f0553a95eaa3089521077e273ec06bc2e30c01",
+   "size": 7285
+  },
+  {
+   "path": "packages/web/tests/stress/payload-validation.test.js",
+   "sha": "0d7e324bf0dff651850689062451735907a2e664",
+   "size": 3664
+  },
+  {
+   "path": "packages/web/tests/stress/rate-limit.test.js",
+   "sha": "0cb478b265c4e35fd3cbf766bcfc44200f7d58e2",
+   "size": 3863
+  },
+  {
+   "path": "packages/web/tests/stress/response-contracts.js",
+   "sha": "ef3374161138a732636bb0dd51f6d8a0d742e8ed",
+   "size": 3153
+  },
+  {
+   "path": "packages/web/tests/stress/setup.js",
+   "sha": "476d8b27017188ee3e9e213a0f3584b1a7d1c260",
+   "size": 201
+  },
+  {
+   "path": "packages/web/tests/stress/stress-helpers.js",
+   "sha": "d5f40ac9ebc984cc348c881b80bbe705446e4653",
+   "size": 2798
+  },
+  {
+   "path": "packages/web/tests/stress/webhook-simulation.test.js",
+   "sha": "717902df91b700cf6eb06e609de3d2e512ea3b30",
+   "size": 2209
+  },
+  {
+   "path": "packages/web/tests/target-policy.js",
+   "sha": "af214722b3dfc452ec9f502feefb1fd39c16cc46",
+   "size": 49644
+  },
+  {
+   "path": "packages/web/tests/unit/action-lifecycle.test.js",
+   "sha": "51ef4686ecae49416af22565c1dc954c63192392",
+   "size": 5398
+  },
+  {
+   "path": "packages/web/tests/unit/ai-review-activation.test.js",
+   "sha": "06c39daf1a6b2e2c9cf8567a314cba0675724444",
+   "size": 6284
+  },
+  {
+   "path": "packages/web/tests/unit/audit-bundle.test.js",
+   "sha": "22c7cdc4424fd21c21e550a89be29e63b1d39fa1",
+   "size": 7315
+  },
+  {
+   "path": "packages/web/tests/unit/backend-id-reachability.test.js",
+   "sha": "e0239cf91caad79965dcf8094934d92a73946ff5",
+   "size": 5011
+  },
+  {
+   "path": "packages/web/tests/unit/backend-level-health-summary.test.js",
+   "sha": "6c67b98678184326f2be9d6f89b90771edafce7e",
+   "size": 9491
+  },
+  {
+   "path": "packages/web/tests/unit/burst-runner.test.js",
+   "sha": "90adb7952d90073d190974ceeb708ed2be1c15e4",
+   "size": 38629
+  },
+  {
+   "path": "packages/web/tests/unit/check-run-lifecycle.test.js",
+   "sha": "a7e539fefa9d384270378c06c0babd833534580d",
+   "size": 8311
+  },
+  {
+   "path": "packages/web/tests/unit/check-run-worker-lifecycle.test.js",
+   "sha": "6671c53d2b2cc952f61135e23efb3a627811df85",
+   "size": 17825
+  },
+  {
+   "path": "packages/web/tests/unit/ci-evidence-collector.test.js",
+   "sha": "1562e1cf91ded74180dfc5eeb2d822016e095d4c",
+   "size": 22919
+  },
+  {
+   "path": "packages/web/tests/unit/ci-evidence-workflow-command.test.js",
+   "sha": "ac77cfa0ab1045cc1d4ff31bf719ee529d94ca9f",
+   "size": 5345
+  },
+  {
+   "path": "packages/web/tests/unit/ci-heal-dco-signoff.test.js",
+   "sha": "6b2715d78caf4ce69a0bd6a17e332835ab41b54a",
+   "size": 2910
+  },
+  {
+   "path": "packages/web/tests/unit/comment-markers-pagination.test.js",
+   "sha": "e7b6310d84b3dfe1ca12d2b58add216252ccffe9",
+   "size": 7513
+  },
+  {
+   "path": "packages/web/tests/unit/commentRouter.test.js",
+   "sha": "20aef74b847dec39a38ba8b163eb56247b8cc1d0",
+   "size": 5310
+  },
+  {
+   "path": "packages/web/tests/unit/config-executor-service-token-guard.test.js",
+   "sha": "15ee1cd89ad20629dedbad16c0303dcd23a73559",
+   "size": 2189
+  },
+  {
+   "path": "packages/web/tests/unit/config-executor-service.test.js",
+   "sha": "147754d0feb899215f17c7a6bb26c85dccdf843b",
+   "size": 2067
+  },
+  {
+   "path": "packages/web/tests/unit/config-validator.test.js",
+   "sha": "8834dc31c28a96a8751b57e869056ba961fb095a",
+   "size": 1210
+  },
+  {
+   "path": "packages/web/tests/unit/critic-behavioral.test.js",
+   "sha": "5907c8f78e17bff0df333a3fba3cb1c5291ca043",
+   "size": 31342
+  },
+  {
+   "path": "packages/web/tests/unit/critic-worker.test.js",
+   "sha": "6ad1f9c961f92fcd024c46a7de063a4abd5c2bef",
+   "size": 19138
+  },
+  {
+   "path": "packages/web/tests/unit/decision-log-search.test.js",
+   "sha": "88504e74e52602716230779a265bd6055d39500f",
+   "size": 5782
+  },
+  {
+   "path": "packages/web/tests/unit/delegated-run-provider.test.js",
+   "sha": "9a9234ad913cf341d163462bfefb48374e9625c5",
+   "size": 3967
+  },
+  {
+   "path": "packages/web/tests/unit/deployment-backend-level-reachability.test.js",
+   "sha": "3c3a9288ae15ddf11414b7550a294cefc2fa16f5",
+   "size": 1805
+  },
+  {
+   "path": "packages/web/tests/unit/deployment-validator-readiness.test.js",
+   "sha": "586bc746d2c6115e5fa54307ea3ebdf9a5cab275",
+   "size": 1442
+  },
+  {
+   "path": "packages/web/tests/unit/diagnosis-behavioral.test.js",
+   "sha": "016f184c9aa24f3b3bdb7b836a0dde27ff4ccadf",
+   "size": 21341
+  },
+  {
+   "path": "packages/web/tests/unit/diagnosis-worker.test.js",
+   "sha": "576ebf3b9cf1a8a2e95cfa48a3f16d43fe349429",
+   "size": 23149
+  },
+  {
+   "path": "packages/web/tests/unit/dry-run-proof.test.js",
+   "sha": "be156f1a39d8c8cbd3f6adbd55db07e23b6175cf",
+   "size": 6670
+  },
+  {
+   "path": "packages/web/tests/unit/embedding.test.js",
+   "sha": "ad8d57afeb2da633b0ce77fe741d2978938da97e",
+   "size": 6430
+  },
+  {
+   "path": "packages/web/tests/unit/execution-receipt-validator-fields.test.js",
+   "sha": "9f38797b99f84a4391b0844bb2d08e3969a974e0",
+   "size": 5456
+  },
+  {
+   "path": "packages/web/tests/unit/execution-receipts-behavioral.test.js",
+   "sha": "46839a7dfb4476acf1ee644e55a8286d1bff0f0e",
+   "size": 14345
+  },
+  {
+   "path": "packages/web/tests/unit/execution-receipts.test.js",
+   "sha": "341f8cced4f6c456dc1c2e5da873aad60937162a",
+   "size": 20311
+  },
+  {
+   "path": "packages/web/tests/unit/executor-backend.test.js",
+   "sha": "8c70effa941a862345dd052c475de29eedd57ef3",
+   "size": 15969
+  },
+  {
+   "path": "packages/web/tests/unit/executor-reachability.test.js",
+   "sha": "072050e2ca9862987186337e5ea81548c7490bb9",
+   "size": 10941
+  },
+  {
+   "path": "packages/web/tests/unit/executor-registry-reachability.test.js",
+   "sha": "1ea37fa009d819181d966cb60e3b81dc51b5b98b",
+   "size": 4773
+  },
+  {
+   "path": "packages/web/tests/unit/executor-report-store.test.js",
+   "sha": "079a39ce543199814a13f3b8a2e5a69c2e9f3850",
+   "size": 7212
+  },
+  {
+   "path": "packages/web/tests/unit/executor-report-verifier-wiring.test.js",
+   "sha": "6017f6b411339dfe558b1ddee9712a7805375582",
+   "size": 2099
+  },
+  {
+   "path": "packages/web/tests/unit/executor-service-allowlists.test.js",
+   "sha": "8641dc4761dee3485bd2b6c643426e80a257f588",
+   "size": 2113
+  },
+  {
+   "path": "packages/web/tests/unit/executor-service-backend.test.js",
+   "sha": "7a075edc1db8cda140a8e908596dc93901672cef",
+   "size": 8816
+  },
+  {
+   "path": "packages/web/tests/unit/executor-service-client.test.js",
+   "sha": "2aca8c184a0a10549c031315576daba15da162d6",
+   "size": 10208
+  },
+  {
+   "path": "packages/web/tests/unit/executor-service-registration.test.js",
+   "sha": "941d26dd8e9106d32f53a7580889627ac5658951",
+   "size": 3576
+  },
+  {
+   "path": "packages/web/tests/unit/governance-hardening.test.js",
+   "sha": "7c6be6b2593effbc001cdff4d2a5b2dc7af8b701",
+   "size": 3991
+  },
+  {
+   "path": "packages/web/tests/unit/graceful-shutdown.test.js",
+   "sha": "dc914c4c755b73bf95b432bec1bfbc427d619b0c",
+   "size": 6315
+  },
+  {
+   "path": "packages/web/tests/unit/handleManualRun-lifecycle.test.js",
+   "sha": "1e927b3051ad64c5db1ee4c9fca9835ce08cdbb4",
+   "size": 14057
+  },
+  {
+   "path": "packages/web/tests/unit/handleManualRun-preflight.test.js",
+   "sha": "b58013de77893d059649a0a5c3b2e5cfa23a9f1c",
+   "size": 8540
+  },
+  {
+   "path": "packages/web/tests/unit/handleManualRun.test.js",
+   "sha": "05c8a6b55da10c0c247b48b57c753e56a30bcc0a",
+   "size": 5156
+  },
+  {
+   "path": "packages/web/tests/unit/handlePullRequest-spam-gate.test.js",
+   "sha": "9d817b3236eee79fd477807227b6d74fc5c1da5c",
+   "size": 4863
+  },
+  {
+   "path": "packages/web/tests/unit/idempotency-lifecycle-real-redis.test.js",
+   "sha": "1c1f99569f5731c1cf52bc903e8239ce548db9c6",
+   "size": 6153
+  },
+  {
+   "path": "packages/web/tests/unit/idempotency-lifecycle.test.js",
+   "sha": "7e96c41f676080cec3ff928be7c00664cc7aed58",
+   "size": 10612
+  },
+  {
+   "path": "packages/web/tests/unit/isolation-evidence.test.js",
+   "sha": "33d796d8f68e45bd066a65a05d3d288c201f4a0d",
+   "size": 19597
+  },
+  {
+   "path": "packages/web/tests/unit/issue-fix-retry-idempotency.test.js",
+   "sha": "a0873076b0c5ea2386587491a321fc2e9eee0d38",
+   "size": 7377
+  },
+  {
+   "path": "packages/web/tests/unit/lib-github-sanitize.test.js",
+   "sha": "7bc39dfc878760f06faa66f9fb703c785850948e",
+   "size": 6187
+  },
+  {
+   "path": "packages/web/tests/unit/notify-fire-and-forget-regression.test.js",
+   "sha": "c9d759cc8641d64f6f0cdc275c5f53d9b0aa4739",
+   "size": 2764
+  },
+  {
+   "path": "packages/web/tests/unit/pass-capable-unlock.test.js",
+   "sha": "6a2d877b1d59fb471bb42ca799981b0b5f4aa9fc",
+   "size": 15232
+  },
+  {
+   "path": "packages/web/tests/unit/patch-behavioral.test.js",
+   "sha": "957e9981db26bff38b768b5990496d95d20f16af",
+   "size": 34759
+  },
+  {
+   "path": "packages/web/tests/unit/patch-worker.test.js",
+   "sha": "84854ab030bd8e312e4ef983823c38a0caac041f",
+   "size": 25980
+  },
+  {
+   "path": "packages/web/tests/unit/plan-execution-conformance.test.js",
+   "sha": "6e028e8e658ab4f977f06f3ff57c0076d1de2102",
+   "size": 18329
+  },
+  {
+   "path": "packages/web/tests/unit/policy-diff-impact.test.js",
+   "sha": "c9bdb355607843c11d26093930c7836cf55a9b04",
+   "size": 7780
+  },
+  {
+   "path": "packages/web/tests/unit/policy-preview.test.js",
+   "sha": "2b95a5c78cd07fe5e57aeef475f2f286d96fd5b4",
+   "size": 6872
+  },
+  {
+   "path": "packages/web/tests/unit/policy-recommendations.test.js",
+   "sha": "4b2466f7c64205af13aabc07e8bf629c8108f8ad",
+   "size": 9848
+  },
+  {
+   "path": "packages/web/tests/unit/policy-rollout-approval.test.js",
+   "sha": "4e5454761e9ffd63fb12a64e3433aaca257de7d4",
+   "size": 9102
+  },
+  {
+   "path": "packages/web/tests/unit/policy-rollout-promotion.test.js",
+   "sha": "cec0e7cab6e70d1df630242085c4f3d30b6ff6ea",
+   "size": 7376
+  },
+  {
+   "path": "packages/web/tests/unit/policy-rollout-rollback.test.js",
+   "sha": "2d214dfe7d57c56fa6c41bf2861c2f2147b4115d",
+   "size": 8959
+  },
+  {
+   "path": "packages/web/tests/unit/policy-rollout.test.js",
+   "sha": "7911edce8d0478500be0d375d25af7e1da08a0de",
+   "size": 15207
+  },
+  {
+   "path": "packages/web/tests/unit/policy-simulation.test.js",
+   "sha": "6e2d73aa20f4d05b253239ef3140026bd183030b",
+   "size": 9338
+  },
+  {
+   "path": "packages/web/tests/unit/policy-validation.test.js",
+   "sha": "903c19cc0811ba84e8db7239ee1a0e86672d6567",
+   "size": 7819
+  },
+  {
+   "path": "packages/web/tests/unit/pure-logic.test.js",
+   "sha": "d885d1697dd96d11e931b92e6544244f58775aad",
+   "size": 19158
+  },
+  {
+   "path": "packages/web/tests/unit/quick-start-contract.test.js",
+   "sha": "c587a9bd26f0abd9240f123f59b5fd3da714be6d",
+   "size": 3242
+  },
+  {
+   "path": "packages/web/tests/unit/reconcile-repository.test.js",
+   "sha": "b9fe916dd1d719e7d7842ec5d61e7b63abbed22a",
+   "size": 5870
+  },
+  {
+   "path": "packages/web/tests/unit/repair-proposal.test.js",
+   "sha": "f9cdd28aefd69f6196f534f5dd2ba1bab0ee152e",
+   "size": 34479
+  },
+  {
+   "path": "packages/web/tests/unit/response-contracts.test.js",
+   "sha": "ab401ab6c46e3b8dc03d9b1e7edebc221c936972",
+   "size": 27450
+  },
+  {
+   "path": "packages/web/tests/unit/rollout-dashboard.test.js",
+   "sha": "a95650f3f5c0b371482ebf206f7f77da797d578a",
+   "size": 10134
+  },
+  {
+   "path": "packages/web/tests/unit/sandbox-runner-validator-fields.test.js",
+   "sha": "4e14188a4c29fe30749fc737c262d7cf958c5813",
+   "size": 8948
+  },
+  {
+   "path": "packages/web/tests/unit/service-adversarial-defense-trigger.test.js",
+   "sha": "395f171951469b0526ef7bfc2bff580adec04365",
+   "size": 9574
+  },
+  {
+   "path": "packages/web/tests/unit/service-adversarial-review.test.js",
+   "sha": "2bfcec98e7a8cd9fa925c32f61951011fc719d5e",
+   "size": 11524
+  },
+  {
+   "path": "packages/web/tests/unit/service-ai-review.test.js",
+   "sha": "296c4a75f66ae4685ba96f19bfc8c4de40019255",
+   "size": 11336
+  },
+  {
+   "path": "packages/web/tests/unit/service-audit-trail.test.js",
+   "sha": "a4dd1e83e8ea171b3405d47d9a058be2275b6ebe",
+   "size": 3620
+  },
+  {
+   "path": "packages/web/tests/unit/service-check-run-finalizer.test.js",
+   "sha": "d58e48df85006eb5cb3285c553ac5da9efb22a64",
+   "size": 7032
+  },
+  {
+   "path": "packages/web/tests/unit/service-ci-heal-per-branch.test.js",
+   "sha": "63457a29194de494e3e3554a0c5006e90d8f068e",
+   "size": 10837
+  },
+  {
+   "path": "packages/web/tests/unit/service-config-validation.test.js",
+   "sha": "1e3fbf2c41684df3d5326e89a230caf291abecc3",
+   "size": 2279
+  },
+  {
+   "path": "packages/web/tests/unit/service-dependency.test.js",
+   "sha": "eed3ad9b5241464c6b1bc32dd7a8c3b66ec980e3",
+   "size": 1965
+  },
+  {
+   "path": "packages/web/tests/unit/service-enforcement.test.js",
+   "sha": "0dd7a075bafdde0d6849a305b84ede2c67009e2a",
+   "size": 2228
+  },
+  {
+   "path": "packages/web/tests/unit/service-error-recovery.test.js",
+   "sha": "1a5377f4623d4a26a9a2a940da2ecb6516cb1688",
+   "size": 2652
+  },
+  {
+   "path": "packages/web/tests/unit/service-feedback.test.js",
+   "sha": "565acf220f525768ffee77d8480d0e30dc876542",
+   "size": 2906
+  },
+  {
+   "path": "packages/web/tests/unit/service-flaky-test.test.js",
+   "sha": "88954586658e0463f8dd78858da7cc6c91e362ac",
+   "size": 2294
+  },
+  {
+   "path": "packages/web/tests/unit/service-github-cache.test.js",
+   "sha": "fb0c931a6e45d85c8fb14686dd2f70f7c3741642",
+   "size": 4012
+  },
+  {
+   "path": "packages/web/tests/unit/service-github-rate-limit.test.js",
+   "sha": "0fd70ba8dfd11774f89029583311e85ab73547f0",
+   "size": 4924
+  },
+  {
+   "path": "packages/web/tests/unit/service-maintainer.test.js",
+   "sha": "bf18cceaa50ab7361e1080e96b473394991db8be",
+   "size": 2596
+  },
+  {
+   "path": "packages/web/tests/unit/service-merge-queue.test.js",
+   "sha": "b0b7f6faa44fc67b76fae18831cf4b7d4a442af1",
+   "size": 5011
+  },
+  {
+   "path": "packages/web/tests/unit/service-pipeline-events.test.js",
+   "sha": "d0c3c378b1fb0d05a123a9479c4c7f92b9cc3cdf",
+   "size": 1650
+  },
+  {
+   "path": "packages/web/tests/unit/service-policy-reconciler.test.js",
+   "sha": "cc66e3dbe846e8c09a7638381e0b9ccba19fc237",
+   "size": 3210
+  },
+  {
+   "path": "packages/web/tests/unit/service-quality-gate-provenance.test.js",
+   "sha": "4ae08e44cfa839ed449a360e2de2aa813fa98a04",
+   "size": 6195
+  },
+  {
+   "path": "packages/web/tests/unit/setup-checklist.test.js",
+   "sha": "d35789c8c10de9126677c160a5ff0c7bc355e78a",
+   "size": 15745
+  },
+  {
+   "path": "packages/web/tests/unit/setup-templates.test.js",
+   "sha": "0906e60f3e3db58108272d15a1440a7b8508d46c",
+   "size": 10268
+  },
+  {
+   "path": "packages/web/tests/unit/source-of-truth-fixture.test.js",
+   "sha": "906499e0ab7724b5b8aa6a86b1d813ba7c3981d9",
+   "size": 21827
+  },
+  {
+   "path": "packages/web/tests/unit/source-of-truth-gate.test.js",
+   "sha": "e83f38506e3d049b941ee25e21a2f9a305a21406",
+   "size": 12555
+  },
+  {
+   "path": "packages/web/tests/unit/source-of-truth-parser.test.js",
+   "sha": "f36dde6e1ead9f47af8c39bdb6b6a6f8730be923",
+   "size": 9820
+  },
+  {
+   "path": "packages/web/tests/unit/stress-functional/bounded-concurrency.test.js",
+   "sha": "36260f810d16fff6de69a780c7daab2e12df83ae",
+   "size": 19153
+  },
+  {
+   "path": "packages/web/tests/unit/stress-functional/burst-report-invariants.test.js",
+   "sha": "8472c38eadfac6b8d351fc7dbe33211ddbd10f00",
+   "size": 49091
+  },
+  {
+   "path": "packages/web/tests/unit/stress-functional/functional-response-contracts.test.js",
+   "sha": "954fd4e387035374ab4abb90a2f4b34f317164e3",
+   "size": 21057
+  },
+  {
+   "path": "packages/web/tests/unit/stress-functional/latency-populations.test.js",
+   "sha": "dc511a2bb83c2bbccb4c915a6fef31aff8e484c2",
+   "size": 14208
+  },
+  {
+   "path": "packages/web/tests/unit/stress-functional/operation-accounting.test.js",
+   "sha": "3e47ec68a4d124a30f4bb6f5ff77105c9484d82c",
+   "size": 39926
+  },
+  {
+   "path": "packages/web/tests/unit/stress-functional/production-policy-parity.test.js",
+   "sha": "cd2fea4906d7a538d0f92362418cc446eec0d5a7",
+   "size": 12876
+  },
+  {
+   "path": "packages/web/tests/unit/stress-functional/retry-attribution.test.js",
+   "sha": "4f35e96999d20d1c989f9552665f845447e0e49a",
+   "size": 41322
+  },
+  {
+   "path": "packages/web/tests/unit/stress-functional/scenario-harness.test.js",
+   "sha": "3f48a39418801f848b907cf77be277df6b904b4e",
+   "size": 23348
+  },
+  {
+   "path": "packages/web/tests/unit/stress-isolation-gate.test.js",
+   "sha": "efdd43f47b0e495b0f26b1fb82e75399d1b0dc6b",
+   "size": 20504
+  },
+  {
+   "path": "packages/web/tests/unit/target-policy.test.js",
+   "sha": "41d0d31a161e4cdcd740be3ee15217f76963b71c",
+   "size": 27201
+  },
+  {
+   "path": "packages/web/tests/unit/triage-auto-comment.test.js",
+   "sha": "599f2659cb901a7cb14ecd26bc6d15875eb70e11",
+   "size": 14271
+  },
+  {
+   "path": "packages/web/tests/unit/triage-mutation-recovery.test.js",
+   "sha": "b7490e858ee58f2e585ae4e0e2f8663300fd2480",
+   "size": 14071
+  },
+  {
+   "path": "packages/web/tests/unit/triage-operations-routes.test.js",
+   "sha": "47279869c4433fa9e7e9eee9fd16f7907ddd5698",
+   "size": 16880
+  },
+  {
+   "path": "packages/web/tests/unit/triage-pr-behavior.test.js",
+   "sha": "5ea48b92f6b87e9f031eb4a7c6fa92059b99598e",
+   "size": 19734
+  },
+  {
+   "path": "packages/web/tests/unit/triage-pr-guards.test.js",
+   "sha": "c3f8564d4082f977b8dd17bdae21b339fbbce50e",
+   "size": 4149
+  },
+  {
+   "path": "packages/web/tests/unit/triage-recovery-non-triage-untouched.test.js",
+   "sha": "277e335abda0030085909c1b2c2198483c83d84a",
+   "size": 2670
+  },
+  {
+   "path": "packages/web/tests/unit/triageFailureService.test.js",
+   "sha": "7df3b610b27f2792d59a34fd60207b70c06827cc",
+   "size": 7793
+  },
+  {
+   "path": "packages/web/tests/unit/v016-docs.test.js",
+   "sha": "a2f93d2aea2f964f463fc7abf0c60d27e4289500",
+   "size": 6484
+  },
+  {
+   "path": "packages/web/tests/unit/v017-docs.test.js",
+   "sha": "e363c8d2d508182c2643c94e14397dda9c12df2f",
+   "size": 7705
+  },
+  {
+   "path": "packages/web/tests/unit/v018-docs.test.js",
+   "sha": "6bc8196167ae0b5479e656a7e3e3c344b551588a",
+   "size": 6376
+  },
+  {
+   "path": "packages/web/tests/unit/validation-plan-adapter.test.js",
+   "sha": "bad773cdefc77b2d8992a398e447593c36f98cbb",
+   "size": 4612
+  },
+  {
+   "path": "packages/web/tests/unit/validation-plan-descriptors.test.js",
+   "sha": "12b4361ebbccd70a2ac25984bd7aad9f49bba04c",
+   "size": 7755
+  },
+  {
+   "path": "packages/web/tests/unit/validation-plan-hash-equivalence.test.js",
+   "sha": "2b197b175e0c2be8c7747469703d59aed1d89077",
+   "size": 4294
+  },
+  {
+   "path": "packages/web/tests/unit/validation-plan-recorder-reconciliation.test.js",
+   "sha": "f91f122752374ebde3fbac4712670d51a9d8b789",
+   "size": 2242
+  },
+  {
+   "path": "packages/web/tests/unit/validation-plan-recorder-wiring.test.js",
+   "sha": "ecbb647f39022772343b05423266c6bf467a0c47",
+   "size": 1334
+  },
+  {
+   "path": "packages/web/tests/unit/validator-image.test.js",
+   "sha": "709a8d220088c5e54a8c3c694fef32707b2d78f6",
+   "size": 4271
+  },
+  {
+   "path": "packages/web/tests/unit/validator-receipt-gate-wiring.test.js",
+   "sha": "b261dce08fa859b8c666f4b6750f1e12b196926f",
+   "size": 1057
+  },
+  {
+   "path": "packages/web/tests/unit/validator-receipt-gate.test.js",
+   "sha": "087c160146ece65e0bfbbe9b2a88385421e21865",
+   "size": 5361
+  },
+  {
+   "path": "packages/web/tests/unit/verification-behavioral.test.js",
+   "sha": "e2ff4e9d7b94cc8b28b959c449e0501949ff5b28",
+   "size": 36480
+  },
+  {
+   "path": "packages/web/tests/unit/verification-worker.test.js",
+   "sha": "ace648bd1afea72a295e0a03004e275fe99d3263",
+   "size": 23114
+  },
+  {
+   "path": "packages/web/tests/unit/version-drift-ci-parity.test.js",
+   "sha": "bc8f23f33c99e09282fbb39ea988a4e08664cbc7",
+   "size": 2700
+  },
+  {
+   "path": "packages/web/tests/unit/waiver-visibility.test.js",
+   "sha": "ad5d6ba408ffe9a8af30c52370ad8b4e3c6baec6",
+   "size": 7598
+  },
+  {
+   "path": "packages/web/tests/unit/wave2-auth-context.test.js",
+   "sha": "838a8d58e07f1c838aa151899bc2949308bb3486",
+   "size": 8834
+  },
+  {
+   "path": "packages/web/tests/unit/wave2-authorize-integration.test.js",
+   "sha": "edf03981d21954e3a5758612fdcd4e2e5f402de1",
+   "size": 8899
+  },
+  {
+   "path": "packages/web/tests/unit/wave2-pr95-corrections.test.js",
+   "sha": "9a943a4b9059ad17b3c2537d8cc3eabe7a93790f",
+   "size": 6290
+  },
+  {
+   "path": "packages/web/tests/unit/wave2-route-observer.test.js",
+   "sha": "c9dc34e796f76c00575412fce6da7067bda723d6",
+   "size": 3434
+  },
+  {
+   "path": "packages/web/tests/unit/wave2-triage-integration.test.js",
+   "sha": "837adfb3fed389c50e130c9754c47606441480b8",
+   "size": 10818
+  },
+  {
+   "path": "packages/web/tests/unit/wave2-webhook-vertical.test.js",
+   "sha": "a9953e4bbd8c88c2cf8a6ccab0dc042c061e78e5",
+   "size": 9673
+  },
+  {
+   "path": "packages/web/tests/unit/wave2-worker-adoption.test.js",
+   "sha": "7afdd142a3f2325324d2faa9c868fc6d507a5171",
+   "size": 5760
+  },
+  {
+   "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+   "sha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
+   "size": 14687
+  },
+  {
+   "path": "packages/web/tests/unit/workflowCommandExtractor.test.js",
+   "sha": "74c4fac39110cea46869db53d825d7dab5e8d054",
+   "size": 7779
+  },
+  {
+   "path": "scripts/backup.sh",
+   "sha": "bd3a1951db89142e90ef5989736320bf7588d3fa",
+   "size": 6153
+  },
+  {
+   "path": "scripts/benchmark.js",
+   "sha": "d41cf960cb684a12cc12b4059e74231162d6c7fe",
+   "size": 15491
+  },
+  {
+   "path": "scripts/check-source-of-truth.mjs",
+   "sha": "0f793ccfd529b5f5be9900741190b1002ab7e484",
+   "size": 16762
+  },
+  {
+   "path": "scripts/check-stress-isolation.mjs",
+   "sha": "c18f12629126b0bbda2b9a74d95227653eeb5c82",
+   "size": 15365
+  },
+  {
+   "path": "scripts/check-version-drift.js",
+   "sha": "1e29b06c997dfebb129ea7f1541fc6e0f4d22dea",
+   "size": 4666
+  },
+  {
+   "path": "scripts/create-test-issues.js",
+   "sha": "b0bdf6f1b018d555bfc60964aa17fcd42e877464",
+   "size": 2836
+  },
+  {
+   "path": "scripts/deploy-release.sh",
+   "sha": "19d137bea111774d7bd697480f5ab0772259e750",
+   "size": 50544
+  },
+  {
+   "path": "scripts/enforce-production-audit.mjs",
+   "sha": "8ba3eb935d5b38db01315e27156790e7e4b0a71c",
+   "size": 12238
+  },
+  {
+   "path": "scripts/generate-build-info.js",
+   "sha": "c01b305525848f7b6c0fac094598c0bcfe8f61b5",
+   "size": 2654
+  },
+  {
+   "path": "scripts/migrate.js",
+   "sha": "35eff5215a2555c3905e601aaba2d5174e63e69b",
+   "size": 3022
+  },
+  {
+   "path": "scripts/parse-source-truth.mjs",
+   "sha": "0614a62012da5527303d7e6addf2536b55ec1700",
+   "size": 14261
+  },
+  {
+   "path": "scripts/prepare-immutable-compose-transition.sh",
+   "sha": "8ad880b55c7b49a3a4443befc6dbcb2b82fdcd62",
+   "size": 12167
+  },
+  {
+   "path": "scripts/read-strict-env.mjs",
+   "sha": "864533299a20703c489be7d5ea49ab2a6f2769a5",
+   "size": 5173
+  },
+  {
+   "path": "scripts/restore.sh",
+   "sha": "78ca743cf4a59df8d383dd038fa602218f4a3428",
+   "size": 5331
+  },
+  {
+   "path": "scripts/secret-leak-stress-test.sh",
+   "sha": "9d0a4d3c250c28832c73835b2c69641165c89e4e",
+   "size": 21389
+  },
+  {
+   "path": "scripts/test-rollback-logic.sh",
+   "sha": "65b209cdb233b8cb63778a0a9da0d77b886d8801",
+   "size": 24154
+  },
+  {
+   "path": "scripts/update-webhook.js",
+   "sha": "98bb871ad41c7b32fc3a837e51cfc9582829f444",
+   "size": 1620
+  },
+  {
+   "path": "scripts/validate-release-manifest.js",
+   "sha": "926047247407e1c9bd0ec946f62721efeed52df3",
+   "size": 3879
+  },
+  {
+   "path": "security-audit-patch-explanation.md",
+   "sha": "ea2a000eec726d03c47cf96ceebb0db93d6969eb",
+   "size": 9846
+  },
+  {
+   "path": "security/secret-scan-report.md",
+   "sha": "520d26bf6a2309e5fcd5167524597f7b08604257",
+   "size": 5638
+  },
+  {
+   "path": "validator-image/Dockerfile",
+   "sha": "c3cf36256c10d9257298c9725442bd22d0c852bd",
+   "size": 2394
+  },
+  {
+   "path": "validator-image/Dockerfile.dockerignore",
+   "sha": "ad10ffdb3fd46113242e043dc550b5118a8c7f14",
+   "size": 387
+  },
+  {
+   "path": "validator-image/README.md",
+   "sha": "e5596d6a73c601f3a630dd63a99bf125dbead95c",
+   "size": 4790
+  },
+  {
+   "path": "validator-image/docker-entrypoint.sh",
+   "sha": "2b8db2314f207efaaa16c3642a36695eb17bb75e",
+   "size": 1747
+  }
+ ]
+}
