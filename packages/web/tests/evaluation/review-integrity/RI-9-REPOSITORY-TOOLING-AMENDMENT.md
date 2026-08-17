@@ -552,36 +552,87 @@ This experiment answers:
 
 ---
 
-### Phase 10 — Model qualification
+### Phase 10 — Model-neutral execution observability (amended 2026-08-17)
 
-Only after repository and harness qualification may model/provider suitability be evaluated again.
+> **Interpretation amendment.** This section originally framed Phase 10 as
+> *model qualification*: a model/provider that passed the corpus would become
+> "supported" or "qualified for APPROVE". That framing is corrected here.
+> This is an interpretation correction, not a new qualification framework.
+> No RI-4/RI-5/RI-6/RI-7 invariant, no RI-9 evaluation threshold, and no
+> frozen acceptance gate changes in this amendment.
 
-Candidate comparisons must use the same:
-
-```text
-repository tools
-agent contract
-policy
-validation
-corpus
-approval thresholds
-```
-
-Only model/provider identity changes.
-
-Separate two product concepts:
+Phase 10 establishes model-neutral execution observability and review-quality
+measurement. The mapping that replaces model qualification:
 
 ```text
-supported
-= operationally compatible with the harness
+execution configuration
+→ observational analytics segment
 
-qualified for APPROVE
-= passes the frozen Review Integrity acceptance gates
+per-invocation RI evidence
+→ deterministic review authority
 ```
 
-Existing contaminated model counts do not carry into the qualified-candidate arithmetic.
+The architectural boundary is non-negotiable:
 
-**Exit criterion:** at least one candidate is qualified under the frozen broken/fixed acceptance gates without harness contamination.
+```text
+Individual review safety
+    RI-4 → RI-5 → RI-6 → RI-7
+    decides APPROVE / COMMENT / REQUEST_CHANGES
+
+Service quality
+    evaluation → telemetry → dashboard
+    measures how well the service performs
+
+Service quality MUST NOT feed RI-6.
+Model identity MUST NOT grant or remove APPROVE authority.
+```
+
+Models discover findings and evidence; deterministic code authorizes state.
+That P1 principle is preserved unchanged.
+
+RI-8 receipts gain additive, nullable **execution profiles** — one for the
+primary reviewer invocation, one for the verifier invocation. Each profile
+records requested and observed provider/model identity (where the provider
+reports it), the analytics fingerprint computed from GitWire-controlled
+configuration (adapter/protocol, requested route, prompt ID/hash,
+repository-tool contract/version, schema versions, budget profile), timing,
+terminal state, and usage/cost where actually exposed. A provider that
+exposes nothing beyond the requested route records `identitySource:
+"requested_only"`; a fully opaque route records `identitySource: "opaque"`.
+Missing optional telemetry never makes a review incomplete.
+
+Frozen interpretation rules:
+
+- provider/model changes alone do not change review policy;
+- requested or observed model identity is descriptive metadata;
+- opaque/missing provider identity is valid;
+- missing optional telemetry does not make a review incomplete;
+- quality uncertainty does not stop normal review execution;
+- demonstrated quality degradation becomes an operational investigation;
+- a demonstrated violation of the frozen safety objective is an incident;
+- existing RI-9 broken/fixed gates remain unchanged;
+- existing Phase 11 sequencing remains unchanged;
+- existing RI-9 closure criteria remain unchanged.
+
+A model-neutral quality scorecard (read model + dashboard) exposes
+independent dimensions — safety, precision, reliability, evidence quality,
+verifier behavior, efficiency — segmented by execution configuration
+(fingerprint, provider, adapter/protocol, requested/observed model,
+identity source). It creates no weighted overall quality number. Its
+presentation states (`Healthy`, `Evaluating current configuration`,
+`Degraded`, `Insufficient evaluation data`) are dashboard display states
+only and are never passed into RI-6.
+
+**Exit criterion (deterministic, zero-paid):** receipts carry primary and
+verifier execution profiles; requested/observed/opaque identity semantics
+work deterministically; controlled configuration produces deterministic
+analytics segmentation; service-quality measurements are available on the
+dashboard/read model; PR/dashboard/audit information separation and RI-6
+non-interference are proven by tests; RI-7 mutation semantics are unchanged;
+exact-head deterministic CI passes at the normal accepted RI-branch profile.
+No paid provider call is required. Completion of this foundation does not
+by itself authorize any paid quality-baseline evaluation, candidate
+comparison, or continuation to Phase 11.
 
 ---
 
