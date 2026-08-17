@@ -783,12 +783,17 @@ export async function runPrimaryReview({
     submissionDiagnostics,
     invocationInfo,
     usageAccumulators(),
+    // A submission reached this path only by parsing + schema-validating
+    // (tool_use or the text cascade) — the invocation completed. Terminal
+    // classification must reflect the accepted result, not which delivery
+    // mechanism the provider happened to honor.
+    true,
   );
 }
 
 // ── Receipt builder ─────────────────────────────────────────────────────────
 
-function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText, unresolvedContextRequests, submissionDiagnostics, invocationInfo, usageAccumulators) {
+function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText, unresolvedContextRequests, submissionDiagnostics, invocationInfo, usageAccumulators, parsedSubmission = false) {
   // Phase 10 execution profile — descriptive metadata only. Built on every
   // receipt path (success, error, timeout, budget, invalid submission);
   // missing optional telemetry never fails the review.
@@ -799,7 +804,11 @@ function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budg
     : (invocation.maxTokens != null ? { maxTokens: invocation.maxTokens } : null);
   const terminalState = classifyPrimaryTerminal({
     error: error || null,
-    submitted: submissionDiagnostics ? Boolean(submissionDiagnostics.usedSubmitTool) : false,
+    // Submitted = the forced submit tool produced the result OR the text
+    // cascade parsed into a schema-valid submission. Tool usage alone is
+    // not the completion criterion.
+    submitted: parsedSubmission === true ||
+      (submissionDiagnostics ? Boolean(submissionDiagnostics.usedSubmitTool) : false),
   });
   const executionProfile = buildExecutionProfile({
     provider: invocation.provider,

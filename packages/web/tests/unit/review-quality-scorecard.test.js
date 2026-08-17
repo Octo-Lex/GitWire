@@ -124,6 +124,19 @@ describe("Phase 10 D: runtime dimension aggregation", () => {
     expect(summary.runCount).toBe(2);
   });
 
+  it("clean approvals come from the v2 policy output, not the delivered verdict", () => {
+    // Shadow rows carry the LEGACY engine's verdict in the verdict column;
+    // only approval_eligible records the v2 decision.
+    const rows = [
+      receiptRow(),
+      receiptRow({ id: 2, verdict: "approved", approval_eligible: false }),
+      receiptRow({ id: 3, verdict: "needs_discussion", approval_eligible: false }),
+    ];
+    const summary = summarizeRuntime(rows.map(mapReceiptRow));
+    expect(summary.precision.cleanApprovalCount).toBe(1);
+    expect(summary.precision.cleanApprovalRate).toBeCloseTo(1 / 3);
+  });
+
   it("computes clean approval rate over v2 receipts", () => {
     const rows = [receiptRow(), receiptRow({ id: 2, verdict: "request_changes", approval_eligible: false })];
     const summary = summarizeRuntime(rows.map(mapReceiptRow));
@@ -245,6 +258,19 @@ describe("Phase 10 D: presentation-state derivation (display only)", () => {
 
 describe("Phase 10 D: full scorecard assembly", () => {
 
+  it("exposes the read window and truncation explicitly", () => {
+    const sc = buildQualityScorecard({
+      receiptRows: [receiptRow()],
+      evaluationScorecards: [evalScorecard()],
+      evaluationRuns: [],
+      window: { limit: 500, rowsReturned: 1, totalV2Receipts: 742, truncated: true },
+    });
+    expect(sc.window).toEqual({ limit: 500, rowsReturned: 1, totalV2Receipts: 742, truncated: true });
+    // No window supplied (pure-function callers) → null, never a fake window.
+    const sc2 = buildQualityScorecard({ receiptRows: [], evaluationScorecards: [], evaluationRuns: [] });
+    expect(sc2.window).toBeNull();
+  });
+
   it("assembles dimensions without a weighted overall number", () => {
     const sc = buildQualityScorecard({
       receiptRows: [receiptRow()],
@@ -307,5 +333,9 @@ describe("Phase 10 D: /api/review/quality route wiring", () => {
     );
     expect(routeSource).toContain('phase4Router.get("/review/quality"');
     expect(routeSource).toContain("reviewQualityScorecard.js");
+    // v2-only selection: integrity_version alone matches pre-v2 rows on an
+    // upgraded database (migration 043 DEFAULT 1 backfill).
+    expect(routeSource).toContain("WHERE review_invocation_id IS NOT NULL");
+    expect(routeSource).not.toContain("WHERE integrity_version IS NOT NULL");
   });
 });

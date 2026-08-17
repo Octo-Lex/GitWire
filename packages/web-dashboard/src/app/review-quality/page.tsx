@@ -45,6 +45,7 @@ type Scorecard = {
   };
   segmentation: Record<string, Array<{ value: string | null; runCount: number }>>;
   runtimeRunCount: number;
+  window: { limit: number; rowsReturned: number; totalV2Receipts: number; truncated: boolean } | null;
 };
 
 // Unknown identity is displayed as unknown — never guessed.
@@ -107,6 +108,12 @@ export default function ReviewQualityPage() {
               <div className="text-xs text-text-tertiary mt-1">
                 Measurement surface only — quality metadata never affects review authority.
               </div>
+              {sc.window && (
+                <div className="text-xs text-text-tertiary mt-1">
+                  Runtime window: {sc.window.rowsReturned.toLocaleString()} of {sc.window.totalV2Receipts.toLocaleString()} v2 receipts
+                  {sc.window.truncated ? ` (most recent ${sc.window.limit.toLocaleString()} — older history truncated)` : ""}
+                </div>
+              )}
             </div>
             <Badge variant={stateVariant(sc.presentationState)}>{sc.presentationState}</Badge>
           </div>
