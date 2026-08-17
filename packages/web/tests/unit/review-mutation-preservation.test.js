@@ -17,7 +17,9 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const FROZEN_RI7_SOURCE_SHA256 = "2686389fd3a9ae03a75387489b50c29cb300fd42a619943ace966ea43ebbf129";
+// Pinned over LF-normalized source: the hash is line-ending independent
+// (checkouts differ between CRLF on Windows and LF on CI runners).
+const FROZEN_RI7_SOURCE_SHA256 = "19f3a384a309feface77bb8adc0e01e0c7209bc77587410167bab586a8f3ecd0";
 
 describe("RI-7 preservation: exactly-one mutation semantics unchanged", () => {
 
@@ -26,7 +28,8 @@ describe("RI-7 preservation: exactly-one mutation semantics unchanged", () => {
     const source = readFileSync(
       join(here, "..", "..", "src", "services", "reviewMutationService.js"),
     );
-    const hash = createHash("sha256").update(source).digest("hex");
+    const normalized = Buffer.from(source.toString("utf8").replace(/\r\n/g, "\n"), "utf8");
+    const hash = createHash("sha256").update(normalized).digest("hex");
     expect(hash).toBe(FROZEN_RI7_SOURCE_SHA256);
   });
 });
