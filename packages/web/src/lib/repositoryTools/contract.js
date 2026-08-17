@@ -17,6 +17,13 @@
 
 export const TOOL_OPERATIONS = Object.freeze(["read", "grep", "find", "ls"]);
 
+// Stable identity of this contract for execution-profile telemetry (RI-9
+// Phase 10). Version tracks the frozen semantics above: "2" is the
+// RepositoryTools v2 contract (typed completeness, negative-evidence
+// invariant). Descriptive metadata only — never consulted by review policy.
+export const TOOL_CONTRACT_NAME = Object.freeze("gitwire-repository-tools");
+export const TOOL_CONTRACT_VERSION = Object.freeze("2");
+
 export const RESULT_STATUSES = Object.freeze(["success", "partial", "error"]);
 
 // Extensible beyond the amendment's minimum set: unfaithful_scope marks a

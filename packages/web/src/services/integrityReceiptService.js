@@ -9,6 +9,7 @@
 // Observability metrics are recorded as structured events for aggregation.
 
 import { db } from "../lib/db.js";
+import { executionProfileForReceipt } from "./executionProfileService.js";
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
@@ -20,6 +21,11 @@ import { db } from "../lib/db.js";
  * repository contents — the evidence manifest carries SHAs and coverage
  * states so actual source is reconstructible through immutable Git.
  *
+ * Phase 10: additive primary/verifier execution profiles (descriptive,
+ * nullable, model-neutral telemetry) are embedded in the manifest. Missing
+ * profiles (null) keep the receipt valid — optional telemetry never makes
+ * a review incomplete.
+ *
  * @param {object} params
  * @param {number} params.reviewRowId - the existing ai_reviews row id
  * @param {object} params.evidence - ReviewEvidence (trimmed to manifest)
@@ -29,6 +35,8 @@ import { db } from "../lib/db.js";
  * @param {object} params.budgetState - context broker budget state
  * @param {string} params.invocationId - from computeInvocationId
  * @param {number} params.integrityVersion - schema version (default 1)
+ * @param {object|null} params.primaryExecutionProfile - from primary receipt (Phase 10)
+ * @param {object|null} params.verifierExecutionProfile - from verifier receipt (Phase 10)
  */
 export async function persistIntegrityReceipt({
   reviewRowId,
@@ -39,9 +47,20 @@ export async function persistIntegrityReceipt({
   budgetState,
   invocationId,
   integrityVersion = 1,
+  primaryExecutionProfile = null,
+  verifierExecutionProfile = null,
 }) {
   // Build the evidence manifest — the receipt, not full contents
   const manifest = buildEvidenceManifest(evidence, primaryFindings, budgetState);
+
+  // Phase 10 execution profiles — additive, nullable, sanitized to the
+  // persisted shape. Never consulted by review authority (RI-6).
+  if (manifest) {
+    manifest.executionProfiles = {
+      primary: executionProfileForReceipt(primaryExecutionProfile),
+      verifier: executionProfileForReceipt(verifierExecutionProfile),
+    };
+  }
 
   // Build the verification receipt (trimmed — no full review body)
   const verifierReceiptRecord = verifierReceipt ? {
