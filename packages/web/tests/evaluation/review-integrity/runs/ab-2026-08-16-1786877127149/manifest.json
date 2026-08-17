@@ -1,0 +1,103 @@
+{
+  "kind": "phase9-ab-manifest",
+  "version": 1,
+  "gitHead": "fcbb975dd493e7facc1ec269a15be71460f5ed19",
+  "arms": {
+    "current-gitwire": {
+      "promptVersion": "current-phase9-v1",
+      "orchestration": "seeded-context + 8-round loop + forced submit_review_result + narration retry"
+    },
+    "pi": {
+      "promptVersion": "pi-phase8-v1",
+      "piPackageVersion": "0.74.2",
+      "orchestration": "pi agent loop + terminal submit_review"
+    }
+  },
+  "provider": "zai",
+  "model": "glm-5.3",
+  "fixtures": [
+    {
+      "caseId": "RI-04",
+      "variant": "broken",
+      "fixtureHead": "624732c"
+    },
+    {
+      "caseId": "RI-04",
+      "variant": "fixed",
+      "fixtureHead": "a32a07e"
+    }
+  ],
+  "budgets": {
+    "deadlineMs": 480000,
+    "maxToolCalls": 60,
+    "maxCostUsd": 0.5,
+    "maxTotalTokens": 7000000
+  },
+  "order": [
+    {
+      "variant": "broken",
+      "arm": "current-gitwire"
+    },
+    {
+      "variant": "broken",
+      "arm": "pi"
+    },
+    {
+      "variant": "broken",
+      "arm": "pi"
+    },
+    {
+      "variant": "broken",
+      "arm": "current-gitwire"
+    },
+    {
+      "variant": "broken",
+      "arm": "current-gitwire"
+    },
+    {
+      "variant": "broken",
+      "arm": "pi"
+    },
+    {
+      "variant": "fixed",
+      "arm": "pi"
+    },
+    {
+      "variant": "fixed",
+      "arm": "current-gitwire"
+    },
+    {
+      "variant": "fixed",
+      "arm": "current-gitwire"
+    },
+    {
+      "variant": "fixed",
+      "arm": "pi"
+    },
+    {
+      "variant": "fixed",
+      "arm": "pi"
+    },
+    {
+      "variant": "fixed",
+      "arm": "current-gitwire"
+    }
+  ],
+  "repetitions": 3,
+  "maxInvocations": 12,
+  "objectivePreamble": "You are reviewing one pull request against its repository at the immutable HEAD. Determine whether the change introduces correctness defects. Correct means: the repository's own documented contracts hold; cross-file consistency holds (including status and behavioral documentation); API usage matches the called code's actual contract; and invariants the surrounding code relies on are preserved. Documentation contradictions about system state are correctness material. Cite exact file/line evidence for every material finding.",
+  "scoring": {
+    "convergence": "status=completed AND terminationReason=submitted AND submission payload structurally valid",
+    "brokenEffectiveness": ">=1 material finding whose evidence refs target an expected evidence path AND survive RI-4 validation AND pass non-circular evidence verification",
+    "fixedPrecision": "no material finding that fails RI-4 validation or evidence verification (clean submissions count as precise)",
+    "evidenceIntegrity": "every material finding's repo-read refs verified: covering read + reproduction + RI-3 reconciliation",
+    "notScored": "model-generated APPROVE — RI-6 remains the decision authority"
+  },
+  "decisionRule": {
+    "choosePi": "Pi materially better on broken effectiveness or convergence WITHOUT worse fixed precision, evidence integrity, or fail-closed behavior",
+    "keepCurrent": "current arm reaches valid terminal submissions in >=4/6 runs AND shows >=1 on-target broken detection while Pi submits in <=2/6",
+    "noWinner": "both fail similarly or results materially mixed — orchestration not established as the causal bottleneck; no per-arm tuning and rerun"
+  },
+  "budgetSemantics": "maxCostUsd is a post-turn fail-closed crossing threshold, not a strict no-overshoot spend ceiling",
+  "manifestHash": "sha256:9b288c0af9fae6ab2cdc6c4384b5946750107cbf6a586519e334f6316fbac1be"
+}

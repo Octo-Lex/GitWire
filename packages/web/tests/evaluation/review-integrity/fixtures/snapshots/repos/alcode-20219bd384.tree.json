@@ -1,0 +1,521 @@
+{
+ "repo": "alcode",
+ "sha": "20219bd384",
+ "tree": [
+  {
+   "path": ".github/workflows/ci.yml",
+   "sha": "a1becef651adc2f0299a30150530a111ccc8fd21",
+   "size": 1654
+  },
+  {
+   "path": ".gitignore",
+   "sha": "a5305e3fc3d9039518123e74e6d3f5a44c54438b",
+   "size": 356
+  },
+  {
+   "path": "LICENSE",
+   "sha": "f4fa5cb8f78b43ef21a85a7822c037ddfc03c2d5",
+   "size": 1067
+  },
+  {
+   "path": "README.md",
+   "sha": "f35e29412e4949e41f87fd794d4d63bfbd74d104",
+   "size": 4611
+  },
+  {
+   "path": "THIRD_PARTY_NOTICES.md",
+   "sha": "107dd038db1f3128ee9e890fcbe067be920e52ac",
+   "size": 1500
+  },
+  {
+   "path": "docs/adr/0001-event-and-projection-commit-semantics.md",
+   "sha": "dbf6b5168c351a806320a1e590c3e2c5f56f8ff9",
+   "size": 2294
+  },
+  {
+   "path": "docs/adr/0002-workspace-identity-and-locking.md",
+   "sha": "90425be0f7b140edc1c53e4f3876e652a2a52dd8",
+   "size": 5918
+  },
+  {
+   "path": "docs/adr/0003-tool-operation-uncertainty-and-recovery.md",
+   "sha": "c92e9cd975afecf8bb09f0f8cd13e966a888245b",
+   "size": 5053
+  },
+  {
+   "path": "docs/adr/0004-secret-admission-and-erasure.md",
+   "sha": "7fc591cae4ccbd41de9d8afcf69fb9ecebce0259",
+   "size": 5868
+  },
+  {
+   "path": "docs/backlog.md",
+   "sha": "6f08e0de2bfa154c6af1c09094b9aed524eb2db2",
+   "size": 6127
+  },
+  {
+   "path": "docs/constitution.md",
+   "sha": "7867491b4b5235dab38624055f0c06b45241de39",
+   "size": 5048
+  },
+  {
+   "path": "docs/event-contract.md",
+   "sha": "f6270239e7e0437f337f895c98d82bfa981c3181",
+   "size": 9015
+  },
+  {
+   "path": "docs/non-goals.md",
+   "sha": "e9de2c3a9658bdb272eb6932f55f405da4e95dde",
+   "size": 3810
+  },
+  {
+   "path": "docs/operation-recovery.md",
+   "sha": "462777043f06c059d2a69921c27962265542dac6",
+   "size": 3570
+  },
+  {
+   "path": "docs/phase-0-spec.md",
+   "sha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+   "size": 35643
+  },
+  {
+   "path": "docs/provenance/pi-v0.81.1.import.json",
+   "sha": "540ae3a031f901e2dcc986134aabd777b7193a72",
+   "size": 1203
+  },
+  {
+   "path": "docs/provenance/pi.md",
+   "sha": "ab58efef86e6ac2a02a255bbbc12217ee8ba23ad",
+   "size": 6054
+  },
+  {
+   "path": "docs/roadmap.md",
+   "sha": "7c334156e8435aa9055ea87953c701a57446d04a",
+   "size": 14269
+  },
+  {
+   "path": "docs/rules.md",
+   "sha": "324fcacce56f824098f2f7462cafbf3c2ca37326",
+   "size": 9467
+  },
+  {
+   "path": "docs/threat-model.md",
+   "sha": "1e1fbe267ce34b4367f7bd86cb316738d97ee458",
+   "size": 4352
+  },
+  {
+   "path": "package.json",
+   "sha": "eb2c7eaeb25d95cab9ec0df0aad30cf8dfb92ae2",
+   "size": 805
+  },
+  {
+   "path": "packages/agent-core/package.json",
+   "sha": "c30b3e3fe789b8f948dd7d4fb72012b3bfed8609",
+   "size": 351
+  },
+  {
+   "path": "packages/agent-core/src/agent-core.test.ts",
+   "sha": "17cdf379cda9313376b48c2ae5ed55c2463d5da3",
+   "size": 1792
+  },
+  {
+   "path": "packages/agent-core/src/agent-loop.ts",
+   "sha": "504a8135db4533a5cb559d6c9bab723bc5db75a0",
+   "size": 6196
+  },
+  {
+   "path": "packages/agent-core/src/contracts.ts",
+   "sha": "a38ec649d03347c7ec9a51430f4444a94af50772",
+   "size": 5261
+  },
+  {
+   "path": "packages/agent-core/src/extension-host.ts",
+   "sha": "457547903480d42b0e199885b7d7718d81dbfa59",
+   "size": 2299
+  },
+  {
+   "path": "packages/agent-core/src/imported/agent-loop.ts",
+   "sha": "3a12506cb2c9fe505a41b63da3d5e132bbe7f1a5",
+   "size": 22114
+  },
+  {
+   "path": "packages/agent-core/src/imported/agent.ts",
+   "sha": "147edc8396d57a6470bb172325d204060a6bc69d",
+   "size": 18121
+  },
+  {
+   "path": "packages/agent-core/src/imported/stream-fn.ts",
+   "sha": "337d16b368623b5981499bdf5947a21e28837b66",
+   "size": 683
+  },
+  {
+   "path": "packages/agent-core/src/imported/types.ts",
+   "sha": "52f34891a7e49b684ab506dd0b212a8919b37656",
+   "size": 17054
+  },
+  {
+   "path": "packages/agent-core/src/index.ts",
+   "sha": "7835529d762cf690924bff1a621a2f29ab585b93",
+   "size": 977
+  },
+  {
+   "path": "packages/agent-core/tsconfig.json",
+   "sha": "5b5eb25456ad27611f8d5af2cb2b43e8e2635df6",
+   "size": 275
+  },
+  {
+   "path": "packages/agent-core/vitest.config.ts",
+   "sha": "b5a8817ec1a73024431a6eff515f6f10c4e4c8e4",
+   "size": 203
+  },
+  {
+   "path": "packages/coding-agent/package.json",
+   "sha": "4eda26fd34dcd0180ba2ee032c4a26a2dd97e5fc",
+   "size": 682
+  },
+  {
+   "path": "packages/coding-agent/src/cli.ts",
+   "sha": "f539de3d1470f45343577ec5d50367f3fbcfc652",
+   "size": 2060
+  },
+  {
+   "path": "packages/coding-agent/src/coding-agent.test.ts",
+   "sha": "1423871293fb2e0a632cf368b55f3125112020ad",
+   "size": 7238
+  },
+  {
+   "path": "packages/coding-agent/src/crash-vertical.test.ts",
+   "sha": "324e4f125a3a3dcfba318e917bd5ac25f2b5cae5",
+   "size": 9917
+  },
+  {
+   "path": "packages/coding-agent/src/durable-agent-sink.test.ts",
+   "sha": "6909d7387fce83f69253c95015a1681e9d69c425",
+   "size": 9136
+  },
+  {
+   "path": "packages/coding-agent/src/durable-agent.test.ts",
+   "sha": "d632b02eddc82cbb7c34dcd17f937103d0f2fede",
+   "size": 14309
+  },
+  {
+   "path": "packages/coding-agent/src/durable-agent.ts",
+   "sha": "d2236fe4d0a5881b1968b43e293d6fe60fc5c77c",
+   "size": 12633
+  },
+  {
+   "path": "packages/coding-agent/src/index.ts",
+   "sha": "b1ab5bb45ea0ee4c6e3669cba067dcd80c28ea2a",
+   "size": 706
+  },
+  {
+   "path": "packages/coding-agent/src/phase-0.2-vertical.test.ts",
+   "sha": "fe0f641c87ce99a49847fff3944c3385a15fe41f",
+   "size": 9346
+  },
+  {
+   "path": "packages/coding-agent/src/reopen-vertical.test.ts",
+   "sha": "6049afb128f649f683405a6e9c5d710b2835a3e5",
+   "size": 14247
+  },
+  {
+   "path": "packages/coding-agent/src/session-lifecycle.test.ts",
+   "sha": "f5e9f1d53d8a580dd3c8b5852a130396ed0627c6",
+   "size": 6378
+  },
+  {
+   "path": "packages/coding-agent/src/session-lifecycle.ts",
+   "sha": "c882c43719f356f398db41d7eed57d9ae05674e0",
+   "size": 6131
+  },
+  {
+   "path": "packages/coding-agent/src/sessions-projection.test.ts",
+   "sha": "ca7d334f23d3717145a9c35836c1e059a4e01936",
+   "size": 4333
+  },
+  {
+   "path": "packages/coding-agent/src/sessions-projection.ts",
+   "sha": "75e509c93e334f97a961e19c7f5587cea126d7ee",
+   "size": 6062
+  },
+  {
+   "path": "packages/coding-agent/src/test-model-provider.ts",
+   "sha": "b7041fcdf95278b89c9b541f31ac34c73fbce127",
+   "size": 3394
+  },
+  {
+   "path": "packages/coding-agent/src/tools/bash.ts",
+   "sha": "a600ed9712aec603ec7619989ab4c29700a66165",
+   "size": 7539
+  },
+  {
+   "path": "packages/coding-agent/tsconfig.json",
+   "sha": "90cee035905c21c68740667704725c628d5f87d3",
+   "size": 231
+  },
+  {
+   "path": "packages/coding-agent/vitest.config.ts",
+   "sha": "b5a8817ec1a73024431a6eff515f6f10c4e4c8e4",
+   "size": 203
+  },
+  {
+   "path": "packages/events/package.json",
+   "sha": "c0f5054f3396f9447b46fff1b430d55b028bcdd7",
+   "size": 347
+  },
+  {
+   "path": "packages/events/src/envelope.ts",
+   "sha": "20b79c7cec0784980ce4633373f3ce6113414187",
+   "size": 2881
+  },
+  {
+   "path": "packages/events/src/events.test.ts",
+   "sha": "a13e5b05d176d9223d45cf680c773d95d8c66b03",
+   "size": 6020
+  },
+  {
+   "path": "packages/events/src/identity.ts",
+   "sha": "558a7f9a07cf2f0e740a390b09b7bfbaafd8bb13",
+   "size": 4893
+  },
+  {
+   "path": "packages/events/src/in-memory-store.ts",
+   "sha": "5528b89ccc4544d4adfbd7417d5e008535bf0b18",
+   "size": 4006
+  },
+  {
+   "path": "packages/events/src/index.ts",
+   "sha": "c83c07d3d1ed18fccfd042d641c84f7d82c1825a",
+   "size": 1165
+  },
+  {
+   "path": "packages/events/src/serialize.ts",
+   "sha": "8e20f41b161f0d0dc778d2b632a1355ccd7f9c4c",
+   "size": 6105
+  },
+  {
+   "path": "packages/events/src/store.ts",
+   "sha": "5d04365a026601d1d72fedd7ee46fad50654dd14",
+   "size": 2379
+  },
+  {
+   "path": "packages/events/tsconfig.json",
+   "sha": "90cee035905c21c68740667704725c628d5f87d3",
+   "size": 231
+  },
+  {
+   "path": "packages/events/vitest.config.ts",
+   "sha": "b69f301fb7a0ddf0bd722ac0738cfc0d8a045f9a",
+   "size": 434
+  },
+  {
+   "path": "packages/secrets/package.json",
+   "sha": "d5eb9c61dd51c590e15e9e910c7c537cb3045d50",
+   "size": 348
+  },
+  {
+   "path": "packages/secrets/src/detection.ts",
+   "sha": "daf2c0ccd6e8ddc266272aedc0b6ebe1ea2c6028",
+   "size": 10518
+  },
+  {
+   "path": "packages/secrets/src/gate.test.ts",
+   "sha": "5439fb7f9b620265f7c3db989eb1509288d7d2e8",
+   "size": 8866
+  },
+  {
+   "path": "packages/secrets/src/gate.ts",
+   "sha": "62ec09bda9f87977a4fe7059c67da5388def2108",
+   "size": 9163
+  },
+  {
+   "path": "packages/secrets/src/index.ts",
+   "sha": "42f79483f0c7b8bade9279b5b2ba81d8c977f684",
+   "size": 488
+  },
+  {
+   "path": "packages/secrets/tsconfig.json",
+   "sha": "90cee035905c21c68740667704725c628d5f87d3",
+   "size": 231
+  },
+  {
+   "path": "packages/secrets/vitest.config.ts",
+   "sha": "b5a8817ec1a73024431a6eff515f6f10c4e4c8e4",
+   "size": 203
+  },
+  {
+   "path": "packages/storage/package.json",
+   "sha": "d428404e90314d3f6a90949222ebd4ab9579e5d7",
+   "size": 611
+  },
+  {
+   "path": "packages/storage/src/index.ts",
+   "sha": "b78a500983e17832b5dbba2e653a2f09dafe0bdc",
+   "size": 2306
+  },
+  {
+   "path": "packages/storage/src/operations.test.ts",
+   "sha": "75c847351594e90ef2e9f877c864c9f18f18af92",
+   "size": 14873
+  },
+  {
+   "path": "packages/storage/src/operations.ts",
+   "sha": "b4d75f1e2854e118739cabaa76db808bf6037cdb",
+   "size": 13599
+  },
+  {
+   "path": "packages/storage/src/projection.ts",
+   "sha": "ccd4675dc0add4dd69b317e2e22f4e8d42201f0d",
+   "size": 12252
+  },
+  {
+   "path": "packages/storage/src/reasoning-memory-projections.ts",
+   "sha": "ae9346da936312b9edae20e0e760dc4e0986cc5a",
+   "size": 4676
+  },
+  {
+   "path": "packages/storage/src/recovery.test.ts",
+   "sha": "a5866aecac7c0c1f88f08ddb65368cdfcfcb36e7",
+   "size": 19913
+  },
+  {
+   "path": "packages/storage/src/schema.ts",
+   "sha": "cc9ae4d2430bf0b8c9ee0dc62d20b1ad5c639c9b",
+   "size": 20435
+  },
+  {
+   "path": "packages/storage/src/sqlite-event-store.test.ts",
+   "sha": "2c6b51e12894c2214fd4908ee292796653262f45",
+   "size": 43963
+  },
+  {
+   "path": "packages/storage/src/sqlite-event-store.ts",
+   "sha": "106daacfe3c0cd0ba96d55f8c3512e1f0f6578fa",
+   "size": 25115
+  },
+  {
+   "path": "packages/storage/src/transcript-projection.ts",
+   "sha": "6809eb59fc99a112395e4c3f6407220fc6822f3e",
+   "size": 4196
+  },
+  {
+   "path": "packages/storage/tsconfig.json",
+   "sha": "90cee035905c21c68740667704725c628d5f87d3",
+   "size": 231
+  },
+  {
+   "path": "packages/storage/vitest.config.ts",
+   "sha": "b5a8817ec1a73024431a6eff515f6f10c4e4c8e4",
+   "size": 203
+  },
+  {
+   "path": "packages/test-provider/package.json",
+   "sha": "939b36a4b47795de9077a1e1bde94d00a37ef3fb",
+   "size": 354
+  },
+  {
+   "path": "packages/test-provider/src/index.ts",
+   "sha": "df81640cda243e1a576bf132abe2bc64f45c28a2",
+   "size": 2025
+  },
+  {
+   "path": "packages/test-provider/src/test-provider.test.ts",
+   "sha": "94d480447d5da29091b3c974ccdec34d2ef5846e",
+   "size": 1185
+  },
+  {
+   "path": "packages/test-provider/tsconfig.json",
+   "sha": "90cee035905c21c68740667704725c628d5f87d3",
+   "size": 231
+  },
+  {
+   "path": "packages/test-provider/vitest.config.ts",
+   "sha": "b69f301fb7a0ddf0bd722ac0738cfc0d8a045f9a",
+   "size": 434
+  },
+  {
+   "path": "packages/workspace/package.json",
+   "sha": "447c2595ff636b187af06faf9ec8f4656a4075c1",
+   "size": 565
+  },
+  {
+   "path": "packages/workspace/src/identity.ts",
+   "sha": "f0958102f5b3e4569213010c458cc58f5da71a01",
+   "size": 2273
+  },
+  {
+   "path": "packages/workspace/src/index.ts",
+   "sha": "f609bafc5ba5cf0a9784e98943ab5f4affb1b7fb",
+   "size": 698
+  },
+  {
+   "path": "packages/workspace/src/lock.ts",
+   "sha": "dddd607f91e392d13ba52ba3be897b747864ab21",
+   "size": 6682
+  },
+  {
+   "path": "packages/workspace/src/registry.test.ts",
+   "sha": "a51ff6eba39c479985a4c27a38c01d8a5090f8d0",
+   "size": 3761
+  },
+  {
+   "path": "packages/workspace/src/registry.ts",
+   "sha": "5900c9d13ef2c46516b9ed465b6dd0f3a189f386",
+   "size": 9055
+  },
+  {
+   "path": "packages/workspace/tsconfig.json",
+   "sha": "90cee035905c21c68740667704725c628d5f87d3",
+   "size": 231
+  },
+  {
+   "path": "packages/workspace/vitest.config.ts",
+   "sha": "b5a8817ec1a73024431a6eff515f6f10c4e4c8e4",
+   "size": 203
+  },
+  {
+   "path": "pnpm-lock.yaml",
+   "sha": "194155224918f0f2fb88ffa83275b62be2219f37",
+   "size": 40264
+  },
+  {
+   "path": "pnpm-workspace.yaml",
+   "sha": "dee51e928d8abc3063b11689792bba48750eb708",
+   "size": 27
+  },
+  {
+   "path": "scripts/gate/gate-0.0.ts",
+   "sha": "b747c56b058d6f77754572b74750ad33cfefc861",
+   "size": 6393
+  },
+  {
+   "path": "scripts/gate/gate-0.1A.ts",
+   "sha": "3136b6fce52b0065fc75529dba21dfa61bb3f6ae",
+   "size": 7367
+  },
+  {
+   "path": "scripts/gate/gate-0.2.ts",
+   "sha": "6d0f3231b88a1e951580db8c85057c4ab9649345",
+   "size": 8910
+  },
+  {
+   "path": "scripts/gate/receipt.ts",
+   "sha": "caacc86acd32f4623d0467361ead4d3695fc19b7",
+   "size": 2651
+  },
+  {
+   "path": "scripts/gate/run.ts",
+   "sha": "6bda11a41748ba3ba52945154cd9f4cc46ee2c24",
+   "size": 1431
+  },
+  {
+   "path": "tsconfig.base.json",
+   "sha": "5e9a1a184c8695dae7b616df6f656843053d5d4a",
+   "size": 727
+  },
+  {
+   "path": "vitest.config.ts",
+   "sha": "54eca4505118b7757e7f51ea0ac84252ffbffd6c",
+   "size": 550
+  }
+ ]
+}
