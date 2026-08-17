@@ -7,6 +7,7 @@
 //   GET  /api/review/results                 — all reviews cross-repo
 //   GET  /api/review/results/:owner/:repo    — reviews for one repo
 //   GET  /api/review/stats                   — summary dashboard numbers
+//   GET  /api/review/quality                 — model-neutral quality scorecard
 //   POST /api/review/trigger/:owner/:repo/:pr — trigger on-demand review
 //
 // Audit trail:
@@ -85,6 +86,31 @@ phase4Router.get("/review/stats", async (_req, res, next) => {
     );
 
     res.json({ summary, by_severity: bySeverity, verdict_trend: verdictTrend });
+  } catch (err) { next(err); }
+});
+
+// ── Model-neutral service-quality scorecard (RI-9 Phase 10) ─────────────────
+// Measurement surface only: aggregates runtime RI-8 receipts (with Phase 10
+// execution profiles) and the frozen evaluation corpus. Never consulted by
+// review authority (RI-6); presentation states are dashboard display only.
+phase4Router.get("/review/quality", async (_req, res, next) => {
+  try {
+    const { buildQualityScorecard, loadEvaluationRecords } = await import("../services/reviewQualityScorecard.js");
+    const { rows } = await db.query(
+      "SELECT id, repo_id, pr_number, commit_sha, verdict, approval_eligible, " +
+      "decision_reason, review_invocation_id, evidence_manifest, verification_receipt, " +
+      "tokens_used, duration_ms, started_at, completed_at " +
+      "FROM ai_reviews WHERE integrity_version IS NOT NULL " +
+      "ORDER BY id DESC LIMIT 500"
+    );
+    const evaluation = await loadEvaluationRecords();
+    res.json({
+      data: buildQualityScorecard({
+        receiptRows: rows,
+        evaluationScorecards: evaluation.scorecards,
+        evaluationRuns: evaluation.runs,
+      }),
+    });
   } catch (err) { next(err); }
 });
 

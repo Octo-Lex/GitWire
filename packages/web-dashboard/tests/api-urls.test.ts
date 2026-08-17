@@ -75,6 +75,10 @@ describe('API URL builders', () => {
     expect(API.reviewConfig('o', 'r')).toBe('/api/review/config/o/r');
   });
 
+  test('review quality path', () => {
+    expect(API.reviewQuality()).toBe('/api/review/quality');
+  });
+
   test('audit stats with days', () => {
     expect(API.auditStats(60)).toBe('/api/audit/stats?days=60');
   });

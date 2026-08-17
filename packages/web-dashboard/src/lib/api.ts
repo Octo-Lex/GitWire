@@ -109,6 +109,7 @@ export const API = {
 
   // Intelligence & Compliance (Phase 4)
   reviewStats:      () => `/api/review/stats`,
+  reviewQuality:    () => `/api/review/quality`,
   reviewResults:    (q = "") => `/api/review/results${q ? `?${q}` : ""}`,
   reviewRepoResults: (owner: string, repo: string) => `/api/review/results/${owner}/${repo}`,
   reviewConfig:     (owner: string, repo: string) => `/api/review/config/${owner}/${repo}`,
