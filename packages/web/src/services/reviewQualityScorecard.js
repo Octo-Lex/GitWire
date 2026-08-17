@@ -116,7 +116,11 @@ export function summarizeRuntime(observations) {
   const rows = observations || [];
   const total = rows.length;
 
-  const approvals = rows.filter(o => o.verdict === "approved" || o.approvalEligible).length;
+  // Clean approvals are measured from approval_eligible — the RI-6 policy
+  // output recorded in the receipt. The `verdict` column holds the DELIVERED
+  // event, which on shadow rows is the legacy engine's verdict, not the v2
+  // decision; mixing them would corrupt the v2 precision dimension.
+  const approvals = rows.filter(o => o.approvalEligible).length;
 
   const reliability = countBy(rows, o => terminalStatesOf(o));
   const verifier = countBy(rows, o => o.verifierStatus ? [o.verifierStatus] : []);
@@ -328,7 +332,7 @@ export function derivePresentationState({ evaluationRuns = 0, brokenFalseApprove
  * Build the model-neutral quality scorecard from runtime receipt rows and
  * frozen evaluation records. Pure — all IO happens in the loader/route.
  */
-export function buildQualityScorecard({ receiptRows = [], evaluationScorecards = [], evaluationRuns = [] } = {}) {
+export function buildQualityScorecard({ receiptRows = [], evaluationScorecards = [], evaluationRuns = [], window = null } = {}) {
   const observations = (receiptRows || []).map(mapReceiptRow);
   const runtime = summarizeRuntime(observations);
   const evaluation = summarizeEvaluation(evaluationScorecards);
@@ -390,6 +394,9 @@ export function buildQualityScorecard({ receiptRows = [], evaluationScorecards =
     },
     segmentation: buildSegmentation(observations),
     runtimeRunCount: runtime.runCount,
+    // Explicit read window: when the caller caps the receipt query, the cap
+    // and any truncation are part of the measurement, never silent.
+    window: window || null,
   };
 }
 
@@ -421,8 +428,16 @@ export async function loadEvaluationRecords(runsDir) {
         else if (record?.kind === "phase9-ab-run") runs.push(record);
       }
     }
-  } catch (_e) {
-    // Directory absent or unreadable — no evaluation records.
+  } catch (err) {
+    // Directory absent or unreadable — no evaluation records. Logged, never
+    // silent: an operational packaging failure must be distinguishable from
+    // a genuinely empty corpus.
+    // Same fallback-logging pattern as recordReviewMetrics: structured
+    // stdout, no runtime-initialized logger dependency.
+    console.warn(
+      "review-quality: evaluation corpus unavailable — scorecard degrades to runtime-only"
+        + " (dir: " + dir + ", err: " + err.message + ")"
+    );
   }
   return { scorecards, runs };
 }
