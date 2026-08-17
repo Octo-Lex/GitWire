@@ -194,6 +194,119 @@ describe("Phase 10 D: segmentation by execution identity", () => {
   });
 });
 
+// ── Frozen efficiency surface: cache tokens, cost, tool-call total ───────────
+
+describe("Phase 10 D: efficiency — cache tokens, cost, and tool-call total", () => {
+
+  it("cache categories stay null when the provider never exposed them", () => {
+    // The production fixture: usage carries input/output, cache fields null.
+    const summary = summarizeRuntime([mapReceiptRow(receiptRow())]);
+    expect(summary.efficiency.primaryUsage.inputTokens).toEqual({
+      count: 1, min: 1000, max: 1000, mean: 1000, median: 1000,
+    });
+    expect(summary.efficiency.primaryUsage.cacheReadTokens).toBeNull();
+    expect(summary.efficiency.primaryUsage.cacheWriteTokens).toBeNull();
+    expect(summary.efficiency.verifierUsage.cacheReadTokens).toBeNull();
+  });
+
+  it("cache categories surface as distributions when profiles carry them", () => {
+    const withCache = (read, write) => receiptRow({
+      evidence_manifest: {
+        ...receiptRow().evidence_manifest,
+        executionProfiles: {
+          primary: {
+            ...receiptRow().evidence_manifest.executionProfiles.primary,
+            usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: read, cacheWriteTokens: write, totalTokens: 10 + 2 + read + write },
+          },
+          verifier: null,
+        },
+      },
+    });
+    const summary = summarizeRuntime([
+      mapReceiptRow(withCache(100, 50)),
+      mapReceiptRow(withCache(300, 150)),
+    ]);
+    expect(summary.efficiency.primaryUsage.cacheReadTokens).toEqual({
+      count: 2, min: 100, max: 300, mean: 200, median: 300,
+    });
+    expect(summary.efficiency.primaryUsage.cacheWriteTokens.mean).toBe(100);
+    // A null-cache row joins input/output distributions but not cache ones.
+    const mixed = summarizeRuntime([mapReceiptRow(withCache(100, 50)), mapReceiptRow(receiptRow())]);
+    expect(mixed.efficiency.primaryUsage.inputTokens.count).toBe(2);
+    expect(mixed.efficiency.primaryUsage.cacheReadTokens.count).toBe(1);
+  });
+
+  it("verifier usage dimensions aggregate independently of primary", () => {
+    const row = receiptRow();
+    row.evidence_manifest.executionProfiles.verifier.usage = {
+      inputTokens: 400, outputTokens: 80, cacheReadTokens: 900, cacheWriteTokens: null, totalTokens: 1380,
+    };
+    const summary = summarizeRuntime([mapReceiptRow(row)]);
+    expect(summary.efficiency.verifierUsage.cacheReadTokens.mean).toBe(900);
+    expect(summary.efficiency.verifierUsage.cacheWriteTokens).toBeNull();
+    expect(summary.efficiency.primaryUsage.cacheReadTokens).toBeNull();
+  });
+
+  it("cost stays null when nothing reported a numeric amount", () => {
+    expect(summarizeRuntime([mapReceiptRow(receiptRow())]).efficiency.cost).toBeNull();
+    const noCost = receiptRow();
+    noCost.evidence_manifest.executionProfiles.primary.cost = { amount: null, currency: null, source: null };
+    expect(summarizeRuntime([mapReceiptRow(noCost)]).efficiency.cost).toBeNull();
+  });
+
+  it("cost sums per currency and never merges currencies", () => {
+    const priced = (amount, currency) => receiptRow({
+      evidence_manifest: {
+        ...receiptRow().evidence_manifest,
+        executionProfiles: {
+          primary: { ...receiptRow().evidence_manifest.executionProfiles.primary, cost: { amount, currency, source: "test" } },
+          verifier: null,
+        },
+      },
+    });
+    const summary = summarizeRuntime([
+      mapReceiptRow(priced(1.5, "USD")),
+      mapReceiptRow(priced(2.25, "USD")),
+      mapReceiptRow(priced(3.0, "EUR")),
+    ]);
+    expect(summary.efficiency.cost.reportedCount).toBe(3);
+    expect(summary.efficiency.cost.byCurrency).toEqual({
+      USD: { count: 2, total: 3.75 },
+      EUR: { count: 1, total: 3.0 },
+    });
+    // No cross-currency total key exists anywhere in the summary.
+    expect(Object.keys(summary.efficiency.cost)).toEqual(["reportedCount", "byCurrency"]);
+  });
+
+  it("cost without a currency lands in a distinct unknown bucket", () => {
+    const row = receiptRow();
+    row.evidence_manifest.executionProfiles.primary.cost = { amount: 0.5, currency: null, source: "test" };
+    const summary = summarizeRuntime([mapReceiptRow(row)]);
+    expect(summary.efficiency.cost.byCurrency).toEqual({ unknown: { count: 1, total: 0.5 } });
+  });
+
+  it("tool-call total is reads + searches, null only when neither is known", () => {
+    const base = summarizeRuntime([mapReceiptRow(receiptRow())]);
+    expect(base.efficiency.repositoryToolCalls).toBe(6); // 4 reads + 2 searches
+
+    const readsOnly = receiptRow();
+    readsOnly.evidence_manifest.budgetConsumption = { fileReads: 7, searches: null };
+    const partial = summarizeRuntime([mapReceiptRow(readsOnly)]);
+    expect(partial.efficiency.repositoryToolCalls).toBe(7);
+
+    const none = receiptRow({ evidence_manifest: { coverage: { approvalEvidenceComplete: true } } });
+    expect(summarizeRuntime([mapReceiptRow(none)]).efficiency.repositoryToolCalls).toBeNull();
+  });
+
+  it("existing efficiency keys keep their shape alongside the new surface", () => {
+    const summary = summarizeRuntime([mapReceiptRow(receiptRow())]);
+    expect(summary.efficiency.primaryLatencyMs.mean).toBe(8000);
+    expect(summary.efficiency.primaryTokens.mean).toBe(1200);
+    expect(summary.efficiency.repositoryReads).toBe(4);
+    expect(summary.efficiency.repositorySearches).toBe(2);
+  });
+});
+
 // ── Evaluation corpus dimensions ─────────────────────────────────────────────
 
 describe("Phase 10 D: evaluation aggregation uses the existing canonical fields", () => {
