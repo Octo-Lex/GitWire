@@ -240,7 +240,9 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
         const v2Material = [...v2PrimaryFindings, ...v2VerifierFindings].some(f =>
           ["P0", "P1", "P2"].includes(f.severity));
 
-        // Model-identity pinning
+        // Model-identity telemetry (descriptive only). Provider-reported
+        // identity NEVER gates run validity — it is not a qualification
+        // claim (see the RI boundary). A mismatch is recorded, not enforced.
         const requestedModel = BASE_CONFIG.model;
         const actualModel = result?.primaryMeta?.actualModel || v2VerifierReceipt?.actualModel || null;
         const modelMatch = actualModel === requestedModel;
@@ -249,7 +251,7 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
         const gaps = octokit.fixtureGaps || [];
         const invalidReason = gaps.length > 0
           ? "fixture_gap:" + gaps[0].path
-          : (modelMatch ? null : "model_identity_mismatch");
+          : null;
 
         const record = {
           fixture: fixture.caseId,
@@ -291,7 +293,8 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
         );
       }
 
-      // ── Run validity: fixture gaps and model-identity mismatches invalidate ──
+      // ── Run validity: fixture gaps invalidate; model identity is
+      // ── descriptive telemetry only and never invalidates a run. ─────────
       const invalidRuns = runs.filter(r => r.invalid);
       expect(invalidRuns).toEqual([]);
 

@@ -286,6 +286,9 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
             accepted: defense
               ? (defense.defenses || []).filter(function (d) { return d.action === "accept"; }).length
               : 0,
+            // Additive telemetry: per-call identity + usage for the receipt.
+            executionProfile: challenge.executionProfile || null,
+            defenseExecutionProfile: defense ? (defense.executionProfile || null) : null,
           };
 
           // Match refined findings back to original v2 findings by claim/title
@@ -703,6 +706,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           budgetState: v2PrimaryMeta?.budgetState || null,
           primaryExecutionProfile: v2PrimaryMeta?.executionProfile || null,
           verifierExecutionProfile: v2Verifier?.executionProfile || null,
+          adversarialExecutionProfile: adversarialMeta?.executionProfile || null,
+          defenseExecutionProfile: adversarialMeta?.defenseExecutionProfile || null,
         });
 
         // Receipt persisted — safe to expose the decision to downstream steps

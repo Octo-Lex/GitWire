@@ -279,3 +279,149 @@ describe("Phase 10 C: verifier invocation execution profile", () => {
     expect(receipt.executionProfile.identitySource).toBe(IDENTITY_SOURCE.REQUESTED_ONLY);
   });
 });
+
+// ── Submission-path billing telemetry (client correction, 2026-08-17) ───────
+// The bounded retry (8192 → 16384) and the tool_choice fallback both create
+// billable provider responses. Usage must be accounted on EVERY successful
+// response BEFORE any response variable is overwritten, and fallback
+// attempts must be visible in the diagnostics.
+
+describe("submission-path usage accounting and fallback recording", () => {
+  const SUBMIT_INPUT_PRIMARY = {
+    findings: [], unresolvedContextNeeds: [],
+    overallCorrectness: "correct", overallConfidence: "high", summary: "clean",
+  };
+  const SUBMIT_INPUT_VERIFIER = {
+    status: "verified", findings: [], coverageSatisfied: true,
+  };
+
+  it("primary: a retried submission accounts for BOTH responses' usage", async () => {
+    let call = 0;
+    const anthropic = {
+      baseURL: "https://api.fake-provider.test/v1",
+      messages: {
+        create: async () => {
+          call += 1;
+          if (call === 1) {
+            return { model: "m", stop_reason: "end_turn", usage: { input_tokens: 100, output_tokens: 20 },
+              content: [{ type: "text", text: "ready" }] };
+          }
+          if (call === 2) {
+            // Narration dies at the cap: no tool_use, max_tokens stop.
+            return { model: "m", stop_reason: "max_tokens", usage: { input_tokens: 300, output_tokens: 8192 },
+              content: [{ type: "text", text: "narrative tail" }] };
+          }
+          return { model: "m", stop_reason: "tool_use", usage: { input_tokens: 320, output_tokens: 200 },
+            content: [{ type: "tool_use", id: "tu1", name: "submit_review_result", input: SUBMIT_INPUT_PRIMARY }] };
+        },
+      },
+    };
+    const receipt = await runPrimaryReview({
+      evidence: EVIDENCE, octokit: fakeOctokit, owner: "o", repo: "r",
+      anthropic, model: "m",
+    });
+
+    expect(receipt.error).toBeUndefined();
+    expect(receipt.submissionDiagnostics.submissionRetried).toBe(true);
+    // 120 (round) + 8492 (overwritten attempt 1) + 520 (attempt 2) — the
+    // first attempt's usage must survive its own overwrite.
+    expect(receipt.tokensUsed).toBe(120 + 8492 + 520);
+    expect(receipt.executionProfile.usage.inputTokens).toBe(100 + 300 + 320);
+    expect(receipt.executionProfile.usage.outputTokens).toBe(20 + 8192 + 200);
+    expect(receipt.executionProfile.usage.totalTokens).toBe(receipt.tokensUsed);
+  });
+
+  it("primary: a provider tool_choice rejection records the fallback attempt", async () => {
+    let call = 0;
+    let forcedCalls = 0;
+    const anthropic = {
+      baseURL: "https://api.fake-provider.test/v1",
+      messages: {
+        create: async (params) => {
+          call += 1;
+          if (call === 1) {
+            return { model: "m", stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 2 },
+              content: [{ type: "text", text: "ready" }] };
+          }
+          if (params.tool_choice) {
+            forcedCalls += 1;
+            throw new Error("412 precondition failed: tool_choice not supported");
+          }
+          return { model: "m", stop_reason: "tool_use", usage: { input_tokens: 50, output_tokens: 10 },
+            content: [{ type: "tool_use", id: "tu1", name: "submit_review_result", input: SUBMIT_INPUT_PRIMARY }] };
+        },
+      },
+    };
+    const receipt = await runPrimaryReview({
+      evidence: EVIDENCE, octokit: fakeOctokit, owner: "o", repo: "r",
+      anthropic, model: "m",
+    });
+
+    expect(receipt.error).toBeUndefined();
+    expect(forcedCalls).toBe(1);
+    expect(receipt.submissionDiagnostics.forcedToolFallbackAttempts).toBe(1);
+    expect(receipt.submissionDiagnostics.submissionRetried).toBe(false);
+  });
+
+  it("verifier: a retried submission accounts for BOTH responses' usage", async () => {
+    let call = 0;
+    const anthropic = {
+      baseURL: "https://api.fake-provider.test/v1",
+      messages: {
+        create: async () => {
+          call += 1;
+          if (call === 1) {
+            return { model: "m", stop_reason: "end_turn", usage: { input_tokens: 60, output_tokens: 8 },
+              content: [{ type: "text", text: "checking" }] };
+          }
+          if (call === 2) {
+            return { model: "m", stop_reason: "max_tokens", usage: { input_tokens: 400, output_tokens: 8192 },
+              content: [{ type: "text", text: "narrative" }] };
+          }
+          return { model: "m", stop_reason: "tool_use", usage: { input_tokens: 410, output_tokens: 90 },
+            content: [{ type: "tool_use", id: "tu1", name: "submit_verification_result", input: SUBMIT_INPUT_VERIFIER }] };
+        },
+      },
+    };
+    const receipt = await runApprovalVerification({
+      evidence: EVIDENCE, octokit: fakeOctokit, owner: "o", repo: "r",
+      anthropic, model: "m", maxDurationMs: 5000,
+    });
+
+    expect(receipt.status).toBe("verified");
+    expect(receipt.submissionDiagnostics.submissionRetried).toBe(true);
+    expect(receipt.tokensUsed).toBe(68 + 8592 + 500);
+    expect(receipt.executionProfile.usage.totalTokens).toBe(receipt.tokensUsed);
+  });
+
+  it("verifier: a provider tool_choice rejection records the fallback attempt", async () => {
+    let call = 0;
+    let forcedCalls = 0;
+    const anthropic = {
+      baseURL: "https://api.fake-provider.test/v1",
+      messages: {
+        create: async (params) => {
+          call += 1;
+          if (call === 1) {
+            return { model: "m", stop_reason: "end_turn", usage: { input_tokens: 20, output_tokens: 4 },
+              content: [{ type: "text", text: "checking" }] };
+          }
+          if (params.tool_choice) {
+            forcedCalls += 1;
+            throw new Error("400 tool_choice rejected");
+          }
+          return { model: "m", stop_reason: "tool_use", usage: { input_tokens: 30, output_tokens: 6 },
+            content: [{ type: "tool_use", id: "tu1", name: "submit_verification_result", input: SUBMIT_INPUT_VERIFIER }] };
+        },
+      },
+    };
+    const receipt = await runApprovalVerification({
+      evidence: EVIDENCE, octokit: fakeOctokit, owner: "o", repo: "r",
+      anthropic, model: "m", maxDurationMs: 5000,
+    });
+
+    expect(receipt.status).toBe("verified");
+    expect(forcedCalls).toBe(1);
+    expect(receipt.submissionDiagnostics.forcedToolFallbackAttempts).toBe(1);
+  });
+});

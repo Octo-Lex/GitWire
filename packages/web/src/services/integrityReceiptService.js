@@ -37,6 +37,8 @@ import { executionProfileForReceipt } from "./executionProfileService.js";
  * @param {number} params.integrityVersion - schema version (default 1)
  * @param {object|null} params.primaryExecutionProfile - from primary receipt (Phase 10)
  * @param {object|null} params.verifierExecutionProfile - from verifier receipt (Phase 10)
+ * @param {object|null} params.adversarialExecutionProfile - from adversarial challenge (additive telemetry)
+ * @param {object|null} params.defenseExecutionProfile - from defense pass (additive telemetry)
  */
 export async function persistIntegrityReceipt({
   reviewRowId,
@@ -49,6 +51,8 @@ export async function persistIntegrityReceipt({
   integrityVersion = 1,
   primaryExecutionProfile = null,
   verifierExecutionProfile = null,
+  adversarialExecutionProfile = null,
+  defenseExecutionProfile = null,
 }) {
   // Build the evidence manifest — the receipt, not full contents
   const manifest = buildEvidenceManifest(evidence, primaryFindings, budgetState);
@@ -59,6 +63,8 @@ export async function persistIntegrityReceipt({
     manifest.executionProfiles = {
       primary: executionProfileForReceipt(primaryExecutionProfile),
       verifier: executionProfileForReceipt(verifierExecutionProfile),
+      adversarial: executionProfileForReceipt(adversarialExecutionProfile),
+      defense: executionProfileForReceipt(defenseExecutionProfile),
     };
   }
 

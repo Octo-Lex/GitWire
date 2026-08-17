@@ -395,6 +395,7 @@ export async function runApprovalVerification({
       // not be able to displace the structured submission). Provider-reject
       // fallback retries without tool_choice; a narration that dies at
       // max_tokens with no tool call gets ONE retry at doubled output room.
+      let vForcedToolFallbackAttempts = 0;
       const vCallSubmission = async (maxTokens) => {
         try {
           return await withDeadline(
@@ -407,6 +408,7 @@ export async function runApprovalVerification({
             "Verifier final submission",
           );
         } catch (_tcErr) {
+          vForcedToolFallbackAttempts += 1;
           return await withDeadline(
             anthropic.messages.create({
               model, max_tokens: maxTokens, system: systemPrompt,
@@ -418,7 +420,15 @@ export async function runApprovalVerification({
         }
       };
 
+      // Usage accounting on EVERY successful response, BEFORE any response
+      // variable is overwritten — mirrors the primary submission fix.
+      const vAccountResponse = (msg) => {
+        accumulateUsage(msg.usage);
+        tokensUsed += (msg.usage?.input_tokens ?? 0) + (msg.usage?.output_tokens ?? 0);
+      };
+
       let vFinalMsg = await vCallSubmission(8192);
+      vAccountResponse(vFinalMsg);
       let vRetried = false;
 
       const vExtract = (msg) => Array.isArray(msg.content)
@@ -432,11 +442,10 @@ export async function runApprovalVerification({
           content: "Output limit reached. Call submit_verification_result NOW with the final structured result only — no prose.",
         });
         vFinalMsg = await vCallSubmission(16384);
+        vAccountResponse(vFinalMsg);
       }
 
       if (vFinalMsg.model && !actualModel) actualModel = vFinalMsg.model;
-      accumulateUsage(vFinalMsg.usage);
-      tokensUsed += (vFinalMsg.usage?.input_tokens ?? 0) + (vFinalMsg.usage?.output_tokens ?? 0);
       if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
       const vSubmitBlocks = vExtract(vFinalMsg);
       if (vSubmitBlocks.length > 0) {
@@ -449,6 +458,7 @@ export async function runApprovalVerification({
         stopReason: vFinalMsg.stop_reason || null,
         usedSubmitTool: vSubmitBlocks.length > 0,
         submissionRetried: vRetried,
+        forcedToolFallbackAttempts: vForcedToolFallbackAttempts,
         textTail: vFinalText ? vFinalText.slice(-300) : null,
         outputTokens: vFinalMsg.usage?.output_tokens ?? 0,
       };
