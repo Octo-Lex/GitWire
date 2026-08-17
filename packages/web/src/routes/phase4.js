@@ -101,7 +101,8 @@ phase4Router.get("/review/quality", async (_req, res, next) => {
       "decision_reason, review_invocation_id, evidence_manifest, verification_receipt, " +
       "tokens_used, duration_ms, started_at, completed_at " +
       "FROM ai_reviews WHERE integrity_version IS NOT NULL " +
-      "ORDER BY id DESC LIMIT 500"
+      "ORDER BY id DESC LIMIT $1",
+      [500]
     );
     const evaluation = await loadEvaluationRecords();
     res.json({
