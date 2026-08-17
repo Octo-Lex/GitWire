@@ -170,6 +170,42 @@ describe("Phase 10 C: primary invocation execution profile", () => {
     expect(receipt.error).toBeUndefined();
   });
 
+  it("text-cascade fallback submission (provider refused the tool) classifies completed", async () => {
+    // The forced submission turn returns valid JSON as TEXT — no tool_use.
+    // The parse cascade accepts it; the invocation completed even though
+    // usedSubmitTool is false. Terminal state must say completed.
+    let call = 0;
+    const anthropic = {
+      baseURL: "https://api.fake-provider.test/v1",
+      messages: {
+        create: async () => {
+          call += 1;
+          if (call === 1) {
+            return {
+              model: "observed-model-1", stop_reason: "end_turn",
+              usage: { input_tokens: 30, output_tokens: 5 },
+              content: [{ type: "text", text: "Inspecting." }],
+            };
+          }
+          return {
+            model: "observed-model-1", stop_reason: "end_turn",
+            usage: { input_tokens: 30, output_tokens: 5 },
+            content: [{ type: "text", text: '{\"findings\": [], \"unresolvedContextNeeds\": []}' }],
+          };
+        },
+      },
+    };
+    const receipt = await runPrimaryReview({
+      evidence: EVIDENCE, octokit: fakeOctokit, owner: "o", repo: "r",
+      anthropic, model: "m",
+    });
+
+    expect(receipt.error).toBeUndefined();
+    expect(receipt.submissionDiagnostics.usedSubmitTool).toBe(false);
+    expect(receipt.executionProfile.terminalState).toBe("completed");
+    expect(receipt.findings).toEqual([]);
+  });
+
   it("same controlled config → same fingerprint; model change → different", async () => {
     const a = await runPrimaryReview({
       evidence: EVIDENCE, octokit: fakeOctokit, owner: "o", repo: "r",
