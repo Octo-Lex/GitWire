@@ -14,6 +14,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { extractReviewJSON } from "@gitwire/rules";
+import { buildExecutionProfile, providerFromBaseURL } from "./executionProfileService.js";
 
 const ADVERSARIAL_MODEL = "claude-haiku-4-20250414";
 
@@ -21,6 +22,23 @@ const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
   baseURL: config.anthropic.baseURL,
 });
+
+// Execution-profile telemetry for the challenge call. Identity and usage
+// only — never consulted by review authority (RI-6 boundary).
+function challengeExecutionProfile(model, message) {
+  return buildExecutionProfile({
+    provider: providerFromBaseURL(anthropic?.baseURL),
+    adapter: "anthropic-sdk-adversarial",
+    protocol: "anthropic-messages",
+    requestedRoute: anthropic?.baseURL || null,
+    requestedModel: model,
+    observedModel: message?.model || null,
+    promptId: null,
+    promptHash: null,
+    budgetLimits: { maxTokens: 2048 },
+    usage: message?.usage ?? null,
+  });
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // System prompt for the adversarial challenge
@@ -111,7 +129,7 @@ function buildChallengePrompt(findings, prTitle, repoName) {
  */
 export async function runAdversarialChallenge(findings, opts) {
   if (!findings || findings.length === 0) {
-    return { challenges: [], missedRisks: [], tokensUsed: 0 };
+    return { challenges: [], missedRisks: [], tokensUsed: 0, executionProfile: null };
   }
 
   var model = opts.model || ADVERSARIAL_MODEL;
@@ -144,6 +162,7 @@ export async function runAdversarialChallenge(findings, opts) {
 
     // Parse JSON response
     var parsed = parseChallengeResponse(text.trim());
+    var profile = challengeExecutionProfile(model, message);
     if (!parsed) {
       logger.warn("Adversarial review: could not parse challenge response, keeping all findings");
       return {
@@ -152,6 +171,7 @@ export async function runAdversarialChallenge(findings, opts) {
         }),
         missedRisks: [],
         tokensUsed: tokens,
+        executionProfile: profile,
       };
     }
 
@@ -169,6 +189,7 @@ export async function runAdversarialChallenge(findings, opts) {
       challenges: parsed.challenges,
       missedRisks: parsed.missed_risks || [],
       tokensUsed: tokens,
+      executionProfile: profile,
     };
   } catch (err) {
     logger.warn({ err: err.message }, "Adversarial review: challenge call failed, keeping all findings");
@@ -178,6 +199,7 @@ export async function runAdversarialChallenge(findings, opts) {
       }),
       missedRisks: [],
       tokensUsed: 0,
+      executionProfile: challengeExecutionProfile(model, null),
     };
   }
 }

@@ -3,11 +3,29 @@ import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { extractReviewJSON } from "@gitwire/rules";
 import { refineFindings } from "./adversarialReview.js";
+import { buildExecutionProfile, providerFromBaseURL } from "./executionProfileService.js";
 
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
   baseURL: config.anthropic.baseURL,
 });
+
+// Execution-profile telemetry for the defense call. Identity and usage
+// only — never consulted by review authority (RI-6 boundary).
+function defenseExecutionProfile(model, message) {
+  return buildExecutionProfile({
+    provider: providerFromBaseURL(anthropic?.baseURL),
+    adapter: "anthropic-sdk-defense",
+    protocol: "anthropic-messages",
+    requestedRoute: anthropic?.baseURL || null,
+    requestedModel: model,
+    observedModel: message?.model || null,
+    promptId: null,
+    promptHash: null,
+    budgetLimits: { maxTokens: 2048 },
+    usage: message?.usage ?? null,
+  });
+}
 
 // ==============================================================================
 // Turn 3: Defense Pass — reviewer responds to Devil's Advocate challenges
@@ -94,6 +112,7 @@ export async function runDefensePass(findings, challenges, opts) {
       }),
       additionalMissed: [],
       tokensUsed: 0,
+      executionProfile: null,
     };
   }
 
@@ -135,12 +154,15 @@ export async function runDefensePass(findings, challenges, opts) {
       try { parsed = JSON.parse(text.trim()); } catch (_e) { /* ignore */ }
     }
 
+    var profile = defenseExecutionProfile(model, message);
+
     if (!parsed || !Array.isArray(parsed.defenses)) {
       logger.warn("Adversarial review: could not parse defense response, keeping challenge results");
       return {
         defenses: challenges,
         additionalMissed: [],
         tokensUsed: tokens,
+        executionProfile: profile,
       };
     }
 
@@ -157,6 +179,7 @@ export async function runDefensePass(findings, challenges, opts) {
       defenses: parsed.defenses,
       additionalMissed: parsed.additional_missed || [],
       tokensUsed: tokens,
+      executionProfile: profile,
     };
   } catch (err) {
     logger.warn({ err: err.message }, "Adversarial review: defense pass failed, keeping challenge results");
@@ -164,6 +187,7 @@ export async function runDefensePass(findings, challenges, opts) {
       defenses: challenges,
       additionalMissed: [],
       tokensUsed: 0,
+      executionProfile: defenseExecutionProfile(model, null),
     };
   }
 }

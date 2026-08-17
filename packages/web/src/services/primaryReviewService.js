@@ -503,6 +503,7 @@ export async function runPrimaryReview({
       // second defense exists below: a narration that dies at max_tokens with
       // no tool call gets ONE retry with doubled output room and a terse
       // final instruction.
+      let forcedToolFallbackAttempts = 0;
       const callSubmission = async (maxTokens) => {
         try {
           return await withDeadline(
@@ -515,6 +516,7 @@ export async function runPrimaryReview({
             "LLM final submission",
           );
         } catch (_tcErr) {
+          forcedToolFallbackAttempts += 1;
           return await withDeadline(
             anthropic.messages.create({
               model, max_tokens: maxTokens, system: systemPrompt,
@@ -526,7 +528,16 @@ export async function runPrimaryReview({
         }
       };
 
+      // Usage accounting happens on EVERY successful response, BEFORE any
+      // response variable is overwritten — a retried submission's first
+      // response is billed by the provider and must appear in the totals.
+      const accountResponse = (msg) => {
+        accumulateUsage(msg.usage);
+        tokensUsed += (msg.usage?.input_tokens ?? 0) + (msg.usage?.output_tokens ?? 0);
+      };
+
       let finalMsg = await callSubmission(8192);
+      accountResponse(finalMsg);
       let submissionRetried = false;
 
       const extractSubmit = (msg) => Array.isArray(msg.content)
@@ -542,11 +553,10 @@ export async function runPrimaryReview({
           content: "Output limit reached. Call submit_review_result NOW with the final structured result only — no prose.",
         });
         finalMsg = await callSubmission(16384);
+        accountResponse(finalMsg);
       }
 
       if (finalMsg.model && !actualModel) actualModel = finalMsg.model;
-      accumulateUsage(finalMsg.usage);
-      tokensUsed += (finalMsg.usage?.input_tokens ?? 0) + (finalMsg.usage?.output_tokens ?? 0);
       if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
       const submitBlocks = extractSubmit(finalMsg);
       if (submitBlocks.length > 0) {
@@ -561,6 +571,7 @@ export async function runPrimaryReview({
         stopReason: finalMsg.stop_reason || null,
         usedSubmitTool: submitBlocks.length > 0,
         submissionRetried,
+        forcedToolFallbackAttempts,
         textTail: finalText ? finalText.slice(-300) : null,
         outputTokens: finalMsg.usage?.output_tokens ?? 0,
       };

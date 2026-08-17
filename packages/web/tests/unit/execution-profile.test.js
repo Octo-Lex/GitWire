@@ -298,7 +298,7 @@ describe("Phase 10: persistIntegrityReceipt embeds execution profiles", () => {
       primaryFindings: [], budgetState: null, invocationId: "rinv:x",
     });
     const manifest = JSON.parse(mockDbQuery.mock.calls[0][1][0]);
-    expect(manifest.executionProfiles).toEqual({ primary: null, verifier: null });
+    expect(manifest.executionProfiles).toEqual({ primary: null, verifier: null, adversarial: null, defense: null });
   });
 
   it("sanitizes unknown fields out of persisted profiles", async () => {
@@ -314,6 +314,34 @@ describe("Phase 10: persistIntegrityReceipt embeds execution profiles", () => {
     const manifest = JSON.parse(mockDbQuery.mock.calls[0][1][0]);
     expect(manifest.executionProfiles.primary.sneakyExtraField).toBeUndefined();
     expect(manifest.executionProfiles.primary.requestedModel).toBe("m");
+  });
+
+  it("persists adversarial and defense profiles alongside primary and verifier", async () => {
+    const adversarialExecutionProfile = buildExecutionProfile({
+      requestedModel: "claude-haiku-4-20250414", observedModel: "glm-served",
+      adapter: "anthropic-sdk-adversarial", promptId: null,
+      budgetLimits: { maxTokens: 2048 }, terminalState: "completed",
+    });
+    const defenseExecutionProfile = buildExecutionProfile({
+      requestedModel: "claude-haiku-4-20250414", observedModel: "glm-served",
+      adapter: "anthropic-sdk-defense", promptId: null,
+      budgetLimits: { maxTokens: 2048 }, terminalState: "completed",
+    });
+
+    await persistIntegrityReceipt({
+      reviewRowId: 1, evidence, verifierReceipt: null, decision,
+      primaryFindings: [], budgetState: null, invocationId: "rinv:x",
+      adversarialExecutionProfile, defenseExecutionProfile,
+    });
+
+    const manifest = JSON.parse(mockDbQuery.mock.calls[0][1][0]);
+    expect(manifest.executionProfiles.primary).toBeNull();
+    expect(manifest.executionProfiles.verifier).toBeNull();
+    expect(manifest.executionProfiles.adversarial.requestedModel).toBe("claude-haiku-4-20250414");
+    expect(manifest.executionProfiles.adversarial.observedModel).toBe("glm-served");
+    expect(manifest.executionProfiles.adversarial.adapter).toBe("anthropic-sdk-adversarial");
+    expect(manifest.executionProfiles.defense.adapter).toBe("anthropic-sdk-defense");
+    expect(manifest.executionProfiles.adversarial.schemaVersion).toBe(EXECUTION_PROFILE_SCHEMA_VERSION);
   });
 });
 
