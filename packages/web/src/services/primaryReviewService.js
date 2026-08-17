@@ -16,6 +16,12 @@
 import { createHash } from "node:crypto";
 import { createContextBroker, DEFAULT_BUDGETS as BROKER_BUDGETS } from "./reviewContextBroker.js";
 import { validateFinding, SEVERITY } from "./findingValidator.js";
+import {
+  buildExecutionProfile,
+  classifyPrimaryTerminal,
+  providerFromBaseURL,
+  usageFromCategories,
+} from "./executionProfileService.js";
 
 // ── Prompt version (for instrumentation) ─────────────────────────────────────
 
@@ -387,8 +393,44 @@ export async function runPrimaryReview({
   const startTime = Date.now();
   const reviewRoot = evidence?.review;
 
+  // Phase 10 execution-observability accumulators (per-category usage; the
+  // Anthropic messages loop exposes input/output only — cache categories
+  // stay null rather than being synthesized). usageSeen distinguishes
+  // "provider exposed usage summing to 0" from "provider exposed nothing".
+  let usageInputTokens = 0;
+  let usageOutputTokens = 0;
+  let usageSeen = false;
+
+  function accumulateUsage(u) {
+    if (u && typeof u === "object" && (u.input_tokens !== undefined || u.output_tokens !== undefined)) {
+      usageSeen = true;
+      usageInputTokens += u.input_tokens ?? 0;
+      usageOutputTokens += u.output_tokens ?? 0;
+    }
+  }
+
+  function usageAccumulators() {
+    return usageSeen
+      ? { inputTokens: usageInputTokens, outputTokens: usageOutputTokens }
+      : {};
+  }
+
+  // Descriptive invocation identity for the execution profile. The provider
+  // is the API endpoint host (or null — opaque is valid).
+  const invocationInfo = {
+    requestedModel: model,
+    provider: providerFromBaseURL(anthropic?.baseURL),
+    adapter: "anthropic-sdk-primary",
+    protocol: "anthropic-messages",
+    requestedRoute: anthropic?.baseURL || null,
+    promptId: PROMPT_VERSION,
+    promptHash: PROMPT_HASH,
+    maxTokens: primaryBudgets?.maxTokens || 100000,
+    startTime,
+  };
+
   if (!reviewRoot || !reviewRoot.baseSha || !reviewRoot.headSha) {
-    return makePrimaryReceipt([], [], [], null, 0, Date.now() - startTime, "Missing review root with base/head SHAs");
+    return makePrimaryReceipt([], [], [], null, 0, Date.now() - startTime, "Missing review root with base/head SHAs", null, undefined, undefined, undefined, invocationInfo, usageAccumulators());
   }
 
   // ── Broker: continue on the seed planner's shared broker when provided
@@ -406,7 +448,7 @@ export async function runPrimaryReview({
         budgets: primaryBudgets?.contextBroker,
       });
     } catch (err) {
-      return makePrimaryReceipt([], [], [], null, 0, Date.now() - startTime, "Failed to create context broker: " + err.message);
+      return makePrimaryReceipt([], [], [], null, 0, Date.now() - startTime, "Failed to create context broker: " + err.message, null, undefined, undefined, undefined, invocationInfo, usageAccumulators());
     }
   }
 
@@ -503,6 +545,7 @@ export async function runPrimaryReview({
       }
 
       if (finalMsg.model && !actualModel) actualModel = finalMsg.model;
+      accumulateUsage(finalMsg.usage);
       tokensUsed += (finalMsg.usage?.input_tokens ?? 0) + (finalMsg.usage?.output_tokens ?? 0);
       if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
       const submitBlocks = extractSubmit(finalMsg);
@@ -546,6 +589,7 @@ export async function runPrimaryReview({
       // Capture actual model identity from the provider response
       if (message.model && !actualModel) actualModel = message.model;
 
+      accumulateUsage(message.usage);
       tokensUsed += (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
 
       // Token ceiling — fail closed, do not parse budget-exhausted output
@@ -641,7 +685,7 @@ export async function runPrimaryReview({
     return makePrimaryReceipt(
       [], [], broker?.getTrace() || [], broker?.getBudgetState() || null,
       tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message,
-      actualModel,
+      actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators(),
     );
   }
 
@@ -652,7 +696,7 @@ export async function runPrimaryReview({
       [], [], broker?.getTrace() || [], broker?.getBudgetState() || null,
       tokensUsed, Date.now() - startTime,
       "Token budget exceeded: " + tokensUsed + " > " + MAX_TOKENS,
-      actualModel,
+      actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators(),
     );
   }
 
@@ -675,7 +719,7 @@ export async function runPrimaryReview({
       [], [], broker.getTrace(), broker.getBudgetState(),
       tokensUsed, Date.now() - startTime, "Failed to parse primary review response",
       actualModel, rawText.slice(0, 2000),
-      [], submissionDiagnostics,
+      [], submissionDiagnostics, invocationInfo, usageAccumulators(),
     );
   }
 
@@ -685,7 +729,7 @@ export async function runPrimaryReview({
       [], [], broker.getTrace(), broker.getBudgetState(),
       tokensUsed, Date.now() - startTime, "Schema validation failed: " + schemaErrors.join("; "),
       actualModel,
-      undefined, [], submissionDiagnostics,
+      undefined, [], submissionDiagnostics, invocationInfo, usageAccumulators(),
     );
   }
 
@@ -737,12 +781,46 @@ export async function runPrimaryReview({
     rawText.slice(0, 500),
     allUnresolved,
     submissionDiagnostics,
+    invocationInfo,
+    usageAccumulators(),
   );
 }
 
 // ── Receipt builder ─────────────────────────────────────────────────────────
 
-function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText, unresolvedContextRequests, submissionDiagnostics) {
+function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budgetState, tokensUsed, durationMs, error, actualModel, rawText, unresolvedContextRequests, submissionDiagnostics, invocationInfo, usageAccumulators) {
+  // Phase 10 execution profile — descriptive metadata only. Built on every
+  // receipt path (success, error, timeout, budget, invalid submission);
+  // missing optional telemetry never fails the review.
+  const invocation = invocationInfo || {};
+  const usage = usageFromCategories(usageAccumulators || {});
+  const budgetLimits = budgetState?.limits
+    ? { maxTokens: invocation.maxTokens ?? null, contextBroker: budgetState.limits }
+    : (invocation.maxTokens != null ? { maxTokens: invocation.maxTokens } : null);
+  const terminalState = classifyPrimaryTerminal({
+    error: error || null,
+    submitted: submissionDiagnostics ? Boolean(submissionDiagnostics.usedSubmitTool) : false,
+  });
+  const executionProfile = buildExecutionProfile({
+    provider: invocation.provider,
+    adapter: invocation.adapter,
+    protocol: invocation.protocol,
+    requestedRoute: invocation.requestedRoute,
+    requestedModel: invocation.requestedModel,
+    observedModel: actualModel,
+    promptId: invocation.promptId,
+    promptHash: invocation.promptHash,
+    budgetLimits,
+    startedAt: invocation.startTime,
+    completedAt: invocation.startTime != null && typeof durationMs === "number"
+      ? invocation.startTime + durationMs
+      : null,
+    durationMs: typeof durationMs === "number" ? durationMs : null,
+    terminalState,
+    terminalReason: error || null,
+    usage,
+  });
+
   return {
     findings: validatedFindings,
     rawFindings: rawFindings || [],
@@ -757,6 +835,7 @@ function makePrimaryReceipt(rawFindings, validatedFindings, retrievalTrace, budg
     promptVersion: PROMPT_VERSION,
     promptHash: PROMPT_HASH,
     actualModel: actualModel || null,
+    executionProfile,
     hasMaterialFindings: (validatedFindings || []).some(f =>
       [SEVERITY.P0, SEVERITY.P1, SEVERITY.P2].includes(f.severity),
     ),

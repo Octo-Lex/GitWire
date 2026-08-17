@@ -11,9 +11,23 @@
 // failure, schema failure, context exhaustion, or unresolved material context
 // results in verification_incomplete → no APPROVE.
 
+import { createHash } from "node:crypto";
 import { logger } from "../lib/logger.js";
 import { createContextBroker, DEFAULT_BUDGETS as BROKER_BUDGETS } from "./reviewContextBroker.js";
 import { validateFinding, SEVERITY } from "./findingValidator.js";
+import {
+  buildExecutionProfile,
+  classifyVerifierTerminal,
+  providerFromBaseURL,
+  usageFromCategories,
+} from "./executionProfileService.js";
+
+// ── Verifier prompt identity (descriptive instrumentation metadata) ──────────
+
+const VERIFIER_PROMPT_VERSION = "v2-verifier-r1";
+const VERIFIER_PROMPT_HASH = createHash("sha256")
+  .update(VERIFIER_PROMPT_VERSION + ":independent-approval-verification")
+  .digest("hex").slice(0, 16);
 
 // ── Verifier status constants ────────────────────────────────────────────────
 
@@ -198,9 +212,42 @@ export async function runApprovalVerification({
   const startTime = Date.now();
   const reviewRoot = evidence?.review;
 
+  // Phase 10 execution-observability accumulators (input/output only; the
+  // Anthropic messages loop does not expose cache categories — they stay
+  // null rather than being synthesized).
+  let usageInputTokens = 0;
+  let usageOutputTokens = 0;
+  let usageSeen = false;
+
+  function accumulateUsage(u) {
+    if (u && typeof u === "object" && (u.input_tokens !== undefined || u.output_tokens !== undefined)) {
+      usageSeen = true;
+      usageInputTokens += u.input_tokens ?? 0;
+      usageOutputTokens += u.output_tokens ?? 0;
+    }
+  }
+
+  function usageAccumulators() {
+    return usageSeen
+      ? { inputTokens: usageInputTokens, outputTokens: usageOutputTokens }
+      : {};
+  }
+
+  const invocationInfo = {
+    requestedModel: model,
+    provider: providerFromBaseURL(anthropic?.baseURL),
+    adapter: "anthropic-sdk-verifier",
+    protocol: "anthropic-messages",
+    requestedRoute: anthropic?.baseURL || null,
+    promptId: VERIFIER_PROMPT_VERSION,
+    promptHash: VERIFIER_PROMPT_HASH,
+    maxTokens: verifierBudgets?.maxTokens || 50000,
+    startTime,
+  };
+
   // ── Guard: evidence must have a review root with required SHAs ──────────
   if (!reviewRoot || !reviewRoot.baseSha || !reviewRoot.headSha) {
-    return makeReceipt(VERIFIER_STATUS.ERROR, [], [], [], [], false, 0, Date.now() - startTime, "Missing review root with base/head SHAs");
+    return makeReceipt(VERIFIER_STATUS.ERROR, [], [], [], [], false, 0, Date.now() - startTime, "Missing review root with base/head SHAs", null, undefined, undefined, undefined, invocationInfo, usageAccumulators());
   }
 
   // ── Create a SEPARATE context broker with its own budget ────────────────
@@ -215,7 +262,7 @@ export async function runApprovalVerification({
       budgets: verifierBudgets?.contextBroker,
     });
   } catch (err) {
-    return makeReceipt(VERIFIER_STATUS.ERROR, [], [], [], [], false, 0, Date.now() - startTime, "Failed to create context broker: " + err.message);
+    return makeReceipt(VERIFIER_STATUS.ERROR, [], [], [], [], false, 0, Date.now() - startTime, "Failed to create context broker: " + err.message, null, undefined, undefined, undefined, invocationInfo, usageAccumulators());
   }
 
   // ── Build the prompt ─────────────────────────────────────────────────────
@@ -388,6 +435,7 @@ export async function runApprovalVerification({
       }
 
       if (vFinalMsg.model && !actualModel) actualModel = vFinalMsg.model;
+      accumulateUsage(vFinalMsg.usage);
       tokensUsed += (vFinalMsg.usage?.input_tokens ?? 0) + (vFinalMsg.usage?.output_tokens ?? 0);
       if (tokensUsed > MAX_TOKENS) tokenBudgetExceeded = true;
       const vSubmitBlocks = vExtract(vFinalMsg);
@@ -429,6 +477,7 @@ export async function runApprovalVerification({
       // Capture actual model identity from the provider response
       if (message.model && !actualModel) actualModel = message.model;
 
+      accumulateUsage(message.usage);
       tokensUsed += (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
 
       // Token ceiling — fail closed, do not parse budget-exhausted output
@@ -522,12 +571,12 @@ export async function runApprovalVerification({
     }
   } catch (err) {
     // Timeout, API failure, or SDK error → incomplete
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message, actualModel);
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "LLM invocation failed: " + err.message, actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators());
   }
 
   // Token budget exceeded — fail closed to INCOMPLETE
   if (tokenBudgetExceeded) {
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "Token budget exceeded: " + tokensUsed + " > " + MAX_TOKENS, actualModel);
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker?.getTrace() || [], false, tokensUsed, Date.now() - startTime, "Token budget exceeded: " + tokensUsed + " > " + MAX_TOKENS, actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators());
   }
 
   // ── Parse: prefer the structured submission; fall back to text cascade ──
@@ -545,13 +594,13 @@ export async function runApprovalVerification({
     }
   }
   if (!parsed) {
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Failed to parse verifier response", actualModel, rawText.slice(0, 500));
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Failed to parse verifier response", actualModel, rawText.slice(0, 500), undefined, undefined, invocationInfo, usageAccumulators());
   }
 
   // ── Deterministic schema validation ──────────────────────────────────────
   const schemaErrors = validateVerifierSchema(parsed);
   if (schemaErrors.length > 0) {
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Verifier schema validation failed: " + schemaErrors.join("; "), actualModel);
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Verifier schema validation failed: " + schemaErrors.join("; "), actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators());
   }
 
   // ── Extract fields ───────────────────────────────────────────────────────
@@ -643,6 +692,8 @@ export async function runApprovalVerification({
     rawText.slice(0, 500),
     broker.getBudgetState(),
     rawFindings,
+    invocationInfo,
+    usageAccumulators(),
   );
   finalReceipt.submissionDiagnostics = submissionDiagnostics;
   return finalReceipt;
@@ -688,7 +739,34 @@ function buildVerifierUserPrompt(evidence) {
 /**
  * Build a verification receipt.
  */
-function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, contextTrace, coverageSatisfied, tokensUsed, durationMs, error, actualModel, rawTextSnippet, budgetState, rawFindings) {
+function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, contextTrace, coverageSatisfied, tokensUsed, durationMs, error, actualModel, rawTextSnippet, budgetState, rawFindings, invocationInfo, usageAccumulators) {
+  // Phase 10 execution profile — descriptive metadata only, built on every
+  // receipt path. Missing optional telemetry never fails the verification.
+  const invocation = invocationInfo || {};
+  const usage = usageFromCategories(usageAccumulators || {});
+  const budgetLimits = budgetState?.limits
+    ? { maxTokens: invocation.maxTokens ?? null, contextBroker: budgetState.limits }
+    : (invocation.maxTokens != null ? { maxTokens: invocation.maxTokens } : null);
+  const executionProfile = buildExecutionProfile({
+    provider: invocation.provider,
+    adapter: invocation.adapter,
+    protocol: invocation.protocol,
+    requestedRoute: invocation.requestedRoute,
+    requestedModel: invocation.requestedModel,
+    observedModel: actualModel,
+    promptId: invocation.promptId,
+    promptHash: invocation.promptHash,
+    budgetLimits,
+    startedAt: invocation.startTime,
+    completedAt: invocation.startTime != null && typeof durationMs === "number"
+      ? invocation.startTime + durationMs
+      : null,
+    durationMs: typeof durationMs === "number" ? durationMs : null,
+    terminalState: classifyVerifierTerminal({ status, error: error || null }),
+    terminalReason: error || null,
+    usage,
+  });
+
   return {
     status,
     findings,
@@ -704,6 +782,9 @@ function makeReceipt(status, findings, unresolvedContextNeeds, contextRequests, 
     actualModel: actualModel || null,
     rawTextSnippet: rawTextSnippet || undefined,
     budgetState: budgetState || null,
+    executionProfile,
+    promptVersion: VERIFIER_PROMPT_VERSION,
+    promptHash: VERIFIER_PROMPT_HASH,
     hasMaterialFindings: findings.some(f =>
       [SEVERITY.P0, SEVERITY.P1, SEVERITY.P2].includes(f.severity)
     ),

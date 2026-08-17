@@ -21,6 +21,7 @@ import { validateFindings } from "./findingValidator.js";
 import { runApprovalVerification } from "./approvalVerificationService.js";
 import { computeReviewDecision } from "./reviewDecisionPolicy.js";
 import { persistIntegrityReceipt, recordReviewMetrics } from "./integrityReceiptService.js";
+import { buildExecutionProfile, providerFromBaseURL } from "./executionProfileService.js";
 
 // ── Shadow mode state ────────────────────────────────────────────────────────
 
@@ -166,6 +167,18 @@ export async function runShadowVerification({
 
   // ── Persist integrity receipt (v2 columns) ───────────────────────────────
   try {
+    // Phase 10: the shadow "primary" is the production legacy engine —
+    // record what is actually known (requested model; observed identity not
+    // captured by the legacy loop). Descriptive metadata only.
+    const shadowPrimaryProfile = buildExecutionProfile({
+      provider: providerFromBaseURL(anthropic?.baseURL),
+      adapter: "legacy-structured-review",
+      protocol: "anthropic-messages",
+      requestedRoute: anthropic?.baseURL || null,
+      requestedModel: model || null,
+      terminalState: "completed",
+      terminalReason: null,
+    });
     await persistIntegrityReceipt({
       reviewRowId,
       evidence,
@@ -174,6 +187,8 @@ export async function runShadowVerification({
       primaryFindings: v2PrimaryFindings,
       budgetState: null, // verifier's broker state is inside verifierReceipt
       invocationId,
+      primaryExecutionProfile: shadowPrimaryProfile,
+      verifierExecutionProfile: verifierReceipt?.executionProfile || null,
     });
   } catch (_e) {
     // Non-fatal in shadow mode — divergence recording is the primary purpose

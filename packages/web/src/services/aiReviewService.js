@@ -321,6 +321,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         actualModel: primaryReceipt.actualModel,
         promptVersion: primaryReceipt.promptVersion,
         promptHash: primaryReceipt.promptHash,
+        executionProfile: primaryReceipt.executionProfile || null,
         rawFindings: primaryReceipt.rawFindings,
         validatedCount: v2PrimaryFindings.length,
         retrievalTrace: primaryReceipt.retrievalTrace,
@@ -699,6 +700,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           primaryFindings: v2Primary,
           invocationId: v2InvocationId,
           budgetState: v2PrimaryMeta?.budgetState || null,
+          primaryExecutionProfile: v2PrimaryMeta?.executionProfile || null,
+          verifierExecutionProfile: v2Verifier?.executionProfile || null,
         });
 
         // Receipt persisted — safe to expose the decision to downstream steps
