@@ -269,6 +269,7 @@ export function classifyVerifierTerminal({ status = null, error = null } = {}) {
  * @param {Date|number|string|null} params.startedAt
  * @param {Date|number|string|null} params.completedAt
  * @param {number|null} params.durationMs
+ * @param {string|null} params.configurationFingerprint - precomputed override (default: derive)
  * @param {string|null} params.terminalState - from classify*Terminal
  * @param {string|null} params.terminalReason
  * @param {object|null} params.usage - raw usage (normalized here)
@@ -290,6 +291,7 @@ export function buildExecutionProfile({
   repositoryToolContractVersion = null,
   integritySchemaVersion = null,
   outputSchema = null,
+  configurationFingerprint = null,
   startedAt = null,
   completedAt = null,
   durationMs = null,
@@ -303,6 +305,18 @@ export function buildExecutionProfile({
   const normalizedOutputVersion = resolvedOutputSchema && typeof resolvedOutputSchema === "object"
     ? String(resolvedOutputSchema.version ?? null)
     : null;
+
+  const derivedFingerprint = typeof configurationFingerprint === "string" && configurationFingerprint
+    ? configurationFingerprint
+    : computeConfigurationFingerprint({
+        adapter, protocol, requestedRoute, requestedModel,
+        promptId, promptHash,
+        repositoryToolContract: repositoryToolContract || TOOL_CONTRACT_NAME,
+        repositoryToolContractVersion: repositoryToolContractVersion || TOOL_CONTRACT_VERSION,
+        outputSchemaVersion: normalizedOutputVersion,
+        integritySchemaVersion: integritySchemaVersion ?? INTEGRITY_SCHEMA_VERSION,
+        budgetProfileId: resolvedBudgetProfileId,
+      });
 
   const profile = {
     schemaVersion: EXECUTION_PROFILE_SCHEMA_VERSION,
@@ -319,15 +333,7 @@ export function buildExecutionProfile({
 
     identitySource: resolveIdentitySource({ requestedModel, observedModel }),
 
-    configurationFingerprint: computeConfigurationFingerprint({
-      adapter, protocol, requestedRoute, requestedModel,
-      promptId, promptHash,
-      repositoryToolContract: repositoryToolContract || TOOL_CONTRACT_NAME,
-      repositoryToolContractVersion: repositoryToolContractVersion || TOOL_CONTRACT_VERSION,
-      outputSchemaVersion: normalizedOutputVersion,
-      integritySchemaVersion: integritySchemaVersion ?? INTEGRITY_SCHEMA_VERSION,
-      budgetProfileId: resolvedBudgetProfileId,
-    }),
+    configurationFingerprint: derivedFingerprint,
 
     promptId: promptId || null,
     promptHash: promptHash || null,
