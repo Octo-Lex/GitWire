@@ -1,199 +1,139 @@
-# Phase B Run Manifest — Frozen Paid Quality Baseline (v2, corrected)
+# Phase B Run Manifest — Frozen Paid Quality Baseline (v3)
 
-Status: **PREPARED, NOT AUTHORIZED TO EXECUTE.** This version corrects the
-v1 manifest (PR #154) to match the candidate's actual live execution path,
-per the client review of 2026-08-17. No paid call has occurred, so the
-correction contaminates nothing. The first provider call still requires
-explicit spend authorization plus a client-set monetary ceiling (§10).
+Status: **PREPARED, NOT AUTHORIZED TO EXECUTE.** v3 supersedes v2 (PR #155)
+after the client's second pre-spend review and the telemetry correction (PR
+#156). It pins the post-telemetry candidate tree and replaces every numeric
+"bound" claim with the accounting model the code actually enforces. The first
+provider call still requires explicit spend authorization plus a client-set
+monetary ceiling (§10). No paid call has occurred.
 
-Every value below is pinned to the executable path at candidate tree
-`3c95c935…` — the live suite and services, not function-signature defaults.
-
-## 1. Candidate identity (frozen, unchanged)
+## 1. Candidate identity (frozen)
 
 | Field | Value |
 | --- | --- |
-| Candidate commit | `25372fd0992175160479bcfdfe450bd7ff3d03c8` (integration PR #153, **unmerged**) |
-| Candidate tree | `3c95c9352b199df7ad36d563b0d287ef1e2c6293` — identical tree object to validated `bc02592` |
+| Candidate commit | `63f70aa7a2723b0b78956dfb03319b4dbe1c9f89` (integration PR #157, **unmerged**, byte-identical successor of `3a8ce38`) |
+| Candidate tree | `ed96ae95e0b79684f26fea6232a54d532bf2272c2` = tree of `review-integrity-v2@3a8ce38` (identical tree object; empty diff) |
 | Master parent | `3d75dd69ee1cef58f1260682a08bf0acbfd353aa` |
-| Candidate CI | PR run 32025129933 entirely green (incl. production-dependency-audit) + CodeQL; dispatched run 32022395179 entirely green |
+| Exact-head CI | Dispatched run 32041971489 at `3a8ce38`: every job green. PR run 32042043535 at `63f70aa`: every job green (incl. production-dependency-audit), plus CodeQL and DCO green |
+| Local profile | web unit 171 suites / 3854 passed + 1 skipped; eval 146; integration 20; core 61; rules 251; runtime 16; executor 128; dashboard 67 |
+| PR state | `MERGEABLE`; merge gated only by the repository's required approving review (maintainer decision) |
 | Commit signature | Cryptographically unsigned; `Signed-off-by` trailer present (metadata, not an exit criterion) |
+
+v2's candidate (`25372fd`, PR #153) is superseded: its tree lacked the
+telemetry corrections this manifest's accounting depends on.
 
 ## 2. The live runner (as it actually executes)
 
-Phase B executes through `tests/evaluation/review-integrity/live-after.test.js`
-("GitWire-after live matrix — runs reviewPR() with review_integrity_v2='live'"),
-which drives the real `reviewPR()` production pipeline against the real
-provider endpoint. Its `BASE_CONFIG` is the frozen configuration:
+Executed through `tests/evaluation/review-integrity/live-after.test.js` —
+the real `reviewPR()` pipeline, `review_integrity_v2: "live"`, frozen
+`BASE_CONFIG` (verbatim in v2 §2; unchanged): requested model
+`process.env.ABLATION_MODEL || "glm-5.2"` (override NOT set for Phase B),
+adversarial enabled by omission, `max_duration_seconds: 300`.
 
-```js
-{
-  enabled: true,
-  check_logic: true, check_security: true, check_architecture: true,
-  check_cost_leaks: true, check_tests: true, check_docs: false,
-  block_on_verdict: ["request_changes"],
-  min_confidence_to_block: "medium",
-  max_files_to_review: 30, max_lines_to_review: 2000,
-  ignore_patterns: ["*.lock", "package-lock.json"],
-  engine: "claude", model: process.env.ABLATION_MODEL || "glm-5.2",
-  max_duration_seconds: 300, bundle_max_chars: 180000, require_file_scope: true,
-  // adversarial_review intentionally omitted — frozen target enables it
-  review_integrity_v2: "live",
-}
-```
+**Runner semantics correction (landed in the candidate):** observed/requested
+model mismatch is **descriptive telemetry only** — the fields are retained in
+every record but never invalidate a run. Only fixture-surface gaps invalidate.
 
-### Endpoint class and requested models (pinned)
+## 3. Endpoint class and billing basis (verified where verifiable)
 
-| Field | Value | Source |
+| Field | Value | Evidence |
 | --- | --- | --- |
-| Transport | Anthropic SDK (`new Anthropic({ apiKey, baseURL })`) against the provider's **Anthropic-protocol coding endpoint** — the general API vs Anthropic-protocol distinction in provider pricing applies; the exact base URL lives in deployment env, not in this repo | `aiReviewService.js` v2 section; `ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL` |
-| Requested model — primary | `cfg.model` = **`glm-5.2`** (override only via `ABLATION_MODEL`, which this manifest does not set) | `live-after.test.js:126` |
-| Requested model — verifier | `cfg.model` = **`glm-5.2`** (same config value; `claude-sonnet-4-20250514` is only the code fallback when `cfg.model` is unset — it is NOT set here) | `aiReviewService.js` verifier call |
-| Requested model — adversarial challenge | default **`claude-haiku-4-20250414`** (no `adversarial_model` in frozen config) | `adversarialReview.js:18,117` |
-| Requested model — defense pass | default **`claude-haiku-4-20250414`** | `adversarialDefense.js:100` |
-| Observed model | recorded per provider response; never overrides requested identity | execution profiles |
+| Production transport | Anthropic SDK (`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`) | code |
+| **Production endpoint route** | **`https://api.z.ai/api/anthropic`** | read from the production `gitwire-gitwire-app-1` container env (non-secret route; key redacted) |
+| Endpoint class | Z.AI **GLM Coding Plan** Anthropic-protocol endpoint — per Z.AI docs, Coding Plan benefits are restricted to officially supported tools/products, and GitWire is **not** on the published supported-tool list | provider documentation |
+| Requested identities | `glm-5.2` (primary + verifier); `claude-haiku-4-20250414` (adversarial + defense defaults) | live config + service defaults |
+| Observed identities | recorded per response in execution profiles (telemetry only) | Phase 10 profiles |
 
-**Rate-basis consequence:** `RATE_BASIS` must be built from the provider's
-published rates for the endpoint class actually used, covering BOTH requested
-identifiers (`glm-5.2` and the haiku-identifier default for adversarial/defense)
-as observed-served by that endpoint. The v1 manifest's premise (a Claude-model
-rate basis) does not exist and is retracted.
+**Open billing questions — client/provider to resolve before `RATE_BASIS`
+can be filled:**
 
-Prompt versions (unchanged, re-verified): primary `v2-primary-r1`
-(`primaryReviewService.js:28`), verifier `v2-verifier-r1`
-(`approvalVerificationService.js:27`).
+1. Whether this GitWire evaluation is an **authorized use** of the Coding
+   Plan endpoint, and how quota/cost is accounted on that plan.
+2. The rate basis for the literal `claude-haiku-4-20250414` adversarial/defense
+   requests as served by this endpoint (provider-side mapping undocumented).
+3. The public PAYG rates (GLM-5.2: $1.40/M input, $0.26/M cached, $4.40/M
+   output) are **not** assumed to govern this endpoint class. No per-token
+   pricing is transplanted.
 
-## 3. Frozen corpus (unchanged)
+## 4. Frozen corpus, matrix, run order (unchanged from v2)
 
-8 fixtures, RI-01…RI-04 broken + fixed, with expected findings and verdict
-contracts exactly as `fixtures/registry.js` loads them (see v1 §2 / registry
-for the per-case table). No new fixtures after the first paid call.
+8 fixtures (RI-01…RI-04 broken + fixed) × 3 consecutive runs, fixture-major
+(case-paired broken→fixed per registry order). 24 invocations, no
+whole-invocation retries, append-only records.
 
-## 4. Matrix and frozen run order (corrected: the runner's own order)
+## 5. Conditional call graph (unchanged from v2)
 
-24 invocations = 8 fixtures × 3 consecutive runs each. The live suite
-iterates **fixture-first**: one test per fixture, `NUM_RUNS = 3` inner loop.
-Combined with the registry construction (case-major, broken then fixed per
-case), the executed sequence is:
+primary (always) → adversarial challenge (enabled, findings > 0) → defense
+pass (auto triggers) → verifier only when post-refinement primary has zero
+P0/P1/P2 findings AND `approvalEvidenceComplete` (`not_run` representation).
 
-```text
-RI-01/broken ×3  →  RI-01/fixed ×3  →
-RI-02/broken ×3  →  RI-02/fixed ×3  →
-RI-03/broken ×3  →  RI-03/fixed ×3  →
-RI-04/broken ×3  →  RI-04/fixed ×3
-```
+## 6. Billable-call accounting model (corrected: no numeric hard bound is claimed)
 
-This fixture-major order — not the v1 run-major order — is frozen. No
-whole-invocation retries: a failed invocation records its terminal state
-and the matrix moves on; the matrix never re-runs an invocation.
+**What the code enforces** are post-hoc, recorded-usage thresholds: each
+completed response's usage is added, and only then is the threshold checked —
+so the final request in a budget can overshoot it, and the thresholds stop
+*subsequent* calls rather than capping the completing one. `max_tokens` caps
+output only; **no code ceiling bounds request input**.
 
-## 5. Conditional call graph per invocation (corrected)
+**What the telemetry now guarantees** (PR #156): usage is accumulated on
+**every successful provider response before any variable is overwritten**, in
+both submission paths; forced-tool fallback attempts are counted; adversarial
+and defense calls return identity + usage and persist as execution profiles.
+Recorded usage therefore includes every successful response. The remaining
+unrecordable class: a **rejected** fallback attempt produces no response
+object — if the provider bills the rejected request's input, no code can
+record it (it is counted as an attempt, not tokens).
 
-"One invocation = one primary + one verifier" was wrong. The live v2 call
-graph is conditional at two points:
+Per-invocation billable response classes (all caps are OUTPUT caps):
 
-```text
-primary (always)
-  → adversarial challenge   (cfg.adversarial_review !== false AND primary findings > 0)
-  → defense pass            (auto-mode triggers: dropped_findings, critical_downgraded, new_criticals)
-  → verifier                (post-refinement primary has ZERO P0/P1/P2 findings
-                             AND evidence coverage approvalEvidenceComplete)
-```
-
-- The verifier does not run on broken fixtures that correctly surface
-  findings; the receipt records `status: "not_run"` (the live suite already
-  represents this).
-- Adversarial and defense tokens are explicitly added to the invocation
-  total (`tokensUsed += challenge.tokensUsed + (defense ? defense.tokensUsed : 0)`).
-- Primary failure is fail-closed: it throws before any verifier, never APPROVE.
-
-## 6. Internal retries that ARE part of the billable path (corrected)
-
-"No retries" applies to whole invocations only. Both the primary and the
-verifier final-submission turns contain bounded protocol-level retries:
-
-| Mechanism | Primary | Verifier | Trigger |
-| --- | --- | --- | --- |
-| Submission attempt 1 | `max_tokens` 8192 | 8192 | always |
-| Submission attempt 2 | 16384 | 16384 | attempt 1 stops at `max_tokens` with no structured tool result, loop budget not exceeded |
-| tool_choice fallback | re-call without `tool_choice` at same cap | same | provider rejects the forced `tool_choice` form |
-
-## 7. Billable-call accounting model (replaces the false 3.6M "deterministic cap")
-
-The 100000/50000 ceilings are **internal fail-closed thresholds computed
-from recorded usage — not hard upper bounds on provider-billed tokens**, for
-two source-proven reasons:
-
-1. **The submission-retry accounting gap.** When the 16384 retry fires, the
-   code overwrites the first response and calls `accumulateUsage` once, on
-   the final message only (`primaryReviewService.js:547-549`,
-   `approvalVerificationService.js` submission turn). The first completed
-   8192-token submission response is billed by the provider but absent from
-   every recorded total. Both roles have this gap.
-2. **tool_choice fallback calls** duplicate a submission call shape when the
-   provider rejects the forced form; a rejected attempt may still bill input.
-
-### Every billable response class per invocation
-
-| # | Class | Condition | Output cap | Recorded? |
+| # | Class | Condition | Output cap | Recorded |
 | --- | --- | --- | --- | --- |
-| 1 | Primary tool-use rounds (`max_tokens` 4096/round) | always | loop budget 100000 (recorded) | yes |
-| 2 | Primary submission attempt 1 | always | 8192 | only if attempt 2 does NOT fire |
+| 1 | Primary tool-use rounds (4096/round) | always | threshold 100000 (post-hoc) | yes |
+| 2 | Primary submission attempt 1 | always | 8192 | **always** (post-fix) |
 | 3 | Primary submission attempt 2 | narration died at cap | 16384 | yes |
-| 4 | Primary tool_choice fallback | provider rejects tool_choice | duplicates 2/3 | as above |
-| 5 | Adversarial challenge | findings > 0 (enabled in frozen config) | 2048 | yes (invocation total) |
-| 6 | Defense pass | auto triggers | 2048 | yes (invocation total) |
-| 7 | Verifier tool-use rounds (`max_tokens` 4096/round) | zero material findings + evidence complete | loop budget 50000 (recorded) | yes |
-| 8 | Verifier submission attempt 1 | as 2 | 8192 | only if attempt 2 does NOT fire |
+| 4 | Primary tool_choice fallback | provider rejects tool_choice | duplicates 2/3 | attempt counted; rejected call's tokens unrecordable |
+| 5 | Adversarial challenge | findings > 0 | 2048 | yes (profile) |
+| 6 | Defense pass | auto triggers | 2048 | yes (profile) |
+| 7 | Verifier tool-use rounds (4096/round) | zero material + evidence complete | threshold 50000 (post-hoc) | yes |
+| 8 | Verifier submission attempt 1 | as 2 | 8192 | **always** (post-fix) |
 | 9 | Verifier submission attempt 2 | as 3 | 16384 | yes |
-| 10 | Verifier tool_choice fallback | as 4 | duplicates 8/9 | as above |
+| 10 | Verifier tool_choice fallback | as 4 | duplicates 8/9 | as 4 |
 
-### Derived ceilings (arithmetic, assumptions stated)
+**No source-proven upper bound on total billed tokens exists.** `CEILING_USD`
+is therefore a pure client spend limit, monitored against the (now complete)
+recorded usage and the per-class attempt counts — not a derived number.
 
-```text
-Recorded-usage ceiling per invocation:
-  primary 100000 + adversarial 2048 + defense 2048 + verifier 50000 = 154,096
-Recorded-usage ceiling, matrix: 24 × 154,096 = 3,698,304 tokens
+## 7. Capture fields (per invocation)
 
-Pathological output-cap envelope per invocation (every class fires):
-  100000 + 8192 + 16384 + (8192 + 16384) + 2048 + 2048
-  + 50000 + 8192 + 16384 + (8192 + 16384) = 252,400
-Pathological output-cap envelope, matrix: 24 × 252,400 = 6,057,600 tokens
+The live-suite record plus Phase 10 execution profiles, now including:
+`executionProfiles.{primary, verifier, adversarial, defense}` (requested /
+observed identity, identity source, per-category usage, fingerprint);
+`submissionDiagnostics.submissionRetried` and `.forcedToolFallbackAttempts`
+per role; verifier `status` with `not_run`; adversarial/defense token
+contributions; plus the v1 fields (verdict/findings/expected-detection,
+latency, cost, repository reads/searches/tool calls, prompt id+hash,
+candidate SHA + tree OID).
 
-Input tokens: loop-call inputs are inside the recorded budgets; the ≤6
-gap/fallback calls per invocation carry inputs that no code ceiling bounds
-(in practice bounded by prompt + retrieved context ≈ the 90,000-char
-retrieval budget + conversation history).
-```
+## 8. Tool contract, budgets, prompts, pass criteria (unchanged)
 
-The client ceiling should be set against the pathological envelope plus an
-input allowance — not against 3.6M, which is a threshold, not a bound.
+`gitwire-repository-tools` v2; per-tool output defaults and all seven broker
+ceilings; planner 45000 chars; prompts `v2-primary-r1` / `v2-verifier-r1`;
+frozen broken/fixed safety-effectiveness criteria and failure-classification
+rule (v2 §9 values stand).
 
-## 8. Capture fields (extended)
+## 9. Execution safety rules (unchanged)
 
-Per invocation, append-only, the live-suite record shape plus Phase 10
-execution profiles, now including: verifier `status` with `not_run`
-representation; `submissionRetried` flags per role; adversarial/defense
-token contributions; per-class observed model and identity source; all §7
-table classes distinguishable in the receipt. Remaining v1 fields unchanged
-(verdict/findings/expected-detection, latency, token categories, cost,
-repository reads/searches/tool calls, fingerprint, prompt id+hash, candidate
-SHA + tree OID).
+Env-gated refusal pattern (`GITWIRE_AB_RUN`-style; CI can never spend), no
+per-arm tuning, no new fixtures after the first call, append-only records.
 
-## 9. Tool contract, budgets, pass criteria (unchanged from v1)
-
-`gitwire-repository-tools` v2; per-tool output defaults and all seven
-context-broker ceilings; planner 45000 chars; frozen broken/fixed
-safety-effectiveness criteria; failure-classification rule. The v1 §6, §7,
-§9 values stand as written there.
-
-## 10. Monetary ceiling — STILL REQUIRES CLIENT DECISION
+## 10. Monetary ceiling — REQUIRES CLIENT DECISION
 
 ```text
-CEILING_USD: ____________  (client — set against §7's pathological envelope + input allowance)
-RATE_BASIS:  ____________  (client — provider-published rates for the ACTUAL endpoint class,
-                            covering glm-5.2 and the haiku-identifier adversarial/defense
-                            requests as served)
+CEILING_USD: ____________  (client — a spend limit, not a derived bound;
+                            monitor against §6 recorded usage + attempt counts)
+RATE_BASIS:  ____________  (client — must resolve §3's three open questions:
+                            Coding-Plan authorized use + quota accounting,
+                            haiku-identifier mapping, applicable rates)
 SIGNED:      ____________  (client, before first call)
 ```
 
@@ -201,6 +141,6 @@ Empty fields = no provider call authorized.
 
 ## 11. What this manifest does not authorize
 
-No paid provider call; no merge of PR #153; no execution of any kind; no
-corpus, prompt, RI-6, RI-7, provider-comparison, or quality-criterion
-changes. Preparation only.
+No paid provider call; no merge of PR #157 (its approving review is the
+maintainer's); no execution of any kind; no corpus, prompt, RI-6, RI-7,
+provider-comparison, or quality-criterion changes.
