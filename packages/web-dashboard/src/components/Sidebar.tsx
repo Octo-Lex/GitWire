@@ -81,6 +81,7 @@ const NAV: NavGroup[] = [
       { href: "/trust",         label: "Trust & Policy", icon: TrustPolicyIcon },
       { href: "/insights",      label: "Insights",       icon: InsightsIcon },
       { href: "/intelligence",  label: "Intelligence",   icon: IntelligenceIcon },
+      { href: "/review-quality", label: "Review Quality", icon: IntelligenceIcon },
     ],
   },
   {

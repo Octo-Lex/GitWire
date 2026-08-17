@@ -7,6 +7,7 @@
 //   GET  /api/review/results                 — all reviews cross-repo
 //   GET  /api/review/results/:owner/:repo    — reviews for one repo
 //   GET  /api/review/stats                   — summary dashboard numbers
+//   GET  /api/review/quality                 — model-neutral quality scorecard
 //   POST /api/review/trigger/:owner/:repo/:pr — trigger on-demand review
 //
 // Audit trail:
@@ -85,6 +86,50 @@ phase4Router.get("/review/stats", async (_req, res, next) => {
     );
 
     res.json({ summary, by_severity: bySeverity, verdict_trend: verdictTrend });
+  } catch (err) { next(err); }
+});
+
+// ── Model-neutral service-quality scorecard (RI-9 Phase 10) ─────────────────
+// Measurement surface only: aggregates runtime RI-8 receipts (with Phase 10
+// execution profiles) and the frozen evaluation corpus. Never consulted by
+// review authority (RI-6); presentation states are dashboard display only.
+phase4Router.get("/review/quality", async (_req, res, next) => {
+  try {
+    // Explicit read window: the scorecard serves the most recent
+    // QUALITY_RECEIPT_WINDOW v2 receipts and REPORTS truncation — older
+    // history is never silently dropped from the measurement surface.
+    const QUALITY_RECEIPT_WINDOW = 500;
+    const { buildQualityScorecard, loadEvaluationRecords } = await import("../services/reviewQualityScorecard.js");
+    // Select ONLY rows that carry a persisted RI-8 receipt. integrity_version
+    // alone is wrong on an upgraded database: migration 043 added it with
+    // DEFAULT 1, which backfills every pre-v2 row to 1. The invocation id is
+    // written exclusively by persistIntegrityReceipt (partial index
+    // idx_ai_reviews_invocation_id) and proves a v2 receipt exists.
+    const { rows } = await db.query(
+      "SELECT id, repo_id, pr_number, commit_sha, verdict, approval_eligible, " +
+      "decision_reason, review_invocation_id, evidence_manifest, verification_receipt, " +
+      "tokens_used, duration_ms, started_at, completed_at " +
+      "FROM ai_reviews WHERE review_invocation_id IS NOT NULL " +
+      "ORDER BY id DESC LIMIT $1",
+      [QUALITY_RECEIPT_WINDOW]
+    );
+    const { rows: [countRow] } = await db.query(
+      "SELECT COUNT(*)::int AS total FROM ai_reviews WHERE review_invocation_id IS NOT NULL"
+    );
+    const evaluation = await loadEvaluationRecords();
+    res.json({
+      data: buildQualityScorecard({
+        receiptRows: rows,
+        evaluationScorecards: evaluation.scorecards,
+        evaluationRuns: evaluation.runs,
+        window: {
+          limit: QUALITY_RECEIPT_WINDOW,
+          rowsReturned: rows.length,
+          totalV2Receipts: countRow ? countRow.total : rows.length,
+          truncated: countRow ? Number(countRow.total) > rows.length : false,
+        },
+      }),
+    });
   } catch (err) { next(err); }
 });
 
