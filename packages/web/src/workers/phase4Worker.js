@@ -205,9 +205,90 @@ export function startPhase4Worker() {
             commentFindings: reviewOpts.comment_findings !== false,
             principalId: ph4PrincipalId,
             surfaceId: "audit_trail:ai_decision",
+            logicalInvocation: job.data.logicalInvocation || "automatic",
           });
 
           await finalizeOwn(result);
+
+          // ── Shadow v2 sidecar (RI-9) ──────────────────────────────────────
+          // Run the v2 pipeline alongside production when shadow mode is enabled.
+          // Shadow mode NEVER produces a GitHub mutation — it only records
+          // divergence between the production and v2 decisions.
+          try {
+            const { resolveShadowMode, runShadowVerification } = await import("../services/reviewIntegrityShadow.js");
+            const shadowMode = resolveShadowMode(repoConfig, reviewOpts);
+            if (shadowMode !== "disabled") {
+              // Build real v2 ReviewEvidence from the same octokit the production review used
+              const { acquireChangedFiles, buildReviewEvidence } = await import("../services/reviewEvidenceService.js");
+              const { allFiles, paginatedFully } = await acquireChangedFiles(
+                octokit, repository.owner.login, repository.name, pr.number,
+                pr.changed_files || 0,
+              );
+              const evidence = await buildReviewEvidence({
+                allFiles,
+                paginatedFully,
+                ignorePatterns: reviewOpts.ignore_patterns || [],
+                maxFiles: reviewOpts.max_files_to_review || 30,
+                maxLines: reviewOpts.max_lines_to_review || 2000,
+                review: {
+                  repoId: repository.id,
+                  repoFullName: repository.full_name,
+                  prNumber: pr.number,
+                  baseSha: pr.base?.sha,
+                  headSha: pr.head.sha,
+                  invocationId: "shadow-" + pr.number + "-" + pr.head.sha,
+                },
+                octokit,
+                owner: repository.owner.login,
+                repo: repository.name,
+              });
+
+              // Construct a real Anthropic client for the verifier from production config
+              const { config } = await import("../../config/index.js");
+              const Anthropic = (await import("@anthropic-ai/sdk")).default;
+              const shadowAnthropic = new Anthropic({
+                apiKey: config.anthropic.apiKey,
+                baseURL: config.anthropic.baseURL,
+              });
+
+              const shadowResult = await runShadowVerification({
+                productionResult: result,
+                productionFindings: result?.findings || [],
+                evidence,
+                octokit,
+                owner: repository.owner.login,
+                repo: repository.name,
+                anthropic: shadowAnthropic,
+                model: reviewOpts.model || "claude-sonnet-4-20250514",
+                repoConfig,
+                reviewConfig: reviewOpts,
+                reviewRowId: 0, // best-effort: reviewRow id not exposed by reviewPR return
+                invocationId: "shadow-" + pr.number + "-" + pr.head.sha,
+                primaryTokens: 0, // production token count not exposed by reviewPR return
+                primaryLatencyMs: 0, // production latency not exposed by reviewPR return
+              });
+
+              // Durable divergence recording
+              if (shadowResult.ran && shadowResult.divergence?.diverged) {
+                logger.warn({
+                  pr: pr.number,
+                  repo: repository.full_name,
+                  productionEvent: shadowResult.productionEvent,
+                  v2Event: shadowResult.v2Event,
+                  divergence: shadowResult.divergence,
+                }, "Shadow v2 divergence detected — production and v2 decisions differ");
+              } else if (shadowResult.ran) {
+                logger.info({
+                  pr: pr.number,
+                  productionEvent: shadowResult.productionEvent,
+                  v2Event: shadowResult.v2Event,
+                }, "Shadow v2 completed — no divergence");
+              }
+            }
+          } catch (shadowErr) {
+            // Shadow failures must NEVER affect the production review path
+            logger.debug({ err: shadowErr.message, pr: pr.number }, "Shadow v2 sidecar failed (non-fatal)");
+          }
 
           await emitWorkerEvent("review_completed", {
             repo: repository.full_name,

@@ -1,0 +1,780 @@
+{
+  "kind": "phase9-ab-run",
+  "manifestHash": "sha256:9b288c0af9fae6ab2cdc6c4384b5946750107cbf6a586519e334f6316fbac1be",
+  "invocation": 10,
+  "arm": "pi",
+  "variant": "fixed",
+  "repetition": 2,
+  "startedAt": "2026-08-16T11:36:02.118Z",
+  "finishedAt": "2026-08-16T11:43:02.219Z",
+  "execution": {
+    "status": "completed",
+    "requestedHarness": "pi",
+    "actualHarness": "pi",
+    "requestedProvider": "zai",
+    "actualProvider": "zai",
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "startedAt": "2026-08-16T11:36:02.118Z",
+    "completedAt": "2026-08-16T11:43:02.219Z",
+    "durationMs": 420101,
+    "toolTrace": [
+      {
+        "ts": "2026-08-16T11:36:42.807Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 21.149,
+        "returnedBytes": 5039,
+        "returnedItems": 160
+      },
+      {
+        "ts": "2026-08-16T11:36:42.814Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 22.254,
+        "returnedBytes": 32525,
+        "returnedItems": 710
+      },
+      {
+        "ts": "2026-08-16T11:37:18.786Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 19.555,
+        "returnedBytes": 14686,
+        "returnedItems": 170
+      },
+      {
+        "ts": "2026-08-16T11:37:18.810Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src",
+          "pattern": "postMarkedComment|findCommentByMarker|buildMarkedComment|buildMarker",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 43.702,
+        "returnedBytes": 1045,
+        "returnedItems": 10
+      },
+      {
+        "ts": "2026-08-16T11:37:18.821Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web",
+          "pattern": "auto_comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 54.093,
+        "returnedBytes": 2524,
+        "returnedItems": 20
+      },
+      {
+        "ts": "2026-08-16T11:37:18.823Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web",
+          "pattern": "Labels applied automatically",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 55.906,
+        "returnedBytes": 125,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:37:36.775Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "pattern": "logDecision\\(|propose\\(",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 14.517,
+        "returnedBytes": 1027,
+        "returnedItems": 14
+      },
+      {
+        "ts": "2026-08-16T11:37:36.780Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "pattern": "buildMarker",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 18.799,
+        "returnedBytes": 117,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:37:36.782Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/services/duplicateDetectionService.js",
+          "pattern": "postMarkedComment|buildMarker|comment|marker",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 21.392,
+        "returnedBytes": 2237,
+        "returnedItems": 17
+      },
+      {
+        "ts": "2026-08-16T11:38:07.924Z",
+        "operation": "grep",
+        "params": {
+          "ignoreCase": true,
+          "path": "packages/web/docs",
+          "pattern": "triage comment|summary comment|auto.?comment",
+          "timeoutMs": 10000
+        },
+        "status": "error",
+        "complete": false,
+        "partialReasons": [],
+        "durationMs": 7.012,
+        "returnedBytes": 0,
+        "errorCode": "E_SCOPE_INVALID"
+      },
+      {
+        "ts": "2026-08-16T11:38:07.949Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/tests",
+          "pattern": "postMarkedComment|triageWorker",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 36.388,
+        "returnedBytes": 8029,
+        "returnedItems": 45
+      },
+      {
+        "ts": "2026-08-16T11:38:07.959Z",
+        "operation": "grep",
+        "params": {
+          "ignoreCase": true,
+          "path": "packages/web",
+          "pattern": "needs_more_info|duplicate_hint",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 46.527,
+        "returnedBytes": 2577,
+        "returnedItems": 23
+      },
+      {
+        "ts": "2026-08-16T11:38:22.463Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/triage-mutation-recovery.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 8.889,
+        "returnedBytes": 14070,
+        "returnedItems": 297
+      },
+      {
+        "ts": "2026-08-16T11:38:22.464Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-triage-integration.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 9.387,
+        "returnedBytes": 10817,
+        "returnedItems": 228
+      },
+      {
+        "ts": "2026-08-16T11:38:43.008Z",
+        "operation": "find",
+        "params": {
+          "glob": "packages/rules/**",
+          "limit": 50
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 2.407,
+        "returnedBytes": 0,
+        "returnedItems": 0
+      },
+      {
+        "ts": "2026-08-16T11:38:43.044Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web",
+          "pattern": "A maintainer will review",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 47.713,
+        "returnedBytes": 221,
+        "returnedItems": 2
+      },
+      {
+        "ts": "2026-08-16T11:38:43.070Z",
+        "operation": "grep",
+        "params": {
+          "ignoreCase": true,
+          "pattern": "Post triage summary|triage summary as comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 73.172,
+        "returnedBytes": 311,
+        "returnedItems": 3
+      },
+      {
+        "ts": "2026-08-16T11:38:54.466Z",
+        "operation": "read",
+        "params": {
+          "limit": 70,
+          "offset": 40,
+          "path": "docs/configuration/policy-as-code.md"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 10.27,
+        "returnedBytes": 1998,
+        "returnedItems": 70
+      },
+      {
+        "ts": "2026-08-16T11:38:54.506Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages",
+          "pattern": "export function isPillarEnabled|export function isDryRun|export function shouldTrigger",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 50.504,
+        "returnedBytes": 236,
+        "returnedItems": 3
+      },
+      {
+        "ts": "2026-08-16T11:39:03.029Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/rules/src/helpers.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 5.446,
+        "returnedBytes": 10931,
+        "returnedItems": 320
+      },
+      {
+        "ts": "2026-08-16T11:39:38.552Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/dry-run-proof.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 8.286,
+        "returnedBytes": 6669,
+        "returnedItems": 212
+      },
+      {
+        "ts": "2026-08-16T11:39:38.568Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/tests/unit",
+          "pattern": "auto_comment|needs_more_info|would post triage comment|labels applied",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 23.813,
+        "returnedBytes": 3140,
+        "returnedItems": 25
+      },
+      {
+        "ts": "2026-08-16T11:40:15.923Z",
+        "operation": "read",
+        "params": {
+          "limit": 60,
+          "path": "packages/web/src/services/duplicateDetectionService.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 10.247,
+        "returnedBytes": 2544,
+        "returnedItems": 60
+      },
+      {
+        "ts": "2026-08-16T11:40:15.923Z",
+        "operation": "read",
+        "params": {
+          "limit": 80,
+          "path": "packages/web/src/services/auth/workerAdoption.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 10.792,
+        "returnedBytes": 3667,
+        "returnedItems": 80
+      },
+      {
+        "ts": "2026-08-16T11:40:25.097Z",
+        "operation": "read",
+        "params": {
+          "limit": 60,
+          "path": "packages/web/src/services/embeddingService.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 6.176,
+        "returnedBytes": 2405,
+        "returnedItems": 60
+      },
+      {
+        "ts": "2026-08-16T11:40:56.234Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/githubWrapper.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 6.415,
+        "returnedBytes": 4121,
+        "returnedItems": 127
+      },
+      {
+        "ts": "2026-08-16T11:41:12.721Z",
+        "operation": "read",
+        "params": {
+          "limit": 60,
+          "path": "packages/web/tests/unit/triage-pr-guards.test.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 10.634,
+        "returnedBytes": 2044,
+        "returnedItems": 60
+      },
+      {
+        "ts": "2026-08-16T11:41:12.721Z",
+        "operation": "read",
+        "params": {
+          "limit": 30,
+          "offset": 1,
+          "path": ".gitwire.example.yml"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 11.38,
+        "returnedBytes": 1513,
+        "returnedItems": 30
+      },
+      {
+        "ts": "2026-08-16T11:42:16.560Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js",
+          "pattern": "ambiguous: true, comments",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 14.163,
+        "returnedBytes": 297,
+        "returnedItems": 3
+      },
+      {
+        "ts": "2026-08-16T11:42:16.562Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js",
+          "pattern": "Returns \\{ ambiguous",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 16.176,
+        "returnedBytes": 114,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:42:16.566Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "pattern": "decision: labelsToApply|configUsed|no labels to apply",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 20.765,
+        "returnedBytes": 516,
+        "returnedItems": 4
+      }
+    ],
+    "submission": {
+      "payload": {
+        "approvalEvidenceComplete": true,
+        "findings": [
+          {
+            "claim": "The rewritten docblock of findCommentByMarker still documents the ambiguity return as { ambiguous: true, comments: [] } while the code returns the actual matched comments, contradicting the contract postMarkedComment relies on for detail.matchCount.",
+            "confidence": 0.85,
+            "description": "commentMarkers.js:54 says the multiple-match return has an empty comments array, but lines 83 and 101 return { ambiguous: true, comments: matches } with the matched comment objects, and postMarkedComment reads existing.comments.length to build detail.matchCount (the blocked-detail the triageWorker surfaces in its error message). A maintainer or future caller coding against the documented shape would mishandle matchCount. The PR rewrote this exact docblock (adding the pagination paragraphs at lines 47-52) but left the stale @returns line. Low impact: the only in-repo consumer uses the real shape, so behavior is correct; this is a doc/contract contradiction only.",
+            "evidenceRefs": [
+              "repo-read:packages/web/src/lib/commentMarkers.js@HEAD:L47-L56",
+              "repo-read:packages/web/src/lib/commentMarkers.js@HEAD:L81-L84",
+              "repo-read:packages/web/src/lib/commentMarkers.js@HEAD:L127-L131"
+            ],
+            "severity": "P3"
+          },
+          {
+            "claim": "After this change the triage decision log still records decision:\"skipped\" with reason \"no labels to apply\" and a configUsed snapshot that omits auto_comment for label-less classifications, even though the same run now performs a GitHub comment mutation.",
+            "confidence": 0.7,
+            "description": "triageWorker.js:335/338/345 compute the audit decision purely from labelsToApply and configUsed purely from auto_label, but the new gating at line 358 posts/updates a marker-backed comment (postMarkedComment at line 364) for every auto_comment-enabled run. Previously a no-label, no-hint run performed no mutation at all, so \"skipped\" was truthful; the change makes the \"skipped\" audit state contradict actual behavior for every no-label triage (e.g., auto_label:false repos or labels filtered out by labelNames). The dry-run proof/dashboard language treats \"skipped\" as 'skipped mutation'. Impact is limited to audit-trail accuracy: the comment mutation is separately recorded in the managed-actions ledger via propose/succeed (lines 384-391), and no behavioral/idempotency invariant breaks. Partially pre-existing (needs_more_info runs already had this gap) but the change makes it the default path.",
+            "evidenceRefs": [
+              "repo-read:packages/web/src/workers/triageWorker.js@HEAD:L332-L346",
+              "repo-read:packages/web/src/workers/triageWorker.js@HEAD:L348-L365",
+              "repo-read:packages/web/src/workers/triageWorker.js@HEAD:L384-L391"
+            ],
+            "severity": "P3"
+          }
+        ],
+        "unresolvedContextRequests": []
+      },
+      "submittedAt": "2026-08-16T11:43:02.217Z",
+      "submitAttempts": 1
+    },
+    "usage": {
+      "inputTokens": 131690,
+      "outputTokens": 19182,
+      "cacheReadTokens": 547648,
+      "cacheWriteTokens": 0,
+      "totalTokens": 698520,
+      "costUsd": 0.16502624
+    },
+    "terminationReason": "submitted"
+  },
+  "submissionVerification": {
+    "evidenceComplete": true,
+    "findings": [
+      {
+        "claim": "The rewritten docblock of findCommentByMarker still documents the ambiguity return as { ambiguous: true, comments: [] } while the code returns the actual matched comments, contradicting the contract postMarkedComment relies on for detail.matchCount.",
+        "severity": "P3",
+        "material": false,
+        "refs": [
+          {
+            "ref": "repo-read:packages/web/src/lib/commentMarkers.js@HEAD:L47-L56",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 160,
+              "params": {
+                "path": "packages/web/src/lib/commentMarkers.js"
+              },
+              "returnedItems": 160
+            },
+            "reproduced": {
+              "status": "success",
+              "blobSha": "9a4ce631180da2aca15405e961e05ab1b65e098e"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:ce406b2cb41a581f8335285ec229b50e37122b4fd119808a0e552e4245a49d2d",
+                "reconstruction": "sha256:ce406b2cb41a581f8335285ec229b50e37122b4fd119808a0e552e4245a49d2d"
+              }
+            }
+          },
+          {
+            "ref": "repo-read:packages/web/src/lib/commentMarkers.js@HEAD:L81-L84",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 160,
+              "params": {
+                "path": "packages/web/src/lib/commentMarkers.js"
+              },
+              "returnedItems": 160
+            },
+            "reproduced": {
+              "status": "success",
+              "blobSha": "9a4ce631180da2aca15405e961e05ab1b65e098e"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:c252458cfcb3eaa89e6526f5795e3c7a0a94028454d4c5e6fe0575455accb37c",
+                "reconstruction": "sha256:c252458cfcb3eaa89e6526f5795e3c7a0a94028454d4c5e6fe0575455accb37c"
+              }
+            }
+          },
+          {
+            "ref": "repo-read:packages/web/src/lib/commentMarkers.js@HEAD:L127-L131",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 160,
+              "params": {
+                "path": "packages/web/src/lib/commentMarkers.js"
+              },
+              "returnedItems": 160
+            },
+            "reproduced": {
+              "status": "success",
+              "blobSha": "9a4ce631180da2aca15405e961e05ab1b65e098e"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:b61cbe54f5f05619367e401f769e78d4af6813d854e19a82c6b073f0e6c348d4",
+                "reconstruction": "sha256:b61cbe54f5f05619367e401f769e78d4af6813d854e19a82c6b073f0e6c348d4"
+              }
+            }
+          }
+        ],
+        "evidenceComplete": true
+      },
+      {
+        "claim": "After this change the triage decision log still records decision:\"skipped\" with reason \"no labels to apply\" and a configUsed snapshot that omits auto_comment for label-less classifications, even though the same run now performs a GitHub comment mutation.",
+        "severity": "P3",
+        "material": false,
+        "refs": [
+          {
+            "ref": "repo-read:packages/web/src/workers/triageWorker.js@HEAD:L332-L346",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 710,
+              "params": {
+                "path": "packages/web/src/workers/triageWorker.js"
+              },
+              "returnedItems": 710
+            },
+            "reproduced": {
+              "status": "success",
+              "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:ae6219a3bb2e4d01e2d2e8319e42129d167de79f5b830c93a9321f18ddc9da88",
+                "reconstruction": "sha256:ae6219a3bb2e4d01e2d2e8319e42129d167de79f5b830c93a9321f18ddc9da88"
+              }
+            }
+          },
+          {
+            "ref": "repo-read:packages/web/src/workers/triageWorker.js@HEAD:L348-L365",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 710,
+              "params": {
+                "path": "packages/web/src/workers/triageWorker.js"
+              },
+              "returnedItems": 710
+            },
+            "reproduced": {
+              "status": "success",
+              "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:2580c475f2a7d7937c57d78c0a2425a996f680e7f20833289a8889d0f660e53f",
+                "reconstruction": "sha256:2580c475f2a7d7937c57d78c0a2425a996f680e7f20833289a8889d0f660e53f"
+              }
+            }
+          },
+          {
+            "ref": "repo-read:packages/web/src/workers/triageWorker.js@HEAD:L384-L391",
+            "parsed": true,
+            "type": "repo-read",
+            "coveringRead": {
+              "windowStart": 1,
+              "windowEnd": 710,
+              "params": {
+                "path": "packages/web/src/workers/triageWorker.js"
+              },
+              "returnedItems": 710
+            },
+            "reproduced": {
+              "status": "success",
+              "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96"
+            },
+            "reconciliation": {
+              "agree": true,
+              "approvalEvidenceComplete": true,
+              "dimensions": {
+                "faithful": true,
+                "reconstructionServed": true,
+                "reconstructionComplete": true,
+                "headBinding": true,
+                "pathBinding": true,
+                "blobIdentity": true,
+                "rangeRepresented": true,
+                "contentAgreement": true
+              },
+              "reasons": [],
+              "digests": {
+                "reviewer": "sha256:b5f50cbdf25402b444b766cdfb4846356b7a5c983b495ae0490205695b10093a",
+                "reconstruction": "sha256:b5f50cbdf25402b444b766cdfb4846356b7a5c983b495ae0490205695b10093a"
+              }
+            }
+          }
+        ],
+        "evidenceComplete": true
+      }
+    ]
+  },
+  "ri4FindingValidation": [
+    {
+      "claim": "The rewritten docblock of findCommentByMarker still documents the ambiguity return as { ambiguous: true, comments: [] } while the code returns the actual matched comments, contradicting the contract postMarkedComment relies on for detail.matchCount.",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "downgraded": false
+    },
+    {
+      "claim": "After this change the triage decision log still records decision:\"skipped\" with reason \"no labels to apply\" and a configUsed snapshot that omits auto_comment for label-less classifications, even though the same run now performs a GitHub comment mutation.",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "downgraded": false
+    }
+  ],
+  "expectedSignature": {
+    "severityClass": "none"
+  },
+  "mutationOccurred": false
+}
