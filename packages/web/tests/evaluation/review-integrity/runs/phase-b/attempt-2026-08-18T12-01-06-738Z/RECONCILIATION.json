@@ -1,0 +1,816 @@
+{
+  "attemptId": "attempt-2026-08-18T12-01-06-738Z",
+  "candidate": {
+    "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+    "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+  },
+  "expectedCoordinates": 24,
+  "uniqueCoordinates": 24,
+  "missingCoordinates": [],
+  "duplicateCoordinates": [],
+  "invocationAccounting": {
+    "providerReachedInvocations": 11,
+    "zeroTokenInvocations": 13,
+    "receiptPresentInvocations": 10,
+    "receiptAbsentInvocations": 14,
+    "consoleTokensUsedTotal": 187674,
+    "profileUsage": {
+      "primary": {
+        "input": 117149,
+        "output": 18792,
+        "cached": 0,
+        "total": 135941
+      },
+      "verifier": {
+        "input": 95675,
+        "output": 19888,
+        "cached": 0,
+        "total": 115563
+      },
+      "adversarial": {
+        "input": 6593,
+        "output": 5706,
+        "cached": 2048,
+        "total": 14347
+      },
+      "defense": {
+        "input": 8050,
+        "output": 3542,
+        "cached": 1280,
+        "total": 12872
+      }
+    },
+    "totals": {
+      "input": 227467,
+      "output": 47928,
+      "cached": 3328,
+      "all": 278723
+    },
+    "classCounts": {
+      "C": 3,
+      "B": 8,
+      "E": 13
+    },
+    "quotaUnits": {
+      "formula": "input*6.9 + cached*1.7 + output*24 (GLM-5.3 Coding Plan multipliers)",
+      "value": 2725452
+    }
+  },
+  "invocations": [
+    {
+      "coordinate": "RI-01|broken|1",
+      "file": "9c02b71c4ee8-RI-01-broken-run1.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 29484,
+      "latencyMs": 62138,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 20817,
+          "output": 1491,
+          "cached": 0,
+          "total": 22308
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 1033,
+          "output": 837,
+          "cached": 0,
+          "total": 1870
+        },
+        "defense": {
+          "input": 1275,
+          "output": 443,
+          "cached": 0,
+          "total": 1718
+        }
+      },
+      "verifier": null,
+      "executionClass": "C"
+    },
+    {
+      "coordinate": "RI-01|broken|2",
+      "file": "9c02b71c4ee8-RI-01-broken-run2.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 13343,
+      "latencyMs": 96462,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 4159,
+          "output": 2436,
+          "cached": 0,
+          "total": 6595
+        },
+        "verifier": {
+          "input": 15525,
+          "output": 1866,
+          "cached": 0,
+          "total": 17391
+        },
+        "adversarial": {
+          "input": 1053,
+          "output": 828,
+          "cached": 0,
+          "total": 1881
+        },
+        "defense": {
+          "input": 976,
+          "output": 517,
+          "cached": 320,
+          "total": 1813
+        }
+      },
+      "verifier": {
+        "status": "incomplete",
+        "errorSnippet": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier",
+        "riskLedgerPresent": false,
+        "unresolvedObligations": 0,
+        "unresolvedContextRequests": 0,
+        "rawTextSnippetBytes": 0,
+        "promptVersion": null
+      },
+      "executionClass": "B"
+    },
+    {
+      "coordinate": "RI-01|broken|3",
+      "file": "9c02b71c4ee8-RI-01-broken-run3.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 21077,
+      "latencyMs": 123918,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 11851,
+          "output": 2378,
+          "cached": 0,
+          "total": 14229
+        },
+        "verifier": {
+          "input": 8969,
+          "output": 2030,
+          "cached": 0,
+          "total": 10999
+        },
+        "adversarial": {
+          "input": 1054,
+          "output": 674,
+          "cached": 0,
+          "total": 1728
+        },
+        "defense": {
+          "input": 1219,
+          "output": 477,
+          "cached": 0,
+          "total": 1696
+        }
+      },
+      "verifier": {
+        "status": "incomplete",
+        "errorSnippet": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier",
+        "riskLedgerPresent": false,
+        "unresolvedObligations": 0,
+        "unresolvedContextRequests": 0,
+        "rawTextSnippetBytes": 0,
+        "promptVersion": null
+      },
+      "executionClass": "B"
+    },
+    {
+      "coordinate": "RI-01|fixed|1",
+      "file": "9c02b71c4ee8-RI-01-fixed-run1.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 21390,
+      "latencyMs": 90024,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 18514,
+          "output": 1030,
+          "cached": 0,
+          "total": 19544
+        },
+        "verifier": {
+          "input": 24262,
+          "output": 2650,
+          "cached": 0,
+          "total": 26912
+        },
+        "adversarial": {
+          "input": 600,
+          "output": 323,
+          "cached": 0,
+          "total": 923
+        },
+        "defense": null
+      },
+      "verifier": {
+        "status": "incomplete",
+        "errorSnippet": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier",
+        "riskLedgerPresent": false,
+        "unresolvedObligations": 0,
+        "unresolvedContextRequests": 0,
+        "rawTextSnippetBytes": 0,
+        "promptVersion": null
+      },
+      "executionClass": "B"
+    },
+    {
+      "coordinate": "RI-01|fixed|2",
+      "file": "9c02b71c4ee8-RI-01-fixed-run2.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 11973,
+      "latencyMs": 101297,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 8605,
+          "output": 1562,
+          "cached": 0,
+          "total": 10167
+        },
+        "verifier": {
+          "input": 8162,
+          "output": 2811,
+          "cached": 0,
+          "total": 10973
+        },
+        "adversarial": {
+          "input": 172,
+          "output": 268,
+          "cached": 448,
+          "total": 888
+        },
+        "defense": {
+          "input": 278,
+          "output": 185,
+          "cached": 320,
+          "total": 783
+        }
+      },
+      "verifier": {
+        "status": "incomplete",
+        "errorSnippet": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier",
+        "riskLedgerPresent": false,
+        "unresolvedObligations": 0,
+        "unresolvedContextRequests": 0,
+        "rawTextSnippetBytes": 0,
+        "promptVersion": null
+      },
+      "executionClass": "B"
+    },
+    {
+      "coordinate": "RI-01|fixed|3",
+      "file": "9c02b71c4ee8-RI-01-fixed-run3.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 13099,
+      "latencyMs": 102454,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 10040,
+          "output": 1081,
+          "cached": 0,
+          "total": 11121
+        },
+        "verifier": {
+          "input": 12506,
+          "output": 2826,
+          "cached": 0,
+          "total": 15332
+        },
+        "adversarial": {
+          "input": 147,
+          "output": 347,
+          "cached": 448,
+          "total": 942
+        },
+        "defense": {
+          "input": 296,
+          "output": 199,
+          "cached": 320,
+          "total": 815
+        }
+      },
+      "verifier": {
+        "status": "incomplete",
+        "errorSnippet": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier",
+        "riskLedgerPresent": false,
+        "unresolvedObligations": 0,
+        "unresolvedContextRequests": 0,
+        "rawTextSnippetBytes": 0,
+        "promptVersion": null
+      },
+      "executionClass": "B"
+    },
+    {
+      "coordinate": "RI-02|broken|1",
+      "file": "9c02b71c4ee8-RI-02-broken-run1.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 20451,
+      "latencyMs": 162160,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 10780,
+          "output": 2649,
+          "cached": 0,
+          "total": 13429
+        },
+        "verifier": {
+          "input": 10955,
+          "output": 3012,
+          "cached": 0,
+          "total": 13967
+        },
+        "adversarial": {
+          "input": 628,
+          "output": 908,
+          "cached": 384,
+          "total": 1920
+        },
+        "defense": {
+          "input": 1356,
+          "output": 619,
+          "cached": 0,
+          "total": 1975
+        }
+      },
+      "verifier": {
+        "status": "incomplete",
+        "errorSnippet": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier",
+        "riskLedgerPresent": false,
+        "unresolvedObligations": 0,
+        "unresolvedContextRequests": 0,
+        "rawTextSnippetBytes": 0,
+        "promptVersion": null
+      },
+      "executionClass": "B"
+    },
+    {
+      "coordinate": "RI-02|broken|2",
+      "file": "9c02b71c4ee8-RI-02-broken-run2.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 18205,
+      "latencyMs": 108972,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 8501,
+          "output": 2828,
+          "cached": 0,
+          "total": 11329
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 1107,
+          "output": 593,
+          "cached": 0,
+          "total": 1700
+        },
+        "defense": {
+          "input": 1241,
+          "output": 497,
+          "cached": 0,
+          "total": 1738
+        }
+      },
+      "verifier": null,
+      "executionClass": "C"
+    },
+    {
+      "coordinate": "RI-02|broken|3",
+      "file": "9c02b71c4ee8-RI-02-broken-run3.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 22575,
+      "latencyMs": 143773,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 14415,
+          "output": 2300,
+          "cached": 0,
+          "total": 16715
+        },
+        "verifier": {
+          "input": 8161,
+          "output": 2841,
+          "cached": 0,
+          "total": 11002
+        },
+        "adversarial": {
+          "input": 570,
+          "output": 747,
+          "cached": 384,
+          "total": 1701
+        },
+        "defense": {
+          "input": 1127,
+          "output": 486,
+          "cached": 0,
+          "total": 1613
+        }
+      },
+      "verifier": {
+        "status": "incomplete",
+        "errorSnippet": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier",
+        "riskLedgerPresent": false,
+        "unresolvedObligations": 0,
+        "unresolvedContextRequests": 0,
+        "rawTextSnippetBytes": 0,
+        "promptVersion": null
+      },
+      "executionClass": "B"
+    },
+    {
+      "coordinate": "RI-02|fixed|1",
+      "file": "9c02b71c4ee8-RI-02-fixed-run1.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 12126,
+      "latencyMs": 78484,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": true,
+      "manifestKeys": 9,
+      "roles": {
+        "primary": {
+          "input": 9467,
+          "output": 1037,
+          "cached": 0,
+          "total": 10504
+        },
+        "verifier": {
+          "input": 7135,
+          "output": 1852,
+          "cached": 0,
+          "total": 8987
+        },
+        "adversarial": {
+          "input": 229,
+          "output": 181,
+          "cached": 384,
+          "total": 794
+        },
+        "defense": {
+          "input": 282,
+          "output": 119,
+          "cached": 320,
+          "total": 721
+        }
+      },
+      "verifier": {
+        "status": "incomplete",
+        "errorSnippet": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier",
+        "riskLedgerPresent": false,
+        "unresolvedObligations": 0,
+        "unresolvedContextRequests": 0,
+        "rawTextSnippetBytes": 0,
+        "promptVersion": null
+      },
+      "executionClass": "B"
+    },
+    {
+      "coordinate": "RI-02|fixed|2",
+      "file": "9c02b71c4ee8-RI-02-fixed-run2.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 3951,
+      "latencyMs": 34607,
+      "modelObserved": "glm-5.3",
+      "providerReached": true,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "C"
+    },
+    {
+      "coordinate": "RI-02|fixed|3",
+      "file": "9c02b71c4ee8-RI-02-fixed-run3.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4261,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-03|broken|1",
+      "file": "9c02b71c4ee8-RI-03-broken-run1.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4550,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-03|broken|2",
+      "file": "9c02b71c4ee8-RI-03-broken-run2.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4588,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-03|broken|3",
+      "file": "9c02b71c4ee8-RI-03-broken-run3.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4463,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-03|fixed|1",
+      "file": "9c02b71c4ee8-RI-03-fixed-run1.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4561,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-03|fixed|2",
+      "file": "9c02b71c4ee8-RI-03-fixed-run2.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4584,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-03|fixed|3",
+      "file": "9c02b71c4ee8-RI-03-fixed-run3.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4165,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-04|broken|1",
+      "file": "9c02b71c4ee8-RI-04-broken-run1.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4573,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-04|broken|2",
+      "file": "9c02b71c4ee8-RI-04-broken-run2.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4137,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-04|broken|3",
+      "file": "9c02b71c4ee8-RI-04-broken-run3.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4460,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-04|fixed|1",
+      "file": "9c02b71c4ee8-RI-04-fixed-run1.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4580,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-04|fixed|2",
+      "file": "9c02b71c4ee8-RI-04-fixed-run2.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4160,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    },
+    {
+      "coordinate": "RI-04|fixed|3",
+      "file": "9c02b71c4ee8-RI-04-fixed-run3.json",
+      "candidate": {
+        "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+        "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 0,
+      "latencyMs": 4615,
+      "modelObserved": null,
+      "providerReached": false,
+      "receiptPresent": false,
+      "manifestKeys": 0,
+      "roles": {},
+      "verifier": null,
+      "executionClass": "E"
+    }
+  ]
+}

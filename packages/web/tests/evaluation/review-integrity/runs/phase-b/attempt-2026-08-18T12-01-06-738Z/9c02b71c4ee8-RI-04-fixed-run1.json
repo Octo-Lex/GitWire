@@ -1,0 +1,41 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-18T12-01-06-738Z",
+  "candidate": {
+    "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+    "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+  },
+  "fixture": "RI-04",
+  "variant": "fixed",
+  "run": 1,
+  "record": {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5.3",
+    "actualModel": null,
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T12:20:20.036Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "expectedDefectDetected": null,
+    "tokensUsed": 0,
+    "latencyMs": 4580,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  "manifest": null,
+  "verifierReceipt": null,
+  "decisionReason": null,
+  "writtenAt": "2026-08-18T12:20:20.036Z"
+}

@@ -1,0 +1,420 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-18T12-01-06-738Z",
+  "candidate": {
+    "sha": "9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa",
+    "tree": "5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68"
+  },
+  "fixture": "RI-01",
+  "variant": "fixed",
+  "run": 2,
+  "record": {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T12:09:00.641Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' list has duplicate item number 3 after inserting roadmap.md"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' list has duplicate item number 3 after inserting roadmap.md"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": null,
+    "tokensUsed": 11973,
+    "latencyMs": 101297,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "dd07fb2",
+      "headSha": "20219bd384",
+      "invocationId": "rinv:e59b52f51bb0383addee8d987ba474c43ed31975"
+    },
+    "coverage": {
+      "totalChangedFiles": 4,
+      "fullyCoveredFiles": 4,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 443,
+      "changedLinesRepresented": 443,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "README.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 15,
+        "deletions": 16,
+        "representedLines": 31,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "f35e29412e4949e41f87fd794d4d63bfbd74d104",
+          "contentDigest": "sha256:b4ab2353f352a89bffcbfc835b3431635bfa5cb84d56a16f9540a39d1925d19d"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "3dec226bcb6e227d359aceac56aba4701289c29e",
+          "contentDigest": "sha256:53c6565ce84c4e3146cb405ff1d180dadf7371c6b6a3112159421228c2fa111c"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/constitution.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 3,
+        "deletions": 4,
+        "representedLines": 7,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7867491b4b5235dab38624055f0c06b45241de39",
+          "contentDigest": "sha256:11da23e66921475ce260dec18e5a25915aad2b36a105c425408847521e26ef85"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "5fe09be65faa108006fe3cdebc85068c997037d1",
+          "contentDigest": "sha256:f2c00edc3522dbb2f4e0c6219e331486bdbc231695fd46ef95812e45b4b37e7a"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/phase-0-spec.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 12,
+        "deletions": 8,
+        "representedLines": 20,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "93e16ca8be4be9b9b08da4f1e6e404f04bb1bbe2",
+          "contentDigest": "sha256:38e9940b0a1fb9219fc170f19cf988fa3a9d65dfbe590f73456305741a8ca3b3"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/roadmap.md",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 385,
+        "deletions": 0,
+        "representedLines": 385,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
+          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab"
+        },
+        "base": null,
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "README.md",
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 2132
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": ".github/workflows/ci.yml",
+        "ref": "20219bd384",
+        "round": 2,
+        "truncated": false,
+        "contentLength": 1654
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "README.md",
+        "ref": "dd07fb2",
+        "round": 2,
+        "truncated": false,
+        "contentLength": 782
+      }
+    ],
+    "primaryFindings": [
+      {
+        "severity": "P3",
+        "category": "docs_gap",
+        "claim": "README 'Read first' list has duplicate item number 3 after inserting roadmap.md",
+        "evidenceRefs": [
+          "changed:README.md@HEAD:22-28",
+          "repo-read:README.md@HEAD:25-28",
+          "repo-read:README.md@dd07fb2:19-24"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "README.md"
+        ]
+      }
+    ],
+    "budgetConsumption": {
+      "fileReads": 3,
+      "searches": 2,
+      "retrievedChars": 7240,
+      "contextRounds": 2,
+      "exhausted": false,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.3",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:02134341153d2a1a",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-18T12:07:19.347Z",
+        "completedAt": "2026-08-18T12:07:54.488Z",
+        "durationMs": 35141,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 8605,
+          "outputTokens": 1562,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 10167
+        },
+        "cost": null
+      },
+      "verifier": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-verifier",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.3",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:0d646e2ec7732e7d",
+        "promptId": "v2-verifier-r2",
+        "promptHash": "958e9fc9807da396",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-7264c40f9ed5",
+        "startedAt": "2026-08-18T12:08:06.889Z",
+        "completedAt": "2026-08-18T12:09:00.641Z",
+        "durationMs": 53752,
+        "terminalState": "provider_error",
+        "terminalReason": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context); dependency_interface_contracts obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context); config_runtime_assumptions obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context); normative_docs_tests obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context); counterexamples obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context)",
+        "usage": {
+          "inputTokens": 8162,
+          "outputTokens": 2811,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 10973
+        },
+        "cost": null
+      },
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 172,
+          "outputTokens": 268,
+          "cacheReadTokens": 448,
+          "cacheWriteTokens": null,
+          "totalTokens": 888
+        },
+        "cost": null
+      },
+      "defense": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-defense",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:3ca011fef7cbeb2f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 278,
+          "outputTokens": 185,
+          "cacheReadTokens": 320,
+          "cacheWriteTokens": null,
+          "totalTokens": 783
+        },
+        "cost": null
+      }
+    }
+  },
+  "verifierReceipt": {
+    "status": "incomplete",
+    "findings": [],
+    "rawFindings": [],
+    "hasMaterialFindings": false,
+    "materialFindingCount": 0,
+    "coverageSatisfied": false,
+    "tokensUsed": 10973,
+    "durationMs": 53752,
+    "unresolvedContextRequests": [],
+    "contextTrace": [
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      }
+    ],
+    "actualModel": "glm-5.3",
+    "budgetState": null,
+    "riskLedger": null,
+    "unresolvedObligations": [],
+    "error": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context); dependency_interface_contracts obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context); config_runtime_assumptions obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context); normative_docs_tests obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context); counterexamples obligation[0]: evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context)"
+  },
+  "decisionReason": "Verifier incomplete — cannot confirm approval safety",
+  "writtenAt": "2026-08-18T12:09:00.641Z"
+}
