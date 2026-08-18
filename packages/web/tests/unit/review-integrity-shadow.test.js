@@ -8,6 +8,7 @@
 //   - Cutover mode (live) is recognized but not yet active
 
 import { jest } from "@jest/globals";
+import { completeClearedLedger } from "./verifierLedgerFixture.js";
 
 const mockDbQuery = jest.fn();
 
@@ -108,6 +109,7 @@ describe("RI-9: runShadowVerification", () => {
   it("runs v2 pipeline in shadow mode and never produces a mutation", async () => {
     const verifierResponse = JSON.stringify({
       status: "verified", findings: [], unresolvedContextNeeds: [], coverageSatisfied: true,
+riskLedger: completeClearedLedger(),
     });
     const result = await runShadowVerification({
       productionResult: { verdict: "approved" },
@@ -140,7 +142,7 @@ describe("RI-9: runShadowVerification", () => {
         evidenceRefs: ["changed:src/app.js@HEAD:L1-L3"],
         proof: { type: "static_trace", summary: "Found at line 1" },
       }],
-      unresolvedContextNeeds: [], coverageSatisfied: true,
+      unresolvedContextNeeds: [], riskLedger: completeClearedLedger(), coverageSatisfied: true,
     });
     const result = await runShadowVerification({
       productionResult: { verdict: "approved" },
@@ -178,6 +180,7 @@ describe("RI-9: runShadowVerification", () => {
       owner: "org", repo: "repo",
       anthropic: makeMockAnthropic(JSON.stringify({
         status: "verified", findings: [], unresolvedContextNeeds: [], coverageSatisfied: true,
+riskLedger: completeClearedLedger(),
       })),
       model: "claude-sonnet-4-20250514",
       repoConfig: { pillars: { ai_review: { review_integrity_v2: "shadow" } } },
@@ -225,6 +228,7 @@ describe("RI-9: runShadowVerification", () => {
     };
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "verified", findings: [], unresolvedContextNeeds: [], coverageSatisfied: true,
+riskLedger: completeClearedLedger(),
     }));
 
     await runShadowVerification({

@@ -94,6 +94,8 @@ export async function persistIntegrityReceipt({
     })),
     actualModel: verifierReceipt.actualModel || null,
     budgetState: verifierReceipt.budgetState || null,
+    riskLedger: verifierReceipt.riskLedger || null,
+    unresolvedObligations: verifierReceipt.unresolvedObligations || [],
     error: verifierReceipt.error || undefined,
     rawTextSnippet: verifierReceipt.rawTextSnippet || undefined,
   } : null;

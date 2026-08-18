@@ -17,6 +17,7 @@ import {
   parseVerifierResult,
   runApprovalVerification,
 } from "../../src/services/approvalVerificationService.js";
+import { completeClearedLedger } from "./verifierLedgerFixture.js";
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -149,6 +150,7 @@ describe("RI-5: runApprovalVerification", () => {
     const evidence = makeEvidence();
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "verified",
+riskLedger: completeClearedLedger(),
       findings: [],
       unresolvedContextNeeds: [],
       coverageSatisfied: true,
@@ -171,6 +173,7 @@ describe("RI-5: runApprovalVerification", () => {
     const evidence = makeEvidence();
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "material_findings",
+riskLedger: completeClearedLedger(),
       findings: [{
         severity: "P2",
         category: "bug",
@@ -200,6 +203,7 @@ describe("RI-5: runApprovalVerification", () => {
       status: "incomplete",
       findings: [],
       unresolvedContextNeeds: ["Could not read src/config.js — needed to verify import"],
+      riskLedger: completeClearedLedger(),
       coverageSatisfied: false,
     }));
 
@@ -256,6 +260,7 @@ describe("RI-5: runApprovalVerification", () => {
     const evidence = makeEvidence();
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "verified",
+riskLedger: completeClearedLedger(),
       findings: [],
       unresolvedContextNeeds: [],
       coverageSatisfied: true,
@@ -277,6 +282,7 @@ describe("RI-5: runApprovalVerification", () => {
 
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "verified",
+riskLedger: completeClearedLedger(),
       findings: [],
       unresolvedContextNeeds: [],
       coverageSatisfied: true,
@@ -296,6 +302,7 @@ describe("RI-5: runApprovalVerification", () => {
     const evidence = makeEvidence(["src/app.js"]);
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "material_findings",
+riskLedger: completeClearedLedger(),
       findings: [{
         severity: "P1",
         category: "bug",
@@ -329,6 +336,7 @@ describe("RI-5: context broker tool-use loop", () => {
     const octokit = makeMockOctokit(); // returns "test" content
     const finalResponse = JSON.stringify({
       status: "verified",
+riskLedger: completeClearedLedger(),
       findings: [],
       unresolvedContextNeeds: [],
       coverageSatisfied: true,
@@ -431,6 +439,7 @@ describe("RI-5: deterministic schema validation", () => {
     const evidence = makeEvidence();
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "verified",
+riskLedger: completeClearedLedger(),
       findings: "none",
       coverageSatisfied: true,
     }));
@@ -447,6 +456,7 @@ describe("RI-5: deterministic schema validation", () => {
     const evidence = makeEvidence();
     const anthropic = makeMockAnthropic(JSON.stringify({
       status: "verified",
+riskLedger: completeClearedLedger(),
       findings: [],
       unresolvedContextNeeds: [],
       contextRequests: [{ path: "src/app.js", ref: HEAD_SHA }],
@@ -468,6 +478,7 @@ describe("RI-5: deterministic schema validation", () => {
       status: "incomplete",
       findings: [],
       unresolvedContextRequests: ["needed to read src/missing.js"],
+      riskLedger: completeClearedLedger(),
       coverageSatisfied: false,
     }));
 
@@ -535,6 +546,7 @@ describe("RI-5: broker context items for finding validation", () => {
     };
     const finalResponse = JSON.stringify({
       status: "material_findings",
+riskLedger: completeClearedLedger(),
       findings: [{
         severity: "P2",
         category: "bug",

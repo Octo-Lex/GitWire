@@ -24,10 +24,61 @@ import {
 
 // ── Verifier prompt identity (descriptive instrumentation metadata) ──────────
 
-const VERIFIER_PROMPT_VERSION = "v2-verifier-r1";
+const VERIFIER_PROMPT_VERSION = "v2-verifier-r2";
 const VERIFIER_PROMPT_HASH = createHash("sha256")
-  .update(VERIFIER_PROMPT_VERSION + ":independent-approval-verification")
+  .update(VERIFIER_PROMPT_VERSION + ":falsification-risk-ledger")
   .digest("hex").slice(0, 16);
+
+// ── Falsification risk-ledger vocabulary (generic, change-relative) ─────────
+//
+// The two-phase falsification contract: the verifier first ENUMERATES the
+// correctness-material risk obligations this change creates, then RESOLVES
+// every obligation with repository evidence, a material finding, or an
+// unresolved-context result. `verified` is computed only when the ledger is
+// complete and every material obligation is evidence-cleared; any unresolved
+// obligation fails closed. The vocabulary is deliberately generic — no
+// fixture, corpus, or benchmark specifics may ever enter it.
+
+export const RISK_CATEGORIES = Object.freeze([
+  {
+    id: "changed_behavior",
+    label: "Changed behavior",
+    prompt: "What the changed lines now do differently at their call sites: outputs, ordering, error paths, edge conditions the old code handled.",
+  },
+  {
+    id: "dependency_interface_contracts",
+    label: "Dependency and interface contracts",
+    prompt: "Contracts the change relies on or alters: callers of changed signatures, exports, config schemas, API/CLI surfaces, types consumed elsewhere.",
+  },
+  {
+    id: "state_side_effects",
+    label: "State and side effects",
+    prompt: "Mutable state the change touches: shared modules, caches, databases, files, background jobs, ordering assumptions, cleanup paths.",
+  },
+  {
+    id: "config_runtime_assumptions",
+    label: "Config and runtime assumptions",
+    prompt: "Environment facts the change assumes: env vars, feature flags, service versions, defaults, deployment-specific values — and whether the repository actually establishes them.",
+  },
+  {
+    id: "normative_docs_tests",
+    label: "Normative docs and tests",
+    prompt: "Statements in docs, specs, comments, or tests that normatively describe the changed behavior and must stay consistent with it.",
+  },
+  {
+    id: "counterexamples",
+    label: "Counterexamples",
+    prompt: "Concrete inputs, sequences, or states that would break the change's implicit claims — constructed adversarially against the diff itself.",
+  },
+]);
+
+export const RISK_CATEGORY_IDS = Object.freeze(RISK_CATEGORIES.map(c => c.id));
+
+export const OBLIGATION_OUTCOMES = Object.freeze({
+  EVIDENCE_CLEARED: "evidence_cleared",
+  MATERIAL_FINDING: "material_finding",
+  UNRESOLVED:        "unresolved",
+});
 
 // ── Verifier status constants ────────────────────────────────────────────────
 
@@ -50,12 +101,13 @@ export const VERIFIER_STATUS = Object.freeze({
  *   - It has read/search tools available at immutable SHAs
  */
 export function buildVerifierSystemPrompt(evidence) {
+  const categoryLines = RISK_CATEGORIES.map(c => '  - "' + c.id + '": ' + c.label + " — " + c.prompt).join("\n");
   return [
     "You are an independent approval verifier for a code review system.",
     "",
     "A primary review has completed on this PR. You do NOT know its verdict,",
     "confidence, or findings. Your job is to independently verify whether this",
-    "PR is safe to approve.",
+    "PR is safe to approve — by trying to FALSIFY it, not by summarizing it.",
     "",
     "You are given the ReviewEvidence: the complete list of changed files,",
     "their coverage states, and the coverage manifest. You also have read and",
@@ -67,19 +119,31 @@ export function buildVerifierSystemPrompt(evidence) {
     "- BASE (old version, before the PR): " + (evidence?.review?.baseSha || "UNKNOWN"),
     "- HEAD (new version, after the PR): " + (evidence?.review?.headSha || "UNKNOWN"),
     "",
-    "Your objectives:",
-    "1. Find missed P0/P1/P2 regressions the primary reviewer may have overlooked.",
-    "2. Find stale declarations or documentation that contradict the changes.",
-    "3. Find caller/helper inconsistencies — changed function signatures,",
-    "   removed exports, broken interfaces.",
-    "4. Find missing test/doc/config updates that the changes require.",
-    "5. Find contradictory repository contracts.",
-    "6. Challenge assumptions the changes make.",
-    "7. Re-evaluate whether apparent P3 risks are really P2+.",
-    "8. Identify unresolved evidence needs — things you needed to check but",
-    "   could not due to budget limits or missing data.",
-    "9. Follow dependency chains: when a changed path calls a helper, verify",
-    "   that helper's implementation at HEAD before broad exploration.",
+    "## Protocol — two phases, in order",
+    "",
+    "PHASE 1 (enumerate): Build a risk ledger of the correctness-material risk",
+    "obligations this change creates. Enumerate one entry per category below.",
+    "Each obligation must be specific to THIS diff — a concrete way the change",
+    "could break correctness that a maintainer would demand be checked before",
+    "approval. An obligation is material when failing it could conceal a",
+    "P0/P1/P2 defect. If a category genuinely has no obligation for this",
+    "change, you must still include the category with an explicit, specific",
+    "noneJustification — an empty category with no justification is invalid.",
+    "",
+    "Categories (use these exact ids):",
+    categoryLines,
+    "",
+    "PHASE 2 (resolve): Resolve EVERY obligation, using the repository tools",
+    "to gather evidence:",
+    "- evidence_cleared: you examined repository evidence (cite it in",
+    "  evidenceRefs) and the obligation does not hold — the change is safe",
+    "  on this axis. An evidence_cleared resolution with no evidenceRefs is",
+    "  invalid: clearing requires evidence, not assertion.",
+    "- material_finding: the obligation holds and constitutes a P0/P1/P2",
+    "  defect — also emit it in findings and point findingIndex at it.",
+    "- unresolved: you could not gather the evidence needed to decide, within",
+    "  budget or data limits — state why in reason. This fails verification",
+    "  closed; never guess an obligation away.",
     "",
     "Coverage manifest:",
     "  Total changed files: " + evidence.coverage.totalChangedFiles,
@@ -103,6 +167,25 @@ export function buildVerifierSystemPrompt(evidence) {
     '      "proof": { "type": "static_trace" | "counterexample" | "reproduction" | "inference", "summary": "..." }',
     "    }",
     "  ],",
+    '  "riskLedger": {',
+    '    "categories": [',
+    "      {",
+    '        "category": "<one of the six category ids above>",',
+    '        "obligations": [',
+    "          {",
+    '            "description": "concrete way this change could break correctness",',
+    '            "resolution": {',
+    '              "outcome": "evidence_cleared" | "material_finding" | "unresolved",',
+    '              "evidenceRefs": ["evidence you examined for a clearance"],',
+    '              "findingIndex": 0,',
+    '              "reason": "why the obligation could not be resolved"',
+    "            }",
+    "          }",
+    "        ],",
+    '        "noneJustification": "why this category has no obligations for this change"',
+    "      }",
+    "    ]",
+    "  },",
     '  "unresolvedContextNeeds": [',
     "    {",
     '      "description": "what could not be checked and why it matters",',
@@ -115,22 +198,29 @@ export function buildVerifierSystemPrompt(evidence) {
     "}",
     "",
     "Rules:",
-    "- Use status 'verified' only if you found zero P0/P1/P2 issues AND have",
-    "  no unresolved material context needs AND coverageSatisfied is true.",
-    "- Use status 'material_findings' if you found any P0/P1/P2 issue.",
-    "- Use status 'incomplete' if you could not complete verification due to",
-    "  missing data or genuinely unresolved material context needs. Using",
-    "  your full retrieval budget is NOT incompleteness by itself.",
-    "- Every P0/P1/P2 finding MUST include at least one evidence reference",
-    "  pointing to a specific file and line range in the changed files or",
-    "  retrieved repository context.",
+    "- `verified` is only schema-valid when the ledger covers ALL six",
+    "  categories and EVERY obligation resolves evidence_cleared (or to a",
+    "  validated material finding). The system computes the final status from",
+    "  your ledger — a declared status cannot override it.",
+    "- Every evidence_cleared resolution MUST cite the repository evidence you",
+    "  examined in evidenceRefs.",
+    "- Every material_finding resolution MUST point at its finding via",
+    "  findingIndex, and every P0/P1/P2 finding MUST include at least one",
+    "  evidence reference pointing to a specific file and line range in the",
+    "  changed files or retrieved repository context.",
+    "- An unresolved obligation or unresolved material context need fails",
+    "  verification closed. Using your full retrieval budget is NOT",
+    "  incompleteness by itself.",
     "- Report an unresolved context need only when the missing evidence",
     "  could plausibly conceal a P0/P1/P2 defect introduced or exposed by",
     "  this PR. Do not report optional completeness checks, low-confidence",
     "  speculation, or historical/external facts that the repository is not",
     "  expected to contain, unless a repository contract specifically",
     "  requires that evidence to be committed or referenced.",
-    "- You have a LIMITED number of file reads and searches. Use them wisely.",
+    "- Follow dependency chains: when a changed path calls a helper, verify",
+    "  that helper's implementation at HEAD before clearing that obligation.",
+    "- You have a LIMITED number of file reads and searches. Spend them on",
+    "  the obligations, not on exploration.",
   ].join("\n");
 }
 
@@ -347,9 +437,47 @@ export async function runApprovalVerification({
             required: ["description", "requiredForApproval"],
           },
         },
+        riskLedger: {
+          type: "object",
+          description: "Two-phase falsification ledger: every risk obligation enumerated per category, each resolved with evidence, a finding, or an unresolved reason.",
+          properties: {
+            categories: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  category: { type: "string", enum: [...RISK_CATEGORY_IDS] },
+                  obligations: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        description: { type: "string", description: "Concrete way this change could break correctness" },
+                        resolution: {
+                          type: "object",
+                          properties: {
+                            outcome: { type: "string", enum: ["evidence_cleared", "material_finding", "unresolved"] },
+                            evidenceRefs: { type: "array", items: { type: "string" } },
+                            findingIndex: { type: "number" },
+                            reason: { type: "string" },
+                          },
+                          required: ["outcome"],
+                        },
+                      },
+                      required: ["description", "resolution"],
+                    },
+                  },
+                  noneJustification: { type: "string" },
+                },
+                required: ["category"],
+              },
+            },
+          },
+          required: ["categories"],
+        },
         coverageSatisfied: { type: "boolean" },
       },
-      required: ["status"],
+      required: ["status", "riskLedger"],
     },
   };
 
@@ -613,6 +741,22 @@ export async function runApprovalVerification({
     return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Verifier schema validation failed: " + schemaErrors.join("; "), actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators());
   }
 
+  // ── Falsification risk-ledger validation (fail-closed) ──────────────────
+  // `verified` is computed from the ledger; a structurally invalid ledger can
+  // never produce it, regardless of the model's declared status.
+  const { errors: ledgerErrors, ledger } = validateRiskLedger(parsed, (parsed.findings || []).length);
+  if (ledgerErrors.length > 0) {
+    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Risk-ledger validation failed: " + ledgerErrors.join("; "), actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators());
+  }
+  const unresolvedObligations = [];
+  for (const cat of ledger.categories) {
+    for (const ob of cat.obligations) {
+      if (ob.resolution.outcome === OBLIGATION_OUTCOMES.UNRESOLVED) {
+        unresolvedObligations.push({ category: cat.category, description: ob.description, reason: ob.resolution.reason });
+      }
+    }
+  }
+
   // ── Extract fields ───────────────────────────────────────────────────────
   const rawFindings = parsed.findings || [];
   // The frozen contract has contextRequests and unresolvedContextRequests.
@@ -678,9 +822,17 @@ export async function runApprovalVerification({
     // Model declared material findings but none survived validation.
     // Cannot confirm approval safety — fail closed to INCOMPLETE.
     status = VERIFIER_STATUS.INCOMPLETE;
+  } else if (unresolvedObligations.length > 0) {
+    // Falsification contract: an unresolved risk obligation fails closed —
+    // a declared status can never clear an obligation the verifier could not.
+    status = VERIFIER_STATUS.INCOMPLETE;
   } else if (unresolvedMaterial.length > 0) {
     status = VERIFIER_STATUS.INCOMPLETE;
   } else if (!coverageSatisfied) {
+    status = VERIFIER_STATUS.INCOMPLETE;
+  } else if (ledger.categories.some(cat => cat.obligations.some(ob => ob.resolution.outcome === OBLIGATION_OUTCOMES.MATERIAL_FINDING))) {
+    // The ledger claims a material obligation but no finding survived
+    // validation — inconsistent with a clean verification. Fail closed.
     status = VERIFIER_STATUS.INCOMPLETE;
   } else {
     status = VERIFIER_STATUS.VERIFIED;
@@ -706,6 +858,8 @@ export async function runApprovalVerification({
     usageAccumulators(),
   );
   finalReceipt.submissionDiagnostics = submissionDiagnostics;
+  finalReceipt.riskLedger = ledger;
+  finalReceipt.unresolvedObligations = unresolvedObligations;
   return finalReceipt;
 }
 
@@ -835,4 +989,125 @@ export function validateVerifierSchema(parsed) {
   }
 
   return errors;
+}
+
+// ── Falsification risk-ledger validation (deterministic, fail-closed) ───────
+//
+// `verified` is schema-valid only when the ledger is COMPLETE (every category
+// present exactly once; every category either carries ≥1 obligation or an
+// explicit noneJustification) and every obligation's resolution is well
+// formed. Outcome-level fail-closed semantics (unresolved → INCOMPLETE) are
+// applied by the caller; this function judges only ledger structure.
+
+/**
+ * Validate and normalize the verifier's risk ledger.
+ *
+ * @param {object} parsed - the parsed verifier submission
+ * @param {number} findingsCount - bounds-check for material_finding indexes
+ * @returns {{errors: string[], ledger: object|null}} errors is empty iff the
+ *   ledger is structurally complete; ledger is the normalized copy for the
+ *   receipt (null when structurally invalid).
+ */
+export function validateRiskLedger(parsed, findingsCount = 0) {
+  const errors = [];
+  const ledger = parsed && typeof parsed === "object" ? parsed.riskLedger : null;
+
+  if (!ledger || typeof ledger !== "object" || !Array.isArray(ledger.categories)) {
+    return { errors: ["riskLedger with a categories array is required"], ledger: null };
+  }
+
+  const seen = new Map();
+  for (const entry of ledger.categories) {
+    if (!entry || typeof entry !== "object" || typeof entry.category !== "string") {
+      errors.push("ledger category entry must be an object with a category id");
+      continue;
+    }
+    if (!RISK_CATEGORY_IDS.includes(entry.category)) {
+      errors.push("unknown ledger category: " + JSON.stringify(entry.category));
+      continue;
+    }
+    if (seen.has(entry.category)) {
+      errors.push("duplicate ledger category: " + entry.category);
+      continue;
+    }
+    seen.set(entry.category, entry);
+
+    const obligations = Array.isArray(entry.obligations) ? entry.obligations : null;
+    const noneJustification = typeof entry.noneJustification === "string" && entry.noneJustification.trim().length > 0
+      ? entry.noneJustification.trim()
+      : null;
+
+    if (obligations === null) {
+      errors.push(entry.category + ": obligations must be an array");
+      continue;
+    }
+    if (obligations.length === 0 && !noneJustification) {
+      errors.push(entry.category + ": empty category requires a noneJustification");
+      continue;
+    }
+
+    for (let i = 0; i < obligations.length; i++) {
+      const ob = obligations[i];
+      const where = entry.category + " obligation[" + i + "]";
+      if (!ob || typeof ob !== "object" || typeof ob.description !== "string" || ob.description.trim().length === 0) {
+        errors.push(where + ": description is required");
+        continue;
+      }
+      const resolution = ob.resolution;
+      if (!resolution || typeof resolution !== "object" || typeof resolution.outcome !== "string") {
+        errors.push(where + ": resolution.outcome is required");
+        continue;
+      }
+      if (!Object.values(OBLIGATION_OUTCOMES).includes(resolution.outcome)) {
+        errors.push(where + ": unknown resolution outcome " + JSON.stringify(resolution.outcome));
+        continue;
+      }
+      if (resolution.outcome === OBLIGATION_OUTCOMES.EVIDENCE_CLEARED) {
+        const refs = Array.isArray(resolution.evidenceRefs)
+          ? resolution.evidenceRefs.filter(r => typeof r === "string" && r.trim().length > 0)
+          : [];
+        if (refs.length === 0) {
+          errors.push(where + ": evidence_cleared requires at least one evidenceRef");
+        }
+      }
+      if (resolution.outcome === OBLIGATION_OUTCOMES.MATERIAL_FINDING) {
+        const idx = resolution.findingIndex;
+        if (!Number.isInteger(idx) || idx < 0 || idx >= findingsCount) {
+          errors.push(where + ": material_finding requires findingIndex within findings bounds");
+        }
+      }
+      if (resolution.outcome === OBLIGATION_OUTCOMES.UNRESOLVED) {
+        if (typeof resolution.reason !== "string" || resolution.reason.trim().length === 0) {
+          errors.push(where + ": unresolved requires a reason");
+        }
+      }
+    }
+  }
+
+  for (const id of RISK_CATEGORY_IDS) {
+    if (!seen.has(id)) {
+      errors.push("missing ledger category: " + id);
+    }
+  }
+
+  if (errors.length > 0) return { errors, ledger: null };
+
+  // Normalize a receipt-safe copy with bounded strings.
+  const normalized = {
+    complete: true,
+    categories: ledger.categories.map(entry => ({
+      category: entry.category,
+      noneJustification: (entry.noneJustification || "").slice(0, 300) || null,
+      obligations: (entry.obligations || []).map(ob => ({
+        description: String(ob.description).slice(0, 300),
+        resolution: {
+          outcome: ob.resolution.outcome,
+          evidenceRefs: (ob.resolution.evidenceRefs || []).slice(0, 10).map(String),
+          findingIndex: Number.isInteger(ob.resolution.findingIndex) ? ob.resolution.findingIndex : null,
+          reason: ob.resolution.reason ? String(ob.resolution.reason).slice(0, 300) : null,
+        },
+      })),
+    })),
+  };
+  return { errors: [], ledger: normalized };
 }
