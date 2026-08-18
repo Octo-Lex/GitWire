@@ -81,6 +81,34 @@ await jest.unstable_mockModule("../../src/services/reviewHeartbeat.js", () => ({
 await jest.unstable_mockModule("../../src/services/adversarialReview.js", () => ({
   runAdversarialChallenge: jest.fn(), refineFindings: jest.fn(),
 }));
+await jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
+  authorize: jest.fn().mockResolvedValue({ allowed: true, code: "ok", principalId: "p" }),
+}));
+await jest.unstable_mockModule("../../src/services/auth/decisionLog.js", () => ({
+  logDecision: jest.fn().mockResolvedValue(undefined),
+  countRecentDisagreements: jest.fn().mockResolvedValue(0),
+}));
+await jest.unstable_mockModule("../../src/services/auth/principalResolver.js", () => ({
+  getInstallationPrincipal: jest.fn().mockResolvedValue({ id: "p", principal_type: "installation" }),
+  getSystemPrincipal: jest.fn().mockResolvedValue(null),
+  getPrincipalById: jest.fn().mockResolvedValue(null),
+  principalValidityCode: jest.fn(() => "valid"),
+}));
+await jest.unstable_mockModule("../../src/lib/github.js", () => ({ getInstallationClient: jest.fn() }));
+await jest.unstable_mockModule("../../src/lib/githubWrapper.js", () => ({ wrapOctokit: (c) => c }));
+// Minimal Redis for the REAL mutation manager (v2 live path): get/set/
+// setex/del/eval(CAS=1)/keys. The manager itself is NOT mocked.
+const redisStore = new Map();
+await jest.unstable_mockModule("../../src/lib/queue.js", () => ({
+  redis: {
+    get: async (k) => redisStore.get(k) ?? null,
+    set: async (k, v) => { redisStore.set(k, v); return "OK"; },
+    setex: async (k, t, v) => { redisStore.set(k, v); return "OK"; },
+    del: async (k) => { redisStore.delete(k); return 1; },
+    eval: async () => 1,
+    keys: async () => [],
+  },
+}));
 
 const { reviewPR } = await import("../../src/services/aiReviewService.js");
 
@@ -122,6 +150,7 @@ describe("body-detail retention (blocker 1)", () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockCreate.mockReset();
+    redisStore.clear();
     mockQuery.mockResolvedValue({ rows: [] });
   });
 
@@ -194,5 +223,66 @@ describe("body-detail retention (blocker 1)", () => {
     const post = reviewPosts(oct)[0];
     expect(post.params.body).toContain("locationless finding");
     expect(post.params.body).toContain("no file, no line, still a finding");
+  });
+});
+
+describe("REAL manager rejection on the v2 live path (blocker 2)", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockCreate.mockReset();
+    redisStore.clear();
+    mockQuery.mockImplementation((sql) => {
+      if (sql.includes("ai_review_config")) return { rows: [V2_LIVE_CONFIG] };
+      if (sql.includes("INSERT INTO ai_reviews")) return { rows: [{ id: 100 }] };
+      return { rows: [] };
+    });
+  });
+
+  test("manager-side 422 → exactly ONE POST, E_REVIEW_DELIVERY, error receipt, FAILURE check, rethrow", async () => {
+    mockQuery.mockImplementation(async (sql) => {
+      if (sql.includes("ai_review_config")) return { rows: [V2_LIVE_CONFIG] };
+      if (sql.includes("INSERT INTO ai_reviews")) return { rows: [{ id: 100 }] };
+      return { rows: [] };
+    });
+    // Primary (no tools) + verifier (with tools) both succeed; the v2
+    // decision flows to delivery; the REAL manager's POST is rejected 422.
+    mockCreate.mockImplementation((params) => {
+      if (params && params.tools && params.tools.length > 0) {
+        return Promise.resolve({
+          content: [{ type: "text", text: JSON.stringify({ status: "verified", findings: [], unresolvedContextNeeds: [], coverageSatisfied: true }) }],
+          usage: { input_tokens: 100, output_tokens: 10 }, stop_reason: "end_turn",
+        });
+      }
+      return Promise.resolve(modelResponse([finding(2, "v2 finding", "v2 description")]));
+    });
+
+    const oct = mockOctokit({
+      "POST /repos/{owner}/{repo}/check-runs": { data: { id: 20 } },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": FILES_RESPONSE,
+      "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": { data: {} },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews": { data: [] },
+      "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews": () => {
+        const err = new Error("422 Position could not be resolved");
+        err.status = 422;
+        throw err;
+      },
+    });
+
+    const result = await reviewPR({ pr: { number: 5, head: { sha: "s" }, base: { sha: "b", ref: "main" }, title: "t", user: { login: "d" }, body: "" }, repository: REPO, octokit: oct }).catch((e) => ({ __thrown: e }));
+    expect(result.__thrown).toMatchObject({ gitwireErrorCode: "E_REVIEW_DELIVERY" });
+
+    // Exactly ONE review POST — the manager's exactly-once semantics hold
+    // (no automatic second mutation attempt).
+    expect(reviewPosts(oct)).toHaveLength(1);
+
+    // FAILURE check with the truthful delivery title.
+    const patches = checkPatches(oct);
+    expect(patches.at(-1).params.conclusion).toBe("failure");
+    expect(patches.at(-1).params.output.title).toContain("delivery failed");
+
+    // Error receipt persisted.
+    const errorUpdate = mockQuery.mock.calls.find((c) => String(c[0]).includes("verdict = 'error'"));
+    expect(errorUpdate).toBeTruthy();
+    expect(errorUpdate[1][0]).toContain("GitHub review delivery failed");
   });
 });
