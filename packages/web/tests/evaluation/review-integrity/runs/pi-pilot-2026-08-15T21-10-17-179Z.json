@@ -1,0 +1,267 @@
+{
+  "kind": "pi-paid-pilot",
+  "frozen": {
+    "caseId": "RI-04",
+    "variant": "broken",
+    "fixtureHead": "624732c",
+    "harness": "pi",
+    "provider": "zai",
+    "providerApi": "anthropic-messages",
+    "model": "glm-5.3",
+    "promptVersion": "pi-phase8-v1",
+    "deadlineMs": 480000,
+    "maxToolCalls": 60,
+    "maxTotalTokens": 200000,
+    "maxTokensPerTurn": 8192
+  },
+  "gitHead": "7d41a838c4389c53455fe979085e43b925544e87",
+  "harnessVersion": "0.74.2",
+  "promptVersion": "pi-phase8-v1",
+  "startedAt": "2026-08-15T21:08:41.687Z",
+  "finishedAt": "2026-08-15T21:10:17.177Z",
+  "execution": {
+    "status": "incomplete",
+    "requestedHarness": "pi",
+    "actualHarness": "pi",
+    "requestedProvider": "zai",
+    "actualProvider": "zai",
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "startedAt": "2026-08-15T21:08:41.688Z",
+    "completedAt": "2026-08-15T21:10:17.177Z",
+    "durationMs": 95489,
+    "toolTrace": [
+      {
+        "ts": "2026-08-15T21:08:49.878Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 23.844,
+        "returnedBytes": 32525,
+        "returnedItems": 710
+      },
+      {
+        "ts": "2026-08-15T21:08:49.932Z",
+        "operation": "grep",
+        "params": {
+          "limit": 100,
+          "pattern": "auto_comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 73.138,
+        "returnedBytes": 3849,
+        "returnedItems": 29
+      },
+      {
+        "ts": "2026-08-15T21:09:02.382Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 8.619,
+        "returnedBytes": 14686,
+        "returnedItems": 170
+      },
+      {
+        "ts": "2026-08-15T21:09:02.383Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 9.363,
+        "returnedBytes": 4255,
+        "returnedItems": 130
+      },
+      {
+        "ts": "2026-08-15T21:09:10.897Z",
+        "operation": "read",
+        "params": {
+          "limit": 80,
+          "offset": 340,
+          "path": "packages/web/src/workers/triageWorker.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 10.311,
+        "returnedBytes": 4025,
+        "returnedItems": 80
+      },
+      {
+        "ts": "2026-08-15T21:09:10.900Z",
+        "operation": "grep",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "pattern": "logDecision\\(|propose\\(",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 12.406,
+        "returnedBytes": 1027,
+        "returnedItems": 14
+      },
+      {
+        "ts": "2026-08-15T21:09:28.552Z",
+        "operation": "read",
+        "params": {
+          "limit": 80,
+          "offset": 30,
+          "path": "docs/configuration/policy-as-code.md"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 13.638,
+        "returnedBytes": 2252,
+        "returnedItems": 80
+      },
+      {
+        "ts": "2026-08-15T21:09:28.586Z",
+        "operation": "grep",
+        "params": {
+          "context": 3,
+          "ignoreCase": true,
+          "path": "docs",
+          "pattern": "needs_more_info|duplicate_hint|triage comment|summary comment|comment.{0,40}only",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 47.877,
+        "returnedBytes": 9847,
+        "returnedItems": 13
+      },
+      {
+        "ts": "2026-08-15T21:09:41.244Z",
+        "operation": "find",
+        "params": {
+          "glob": "docs/workers/*"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 4.681,
+        "returnedBytes": 302,
+        "returnedItems": 10
+      },
+      {
+        "ts": "2026-08-15T21:09:41.286Z",
+        "operation": "grep",
+        "params": {
+          "context": 2,
+          "path": "packages/web",
+          "pattern": "postMarkedComment|buildTriageComment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 51.079,
+        "returnedBytes": 4356,
+        "returnedItems": 13
+      },
+      {
+        "ts": "2026-08-15T21:09:48.826Z",
+        "operation": "read",
+        "params": {
+          "path": "docs/workers/triage-worker.md"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 9.502,
+        "returnedBytes": 1123,
+        "returnedItems": 41
+      },
+      {
+        "ts": "2026-08-15T21:09:48.827Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/triage-mutation-recovery.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 10.546,
+        "returnedBytes": 14070,
+        "returnedItems": 297
+      },
+      {
+        "ts": "2026-08-15T21:10:00.071Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-triage-integration.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 5.544,
+        "returnedBytes": 10817,
+        "returnedItems": 228
+      },
+      {
+        "ts": "2026-08-15T21:10:17.163Z",
+        "operation": "read",
+        "params": {
+          "limit": 40,
+          "offset": 1,
+          "path": "packages/rules/src/schema.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 12.024,
+        "returnedBytes": 1094,
+        "returnedItems": 40
+      },
+      {
+        "ts": "2026-08-15T21:10:17.166Z",
+        "operation": "grep",
+        "params": {
+          "context": 4,
+          "path": "packages/web/src/services/duplicateDetectionService.js",
+          "pattern": "comment|marker|postMarked",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 15.342,
+        "returnedBytes": 4792,
+        "returnedItems": 17
+      }
+    ],
+    "usage": {
+      "inputTokens": 40529,
+      "outputTokens": 3582,
+      "totalTokens": 213711,
+      "costUsd": 0.0321978
+    },
+    "terminationReason": "budget_exceeded"
+  },
+  "ri4Validation": [],
+  "mutationOccurred": false,
+  "notes": "submit_review is data submission only; no GitHub mutation credential exists in the adapter"
+}

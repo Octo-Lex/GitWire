@@ -121,6 +121,7 @@ async function handlePRManualRun(payload, parsed, pillar, issueNumber, installat
           pr: fullPR,
           repository: payload.repository,
           installation: payload.installation,
+          logicalInvocation: "manual-" + Date.now(),
         }, { priority: 1 });
         dispatched.push("review");
       }
