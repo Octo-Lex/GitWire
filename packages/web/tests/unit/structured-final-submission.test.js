@@ -15,7 +15,7 @@
 
 const { runPrimaryReview } = await import("../../src/services/primaryReviewService.js");
 const { runApprovalVerification, VERIFIER_STATUS } = await import("../../src/services/approvalVerificationService.js");
-const { completeClearedLedger } = await import("./verifierLedgerFixture.js");
+const { completeNoneJustifiedLedger } = await import("./verifierLedgerFixture.js");
 
 // ── Mock octokit for the Context Broker ─────────────────────────────────────
 
@@ -388,7 +388,7 @@ describe("Verifier: structured final submission and budget semantics", () => {
       toolUseMsg([{ name: "read_repo_file", input: { path: "src/a.js", ref: HEAD } }]),
       toolUseMsg([{
         name: "submit_verification_result",
-        input: { status: "verified", findings: [], unresolvedContextNeeds: [], riskLedger: completeClearedLedger(), coverageSatisfied: true },
+        input: { status: "verified", findings: [], unresolvedContextNeeds: [], riskLedger: completeNoneJustifiedLedger(), coverageSatisfied: true },
       }]),
     ]);
 
@@ -414,7 +414,7 @@ describe("Verifier: structured final submission and budget semantics", () => {
       ]),
       toolUseMsg([{
         name: "submit_verification_result",
-        input: { status: "verified", findings: [], unresolvedContextNeeds: [], riskLedger: completeClearedLedger(), coverageSatisfied: true },
+        input: { status: "verified", findings: [], unresolvedContextNeeds: [], riskLedger: completeNoneJustifiedLedger(), coverageSatisfied: true },
       }]),
     ]);
 
@@ -442,7 +442,7 @@ describe("Verifier: structured final submission and budget semantics", () => {
           unresolvedContextNeeds: [
             { description: "callee implementation could not be read", requiredForApproval: true, potentialSeverity: "P2", basis: "repository_dependency" },
           ],
-          riskLedger: completeClearedLedger(),
+          riskLedger: completeNoneJustifiedLedger(),
           coverageSatisfied: true,
         },
       }]),

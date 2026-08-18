@@ -360,7 +360,7 @@ function isLineInRange(startLine, endLine, ranges) {
   return ranges.some(([rStart, rEnd]) => startLine >= rStart && endLine <= rEnd);
 }
 
-function validateEvidenceRef(parsed, evidence, contextItems = []) {
+export function validateEvidenceRef(parsed, evidence, contextItems = []) {
   const path = parsed.path;
   const changedFiles = evidence?.changedFiles || [];
   const evidenceContextItems = evidence?.contextItems || [];
