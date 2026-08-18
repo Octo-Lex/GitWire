@@ -1,0 +1,1029 @@
+[
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:32:33.905Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 4,
+    "findingSeverities": [
+      "low",
+      "low",
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Phase status update is incomplete: README.md and docs/constitution.md still declare Phase 0.0 REOPEN",
+      "phase-0-spec.md is internally inconsistent: its own 'Phase 0 estimated total range' summary table st",
+      "Changed file is internally inconsistent: phase-0-spec.md still labels Phase 0.0 'REOPENED' in its ph",
+      "Stale status declarations in governing docs contradict the new CLOSED status: docs/constitution.md §"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Phase status update is incomplete: README.md and docs/constitution.md still declare Phase 0.0 REOPENED, contradicting th"
+      },
+      {
+        "severity": "P3",
+        "claim": "phase-0-spec.md is internally inconsistent: its own 'Phase 0 estimated total range' summary table still lists 0.0 as REO"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Changed file is internally inconsistent: phase-0-spec.md still labels Phase 0.0 'REOPENED' in its phase-range table whil"
+      },
+      {
+        "severity": "P3",
+        "claim": "Stale status declarations in governing docs contradict the new CLOSED status: docs/constitution.md §Status and README.md"
+      }
+    ],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": false,
+    "tokensUsed": 35739,
+    "latencyMs": 119517,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:35:18.775Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 7,
+    "findingSeverities": [
+      "low",
+      "low",
+      "low",
+      "low",
+      "low",
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README.md still declares Phase 0.0 'reopened', contradicting the PR's claim that 0.0/0.1A/0.2 are cl",
+      "docs/constitution.md Status section still says Phase 0.0 is 'reopened' and the scaffold is missing",
+      "Internal inconsistency: phase-0-spec.md's own summary table still lists '0.0 Architecture foundation",
+      "Status change asserts gate:0.2 green on main (dd07fb2) without committed evidence, and the cited SHA",
+      "Phase status contradictory across authoritative docs: spec/roadmap say 0.0 CLOSED while README and c",
+      "Internal contradiction within the changed file: phase-0-spec.md still lists '0.0 Architecture founda",
+      "README 'Read first' list does not reference the new docs/roadmap.md; hard-coded base SHA in status l"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README.md still declares Phase 0.0 'reopened', contradicting the PR's claim that 0.0/0.1A/0.2 are closed"
+      },
+      {
+        "severity": "P3",
+        "claim": "docs/constitution.md Status section still says Phase 0.0 is 'reopened' and the scaffold is missing"
+      },
+      {
+        "severity": "P3",
+        "claim": "Internal inconsistency: phase-0-spec.md's own summary table still lists '0.0 Architecture foundation (REOPENED)' after t"
+      },
+      {
+        "severity": "P3",
+        "claim": "Status change asserts gate:0.2 green on main (dd07fb2) without committed evidence, and the cited SHA is the PR's own bas"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Phase status contradictory across authoritative docs: spec/roadmap say 0.0 CLOSED while README and constitution still sa"
+      },
+      {
+        "severity": "P3",
+        "claim": "Internal contradiction within the changed file: phase-0-spec.md still lists '0.0 Architecture foundation (REOPENED)' in "
+      },
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' list does not reference the new docs/roadmap.md; hard-coded base SHA in status line"
+      }
+    ],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": false,
+    "tokensUsed": 38358,
+    "latencyMs": 164847,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:36:55.766Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 3,
+    "findingSeverities": [
+      "low",
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README.md still declares Phase 0.0 REOPENED / scaffold pending, contradicting the new closed-status ",
+      "phase-0-spec.md is internally contradictory: header says Phase 0.0 CLOSED but its own estimate block",
+      "README.md and docs/constitution.md still declare 'Phase 0.0 reopened', contradicting the PR's closur"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README.md still declares Phase 0.0 REOPENED / scaffold pending, contradicting the new closed-status contract set in this"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "phase-0-spec.md is internally contradictory: header says Phase 0.0 CLOSED but its own estimate block still says (REOPENE"
+      },
+      {
+        "severity": "P3",
+        "claim": "README.md and docs/constitution.md still declare 'Phase 0.0 reopened', contradicting the PR's closure declaration"
+      }
+    ],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": false,
+    "tokensUsed": 13088,
+    "latencyMs": 96989,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:38:33.137Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "phase-0-spec.md status line hardcodes commit SHA dd07fb2"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "phase-0-spec.md status line hardcodes commit SHA dd07fb2"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 30969,
+    "latencyMs": 97366,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:40:11.528Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' numbered list has duplicate item number 3",
+      "README 'Read first' list has duplicate numbering after inserting roadmap.md"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' numbered list has duplicate item number 3"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' list has duplicate numbering after inserting roadmap.md"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 14042,
+    "latencyMs": 98389,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 3,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:41:30.720Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 3,
+    "findingSeverities": [
+      "low",
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' ordered list has duplicate item number '3' after inserting roadmap.md",
+      "phase-0-spec.md status line hardcodes commit SHA `dd07fb2`",
+      "Duplicate list numbering in README 'Read first' section"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' ordered list has duplicate item number '3' after inserting roadmap.md"
+      },
+      {
+        "severity": "P3",
+        "claim": "phase-0-spec.md status line hardcodes commit SHA `dd07fb2`"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Duplicate list numbering in README 'Read first' section"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 9978,
+    "latencyMs": 79190,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:43:17.133Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 2,
+    "findingSeverities": [
+      "medium",
+      "medium"
+    ],
+    "findingTitles": [
+      "phase-0-spec.md's estimated-total-range block still says '0.0 Architecture foundation (REOPENED)' af",
+      "Claim 'gate:0.2 green on main (dd07fb2)' is unsupported by the repository and contradicted by the sa"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "phase-0-spec.md's estimated-total-range block still says '0.0 Architecture foundation (REOPENED)' after the phase header"
+      },
+      {
+        "severity": "P2",
+        "claim": "Claim 'gate:0.2 green on main (dd07fb2)' is unsupported by the repository and contradicted by the same commit's own spec"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": false,
+    "tokensUsed": 35859,
+    "latencyMs": 106411,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:45:33.571Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 6,
+    "findingSeverities": [
+      "low",
+      "low",
+      "low",
+      "medium",
+      "medium",
+      "medium"
+    ],
+    "findingTitles": [
+      "README.md still declares Phase 0.0 'reopened', contradicting the new closed-status contract",
+      "docs/constitution.md still declares Phase 0.0 reopened, contradicting the spec status change",
+      "phase-0-spec.md's own 'estimated total range' block still labels Phase 0.0 as REOPENED",
+      "README.md still declares Phase 0.0 'reopened', contradicting the PR's 'Phases 0.0, 0.1A, 0.2 closed'",
+      "docs/constitution.md Status section still says 'Phase 0.0 is reopened'",
+      "docs/phase-0-spec.md is internally inconsistent: header says 0.0 closed but the estimates table stil"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README.md still declares Phase 0.0 'reopened', contradicting the new closed-status contract"
+      },
+      {
+        "severity": "P3",
+        "claim": "docs/constitution.md still declares Phase 0.0 reopened, contradicting the spec status change"
+      },
+      {
+        "severity": "P3",
+        "claim": "phase-0-spec.md's own 'estimated total range' block still labels Phase 0.0 as REOPENED"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P2",
+        "claim": "README.md still declares Phase 0.0 'reopened', contradicting the PR's 'Phases 0.0, 0.1A, 0.2 closed' status"
+      },
+      {
+        "severity": "P2",
+        "claim": "docs/constitution.md Status section still says 'Phase 0.0 is reopened'"
+      },
+      {
+        "severity": "P2",
+        "claim": "docs/phase-0-spec.md is internally inconsistent: header says 0.0 closed but the estimates table still says '(REOPENED)'"
+      }
+    ],
+    "v2VerifierStatus": "material_findings",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": false,
+    "tokensUsed": 15045,
+    "latencyMs": 136437,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:48:34.018Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 5,
+    "findingSeverities": [
+      "low",
+      "low",
+      "low",
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README.md still states 'Phase 0.0 — reopened; scaffold pending', contradicting the new CLOSED status",
+      "docs/constitution.md Status section still says 'Phase 0.0 is reopened'",
+      "Status update incomplete: README.md and docs/constitution.md still declare Phase 0.0 'reopened', con",
+      "phase-0-spec.md's own estimate table (~L740) still labels 0.0 as '(REOPENED)', contradicting the sam",
+      "roadmap.md names/gates drift from phase-0-spec.md (e.g., '0.8 Application Protocol + React experienc"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README.md still states 'Phase 0.0 — reopened; scaffold pending', contradicting the new CLOSED status"
+      },
+      {
+        "severity": "P3",
+        "claim": "docs/constitution.md Status section still says 'Phase 0.0 is reopened'"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Status update incomplete: README.md and docs/constitution.md still declare Phase 0.0 'reopened', contradicting this PR's"
+      },
+      {
+        "severity": "P3",
+        "claim": "phase-0-spec.md's own estimate table (~L740) still labels 0.0 as '(REOPENED)', contradicting the same file's updated CLO"
+      },
+      {
+        "severity": "P3",
+        "claim": "roadmap.md names/gates drift from phase-0-spec.md (e.g., '0.8 Application Protocol + React experience' vs spec 'Phase 0."
+      }
+    ],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": false,
+    "tokensUsed": 18967,
+    "latencyMs": 180445,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:50:06.891Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' list has duplicate numbering (two items numbered 3) after inserting the roadmap ",
+      "Duplicate list numbering in README 'Read first' section"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' list has duplicate numbering (two items numbered 3) after inserting the roadmap entry"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Duplicate list numbering in README 'Read first' section"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 15238,
+    "latencyMs": 92870,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:51:43.976Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' list has duplicate item number 3 and off-by-one numbering downstream"
+    ],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' list has duplicate item number 3 and off-by-one numbering downstream"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 8453,
+    "latencyMs": 97084,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 3,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:53:11.553Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' ordered list has duplicate item number '3.' after inserting roadmap.md",
+      "Duplicated list numbering in README 'Read first' section"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' ordered list has duplicate item number '3.' after inserting roadmap.md"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Duplicated list numbering in README 'Read first' section"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 10949,
+    "latencyMs": 87576,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:54:18.717Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "reviewPR now returns a truthy skip object where all pre-existing null-return paths were falsy, so an"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "reviewPR now returns a truthy skip object where all pre-existing null-return paths were falsy, so any caller using truth"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 29937,
+    "latencyMs": 67161,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:55:32.928Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Preflight omits shouldTrigger/waiver/dry-run gates, so the manual-run ack can still over-promise",
+      "Worker emits review_completed even when reviewPR returns a structured skip"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Preflight omits shouldTrigger/waiver/dry-run gates, so the manual-run ack can still over-promise"
+      },
+      {
+        "severity": "P3",
+        "claim": "Worker emits review_completed even when reviewPR returns a structured skip"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 13477,
+    "latencyMs": 74210,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:56:33.846Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Ack fallback branch for blocked reasons other than not_activated/pillar_disabled duplicates the gene"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Ack fallback branch for blocked reasons other than not_activated/pillar_disabled duplicates the generic warning text"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 22990,
+    "latencyMs": 60917,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:57:55.641Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Preflight in handleManualRun duplicates the dual-gate logic and can drift from reviewPR's actual gat",
+      "Activation URL rendered as empty link when APP_BASE_URL is unset"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Preflight in handleManualRun duplicates the dual-gate logic and can drift from reviewPR's actual gates"
+      },
+      {
+        "severity": "P3",
+        "claim": "Activation URL rendered as empty link when APP_BASE_URL is unset"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 33656,
+    "latencyMs": 81791,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:59:13.028Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Preflight check duplicates only two of the worker's several skip gates, so the ack can still over-pr"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Preflight check duplicates only two of the worker's several skip gates, so the ack can still over-promise"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 7906,
+    "latencyMs": 77386,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 3,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T02:00:16.654Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Potential interface ambiguity between structured skip objects and real review results"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Potential interface ambiguity between structured skip objects and real review results"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 9257,
+    "latencyMs": 63624,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T02:02:13.489Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Decision log's configUsed doesn't record the auto_comment setting now that it gates the comment",
+      "Behavioral default change: repos with default config will now receive a comment on every issue"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Decision log's configUsed doesn't record the auto_comment setting now that it gates the comment"
+      },
+      {
+        "severity": "P3",
+        "claim": "Behavioral default change: repos with default config will now receive a comment on every issue"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 39787,
+    "latencyMs": 116832,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T02:04:11.765Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Comment-posting errors now fail the whole triage job for every issue, re-running the full Claude cla",
+      "Footer no longer mentions applied labels even when auto_label is enabled"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Comment-posting errors now fail the whole triage job for every issue, re-running the full Claude classification on retry"
+      },
+      {
+        "severity": "P3",
+        "claim": "Footer no longer mentions applied labels even when auto_label is enabled"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 15531,
+    "latencyMs": 118275,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T02:06:59.512Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Every triaged issue now receives a comment even when classification.triage_summary is empty",
+      "Behavior change makes every triaged issue receive a comment by default"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Every triaged issue now receives a comment even when classification.triage_summary is empty"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Behavior change makes every triaged issue receive a comment by default"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": false,
+    "tokensUsed": 19351,
+    "latencyMs": 167746,
+    "falseApprove": true,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T02:08:32.873Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Pagination issues one extra API request when total comments are an exact multiple of 100"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Pagination issues one extra API request when total comments are an exact multiple of 100"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 44969,
+    "latencyMs": 93357,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T02:09:47.435Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "JSDoc for findCommentByMarker's ambiguous return shape (`comments: []`) does not match actual return"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "JSDoc for findCommentByMarker's ambiguous return shape (`comments: []`) does not match actual return (`comments: matches"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 30057,
+    "latencyMs": 74560,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 3,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T02:10:27.228Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 10953,
+    "latencyMs": 39791,
+    "falseApprove": null,
+    "falsePositive": false
+  }
+]

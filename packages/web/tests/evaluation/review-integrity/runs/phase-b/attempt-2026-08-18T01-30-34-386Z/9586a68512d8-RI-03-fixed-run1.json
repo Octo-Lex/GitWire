@@ -1,0 +1,579 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-18T01-30-34-386Z",
+  "candidate": {
+    "sha": "9586a68512d8b3e072c0b47c7f1726c482a84df6",
+    "tree": "e6b2b53a0bf9c46b37073667750e2d6e6f79ade5"
+  },
+  "fixture": "RI-03",
+  "variant": "fixed",
+  "run": 1,
+  "record": {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5.2",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T01:57:55.641Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Preflight in handleManualRun duplicates the dual-gate logic and can drift from reviewPR's actual gat",
+      "Activation URL rendered as empty link when APP_BASE_URL is unset"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Preflight in handleManualRun duplicates the dual-gate logic and can drift from reviewPR's actual gates"
+      },
+      {
+        "severity": "P3",
+        "claim": "Activation URL rendered as empty link when APP_BASE_URL is unset"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 33656,
+    "latencyMs": 81791,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "5f48600",
+      "headSha": "67908f7",
+      "invocationId": "rinv:f0e46284cbeedb2808d8eb6223207ed73f56f672"
+    },
+    "coverage": {
+      "totalChangedFiles": 9,
+      "fullyCoveredFiles": 9,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [
+        {
+          "source": "model_declared",
+          "description": "All callers of reviewPR() outside checkRunFinalizer.js (notably the phase4 ai-review worker) could not be verified because repository text search returned no results during this review. Previously a config-disabled repo caused reviewPR to return null; it now returns a truthy { skipped, reason, activationUrl } object. Any caller that branches on truthiness (e.g. treats non-null as 'review completed' and reads reviewResult.verdict or reviewResult.findings, records metrics, or caches results) would now mis-handle the structured skip. The finalizer was updated, but the worker-side handling of the return value is unconfirmed.",
+          "potentialSeverity": "P1",
+          "basis": "changed_contract"
+        }
+      ],
+      "unresolvedContextRequests": [
+        {
+          "source": "model_declared",
+          "description": "All callers of reviewPR() outside checkRunFinalizer.js (notably the phase4 ai-review worker) could not be verified because repository text search returned no results during this review. Previously a config-disabled repo caused reviewPR to return null; it now returns a truthy { skipped, reason, activationUrl } object. Any caller that branches on truthiness (e.g. treats non-null as 'review completed' and reads reviewResult.verdict or reviewResult.findings, records metrics, or caches results) would now mis-handle the structured skip. The finalizer was updated, but the worker-side handling of the return value is unconfirmed.",
+          "potentialSeverity": "P1",
+          "basis": "changed_contract"
+        }
+      ],
+      "changedLinesTotal": 533,
+      "changedLinesRepresented": 533,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": false
+    },
+    "changedFiles": [
+      {
+        "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 53,
+        "deletions": 15,
+        "representedLines": 68,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "75b429cbc5747d5c02b7c958d34d882102c8b15d",
+          "contentDigest": "sha256:b9d21d6197257e192667b2a3e31b7d401f148e351042bf5f1c3c0fe7424e28aa"
+        },
+        "base": {
+          "sha": "5f48600",
+          "blobSha": "531cffefb9f2ca3006e3fd48cc447ca30c39eddf",
+          "contentDigest": "sha256:0401d6de85be2f88bc484669c7820025845315675c1dc51664a64cf0ed23eed6"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/src/services/aiReviewService.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 49,
+        "deletions": 1,
+        "representedLines": 50,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "7c71f2f3b4743d45a98d63b18670ddff44c32391",
+          "contentDigest": "sha256:0c320f5ab9c0968e75ef0f9c7874ed1de3e060e16ca3ec73a83cf4e32d8fdcbe"
+        },
+        "base": {
+          "sha": "5f48600",
+          "blobSha": "99eefab547828565bc9d623f954dd9db604f0499",
+          "contentDigest": "sha256:3c62ed499521357599fa7ae8e38f304762da246d9bfa5c711fd0b789ee01a83a"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/src/services/checkRunFinalizer.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 9,
+        "deletions": 0,
+        "representedLines": 9,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "15ce0ab42a95b7e2c04784f8da9e43b916841bf2",
+          "contentDigest": "sha256:bac970cfa3cab773617a31467a52641e63e485171ff72e6e9f3b75e2eb7cd746"
+        },
+        "base": {
+          "sha": "5f48600",
+          "blobSha": "4f9c55ce156d5acb77b00213cba3b85a5ef7c714",
+          "contentDigest": "sha256:2338e8b9326e317e3eadf9c83335a658c0cccfd1f55e2eeaf00239a0111d5134"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/tests/unit/ai-review-activation.test.js",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 164,
+        "deletions": 0,
+        "representedLines": 164,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "06c39daf1a6b2e2c9cf8567a314cba0675724444",
+          "contentDigest": "sha256:37fe1940fbb00b71ec9ce44b9472dd5b246715f35bc34843b8be532a3276bc8b"
+        },
+        "base": null,
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/tests/unit/handleManualRun-lifecycle.test.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 12,
+        "deletions": 0,
+        "representedLines": 12,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "1e927b3051ad64c5db1ee4c9fca9835ce08cdbb4",
+          "contentDigest": "sha256:537bedf597574e6bb43088d34401858cb4e551bb91eeecbea8adf2f1c11ad605"
+        },
+        "base": {
+          "sha": "5f48600",
+          "blobSha": "b8107ecb9ac594225cc9617b2ab764139a7eaade",
+          "contentDigest": "sha256:321b47a022deafd9be513ecf209ea86ded12653a698ce7b476639250bbb08f07"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/tests/unit/handleManualRun-preflight.test.js",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 202,
+        "deletions": 0,
+        "representedLines": 202,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "b58013de77893d059649a0a5c3b2e5cfa23a9f1c",
+          "contentDigest": "sha256:522b296129b9ec9768c17c2aac3910485656b8a1aa87dfd56d955247970ad749"
+        },
+        "base": null,
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/tests/unit/service-ai-review.test.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 4,
+        "deletions": 2,
+        "representedLines": 6,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "296c4a75f66ae4685ba96f19bfc8c4de40019255",
+          "contentDigest": "sha256:d48aa73936b21d11048fb84cc58de9a3bcdca413cc2c99c7e5fbd093422d123f"
+        },
+        "base": {
+          "sha": "5f48600",
+          "blobSha": "18d9b91c9bdbb2994b554bd4fda13757525489fd",
+          "contentDigest": "sha256:2eab7bfeafee36c4a9bcca7f77f2626ec09c8cf1407c28f37b11995cf920e8ad"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/tests/unit/service-check-run-finalizer.test.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 18,
+        "deletions": 0,
+        "representedLines": 18,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "d58e48df85006eb5cb3285c553ac5da9efb22a64",
+          "contentDigest": "sha256:ca2867958ee1f755f9aa6f3559ebaf890d00be0d83e3d41c7f7c7950335c8bbc"
+        },
+        "base": {
+          "sha": "5f48600",
+          "blobSha": "293f6b65238941965c7ee82cb29874064dcddd45",
+          "contentDigest": "sha256:3e93e722b61da0d73bcf85998c1e6f51b0bcbdf47e6705deb74a9f840aea8e99"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 2,
+        "deletions": 2,
+        "representedLines": 4,
+        "head": {
+          "sha": "67908f7",
+          "blobSha": "09710b6ad5511f06a6208bb93bdaf9686df5a4b7",
+          "contentDigest": "sha256:d1883978f36b8ab3defb57d8dbfd5d64461c311c963af5a83af447433ff602ab"
+        },
+        "base": {
+          "sha": "5f48600",
+          "blobSha": "ab0767e58638f140f515717cd5623436be92e426",
+          "contentDigest": "sha256:b828ec730f12142a91a30518fa47b141567d9639707cbb295e39dfd54ba08356"
+        },
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 5682
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/services/aiReviewService.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 5152
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/services/checkRunFinalizer.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 5054
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/tests/unit/ai-review-activation.test.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 4154
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/tests/unit/handleManualRun-lifecycle.test.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 4557
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/tests/unit/handleManualRun-preflight.test.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 4701
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/tests/unit/service-ai-review.test.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 3884
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/tests/unit/service-check-run-finalizer.test.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 4722
+      },
+      {
+        "type": "file_read",
+        "result": "ok_truncated",
+        "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": true,
+        "contentLength": 7094
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "67908f7",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "67908f7",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "67908f7",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/services/checkRunFinalizer.js",
+        "ref": "67908f7",
+        "round": 3,
+        "truncated": false,
+        "contentLength": 5054
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
+        "ref": "67908f7",
+        "round": 3,
+        "truncated": false,
+        "contentLength": 3934
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/services/aiReviewService.js",
+        "ref": "67908f7",
+        "round": 4,
+        "truncated": false,
+        "contentLength": 2587
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js",
+        "ref": "67908f7",
+        "round": 4,
+        "truncated": false,
+        "contentLength": 3281
+      }
+    ],
+    "primaryFindings": [
+      {
+        "severity": "P3",
+        "category": "maintainability",
+        "claim": "Preflight in handleManualRun duplicates the dual-gate logic and can drift from reviewPR's actual gates",
+        "evidenceRefs": [
+          "changed:packages/web/src/services/aiReviewService.js@HEAD:77-80",
+          "repo-read:packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js@HEAD:101-112"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "packages/web/src/services/aiReviewService.js",
+          "packages/web/src/lib/webhookHandlers/commentCommands/handleManualRun.js"
+        ]
+      },
+      {
+        "severity": "P3",
+        "category": "bug",
+        "claim": "Activation URL rendered as empty link when APP_BASE_URL is unset",
+        "evidenceRefs": [
+          "changed:packages/web/src/services/aiReviewService.js@HEAD:804-808",
+          "changed:packages/web/src/services/checkRunFinalizer.js@HEAD:96-101"
+        ],
+        "proofType": "inference",
+        "affectedPaths": [
+          "packages/web/src/services/aiReviewService.js",
+          "packages/web/src/services/checkRunFinalizer.js"
+        ]
+      }
+    ],
+    "budgetConsumption": {
+      "fileReads": 13,
+      "searches": 4,
+      "retrievedChars": 59856,
+      "contextRounds": 4,
+      "exhausted": true,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.2",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:179f2a77b45c89a2",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-18T01:56:33.857Z",
+        "completedAt": "2026-08-18T01:57:36.414Z",
+        "durationMs": 62557,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 28001,
+          "outputTokens": 1693,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 29694
+        },
+        "cost": null
+      },
+      "verifier": null,
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 330,
+          "outputTokens": 523,
+          "cacheReadTokens": 448,
+          "cacheWriteTokens": null,
+          "totalTokens": 1301
+        },
+        "cost": null
+      },
+      "defense": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-defense",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:3ca011fef7cbeb2f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 683,
+          "outputTokens": 445,
+          "cacheReadTokens": 256,
+          "cacheWriteTokens": null,
+          "totalTokens": 1384
+        },
+        "cost": null
+      }
+    }
+  },
+  "verifierReceipt": null,
+  "decisionReason": "Approval evidence incomplete — cannot verify full coverage",
+  "writtenAt": "2026-08-18T01:57:55.641Z"
+}
