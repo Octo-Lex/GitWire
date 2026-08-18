@@ -1,134 +1,95 @@
-# Phase B Run Manifest — Frozen Paid Quality Baseline (v4)
+# Phase B Run Manifest — Attempt-2 Configuration Re-Freeze (v5)
 
-Status: **PREPARED, QUOTA-AUTHORIZED AGAINST THIS EXACT TREE, EXECUTION NOT
-STARTED.** v4 supersedes v3 (PR #158) after the runner-evidence correction
-(PR #159). It pins the post-correction candidate and records the client's
-carried-forward quota authorization. The 24-invocation matrix has not run.
+Status: **PREPARED, NOT AUTHORIZED TO EXECUTE.** v5 supersedes v4 (PR #161).
+It freezes attempt 2's configuration after attempt 1 failed the frozen
+thresholds. The v4 quota authorization does **not** carry across the
+requested-model change (§3): attempt 2 requires a new, explicit client quota
+authorization.
 
-## 1. Candidate identity (frozen)
+## 1. Candidate identity (UNCHANGED from v4)
 
 | Field | Value |
 | --- | --- |
-| Candidate commit | `9586a68512d8b3e072c0b47c7f1726c482a84df6` (integration PR #160, **unmerged**, byte-identical successor of `644d94c`) |
-| Candidate tree | `e6b2b53a0bf9c46b37073667750e2d6e6f79ade5` = tree of `review-integrity-v2@644d94c` (identical tree object; empty diff) |
+| Candidate commit | `9586a68512d8b3e072c0b47c7f1726c482a84df6` (integration PR #160, **unmerged**) |
+| Candidate tree | `e6b2b53a0bf9c46b37073667750e2d6e6f79ade5` |
 | Master parent | `3d75dd69ee1cef58f1260682a08bf0acbfd353aa` |
-| Exact-head CI | Dispatched run 32086621509 at `644d94c`: every job green. PR run 32086678430 at `9586a68`: every job green (incl. production-dependency-audit), CodeQL and DCO green |
-| Local profile | web unit 172 suites / 3862 passed + 1 skipped; eval 146; integration 20; core 61; rules 251; runtime 16; executor 128; dashboard 67 (pre-correction heads unchanged for these packages) |
-| PR state | `MERGEABLE` / `CLEAN` / review-gate `APPROVED` — unmerged by instruction |
-| Commit signature | Cryptographically unsigned; `Signed-off-by` trailer present (metadata, not an exit criterion) |
+| CI evidence | Dispatched run 32086621509 at `644d94c` and PR run 32086678430 at `9586a68` — every job green; CodeQL and DCO green |
 
-v3's candidate (`63f70aa`, closed PR #157) is superseded: its tree predates
-the runner-evidence correction required before consuming quota.
+This is a **B1 configuration re-freeze, not a code change.** No new source
+successor; the candidate tree, prompts, tool contract, corpus, criteria,
+RI-6, and RI-7 are byte-identical to attempt 1's.
 
-## 2. Quota authorization (recorded per client instruction, 2026-08-18)
+## 2. Attempt-1 record (authoritative first attempt)
 
-The client's instruction, recorded verbatim in intent:
+Executed 2026-08-18 01:30–02:10 UTC against this exact candidate. Canonical
+evidence: branch `ri2/phase-b-attempt-1-evidence`, commit
+`5c441921f5d96ab39ddc797f781e05b13ff79c45` (24 immutable records, aggregate,
+execution log, `EXECUTION.md` with environment, exact command, and per-file
+SHA-256 hashes). Pointer recorded on PR #160.
 
-> Because this correction changes only evaluation evidence persistence — not
-> provider, requested models, prompts, corpus, quality criteria, RI-6, RI-7,
-> or billing basis — the existing authorization to consume the Max
-> subscription quota can be recorded against the new exact candidate without
-> requesting new commercial authorization.
+Outcome: 2/8 frozen thresholds passed. 0/12 broken-fixture expected-defect
+detections; RI-04 broken run 3 false APPROVE (verifier verified, coverage
+complete); RI-03/RI-04 fixed abstained (0/3 APPROVE). Identity telemetry:
+`glm-5.2` requested → `glm-5.3` served on every invocation.
+
+Client adjudication: **primary cause = review-quality recall/capability
+failure; safety consequence = false-approval escape; secondary = excessive
+abstention on clean code.** No Phase C; no rerun of the attempt-1
+configuration.
+
+## 3. Attempt-2 configuration freeze
 
 ```text
-QUOTA_BASIS:     Z.AI Max subscription quota (client-held plan)
-AUTHORIZATION:   Carried forward to candidate 9586a68 / tree e6b2b53a per the
-                 client's 2026-08-18 instruction (persistence-only delta from
-                 the authorized tree; no covered dimension changed)
-PER-TOKEN CEILING: Not applicable under subscription quota; §6's accounting
-                 model governs telemetry and quota-consumption monitoring
-SIGNED:          Recorded by client direction 2026-08-18 (this section)
+candidate:       9586a68512d8b3e072c0b47c7f1726c482a84df6   (unchanged)
+tree:            e6b2b53a0bf9c46b37073667750e2d6e6f79ade5   (unchanged)
+provider/route:  unchanged (Anthropic SDK; https://api.z.ai/api/anthropic)
+requested model: glm-5.1
+runner override: ABLATION_MODEL=glm-5.1   (the ONLY configuration delta)
+matrix:          same 8 fixtures × 3 (24 invocations)
+order:           unchanged (fixture-major, case-paired broken→fixed)
+prompts/tools:   unchanged (v2-primary-r1 / v2-verifier-r1; repository-tools v2)
+criteria:        unchanged (v4 §9 thresholds, suite-enforced)
+attempt:         fresh immutable attempt directory (runs/phase-b/<new-attemptId>/)
 ```
 
-Endpoint facts (verified 2026-08-17, unchanged): transport Anthropic SDK;
-production route `https://api.z.ai/api/anthropic`; requested identities
-`glm-5.2` (primary + verifier) and `claude-haiku-4-20250414` (adversarial +
-defense); observed identities recorded per response as telemetry.
+**Why glm-5.1 and not the observed glm-5.3 (client's rationale):** Z.AI's
+current Coding Plan documentation lists GLM-5.1, GLM-5-Turbo, GLM-4.7, and
+GLM-4.5-Air as supported plan models; neither 5.2 nor 5.3 is documented.
+The observed `glm-5.3` response to a `glm-5.2` request is opaque routing —
+useful telemetry, not a documented configuration target. GLM-5.1 is
+positioned by the provider as its high-end coding model. The smallest
+controlled correction is to stop relying on opaque routing and explicitly
+request a documented plan model.
 
-## 3. Runner evidence lifecycle (new in v4 — the correction this candidate carries)
+Served-model identity remains descriptive telemetry: an observed ≠ requested
+mismatch is recorded, never a run-validity gate.
 
-Every **completed** invocation immediately writes its own immutable record
-before another paid invocation can run (`liveEvidenceStore.js`, wired into
-`live-after.test.js`, proven by 8 deterministic tests):
+## 4. Quota authorization — NEW EXPLICIT AUTHORIZATION REQUIRED
 
-- **Path**: `runs/phase-b/<attemptId>/<sha12>-<fixture>-<variant>-run<N>.json`
-- **Immutability**: created with the `wx` flag — existing records can never be
-  overwritten; a same-identity collision is an error. One attempt directory
-  per suite execution, so a matrix re-run never collides.
-- **Contents**: candidate SHA + tree; fixture/variant/run; the full run record
-  (verdict, check state, findings, model telemetry, tokens, latency,
-  detection/false-positive fields); the sanitized execution profiles and
-  retrieval/budget evidence from `v2Capture.manifest`; the verifier receipt;
-  the decision reason.
-- **Fail-closed**: any persistence failure poisons the store —
-  `assertEvidenceWritable()` refuses every further paid invocation, and
-  poisoned writes fail even to valid paths.
-- **Scorecard safety**: records sit two levels below `runs/` with
-  `kind: "phase-b-invocation"`; the runtime scorecard's `phase9-*` scan never
-  consumes them.
+v4's carried-forward Max-subscription-quota authorization explicitly covered
+only deltas outside provider, requested models, prompts, corpus, criteria,
+RI-6, RI-7, and billing basis. **This re-freeze changes the requested model,
+so that authorization does not extend to attempt 2.**
 
-## 4. The live runner (unchanged from v3)
+```text
+ATTEMPT_2_QUOTA_AUTHORIZATION: ____________  (client — explicit, before first call)
+SIGNED:                        ____________  (client)
+```
 
-`live-after.test.js`, real `reviewPR()` pipeline, `review_integrity_v2:
-"live"`, frozen `BASE_CONFIG` (v2 §2 verbatim): requested model
-`process.env.ABLATION_MODEL || "glm-5.2"` (override NOT set), adversarial
-enabled by omission, `max_duration_seconds: 300`. Model identity is
-descriptive telemetry — mismatch never invalidates a run; only
-fixture-surface gaps do.
+Empty fields = no provider call authorized for attempt 2.
 
-## 5. Frozen corpus, matrix, run order (unchanged)
+## 5. Everything else (unchanged from v4, incorporated by reference)
 
-8 fixtures (RI-01…RI-04 broken + fixed) × 3 consecutive runs, fixture-major
-(case-paired broken→fixed per registry order). 24 invocations, no
-whole-invocation retries, append-only records (now per-invocation immutable,
-§3).
+Runner evidence lifecycle (v4 §3: per-invocation immutable records, wx
+no-overwrite, attempt isolation, fail-closed poisoning); the live runner
+config mechanics (v4 §4); billable/quota accounting model (v4 §7); capture
+fields (v4 §8); execution safety rules (v4 §10) — including the env-gated
+refusal and the historical requirement that the harness process supply a
+workable test timeout (attempt 1 used `--testTimeout=3600000` as a
+process-level CLI parameter; recorded in the attempt-1 EXECUTION.md).
 
-## 6. Conditional call graph (unchanged)
+## 6. What this manifest does not authorize
 
-primary (always) → adversarial challenge (enabled, findings > 0) → defense
-pass (auto triggers) → verifier only when post-refinement primary has zero
-P0/P1/P2 findings AND `approvalEvidenceComplete` (`not_run` representation).
-
-## 7. Billable/quota-consumption accounting model (unchanged from v3)
-
-No numeric hard bound is claimed. Thresholds (100000 / 50000) are post-hoc
-recorded-usage enforcement; `max_tokens` caps output only; no code ceiling
-bounds inputs. Recorded usage includes **every successful response**
-(telemetry correction); rejected tool_choice fallback attempts are counted
-but produce no token record. The 10-class table in v3 §6 stands. Under
-subscription quota this model monitors quota consumption rather than USD.
-
-## 8. Capture fields (per invocation — now natively persisted, §3)
-
-`executionProfiles.{primary, verifier, adversarial, defense}`;
-`submissionDiagnostics.submissionRetried` and `.forcedToolFallbackAttempts`
-per role; verifier `status` with `not_run`; verdict/findings/
-expected-detection; latency; token categories; repository reads/searches/
-tool calls; prompt id+hash; requested/observed identity; candidate SHA +
-tree; decision reason.
-
-## 9. Tool contract, budgets, prompts, pass criteria (unchanged)
-
-`gitwire-repository-tools` v2; per-tool output defaults and all seven broker
-ceilings; planner 45000 chars; prompts `v2-primary-r1` / `v2-verifier-r1`;
-frozen broken/fixed safety-effectiveness criteria and the
-failure-classification rule (v2 §9 stands).
-
-**Frozen pass thresholds.** Each broken fixture: false APPROVE 0/3; expected
-material defect detected in ≥2/3; the remaining run detects OR
-abstains/is-incomplete, never falsely approves. Each fixed fixture: false
-P0/P1/P2 0/3; APPROVE ≥2/3. A failure stops the programme for classification;
-a pass advances to Phase C clean-room golden journeys.
-
-## 10. Execution safety rules (unchanged)
-
-Env-gated refusal (`REVIEW_INTEGRITY_LIVE=1` + credentials; CI can never
-spend), no per-arm tuning, no new fixtures after the first call, append-only
-records, fail-closed evidence persistence (§3).
-
-## 11. What this manifest does not authorize
-
-Merging PR #160 (its approval notwithstanding — merge is a separate decision);
-any change to provider, requested models, prompts, corpus, quality criteria,
-RI-6, RI-7, or the recorded quota basis; any execution beyond the frozen
-24-invocation matrix defined here.
+Any provider call for attempt 2 (§4 empty); merging PR #160; any change
+beyond the single configuration delta in §3; Phase C entry (gated on an
+attempt that passes the unchanged thresholds).
