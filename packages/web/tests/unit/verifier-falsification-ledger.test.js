@@ -181,6 +181,73 @@ describe("RI-5 falsification ledger: structural completeness gates", () => {
   });
 });
 
+// ── Evidence-bound clearances: citation truth, not citation shape ──────────
+
+describe("RI-5 falsification ledger: clearances are evidence-bound", () => {
+  it("a fabricated, unparseable reference fails closed", async () => {
+    const receipt = await run({
+      status: "verified", findings: [], unresolvedContextNeeds: [],
+      riskLedger: completeClearedLedger("not-repository-evidence"),
+      coverageSatisfied: true,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.error).toContain("at least one valid repository evidence reference");
+  });
+
+  it("a changed reference to a path absent from the evidence fails closed", async () => {
+    const receipt = await run({
+      status: "verified", findings: [], unresolvedContextNeeds: [],
+      riskLedger: completeClearedLedger("changed:src/nonexistent.js@HEAD:L1-L2"),
+      coverageSatisfied: true,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.error).toContain("at least one valid repository evidence reference");
+  });
+
+  it("a changed reference outside the represented patch range fails closed", async () => {
+    const receipt = await run({
+      status: "verified", findings: [], unresolvedContextNeeds: [],
+      riskLedger: completeClearedLedger("changed:src/app.js@HEAD:L900-L901"),
+      coverageSatisfied: true,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.error).toContain("at least one valid repository evidence reference");
+  });
+
+  it("a repo-read reference absent from successful verifier context fails closed", async () => {
+    // The text-cascade mock performs no broker reads, so verifierContextItems
+    // is empty and no repo-read reference can validate.
+    const receipt = await run({
+      status: "verified", findings: [], unresolvedContextNeeds: [],
+      riskLedger: completeClearedLedger("repo-read:src/app.js@HEAD:L1-L2"),
+      coverageSatisfied: true,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.INCOMPLETE);
+    expect(receipt.error).toContain("at least one valid repository evidence reference");
+  });
+
+  it("one valid reference among invalid ones still clears the obligation (≥1 valid rule)", async () => {
+    const ob = {
+      description: "Caller-visible output ordering at the single call site.",
+      resolution: {
+        outcome: "evidence_cleared",
+        evidenceRefs: ["not-repository-evidence", "changed:src/app.js@HEAD:L2-L3"],
+      },
+    };
+    const receipt = await run({
+      status: "verified", findings: [], unresolvedContextNeeds: [],
+      riskLedger: ledgerWithCategory("changed_behavior", [ob]),
+      coverageSatisfied: true,
+    });
+
+    expect(receipt.status).toBe(VERIFIER_STATUS.VERIFIED);
+  });
+});
+
 // ── Material obligations route through the evidence-bound validator ────────
 
 describe("RI-5 falsification ledger: material obligations", () => {
@@ -217,9 +284,11 @@ describe("RI-5 falsification ledger: material obligations", () => {
 
 describe("validateRiskLedger unit contract", () => {
   const base = (ledger) => ({ riskLedger: ledger });
+  const evidence = makeEvidence();
+  const validate = (ledger, count = 0) => validateRiskLedger(base(ledger), count, evidence, []);
 
   it("accepts the complete cleared ledger", () => {
-    const { errors, ledger } = validateRiskLedger(base(completeClearedLedger()), 0);
+    const { errors, ledger } = validate(completeClearedLedger());
     expect(errors).toEqual([]);
     expect(ledger.complete).toBe(true);
   });
@@ -227,21 +296,21 @@ describe("validateRiskLedger unit contract", () => {
   it("rejects duplicate categories", () => {
     const dup = completeClearedLedger();
     dup.categories.push({ ...dup.categories[0] });
-    const { errors } = validateRiskLedger(base(dup), 0);
+    const { errors } = validate(dup);
     expect(errors.join(" ")).toContain("duplicate ledger category");
   });
 
   it("rejects unknown categories", () => {
     const bad = completeClearedLedger();
     bad.categories[0].category = "fixture_specific_hints";
-    const { errors } = validateRiskLedger(base(bad), 0);
+    const { errors } = validate(bad);
     expect(errors.join(" ")).toContain("unknown ledger category");
   });
 
   it("rejects unresolved resolutions without a reason", () => {
     const ob = unresolvedObligation();
     delete ob.resolution.reason;
-    const { errors } = validateRiskLedger(base(ledgerWithCategory("config_runtime_assumptions", [ob])), 0);
+    const { errors } = validate(ledgerWithCategory("config_runtime_assumptions", [ob]));
     expect(errors.join(" ")).toContain("unresolved requires a reason");
   });
 });

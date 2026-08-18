@@ -27,6 +27,7 @@ const EVIDENCE = {
     {
       path: "src/one.js", status: "modified", coverage: "full",
       additions: 2, deletions: 1, representedLines: 3,
+      patch: "@@ -1,1 +1,2 @@\n ctx\n+new",
       head: { sha: "h".repeat(40), blobSha: "bh", contentDigest: "d1" },
       base: { sha: "b".repeat(40), blobSha: "bb", contentDigest: "d0" },
     },
@@ -90,7 +91,7 @@ function makeFakeVerifierAnthropic({ observedModel = "observed-model-1", usage }
           model: observedModel, stop_reason: "tool_use", usage: usage || { input_tokens: 50, output_tokens: 10 },
           content: [{
             type: "tool_use", id: "tu1", name: "submit_verification_result",
-            input: { status: "verified", findings: [], riskLedger: completeClearedLedger(), coverageSatisfied: true },
+            input: { status: "verified", findings: [], riskLedger: completeClearedLedger("changed:src/one.js@HEAD:L1-L2"), coverageSatisfied: true },
           }],
         };
       },
@@ -293,7 +294,7 @@ describe("submission-path usage accounting and fallback recording", () => {
     overallCorrectness: "correct", overallConfidence: "high", summary: "clean",
   };
   const SUBMIT_INPUT_VERIFIER = {
-    status: "verified", findings: [], riskLedger: completeClearedLedger(), coverageSatisfied: true,
+    status: "verified", findings: [], riskLedger: completeClearedLedger("changed:src/one.js@HEAD:L1-L2"), coverageSatisfied: true,
   };
 
   it("primary: a retried submission accounts for BOTH responses' usage", async () => {

@@ -14,7 +14,7 @@
 import { createHash } from "node:crypto";
 import { logger } from "../lib/logger.js";
 import { createContextBroker, DEFAULT_BUDGETS as BROKER_BUDGETS } from "./reviewContextBroker.js";
-import { validateFinding, SEVERITY } from "./findingValidator.js";
+import { validateFinding, SEVERITY, parseEvidenceRef, validateEvidenceRef } from "./findingValidator.js";
 import {
   buildExecutionProfile,
   classifyVerifierTerminal,
@@ -743,8 +743,10 @@ export async function runApprovalVerification({
 
   // ── Falsification risk-ledger validation (fail-closed) ──────────────────
   // `verified` is computed from the ledger; a structurally invalid ledger can
-  // never produce it, regardless of the model's declared status.
-  const { errors: ledgerErrors, ledger } = validateRiskLedger(parsed, (parsed.findings || []).length);
+  // never produce it, regardless of the model's declared status. Clearances
+  // are evidence-bound: every evidence_cleared obligation must cite at least
+  // one reference that survives the RI-4 parser and bounds validation.
+  const { errors: ledgerErrors, ledger } = validateRiskLedger(parsed, (parsed.findings || []).length, evidence, verifierContextItems);
   if (ledgerErrors.length > 0) {
     return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Risk-ledger validation failed: " + ledgerErrors.join("; "), actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators());
   }
@@ -1004,11 +1006,13 @@ export function validateVerifierSchema(parsed) {
  *
  * @param {object} parsed - the parsed verifier submission
  * @param {number} findingsCount - bounds-check for material_finding indexes
+ * @param {object|null} evidence - ReviewEvidence, for evidence-bound clearance checks
+ * @param {object[]} verifierContextItems - successful broker reads, for repo-read checks
  * @returns {{errors: string[], ledger: object|null}} errors is empty iff the
  *   ledger is structurally complete; ledger is the normalized copy for the
  *   receipt (null when structurally invalid).
  */
-export function validateRiskLedger(parsed, findingsCount = 0) {
+export function validateRiskLedger(parsed, findingsCount = 0, evidence = null, verifierContextItems = []) {
   const errors = [];
   const ledger = parsed && typeof parsed === "object" ? parsed.riskLedger : null;
 
@@ -1068,6 +1072,18 @@ export function validateRiskLedger(parsed, findingsCount = 0) {
           : [];
         if (refs.length === 0) {
           errors.push(where + ": evidence_cleared requires at least one evidenceRef");
+        } else {
+          // Evidence-bound clearances: a citation-shaped string is not
+          // evidence. Every clearance must carry ≥1 reference that parses and
+          // passes the same RI-4 bounds validation used for findings —
+          // against the ReviewEvidence and the verifier's successful reads.
+          const validCount = refs.filter(function (r) {
+            const parsedRef = parseEvidenceRef(r);
+            return parsedRef !== null && validateEvidenceRef(parsedRef, evidence, verifierContextItems).valid === true;
+          }).length;
+          if (validCount === 0) {
+            errors.push(where + ": evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context)");
+          }
         }
       }
       if (resolution.outcome === OBLIGATION_OUTCOMES.MATERIAL_FINDING) {
