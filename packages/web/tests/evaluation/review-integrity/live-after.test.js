@@ -18,8 +18,13 @@
 
 import { jest } from "@jest/globals";
 import { writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertEvidenceWritable,
+  writeInvocationRecord,
+} from "./liveEvidenceStore.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REVIEW_INTEGRITY_LIVE = process.env.REVIEW_INTEGRITY_LIVE === "1";
@@ -159,6 +164,21 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
   const NUM_RUNS = 3;
   const fixtures = getAllFixtures();
 
+  // Per-invocation evidence identity — computed only when the suite actually
+  // runs (live mode), so skipped/CI imports never shell out to git.
+  let CANDIDATE_SHA = null;
+  let CANDIDATE_TREE = null;
+  let EVIDENCE_ATTEMPT_ID = null;
+  const EVIDENCE_RUNS_DIR = join(__dirname, "runs");
+
+  beforeAll(() => {
+    CANDIDATE_SHA = execSync("git rev-parse HEAD").toString().trim();
+    CANDIDATE_TREE = execSync("git rev-parse HEAD^{tree}").toString().trim();
+    // One attempt identity per suite execution: a re-run of the matrix gets
+    // its own directory, so records stay immutable without colliding.
+    EVIDENCE_ATTEMPT_ID = "attempt-" + new Date().toISOString().replace(/[:.]/g, "-");
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     v2Capture = null;
@@ -197,6 +217,10 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
         v2Capture = null;
         const startTime = Date.now();
         const octokit = buildFixtureOctokit(fixture);
+
+        // Fail-closed evidence gate: if any earlier invocation's record could
+        // not be persisted, refuse to spend on another provider call.
+        assertEvidenceWritable();
 
         const result = await reviewPR({
           pr: makeV2PR(fixture),
@@ -280,6 +304,23 @@ describeOrSkip("RI live-after — v2 live cutover matrix", () => {
           falseApprove: fixture.variant === "broken" ? result?.verdict === "approved" : null,
           falsePositive: fixture.variant === "fixed" ? (legacyMaterial || v2Material) : null,
         };
+
+        // Persist this invocation's immutable evidence record IMMEDIATELY —
+        // before the loop can reach another paid invocation. A failure here
+        // fails the test and poisons the store for every later fixture.
+        writeInvocationRecord({
+          runsDir: EVIDENCE_RUNS_DIR,
+          attemptId: EVIDENCE_ATTEMPT_ID,
+          candidateSha: CANDIDATE_SHA,
+          candidateTree: CANDIDATE_TREE,
+          fixture: fixture.caseId,
+          variant: fixture.variant,
+          run,
+          record,
+          manifest: v2Capture?.manifest || null,
+          verifierReceipt: v2Capture?.verifierReceipt || null,
+          decisionReason: v2Capture?.decisionReason || null,
+        });
 
         runs.push(record);
         allResults.push(record);
