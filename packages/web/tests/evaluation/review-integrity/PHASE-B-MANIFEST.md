@@ -1,146 +1,134 @@
-# Phase B Run Manifest — Frozen Paid Quality Baseline (v3)
+# Phase B Run Manifest — Frozen Paid Quality Baseline (v4)
 
-Status: **PREPARED, NOT AUTHORIZED TO EXECUTE.** v3 supersedes v2 (PR #155)
-after the client's second pre-spend review and the telemetry correction (PR
-#156). It pins the post-telemetry candidate tree and replaces every numeric
-"bound" claim with the accounting model the code actually enforces. The first
-provider call still requires explicit spend authorization plus a client-set
-monetary ceiling (§10). No paid call has occurred.
+Status: **PREPARED, QUOTA-AUTHORIZED AGAINST THIS EXACT TREE, EXECUTION NOT
+STARTED.** v4 supersedes v3 (PR #158) after the runner-evidence correction
+(PR #159). It pins the post-correction candidate and records the client's
+carried-forward quota authorization. The 24-invocation matrix has not run.
 
 ## 1. Candidate identity (frozen)
 
 | Field | Value |
 | --- | --- |
-| Candidate commit | `63f70aa7a2723b0b78956dfb03319b4dbe1c9f89` (integration PR #157, **unmerged**, byte-identical successor of `3a8ce38`) |
-| Candidate tree | `ed96ae95e0b79684f26fea6232a54d532bf2272c2` = tree of `review-integrity-v2@3a8ce38` (identical tree object; empty diff) |
+| Candidate commit | `9586a68512d8b3e072c0b47c7f1726c482a84df6` (integration PR #160, **unmerged**, byte-identical successor of `644d94c`) |
+| Candidate tree | `e6b2b53a0bf9c46b37073667750e2d6e6f79ade5` = tree of `review-integrity-v2@644d94c` (identical tree object; empty diff) |
 | Master parent | `3d75dd69ee1cef58f1260682a08bf0acbfd353aa` |
-| Exact-head CI | Dispatched run 32041971489 at `3a8ce38`: every job green. PR run 32042043535 at `63f70aa`: every job green (incl. production-dependency-audit), plus CodeQL and DCO green |
-| Local profile | web unit 171 suites / 3854 passed + 1 skipped; eval 146; integration 20; core 61; rules 251; runtime 16; executor 128; dashboard 67 |
-| PR state | `MERGEABLE`; merge gated only by the repository's required approving review (maintainer decision) |
+| Exact-head CI | Dispatched run 32086621509 at `644d94c`: every job green. PR run 32086678430 at `9586a68`: every job green (incl. production-dependency-audit), CodeQL and DCO green |
+| Local profile | web unit 172 suites / 3862 passed + 1 skipped; eval 146; integration 20; core 61; rules 251; runtime 16; executor 128; dashboard 67 (pre-correction heads unchanged for these packages) |
+| PR state | `MERGEABLE` / `CLEAN` / review-gate `APPROVED` — unmerged by instruction |
 | Commit signature | Cryptographically unsigned; `Signed-off-by` trailer present (metadata, not an exit criterion) |
 
-v2's candidate (`25372fd`, PR #153) is superseded: its tree lacked the
-telemetry corrections this manifest's accounting depends on.
+v3's candidate (`63f70aa`, closed PR #157) is superseded: its tree predates
+the runner-evidence correction required before consuming quota.
 
-## 2. The live runner (as it actually executes)
+## 2. Quota authorization (recorded per client instruction, 2026-08-18)
 
-Executed through `tests/evaluation/review-integrity/live-after.test.js` —
-the real `reviewPR()` pipeline, `review_integrity_v2: "live"`, frozen
-`BASE_CONFIG` (verbatim in v2 §2; unchanged): requested model
-`process.env.ABLATION_MODEL || "glm-5.2"` (override NOT set for Phase B),
-adversarial enabled by omission, `max_duration_seconds: 300`.
+The client's instruction, recorded verbatim in intent:
 
-**Runner semantics correction (landed in the candidate):** observed/requested
-model mismatch is **descriptive telemetry only** — the fields are retained in
-every record but never invalidate a run. Only fixture-surface gaps invalidate.
+> Because this correction changes only evaluation evidence persistence — not
+> provider, requested models, prompts, corpus, quality criteria, RI-6, RI-7,
+> or billing basis — the existing authorization to consume the Max
+> subscription quota can be recorded against the new exact candidate without
+> requesting new commercial authorization.
 
-## 3. Endpoint class and billing basis (verified where verifiable)
+```text
+QUOTA_BASIS:     Z.AI Max subscription quota (client-held plan)
+AUTHORIZATION:   Carried forward to candidate 9586a68 / tree e6b2b53a per the
+                 client's 2026-08-18 instruction (persistence-only delta from
+                 the authorized tree; no covered dimension changed)
+PER-TOKEN CEILING: Not applicable under subscription quota; §6's accounting
+                 model governs telemetry and quota-consumption monitoring
+SIGNED:          Recorded by client direction 2026-08-18 (this section)
+```
 
-| Field | Value | Evidence |
-| --- | --- | --- |
-| Production transport | Anthropic SDK (`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`) | code |
-| **Production endpoint route** | **`https://api.z.ai/api/anthropic`** | read from the production `gitwire-gitwire-app-1` container env (non-secret route; key redacted) |
-| Endpoint class | Z.AI **GLM Coding Plan** Anthropic-protocol endpoint — per Z.AI docs, Coding Plan benefits are restricted to officially supported tools/products, and GitWire is **not** on the published supported-tool list | provider documentation |
-| Requested identities | `glm-5.2` (primary + verifier); `claude-haiku-4-20250414` (adversarial + defense defaults) | live config + service defaults |
-| Observed identities | recorded per response in execution profiles (telemetry only) | Phase 10 profiles |
+Endpoint facts (verified 2026-08-17, unchanged): transport Anthropic SDK;
+production route `https://api.z.ai/api/anthropic`; requested identities
+`glm-5.2` (primary + verifier) and `claude-haiku-4-20250414` (adversarial +
+defense); observed identities recorded per response as telemetry.
 
-**Open billing questions — client/provider to resolve before `RATE_BASIS`
-can be filled:**
+## 3. Runner evidence lifecycle (new in v4 — the correction this candidate carries)
 
-1. Whether this GitWire evaluation is an **authorized use** of the Coding
-   Plan endpoint, and how quota/cost is accounted on that plan.
-2. The rate basis for the literal `claude-haiku-4-20250414` adversarial/defense
-   requests as served by this endpoint (provider-side mapping undocumented).
-3. The public PAYG rates (GLM-5.2: $1.40/M input, $0.26/M cached, $4.40/M
-   output) are **not** assumed to govern this endpoint class. No per-token
-   pricing is transplanted.
+Every **completed** invocation immediately writes its own immutable record
+before another paid invocation can run (`liveEvidenceStore.js`, wired into
+`live-after.test.js`, proven by 8 deterministic tests):
 
-## 4. Frozen corpus, matrix, run order (unchanged from v2)
+- **Path**: `runs/phase-b/<attemptId>/<sha12>-<fixture>-<variant>-run<N>.json`
+- **Immutability**: created with the `wx` flag — existing records can never be
+  overwritten; a same-identity collision is an error. One attempt directory
+  per suite execution, so a matrix re-run never collides.
+- **Contents**: candidate SHA + tree; fixture/variant/run; the full run record
+  (verdict, check state, findings, model telemetry, tokens, latency,
+  detection/false-positive fields); the sanitized execution profiles and
+  retrieval/budget evidence from `v2Capture.manifest`; the verifier receipt;
+  the decision reason.
+- **Fail-closed**: any persistence failure poisons the store —
+  `assertEvidenceWritable()` refuses every further paid invocation, and
+  poisoned writes fail even to valid paths.
+- **Scorecard safety**: records sit two levels below `runs/` with
+  `kind: "phase-b-invocation"`; the runtime scorecard's `phase9-*` scan never
+  consumes them.
+
+## 4. The live runner (unchanged from v3)
+
+`live-after.test.js`, real `reviewPR()` pipeline, `review_integrity_v2:
+"live"`, frozen `BASE_CONFIG` (v2 §2 verbatim): requested model
+`process.env.ABLATION_MODEL || "glm-5.2"` (override NOT set), adversarial
+enabled by omission, `max_duration_seconds: 300`. Model identity is
+descriptive telemetry — mismatch never invalidates a run; only
+fixture-surface gaps do.
+
+## 5. Frozen corpus, matrix, run order (unchanged)
 
 8 fixtures (RI-01…RI-04 broken + fixed) × 3 consecutive runs, fixture-major
 (case-paired broken→fixed per registry order). 24 invocations, no
-whole-invocation retries, append-only records.
+whole-invocation retries, append-only records (now per-invocation immutable,
+§3).
 
-## 5. Conditional call graph (unchanged from v2)
+## 6. Conditional call graph (unchanged)
 
 primary (always) → adversarial challenge (enabled, findings > 0) → defense
 pass (auto triggers) → verifier only when post-refinement primary has zero
 P0/P1/P2 findings AND `approvalEvidenceComplete` (`not_run` representation).
 
-## 6. Billable-call accounting model (corrected: no numeric hard bound is claimed)
+## 7. Billable/quota-consumption accounting model (unchanged from v3)
 
-**What the code enforces** are post-hoc, recorded-usage thresholds: each
-completed response's usage is added, and only then is the threshold checked —
-so the final request in a budget can overshoot it, and the thresholds stop
-*subsequent* calls rather than capping the completing one. `max_tokens` caps
-output only; **no code ceiling bounds request input**.
+No numeric hard bound is claimed. Thresholds (100000 / 50000) are post-hoc
+recorded-usage enforcement; `max_tokens` caps output only; no code ceiling
+bounds inputs. Recorded usage includes **every successful response**
+(telemetry correction); rejected tool_choice fallback attempts are counted
+but produce no token record. The 10-class table in v3 §6 stands. Under
+subscription quota this model monitors quota consumption rather than USD.
 
-**What the telemetry now guarantees** (PR #156): usage is accumulated on
-**every successful provider response before any variable is overwritten**, in
-both submission paths; forced-tool fallback attempts are counted; adversarial
-and defense calls return identity + usage and persist as execution profiles.
-Recorded usage therefore includes every successful response. The remaining
-unrecordable class: a **rejected** fallback attempt produces no response
-object — if the provider bills the rejected request's input, no code can
-record it (it is counted as an attempt, not tokens).
+## 8. Capture fields (per invocation — now natively persisted, §3)
 
-Per-invocation billable response classes (all caps are OUTPUT caps):
-
-| # | Class | Condition | Output cap | Recorded |
-| --- | --- | --- | --- | --- |
-| 1 | Primary tool-use rounds (4096/round) | always | threshold 100000 (post-hoc) | yes |
-| 2 | Primary submission attempt 1 | always | 8192 | **always** (post-fix) |
-| 3 | Primary submission attempt 2 | narration died at cap | 16384 | yes |
-| 4 | Primary tool_choice fallback | provider rejects tool_choice | duplicates 2/3 | attempt counted; rejected call's tokens unrecordable |
-| 5 | Adversarial challenge | findings > 0 | 2048 | yes (profile) |
-| 6 | Defense pass | auto triggers | 2048 | yes (profile) |
-| 7 | Verifier tool-use rounds (4096/round) | zero material + evidence complete | threshold 50000 (post-hoc) | yes |
-| 8 | Verifier submission attempt 1 | as 2 | 8192 | **always** (post-fix) |
-| 9 | Verifier submission attempt 2 | as 3 | 16384 | yes |
-| 10 | Verifier tool_choice fallback | as 4 | duplicates 8/9 | as 4 |
-
-**No source-proven upper bound on total billed tokens exists.** `CEILING_USD`
-is therefore a pure client spend limit, monitored against the (now complete)
-recorded usage and the per-class attempt counts — not a derived number.
-
-## 7. Capture fields (per invocation)
-
-The live-suite record plus Phase 10 execution profiles, now including:
-`executionProfiles.{primary, verifier, adversarial, defense}` (requested /
-observed identity, identity source, per-category usage, fingerprint);
+`executionProfiles.{primary, verifier, adversarial, defense}`;
 `submissionDiagnostics.submissionRetried` and `.forcedToolFallbackAttempts`
-per role; verifier `status` with `not_run`; adversarial/defense token
-contributions; plus the v1 fields (verdict/findings/expected-detection,
-latency, cost, repository reads/searches/tool calls, prompt id+hash,
-candidate SHA + tree OID).
+per role; verifier `status` with `not_run`; verdict/findings/
+expected-detection; latency; token categories; repository reads/searches/
+tool calls; prompt id+hash; requested/observed identity; candidate SHA +
+tree; decision reason.
 
-## 8. Tool contract, budgets, prompts, pass criteria (unchanged)
+## 9. Tool contract, budgets, prompts, pass criteria (unchanged)
 
 `gitwire-repository-tools` v2; per-tool output defaults and all seven broker
 ceilings; planner 45000 chars; prompts `v2-primary-r1` / `v2-verifier-r1`;
-frozen broken/fixed safety-effectiveness criteria and failure-classification
-rule (v2 §9 values stand).
+frozen broken/fixed safety-effectiveness criteria and the
+failure-classification rule (v2 §9 stands).
 
-## 9. Execution safety rules (unchanged)
+**Frozen pass thresholds.** Each broken fixture: false APPROVE 0/3; expected
+material defect detected in ≥2/3; the remaining run detects OR
+abstains/is-incomplete, never falsely approves. Each fixed fixture: false
+P0/P1/P2 0/3; APPROVE ≥2/3. A failure stops the programme for classification;
+a pass advances to Phase C clean-room golden journeys.
 
-Env-gated refusal pattern (`GITWIRE_AB_RUN`-style; CI can never spend), no
-per-arm tuning, no new fixtures after the first call, append-only records.
+## 10. Execution safety rules (unchanged)
 
-## 10. Monetary ceiling — REQUIRES CLIENT DECISION
-
-```text
-CEILING_USD: ____________  (client — a spend limit, not a derived bound;
-                            monitor against §6 recorded usage + attempt counts)
-RATE_BASIS:  ____________  (client — must resolve §3's three open questions:
-                            Coding-Plan authorized use + quota accounting,
-                            haiku-identifier mapping, applicable rates)
-SIGNED:      ____________  (client, before first call)
-```
-
-Empty fields = no provider call authorized.
+Env-gated refusal (`REVIEW_INTEGRITY_LIVE=1` + credentials; CI can never
+spend), no per-arm tuning, no new fixtures after the first call, append-only
+records, fail-closed evidence persistence (§3).
 
 ## 11. What this manifest does not authorize
 
-No paid provider call; no merge of PR #157 (its approving review is the
-maintainer's); no execution of any kind; no corpus, prompt, RI-6, RI-7,
-provider-comparison, or quality-criterion changes.
+Merging PR #160 (its approval notwithstanding — merge is a separate decision);
+any change to provider, requested models, prompts, corpus, quality criteria,
+RI-6, RI-7, or the recorded quota basis; any execution beyond the frozen
+24-invocation matrix defined here.
