@@ -13,6 +13,7 @@
 
 import { jest } from "@jest/globals";
 import { IDENTITY_SOURCE } from "../../src/services/executionProfileService.js";
+import { completeClearedLedger } from "./verifierLedgerFixture.js";
 
 const { runPrimaryReview } = await import("../../src/services/primaryReviewService.js");
 const { runApprovalVerification } = await import("../../src/services/approvalVerificationService.js");
@@ -89,7 +90,7 @@ function makeFakeVerifierAnthropic({ observedModel = "observed-model-1", usage }
           model: observedModel, stop_reason: "tool_use", usage: usage || { input_tokens: 50, output_tokens: 10 },
           content: [{
             type: "tool_use", id: "tu1", name: "submit_verification_result",
-            input: { status: "verified", findings: [], coverageSatisfied: true },
+            input: { status: "verified", findings: [], riskLedger: completeClearedLedger(), coverageSatisfied: true },
           }],
         };
       },
@@ -242,7 +243,7 @@ describe("Phase 10 C: verifier invocation execution profile", () => {
     expect(receipt.executionProfile.requestedModel).toBe("ver-requested");
     expect(receipt.executionProfile.observedModel).toBe("ver-observed");
     expect(receipt.executionProfile.adapter).toBe("anthropic-sdk-verifier");
-    expect(receipt.executionProfile.promptId).toBe("v2-verifier-r1");
+    expect(receipt.executionProfile.promptId).toBe("v2-verifier-r2");
     expect(receipt.executionProfile.terminalState).toBe("completed");
   });
 
@@ -292,7 +293,7 @@ describe("submission-path usage accounting and fallback recording", () => {
     overallCorrectness: "correct", overallConfidence: "high", summary: "clean",
   };
   const SUBMIT_INPUT_VERIFIER = {
-    status: "verified", findings: [], coverageSatisfied: true,
+    status: "verified", findings: [], riskLedger: completeClearedLedger(), coverageSatisfied: true,
   };
 
   it("primary: a retried submission accounts for BOTH responses' usage", async () => {
