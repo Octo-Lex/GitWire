@@ -1,0 +1,430 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-18T02-50-37-251Z",
+  "candidate": {
+    "sha": "9586a68512d8b3e072c0b47c7f1726c482a84df6",
+    "tree": "e6b2b53a0bf9c46b37073667750e2d6e6f79ade5"
+  },
+  "fixture": "RI-02",
+  "variant": "broken",
+  "run": 2,
+  "record": {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5.1",
+    "actualModel": "glm-5.3",
+    "modelMatch": false,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-18T03:07:56.748Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 4,
+    "findingSeverities": [
+      "low",
+      "low",
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Status update is incomplete: README.md, docs/constitution.md, and the unchanged tail of phase-0-spec",
+      "Closure claim 'gate:0.2 green on main (dd07fb2)' is not corroborated by a committed GateReceipt or C",
+      "Stale '(REOPENED)' label remains inside the same changed file",
+      "README.md and docs/constitution.md still declare Phase 0.0 'reopened', contradicting the new closed "
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Status update is incomplete: README.md, docs/constitution.md, and the unchanged tail of phase-0-spec.md still declare Ph"
+      },
+      {
+        "severity": "P3",
+        "claim": "Closure claim 'gate:0.2 green on main (dd07fb2)' is not corroborated by a committed GateReceipt or CI evidence reference"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Stale '(REOPENED)' label remains inside the same changed file"
+      },
+      {
+        "severity": "P3",
+        "claim": "README.md and docs/constitution.md still declare Phase 0.0 'reopened', contradicting the new closed status"
+      }
+    ],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": false,
+    "tokensUsed": 11846,
+    "latencyMs": 122903,
+    "falseApprove": true,
+    "falsePositive": null
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "dd07fb2",
+      "headSha": "0181b19f00dc",
+      "invocationId": "rinv:5fb742d251c34d2e309253a0ec563ee44ffcc588"
+    },
+    "coverage": {
+      "totalChangedFiles": 2,
+      "fullyCoveredFiles": 2,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 393,
+      "changedLinesRepresented": 393,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "docs/phase-0-spec.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 4,
+        "deletions": 4,
+        "representedLines": 8,
+        "head": {
+          "sha": "0181b19f00dc",
+          "blobSha": "77a9847924a044cf13609a4189553f77068ebfda",
+          "contentDigest": "sha256:5d26fb562821169745a9a39666dde56436ce1a171365a25c5a6fa33f97e9b5ac"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "93e16ca8be4be9b9b08da4f1e6e404f04bb1bbe2",
+          "contentDigest": "sha256:38e9940b0a1fb9219fc170f19cf988fa3a9d65dfbe590f73456305741a8ca3b3"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/roadmap.md",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 385,
+        "deletions": 0,
+        "representedLines": 385,
+        "head": {
+          "sha": "0181b19f00dc",
+          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
+          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab"
+        },
+        "base": null,
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "0181b19f00dc",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "0181b19f00dc",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "0181b19f00dc",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      }
+    ],
+    "primaryFindings": [
+      {
+        "severity": "P3",
+        "category": "docs_gap",
+        "claim": "Status update is incomplete: README.md, docs/constitution.md, and the unchanged tail of phase-0-spec.md still declare Phase 0.0 'reopened'",
+        "evidenceRefs": [
+          "changed:docs/phase-0-spec.md@HEAD:1-6",
+          "repo-read:README.md@HEAD:11",
+          "repo-read:docs/constitution.md@HEAD:70",
+          "repo-read:docs/phase-0-spec.md@HEAD:740"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "docs/phase-0-spec.md",
+          "docs/roadmap.md",
+          "README.md",
+          "docs/constitution.md"
+        ]
+      },
+      {
+        "severity": "P3",
+        "category": "docs_gap",
+        "claim": "Closure claim 'gate:0.2 green on main (dd07fb2)' is not corroborated by a committed GateReceipt or CI evidence referenced anywhere in the repo",
+        "evidenceRefs": [
+          "changed:docs/phase-0-spec.md@HEAD:1-6",
+          "repo-read:docs/constitution.md@HEAD:70"
+        ],
+        "proofType": "inference",
+        "affectedPaths": [
+          "docs/phase-0-spec.md"
+        ]
+      }
+    ],
+    "budgetConsumption": {
+      "fileReads": 0,
+      "searches": 3,
+      "retrievedChars": 2609,
+      "contextRounds": 2,
+      "exhausted": false,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.1",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:7dade087d09f63f9",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-18T03:05:53.847Z",
+        "completedAt": "2026-08-18T03:06:43.070Z",
+        "durationMs": 49223,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 4965,
+          "outputTokens": 1943,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 6908
+        },
+        "cost": null
+      },
+      "verifier": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-verifier",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.1",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:682c713dc0e893a0",
+        "promptId": "v2-verifier-r1",
+        "promptHash": "2e802344447f64a2",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d251e50fb3e6",
+        "startedAt": "2026-08-18T03:07:14.085Z",
+        "completedAt": "2026-08-18T03:07:56.746Z",
+        "durationMs": 42661,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 15684,
+          "outputTokens": 1531,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 17215
+        },
+        "cost": null
+      },
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 943,
+          "outputTokens": 512,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": null,
+          "totalTokens": 1455
+        },
+        "cost": null
+      },
+      "defense": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-defense",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:3ca011fef7cbeb2f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 647,
+          "outputTokens": 367,
+          "cacheReadTokens": 320,
+          "cacheWriteTokens": null,
+          "totalTokens": 1334
+        },
+        "cost": null
+      }
+    }
+  },
+  "verifierReceipt": {
+    "status": "verified",
+    "findings": [
+      {
+        "severity": "P3",
+        "category": "maintainability",
+        "claim": "Stale '(REOPENED)' label remains inside the same changed file",
+        "evidenceRefs": [
+          "repo-read:docs/phase-0-spec.md@HEAD:L736-L742",
+          "changed:docs/phase-0-spec.md@HEAD:L3"
+        ],
+        "proofType": "static_trace"
+      },
+      {
+        "severity": "P3",
+        "category": "maintainability",
+        "claim": "README.md and docs/constitution.md still declare Phase 0.0 'reopened', contradicting the new closed status",
+        "evidenceRefs": [
+          "repo-read:README.md@HEAD:L11",
+          "repo-read:docs/constitution.md@HEAD:L70"
+        ],
+        "proofType": "static_trace"
+      }
+    ],
+    "rawFindings": [
+      {
+        "severity": "P3",
+        "claim": "Stale '(REOPENED)' label remains inside the same changed file"
+      },
+      {
+        "severity": "P3",
+        "claim": "README.md and docs/constitution.md still declare Phase 0.0 'reopened', contradicting the new closed status"
+      }
+    ],
+    "hasMaterialFindings": false,
+    "materialFindingCount": 0,
+    "coverageSatisfied": true,
+    "tokensUsed": 17215,
+    "durationMs": 42661,
+    "unresolvedContextRequests": [],
+    "contextTrace": [
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "0181b19f00dc",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "0181b19f00dc",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "0181b19f00dc",
+        "round": 2,
+        "truncated": false
+      }
+    ],
+    "actualModel": "glm-5.3",
+    "budgetState": {
+      "fileReads": 1,
+      "searches": 2,
+      "retrievedChars": 2357,
+      "contextRounds": 2,
+      "currentRound": 0,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      },
+      "exhausted": false
+    },
+    "rawTextSnippet": "{\n  \"status\": \"verified\",\n  \"findings\": [\n    {\n      \"severity\": \"P3\",\n      \"category\": \"maintainability\",\n      \"claim\": \"Stale '(REOPENED)' label remains inside the same changed file\",\n      \"description\": \"The PR changes the phase headings and top-of-file status of docs/phase-0-spec.md to 'CLOSED', but the 'Phase 0 estimated total range' table at the bottom of the same file still lists '0.0 Architecture foundation (REOPENED)', directly contradicting the new header and the new roadmap.md sta"
+  },
+  "decisionReason": "No material findings, evidence complete, verifier clean",
+  "writtenAt": "2026-08-18T03:07:56.748Z"
+}
