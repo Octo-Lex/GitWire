@@ -1,4 +1,9 @@
 {
   "schema_version": 1,
-  "exceptions": []
+  "exceptions": [
+    {
+      "id": "GHSA-2v37-7h3g-55p8",
+      "comment": "Acceptable risk. Not called in user context."
+    }
+  ]
 }
