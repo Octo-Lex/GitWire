@@ -1,0 +1,375 @@
+=== PHASE B MATRIX ATTEMPT 5 (glm-5-turbo, single-model qualification) (linux container) START 2026-08-19T22:11:03Z sha=0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae tree=f48e1f78633d9d7a31c95220bdf3bdba2e5797d6 model=glm-5-turbo ===
+(node:39) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+  console.log
+      RI-01 broken run 1: verdict=approved checkState=review_passed v2Verifier=verified defect=false model=glm-5-turbo (34816 tokens, 98342ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-01 broken run 2: verdict=needs_discussion checkState=review_blocked v2Verifier=not_run defect=true model=glm-5-turbo (28923 tokens, 174891ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-01 broken run 3: verdict=needs_discussion checkState=review_blocked v2Verifier=not_run defect=true model=glm-5-turbo (33589 tokens, 72935ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-01 fixed run 1: verdict=approved checkState=review_passed v2Verifier=verified defect=null model=glm-5-turbo (15348 tokens, 159535ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-01 fixed run 2: verdict=needs_discussion checkState=review_blocked v2Verifier=not_run defect=null model=glm-5-turbo (14417 tokens, 37872ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-01 fixed run 3: verdict=approved checkState=review_passed v2Verifier=verified defect=null model=glm-5-turbo (5572 tokens, 96434ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-02 broken run 1: verdict=needs_discussion checkState=review_incomplete v2Verifier=not_run defect=false model=glm-5-turbo (19773 tokens, 43969ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-02 broken run 2: verdict=needs_discussion checkState=review_blocked v2Verifier=not_run defect=false model=glm-5-turbo (33752 tokens, 100681ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-02 broken run 3: verdict=needs_discussion checkState=review_blocked v2Verifier=not_run defect=false model=glm-5-turbo (28144 tokens, 73119ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-02 fixed run 1: verdict=approved checkState=review_passed v2Verifier=verified defect=null model=glm-5-turbo (18910 tokens, 81923ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-02 fixed run 2: verdict=approved checkState=review_passed v2Verifier=verified defect=null model=glm-5-turbo (9148 tokens, 207544ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-02 fixed run 3: verdict=needs_discussion checkState=review_incomplete v2Verifier=not_run defect=null model=glm-5-turbo (7612 tokens, 28744ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-03 broken run 1: verdict=needs_discussion checkState=review_incomplete v2Verifier=not_run defect=false model=glm-5-turbo (23992 tokens, 50132ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-03 broken run 2: verdict=needs_discussion checkState=review_incomplete v2Verifier=not_run defect=false model=glm-5-turbo (5244 tokens, 52593ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-03 broken run 3: verdict=needs_discussion checkState=review_incomplete v2Verifier=not_run defect=false model=glm-5-turbo (4996 tokens, 38441ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-03 fixed run 1: verdict=needs_discussion checkState=review_blocked v2Verifier=not_run defect=null model=glm-5-turbo (17757 tokens, 71155ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-03 fixed run 2: verdict=needs_discussion checkState=review_incomplete v2Verifier=not_run defect=null model=glm-5-turbo (5548 tokens, 37003ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-03 fixed run 3: verdict=needs_discussion checkState=review_blocked v2Verifier=not_run defect=null model=glm-5-turbo (8569 tokens, 43805ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-04 broken run 1: verdict=approved checkState=review_passed v2Verifier=verified defect=false model=glm-5-turbo (32594 tokens, 85934ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-04 broken run 2: verdict=needs_discussion checkState=review_incomplete v2Verifier=incomplete defect=false model=glm-5-turbo (4888 tokens, 87467ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-04 broken run 3: verdict=approved checkState=review_passed v2Verifier=verified defect=false model=glm-5-turbo (8848 tokens, 115638ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-04 fixed run 1: verdict=approved checkState=review_passed v2Verifier=verified defect=null model=glm-5-turbo (33272 tokens, 131869ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-04 fixed run 2: verdict=needs_discussion checkState=review_incomplete v2Verifier=incomplete defect=null model=glm-5-turbo (20421 tokens, 340875ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+      RI-04 fixed run 3: verdict=needs_discussion checkState=review_incomplete v2Verifier=not_run defect=null model=glm-5-turbo (13776 tokens, 55331ms)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:328:17)
+
+  console.log
+    
+    === GitWire-after (v2 live) Summary ===
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:382:13)
+
+  console.log
+    Broken: 3/12 false APPROVEs
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:383:13)
+
+  console.log
+    Broken: 2/12 expected defect detected
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:384:13)
+
+  console.log
+    Fixed: 3/12 false positives (P0/P1/P2)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:385:13)
+
+  console.log
+    Fixed: 5/12 APPROVEs
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:386:13)
+
+  console.log
+    Avg tokens: 17913
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:387:13)
+
+  console.log
+    Avg latency: 95260ms
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:388:13)
+
+  console.log
+    Check states: {"review_passed":8,"review_blocked":7,"review_incomplete":9}
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:395:13)
+
+  console.log
+    Verifier statuses: {"verified":8,"not_run":14,"incomplete":2}
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:402:13)
+
+  console.log
+    
+    Comparison with GitWire-before baseline:
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:404:13)
+
+  console.log
+      Before: 11/12 broken false APPROVEs (91.7%), 0/12 defect detection
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:405:13)
+
+  console.log
+      After:  3/12 broken false APPROVEs (25%), 2/12 defect detection
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:406:13)
+
+  console.log
+    
+    Frozen threshold enforcement:
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:408:13)
+
+  console.log
+      RI-01 broken: 2/3 defect detections (need ≥2)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:416:17)
+
+  console.log
+      RI-01 fixed: 2/3 APPROVEs (need ≥2), 1 false positives (need 0)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:418:17)
+
+  console.log
+      RI-02 broken: 0/3 defect detections (need ≥2)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:416:17)
+
+  console.log
+      RI-02 fixed: 2/3 APPROVEs (need ≥2), 0 false positives (need 0)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:418:17)
+
+  console.log
+      RI-03 broken: 0/3 defect detections (need ≥2)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:416:17)
+
+  console.log
+      RI-03 fixed: 0/3 APPROVEs (need ≥2), 2 false positives (need 0)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:418:17)
+
+  console.log
+      RI-04 broken: 0/3 defect detections (need ≥2)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:416:17)
+
+  console.log
+      RI-04 fixed: 1/3 APPROVEs (need ≥2), 0 false positives (need 0)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:418:17)
+
+  console.log
+    Results: /wt/packages/web/tests/evaluation/review-integrity/live-after-results.json
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:422:13)
+
+FAIL tests/evaluation/review-integrity/live-after.test.js (2286.686 s)
+  RI live-after — v2 live cutover matrix
+    ✕ RI-01 broken — frozen threshold (3 runs) (346246 ms)
+    ✕ RI-01 fixed — frozen threshold (3 runs) (293846 ms)
+    ✕ RI-02 broken — frozen threshold (3 runs) (217773 ms)
+    ✓ RI-02 fixed — frozen threshold (3 runs) (318217 ms)
+    ✕ RI-03 broken — frozen threshold (3 runs) (141172 ms)
+    ✕ RI-03 fixed — frozen threshold (3 runs) (151969 ms)
+    ✕ RI-04 broken — frozen threshold (3 runs) (289044 ms)
+    ✕ RI-04 fixed — frozen threshold (3 runs) (528080 ms)
+
+  ● RI live-after — v2 live cutover matrix › RI-01 broken — frozen threshold (3 runs)
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 0
+    Received: 1
+
+      344 |         // Frozen requirement: zero false APPROVEs on broken code
+      345 |         const falseApproves = runs.filter(r => r.verdict === "approved").length;
+    > 346 |         expect(falseApproves).toBe(0);
+          |                               ^
+      347 |
+      348 |         // Frozen requirement: strict expected-defect detection in ≥2/3 runs
+      349 |         // (canonical P0/P1/P2 findings only — unresolved needs never count)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:346:31)
+
+  ● RI live-after — v2 live cutover matrix › RI-01 fixed — frozen threshold (3 runs)
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 0
+    Received: 1
+
+      359 |         // Each fixed fixture must produce zero false P0/P1/P2 AND APPROVE in ≥2/3
+      360 |         const falsePositives = runs.filter(r => r.falsePositive === true).length;
+    > 361 |         expect(falsePositives).toBe(0);
+          |                                ^
+      362 |
+      363 |         const approves = runs.filter(r => r.verdict === "approved").length;
+      364 |         expect(approves).toBeGreaterThanOrEqual(2);
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:361:32)
+
+  ● RI live-after — v2 live cutover matrix › RI-02 broken — frozen threshold (3 runs)
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 2
+    Received:    0
+
+      349 |         // (canonical P0/P1/P2 findings only — unresolved needs never count)
+      350 |         const detections = runs.filter(r => r.expectedDefectDetected === true).length;
+    > 351 |         expect(detections).toBeGreaterThanOrEqual(2);
+          |                            ^
+      352 |
+      353 |         // Frozen third-run allowance: every non-detecting run must detect OR
+      354 |         // abstain (review_incomplete) — a silent clean miss is not allowed
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:351:28)
+
+  ● RI live-after — v2 live cutover matrix › RI-03 broken — frozen threshold (3 runs)
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 2
+    Received:    0
+
+      349 |         // (canonical P0/P1/P2 findings only — unresolved needs never count)
+      350 |         const detections = runs.filter(r => r.expectedDefectDetected === true).length;
+    > 351 |         expect(detections).toBeGreaterThanOrEqual(2);
+          |                            ^
+      352 |
+      353 |         // Frozen third-run allowance: every non-detecting run must detect OR
+      354 |         // abstain (review_incomplete) — a silent clean miss is not allowed
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:351:28)
+
+  ● RI live-after — v2 live cutover matrix › RI-03 fixed — frozen threshold (3 runs)
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 0
+    Received: 2
+
+      359 |         // Each fixed fixture must produce zero false P0/P1/P2 AND APPROVE in ≥2/3
+      360 |         const falsePositives = runs.filter(r => r.falsePositive === true).length;
+    > 361 |         expect(falsePositives).toBe(0);
+          |                                ^
+      362 |
+      363 |         const approves = runs.filter(r => r.verdict === "approved").length;
+      364 |         expect(approves).toBeGreaterThanOrEqual(2);
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:361:32)
+
+  ● RI live-after — v2 live cutover matrix › RI-04 broken — frozen threshold (3 runs)
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 0
+    Received: 2
+
+      344 |         // Frozen requirement: zero false APPROVEs on broken code
+      345 |         const falseApproves = runs.filter(r => r.verdict === "approved").length;
+    > 346 |         expect(falseApproves).toBe(0);
+          |                               ^
+      347 |
+      348 |         // Frozen requirement: strict expected-defect detection in ≥2/3 runs
+      349 |         // (canonical P0/P1/P2 findings only — unresolved needs never count)
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:346:31)
+
+  ● RI live-after — v2 live cutover matrix › RI-04 fixed — frozen threshold (3 runs)
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 2
+    Received:    1
+
+      362 |
+      363 |         const approves = runs.filter(r => r.verdict === "approved").length;
+    > 364 |         expect(approves).toBeGreaterThanOrEqual(2);
+          |                          ^
+      365 |       }
+      366 |     }, 600000); // 10 min for 3 runs
+      367 |   }
+
+      at Object.<anonymous> (tests/evaluation/review-integrity/live-after.test.js:364:26)
+
+Test Suites: 1 failed, 1 total
+Tests:       7 failed, 1 passed, 8 total
+Snapshots:   0 total
+Time:        2286.738 s
+Ran all test suites matching /tests\/evaluation\/review-integrity\/live-after.test.js/i.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+=== JEST EXIT 1 — preserving evidence ===
+=== PHASE B MATRIX ATTEMPT 5 END rc=1 2026-08-19T22:49:51Z ===
+CONTAINER_EXIT=1

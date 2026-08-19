@@ -1,0 +1,475 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-19T22-11-44-995Z",
+  "candidate": {
+    "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+    "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+  },
+  "fixture": "RI-02",
+  "variant": "fixed",
+  "run": 1,
+  "record": {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:27:24.789Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 18910,
+    "latencyMs": 81923,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "dd07fb2",
+      "headSha": "20219bd384",
+      "invocationId": "rinv:e59b52f51bb0383addee8d987ba474c43ed31975"
+    },
+    "coverage": {
+      "totalChangedFiles": 4,
+      "fullyCoveredFiles": 4,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 443,
+      "changedLinesRepresented": 443,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "README.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 15,
+        "deletions": 16,
+        "representedLines": 31,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "f35e29412e4949e41f87fd794d4d63bfbd74d104",
+          "contentDigest": "sha256:b4ab2353f352a89bffcbfc835b3431635bfa5cb84d56a16f9540a39d1925d19d"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "3dec226bcb6e227d359aceac56aba4701289c29e",
+          "contentDigest": "sha256:53c6565ce84c4e3146cb405ff1d180dadf7371c6b6a3112159421228c2fa111c"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/constitution.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 3,
+        "deletions": 4,
+        "representedLines": 7,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7867491b4b5235dab38624055f0c06b45241de39",
+          "contentDigest": "sha256:11da23e66921475ce260dec18e5a25915aad2b36a105c425408847521e26ef85"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "5fe09be65faa108006fe3cdebc85068c997037d1",
+          "contentDigest": "sha256:f2c00edc3522dbb2f4e0c6219e331486bdbc231695fd46ef95812e45b4b37e7a"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/phase-0-spec.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 12,
+        "deletions": 8,
+        "representedLines": 20,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "93e16ca8be4be9b9b08da4f1e6e404f04bb1bbe2",
+          "contentDigest": "sha256:38e9940b0a1fb9219fc170f19cf988fa3a9d65dfbe590f73456305741a8ca3b3"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/roadmap.md",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 385,
+        "deletions": 0,
+        "representedLines": 385,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
+          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab"
+        },
+        "base": null,
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 3,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/rules.md",
+        "ref": "20219bd384",
+        "round": 4,
+        "truncated": false,
+        "contentLength": 9439
+      }
+    ],
+    "primaryFindings": [],
+    "budgetConsumption": {
+      "fileReads": 1,
+      "searches": 3,
+      "retrievedChars": 9439,
+      "contextRounds": 4,
+      "exhausted": true,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:6f54a797de38e761",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-19T22:26:02.869Z",
+        "completedAt": "2026-08-19T22:26:30.832Z",
+        "durationMs": 27963,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 16939,
+          "outputTokens": 467,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 17406
+        },
+        "cost": null
+      },
+      "verifier": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-verifier",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:7d71cfa3235d0453",
+        "promptId": "v2-verifier-r3",
+        "promptHash": "46378a48abdd3072",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d251e50fb3e6",
+        "startedAt": "2026-08-19T22:26:41.514Z",
+        "completedAt": "2026-08-19T22:27:24.789Z",
+        "durationMs": 43275,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 11182,
+          "outputTokens": 1015,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 12197
+        },
+        "cost": null
+      },
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 155,
+          "outputTokens": 177,
+          "cacheReadTokens": 448,
+          "cacheWriteTokens": null,
+          "totalTokens": 780
+        },
+        "cost": null
+      },
+      "defense": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-defense",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:3ca011fef7cbeb2f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 268,
+          "outputTokens": 152,
+          "cacheReadTokens": 320,
+          "cacheWriteTokens": null,
+          "totalTokens": 740
+        },
+        "cost": null
+      }
+    }
+  },
+  "verifierReceipt": {
+    "status": "verified",
+    "findings": [],
+    "rawFindings": [],
+    "hasMaterialFindings": false,
+    "materialFindingCount": 0,
+    "coverageSatisfied": true,
+    "tokensUsed": 12197,
+    "durationMs": 43275,
+    "unresolvedContextRequests": [],
+    "contextTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "20219bd384",
+        "round": 2,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/roadmap.md",
+        "ref": "20219bd384",
+        "round": 3,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/roadmap.md",
+        "ref": "20219bd384",
+        "round": 4,
+        "truncated": false
+      }
+    ],
+    "actualModel": "glm-5-turbo",
+    "budgetState": {
+      "fileReads": 4,
+      "searches": 0,
+      "retrievedChars": 3564,
+      "contextRounds": 4,
+      "currentRound": 0,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      },
+      "exhausted": true
+    },
+    "riskLedger": {
+      "complete": true,
+      "categories": [
+        {
+          "category": "changed_behavior",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "Phase status labels changed from REOPENED/pending to CLOSED across README, constitution, and phase-0-spec — this alters the project's stated state and the 'next action' guidance, which could mislead contributors about what work remains.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-2",
+                  "C-3",
+                  "C-4",
+                  "C-5",
+                  "C-6",
+                  "C-7",
+                  "C-8",
+                  "C-9",
+                  "C-10"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "All changes are purely documentation status updates and architecture orientation text. No executable code, no runtime behavior, no logic paths are affected. The changes are consistent across all three files and the new roadmap document."
+              }
+            }
+          ]
+        },
+        {
+          "category": "dependency_interface_contracts",
+          "noneJustification": "No code, APIs, CLI surfaces, types, config schemas, exports, or function signatures are changed in this PR. All changes are in Markdown documentation files only.",
+          "obligations": []
+        },
+        {
+          "category": "state_side_effects",
+          "noneJustification": "No mutable state, databases, caches, files, background jobs, or shared modules are touched. This PR only modifies documentation files.",
+          "obligations": []
+        },
+        {
+          "category": "config_runtime_assumptions",
+          "noneJustification": "No environment variables, feature flags, service versions, defaults, or deployment-specific values are introduced or altered. The PR is purely documentation.",
+          "obligations": []
+        },
+        {
+          "category": "normative_docs_tests",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "The phase-0-spec.md exit gate for 0.5 now adds an explicit agent replacement/restart requirement. This is a normative specification change that could conflict with existing or planned gate:0.5 test implementations.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "R-1",
+                  "R-2",
+                  "C-13",
+                  "C-14",
+                  "C-19",
+                  "C-20",
+                  "C-21",
+                  "R-4"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "Verified that the 0.5 exit gate in phase-0-spec.md adds an explicit agent replacement requirement (R-2, C-13) that was not present at BASE (R-1, C-19). The same requirement appears consistently in the new roadmap.md §0.5 section (R-4). This is a forward-looking specification addition for a future ph"
+              }
+            }
+          ]
+        },
+        {
+          "category": "counterexamples",
+          "noneJustification": "No executable logic exists in this PR to construct counterexamples against. The changes are documentation text — status labels, architectural descriptions, and sequencing guidance. There are no code paths, inputs, or state transitions to falsify.",
+          "obligations": []
+        }
+      ]
+    },
+    "unresolvedObligations": [],
+    "rejectedSubmission": null
+  },
+  "decisionReason": "No material findings, evidence complete, verifier clean",
+  "writtenAt": "2026-08-19T22:27:24.790Z"
+}

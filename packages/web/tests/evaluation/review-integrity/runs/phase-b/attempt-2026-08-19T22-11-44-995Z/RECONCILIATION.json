@@ -1,0 +1,903 @@
+{
+  "attemptId": "attempt-2026-08-19T22-11-44-995Z",
+  "expectedCoordinates": 24,
+  "uniqueCoordinates": 24,
+  "missing": [],
+  "duplicates": [],
+  "invocationAccounting": {
+    "verifierClassCounts": {
+      "verified": 8,
+      "not_run": 14,
+      "ledger_rejected": 1,
+      "incomplete_other": 1
+    },
+    "falseApprovesOnBroken": [
+      "RI-01|broken|1",
+      "RI-04|broken|1",
+      "RI-04|broken|3"
+    ],
+    "detectionsOnBroken": [
+      "RI-01|broken|2",
+      "RI-01|broken|3"
+    ],
+    "fixedVerdicts": {
+      "RI-01|broken": {
+        "falseApproves": 1,
+        "detections": 2,
+        "PASS": false
+      },
+      "RI-01|fixed": {
+        "falsePositives": 1,
+        "approves": 2,
+        "PASS": false
+      },
+      "RI-02|broken": {
+        "falseApproves": 0,
+        "detections": 0,
+        "PASS": false
+      },
+      "RI-02|fixed": {
+        "falsePositives": 0,
+        "approves": 2,
+        "PASS": true
+      },
+      "RI-03|broken": {
+        "falseApproves": 0,
+        "detections": 0,
+        "PASS": false
+      },
+      "RI-03|fixed": {
+        "falsePositives": 2,
+        "approves": 0,
+        "PASS": false
+      },
+      "RI-04|broken": {
+        "falseApproves": 2,
+        "detections": 0,
+        "PASS": false
+      },
+      "RI-04|fixed": {
+        "falsePositives": 0,
+        "approves": 1,
+        "PASS": false
+      }
+    },
+    "profileUsage": {
+      "primary": {
+        "input": 346434,
+        "output": 20861,
+        "cached": 0,
+        "total": 367295
+      },
+      "verifier": {
+        "input": 121669,
+        "output": 14761,
+        "cached": 0,
+        "total": 136430
+      },
+      "adversarial": {
+        "input": 8380,
+        "output": 9612,
+        "cached": 6848,
+        "total": 24840
+      },
+      "defense": {
+        "input": 8817,
+        "output": 4498,
+        "cached": 3968,
+        "total": 17283
+      }
+    },
+    "totals": {
+      "input": 485300,
+      "output": 49732,
+      "cached": 10816,
+      "all": 545848
+    },
+    "quotaUnits": {
+      "formula": "input*5.7 + cached*1.5 + output*21 (GLM-5-Turbo multipliers)",
+      "value": 3826806
+    },
+    "fixturePassCount": 1
+  },
+  "invocations": [
+    {
+      "coordinate": "RI-01|broken|1",
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 34816,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": true,
+      "falsePositive": false,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 31144,
+          "output": 1186,
+          "cached": 0,
+          "total": 32330
+        },
+        "verifier": {
+          "input": 14377,
+          "output": 1205,
+          "cached": 0,
+          "total": 15582
+        },
+        "adversarial": {
+          "input": 855,
+          "output": 388,
+          "cached": 0,
+          "total": 1243
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-01|broken|2",
+      "verdict": "needs_discussion",
+      "checkState": "review_blocked",
+      "consoleTokensUsed": 28923,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": true,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 20890,
+          "output": 1621,
+          "cached": 0,
+          "total": 22511
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 717,
+          "output": 768,
+          "cached": 384,
+          "total": 1869
+        },
+        "defense": {
+          "input": 1289,
+          "output": 432,
+          "cached": 0,
+          "total": 1721
+        }
+      }
+    },
+    {
+      "coordinate": "RI-01|broken|3",
+      "verdict": "needs_discussion",
+      "checkState": "review_blocked",
+      "consoleTokensUsed": 33589,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": true,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 27466,
+          "output": 1805,
+          "cached": 0,
+          "total": 29271
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 910,
+          "output": 1249,
+          "cached": 384,
+          "total": 2543
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-01|fixed|1",
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 15348,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 11203,
+          "output": 1139,
+          "cached": 0,
+          "total": 12342
+        },
+        "verifier": {
+          "input": 19082,
+          "output": 1134,
+          "cached": 0,
+          "total": 20216
+        },
+        "adversarial": {
+          "input": 311,
+          "output": 402,
+          "cached": 448,
+          "total": 1161
+        },
+        "defense": {
+          "input": 490,
+          "output": 300,
+          "cached": 320,
+          "total": 1110
+        }
+      }
+    },
+    {
+      "coordinate": "RI-01|fixed|2",
+      "verdict": "needs_discussion",
+      "checkState": "review_blocked",
+      "consoleTokensUsed": 14417,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 11345,
+          "output": 602,
+          "cached": 0,
+          "total": 11947
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 199,
+          "output": 436,
+          "cached": 448,
+          "total": 1083
+        },
+        "defense": {
+          "input": 358,
+          "output": 242,
+          "cached": 320,
+          "total": 920
+        }
+      }
+    },
+    {
+      "coordinate": "RI-01|fixed|3",
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 5572,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 4083,
+          "output": 595,
+          "cached": 0,
+          "total": 4678
+        },
+        "verifier": {
+          "input": 11925,
+          "output": 2054,
+          "cached": 0,
+          "total": 13979
+        },
+        "adversarial": {
+          "input": 166,
+          "output": 281,
+          "cached": 448,
+          "total": 895
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-02|broken|1",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 19773,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 16553,
+          "output": 728,
+          "cached": 0,
+          "total": 17281
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 226,
+          "output": 446,
+          "cached": 448,
+          "total": 1120
+        },
+        "defense": {
+          "input": 391,
+          "output": 183,
+          "cached": 320,
+          "total": 894
+        }
+      }
+    },
+    {
+      "coordinate": "RI-02|broken|2",
+      "verdict": "needs_discussion",
+      "checkState": "review_blocked",
+      "consoleTokensUsed": 33752,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 28219,
+          "output": 1111,
+          "cached": 0,
+          "total": 29330
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 585,
+          "output": 537,
+          "cached": 384,
+          "total": 1506
+        },
+        "defense": {
+          "input": 702,
+          "output": 387,
+          "cached": 320,
+          "total": 1409
+        }
+      }
+    },
+    {
+      "coordinate": "RI-02|broken|3",
+      "verdict": "needs_discussion",
+      "checkState": "review_blocked",
+      "consoleTokensUsed": 28144,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 21593,
+          "output": 1361,
+          "cached": 0,
+          "total": 22954
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 494,
+          "output": 765,
+          "cached": 448,
+          "total": 1707
+        },
+        "defense": {
+          "input": 845,
+          "output": 491,
+          "cached": 320,
+          "total": 1656
+        }
+      }
+    },
+    {
+      "coordinate": "RI-02|fixed|1",
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 18910,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 16939,
+          "output": 467,
+          "cached": 0,
+          "total": 17406
+        },
+        "verifier": {
+          "input": 11182,
+          "output": 1015,
+          "cached": 0,
+          "total": 12197
+        },
+        "adversarial": {
+          "input": 155,
+          "output": 177,
+          "cached": 448,
+          "total": 780
+        },
+        "defense": {
+          "input": 268,
+          "output": 152,
+          "cached": 320,
+          "total": 740
+        }
+      }
+    },
+    {
+      "coordinate": "RI-02|fixed|2",
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 9148,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 8798,
+          "output": 350,
+          "cached": 0,
+          "total": 9148
+        },
+        "verifier": {
+          "input": 1574,
+          "output": 1684,
+          "cached": 0,
+          "total": 3258
+        },
+        "adversarial": null,
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-02|fixed|3",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 7612,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 7154,
+          "output": 458,
+          "cached": 0,
+          "total": 7612
+        },
+        "verifier": null,
+        "adversarial": null,
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-03|broken|1",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 23992,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 18514,
+          "output": 850,
+          "cached": 0,
+          "total": 19364
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 761,
+          "output": 602,
+          "cached": 0,
+          "total": 1363
+        },
+        "defense": {
+          "input": 613,
+          "output": 338,
+          "cached": 256,
+          "total": 1207
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|broken|2",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 5244,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 731,
+          "output": 1043,
+          "cached": 0,
+          "total": 1774
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 417,
+          "output": 530,
+          "cached": 384,
+          "total": 1331
+        },
+        "defense": {
+          "input": 476,
+          "output": 312,
+          "cached": 320,
+          "total": 1108
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|broken|3",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 4996,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 3031,
+          "output": 665,
+          "cached": 0,
+          "total": 3696
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 286,
+          "output": 364,
+          "cached": 448,
+          "total": 1098
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-03|fixed|1",
+      "verdict": "needs_discussion",
+      "checkState": "review_blocked",
+      "consoleTokensUsed": 17757,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 10148,
+          "output": 1525,
+          "cached": 0,
+          "total": 11673
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 685,
+          "output": 810,
+          "cached": 384,
+          "total": 1879
+        },
+        "defense": {
+          "input": 1049,
+          "output": 498,
+          "cached": 256,
+          "total": 1803
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|fixed|2",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 5548,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 2337,
+          "output": 747,
+          "cached": 0,
+          "total": 3084
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 243,
+          "output": 402,
+          "cached": 448,
+          "total": 1093
+        },
+        "defense": {
+          "input": 413,
+          "output": 174,
+          "cached": 320,
+          "total": 907
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|fixed|3",
+      "verdict": "needs_discussion",
+      "checkState": "review_blocked",
+      "consoleTokensUsed": 8569,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 5376,
+          "output": 783,
+          "cached": 0,
+          "total": 6159
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 224,
+          "output": 337,
+          "cached": 448,
+          "total": 1009
+        },
+        "defense": {
+          "input": 359,
+          "output": 285,
+          "cached": 320,
+          "total": 964
+        }
+      }
+    },
+    {
+      "coordinate": "RI-04|broken|1",
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 32594,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": true,
+      "falsePositive": false,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 32309,
+          "output": 285,
+          "cached": 0,
+          "total": 32594
+        },
+        "verifier": {
+          "input": 20858,
+          "output": 1734,
+          "cached": 0,
+          "total": 22592
+        },
+        "adversarial": null,
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-04|broken|2",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 4888,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": {
+        "status": "incomplete",
+        "vClass": "ledger_rejected",
+        "ledgerComplete": false,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 2663,
+          "output": 573,
+          "cached": 0,
+          "total": 3236
+        },
+        "verifier": {
+          "input": 5058,
+          "output": 1693,
+          "cached": 0,
+          "total": 6751
+        },
+        "adversarial": {
+          "input": 146,
+          "output": 200,
+          "cached": 448,
+          "total": 794
+        },
+        "defense": {
+          "input": 338,
+          "output": 142,
+          "cached": 256,
+          "total": 736
+        }
+      }
+    },
+    {
+      "coordinate": "RI-04|broken|3",
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 8848,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": true,
+      "falsePositive": false,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 5558,
+          "output": 866,
+          "cached": 0,
+          "total": 6424
+        },
+        "verifier": {
+          "input": 6215,
+          "output": 1977,
+          "cached": 0,
+          "total": 8192
+        },
+        "adversarial": {
+          "input": 225,
+          "output": 393,
+          "cached": 448,
+          "total": 1066
+        },
+        "defense": {
+          "input": 401,
+          "output": 193,
+          "cached": 320,
+          "total": 914
+        }
+      }
+    },
+    {
+      "coordinate": "RI-04|fixed|1",
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 33272,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 32873,
+          "output": 399,
+          "cached": 0,
+          "total": 33272
+        },
+        "verifier": {
+          "input": 27861,
+          "output": 1970,
+          "cached": 0,
+          "total": 29831
+        },
+        "adversarial": null,
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-04|fixed|2",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 20421,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": {
+        "status": "incomplete",
+        "vClass": "incomplete_other",
+        "ledgerComplete": false,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 19864,
+          "output": 557,
+          "cached": 0,
+          "total": 20421
+        },
+        "verifier": {
+          "input": 3537,
+          "output": 295,
+          "cached": 0,
+          "total": 3832
+        },
+        "adversarial": null,
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-04|fixed|3",
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 13776,
+      "modelObserved": "glm-5-turbo",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 7643,
+          "output": 1145,
+          "cached": 0,
+          "total": 8788
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 775,
+          "output": 525,
+          "cached": 0,
+          "total": 1300
+        },
+        "defense": {
+          "input": 825,
+          "output": 369,
+          "cached": 0,
+          "total": 1194
+        }
+      }
+    }
+  ]
+}

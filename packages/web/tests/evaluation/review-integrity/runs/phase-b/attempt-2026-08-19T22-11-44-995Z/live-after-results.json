@@ -1,0 +1,794 @@
+[
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:13:23.339Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Stale '(REOPENED)' label in the Phase 0 estimated total range table contradicts the status updates m"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Stale '(REOPENED)' label in the Phase 0 estimated total range table contradicts the status updates made elsewhere in the"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": false,
+    "tokensUsed": 34816,
+    "latencyMs": 98342,
+    "falseApprove": true,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:16:18.300Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 3,
+    "findingSeverities": [
+      "medium",
+      "medium",
+      "low"
+    ],
+    "findingTitles": [
+      "Stale (REOPENED) label for Phase 0.0 in the estimated total range section contradicts the (CLOSED) s",
+      "Phase 0.5 description in roadmap.md omits the existing cognition extension + coordinator split docum",
+      "Phase-0-spec.md workspace layout listing does not include docs/roadmap.md"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "Stale (REOPENED) label for Phase 0.0 in the estimated total range section contradicts the (CLOSED) status set elsewhere "
+      },
+      {
+        "severity": "P2",
+        "claim": "Phase 0.5 description in roadmap.md omits the existing cognition extension + coordinator split documented in phase-0-spe"
+      },
+      {
+        "severity": "P3",
+        "claim": "Phase-0-spec.md workspace layout listing does not include docs/roadmap.md"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": true,
+    "tokensUsed": 28923,
+    "latencyMs": 174891,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:17:31.237Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 4,
+    "findingSeverities": [
+      "medium",
+      "medium",
+      "medium",
+      "low"
+    ],
+    "findingTitles": [
+      "phase-0-spec.md summary table still lists Phase 0.0 as 'REOPENED'",
+      "roadmap.md 0.5 framing differs from phase-0-spec.md 0.5 objective/title without explicit reconciliat",
+      "roadmap.md §0.8 renames React GUI phase and introduces 'Application Protocol' framing absent from ph",
+      "roadmap.md document roles section references docs/constitution.md with relative link that may not re"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "phase-0-spec.md summary table still lists Phase 0.0 as 'REOPENED'"
+      },
+      {
+        "severity": "P2",
+        "claim": "roadmap.md 0.5 framing differs from phase-0-spec.md 0.5 objective/title without explicit reconciliation"
+      },
+      {
+        "severity": "P2",
+        "claim": "roadmap.md §0.8 renames React GUI phase and introduces 'Application Protocol' framing absent from phase-0-spec.md §0.8"
+      },
+      {
+        "severity": "P3",
+        "claim": "roadmap.md document roles section references docs/constitution.md with relative link that may not resolve correctly"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": true,
+    "tokensUsed": 33589,
+    "latencyMs": 72935,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:20:10.780Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Numbered list in README.md has duplicate item 3 and skips 4 after inserting roadmap.md as item 2",
+      "backlog.md 'Required before Phase 0.2' section heading is now stale/misleading after Phase 0.2 is ma"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Numbered list in README.md has duplicate item 3 and skips 4 after inserting roadmap.md as item 2"
+      },
+      {
+        "severity": "P3",
+        "claim": "backlog.md 'Required before Phase 0.2' section heading is now stale/misleading after Phase 0.2 is marked closed"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 15348,
+    "latencyMs": 159535,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:20:48.654Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 1,
+    "findingSeverities": [
+      "medium"
+    ],
+    "findingTitles": [
+      "README 'Read first' list has duplicate item number 3 and skips number 2 after the insertion"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "README 'Read first' list has duplicate item number 3 and skips number 2 after the insertion"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": null,
+    "tokensUsed": 14417,
+    "latencyMs": 37872,
+    "falseApprove": null,
+    "falsePositive": true
+  },
+  {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:22:25.090Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Stale 'reopened' backlog item reference in docs/backlog.md"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Stale 'reopened' backlog item reference in docs/backlog.md"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 5572,
+    "latencyMs": 96434,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:23:09.061Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 19773,
+    "latencyMs": 43969,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:24:49.743Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 1,
+    "findingSeverities": [
+      "medium"
+    ],
+    "findingTitles": [
+      "Stale 'REOPENED' label and estimated-range table in phase-0-spec.md contradict new CLOSED status"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "Stale 'REOPENED' label and estimated-range table in phase-0-spec.md contradict new CLOSED status"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": false,
+    "tokensUsed": 33752,
+    "latencyMs": 100681,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:26:02.863Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 1,
+    "findingSeverities": [
+      "medium"
+    ],
+    "findingTitles": [
+      "phase-0-spec.md estimated-range summary table still labels Phase 0.0 as REOPENED"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "phase-0-spec.md estimated-range summary table still labels Phase 0.0 as REOPENED"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": false,
+    "tokensUsed": 28144,
+    "latencyMs": 73119,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:27:24.789Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 18910,
+    "latencyMs": 81923,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:30:52.336Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 9148,
+    "latencyMs": 207544,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:31:21.081Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 7612,
+    "latencyMs": 28744,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:32:11.215Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Partial-pillar commands (e.g., /gitwire run heal) not tested with blocked pillars"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Partial-pillar commands (e.g., /gitwire run heal) not tested with blocked pillars"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 23992,
+    "latencyMs": 50132,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:33:03.810Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "The fallback else-branch in postAcknowledgment may render a stale \"no workers dispatched\" message in"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "The fallback else-branch in postAcknowledgment may render a stale \"no workers dispatched\" message instead of a specific "
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 5244,
+    "latencyMs": 52593,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:33:42.253Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "No test covers the case where a previously dispatched job reaches the worker and reviewPR returns { "
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "No test covers the case where a previously dispatched job reaches the worker and reviewPR returns { skipped: true, reaso"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": false,
+    "tokensUsed": 4996,
+    "latencyMs": 38441,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:34:53.411Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 2,
+    "findingSeverities": [
+      "medium",
+      "low"
+    ],
+    "findingTitles": [
+      "Other callers of reviewPR may rely on bare-null return semantics and could break",
+      "Test assertion in service-check-run-finalizer uses a URL without /dashboard prefix, inconsistent wit"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "Other callers of reviewPR may rely on bare-null return semantics and could break"
+      },
+      {
+        "severity": "P3",
+        "claim": "Test assertion in service-check-run-finalizer uses a URL without /dashboard prefix, inconsistent with production URL"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": null,
+    "tokensUsed": 17757,
+    "latencyMs": 71155,
+    "falseApprove": null,
+    "falsePositive": true
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:35:30.415Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 5548,
+    "latencyMs": 37003,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-03",
+    "variant": "fixed",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:36:14.221Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 1,
+    "findingSeverities": [
+      "medium"
+    ],
+    "findingTitles": [
+      "Audit test line references for aiReviewService.js appear to not match the actual line numbers at HEA"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "Audit test line references for aiReviewService.js appear to not match the actual line numbers at HEAD"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": null,
+    "tokensUsed": 8569,
+    "latencyMs": 43805,
+    "falseApprove": null,
+    "falsePositive": true
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:37:40.159Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": false,
+    "tokensUsed": 32594,
+    "latencyMs": 85934,
+    "falseApprove": true,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 2,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:39:07.628Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": false,
+    "tokensUsed": 4888,
+    "latencyMs": 87467,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:41:03.267Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": false,
+    "tokensUsed": 8848,
+    "latencyMs": 115638,
+    "falseApprove": true,
+    "falsePositive": null
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:43:15.139Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 33272,
+    "latencyMs": 131869,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 2,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:48:56.015Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": null,
+    "tokensUsed": 20421,
+    "latencyMs": 340875,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  {
+    "fixture": "RI-04",
+    "variant": "fixed",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:49:51.348Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Ambiguous early exit returns only matched comments, not full set"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Ambiguous early exit returns only matched comments, not full set"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "Approval evidence incomplete — cannot verify full coverage",
+    "expectedDefectDetected": null,
+    "tokensUsed": 13776,
+    "latencyMs": 55331,
+    "falseApprove": null,
+    "falsePositive": false
+  }
+]

@@ -1,0 +1,434 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-19T22-11-44-995Z",
+  "candidate": {
+    "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+    "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+  },
+  "fixture": "RI-01",
+  "variant": "broken",
+  "run": 1,
+  "record": {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:13:23.339Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 1,
+    "findingSeverities": [
+      "low"
+    ],
+    "findingTitles": [
+      "Stale '(REOPENED)' label in the Phase 0 estimated total range table contradicts the status updates m"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Stale '(REOPENED)' label in the Phase 0 estimated total range table contradicts the status updates made elsewhere in the"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": false,
+    "tokensUsed": 34816,
+    "latencyMs": 98342,
+    "falseApprove": true,
+    "falsePositive": null
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "dd07fb2",
+      "headSha": "0181b19f00dc",
+      "invocationId": "rinv:5fb742d251c34d2e309253a0ec563ee44ffcc588"
+    },
+    "coverage": {
+      "totalChangedFiles": 2,
+      "fullyCoveredFiles": 2,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 393,
+      "changedLinesRepresented": 393,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "docs/phase-0-spec.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 4,
+        "deletions": 4,
+        "representedLines": 8,
+        "head": {
+          "sha": "0181b19f00dc",
+          "blobSha": "77a9847924a044cf13609a4189553f77068ebfda",
+          "contentDigest": "sha256:5d26fb562821169745a9a39666dde56436ce1a171365a25c5a6fa33f97e9b5ac"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "93e16ca8be4be9b9b08da4f1e6e404f04bb1bbe2",
+          "contentDigest": "sha256:38e9940b0a1fb9219fc170f19cf988fa3a9d65dfbe590f73456305741a8ca3b3"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/roadmap.md",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 385,
+        "deletions": 0,
+        "representedLines": 385,
+        "head": {
+          "sha": "0181b19f00dc",
+          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
+          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab"
+        },
+        "base": null,
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "0181b19f00dc",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 34854
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "dd07fb2",
+        "round": 2,
+        "truncated": false,
+        "contentLength": 279
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "0181b19f00dc",
+        "round": 3,
+        "truncated": false,
+        "contentLength": 861
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "0181b19f00dc",
+        "round": 4,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      }
+    ],
+    "primaryFindings": [
+      {
+        "severity": "P3",
+        "category": "docs_gap",
+        "claim": "Stale '(REOPENED)' label in the Phase 0 estimated total range table contradicts the status updates made elsewhere in the same file and in the new roadmap",
+        "evidenceRefs": [
+          "changed:docs/phase-0-spec.md@HEAD:L4-L4",
+          "repo-read:docs/phase-0-spec.md@HEAD:L740-L740"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "docs/phase-0-spec.md"
+        ]
+      }
+    ],
+    "budgetConsumption": {
+      "fileReads": 3,
+      "searches": 1,
+      "retrievedChars": 36872,
+      "contextRounds": 4,
+      "exhausted": true,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:6f54a797de38e761",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-19T22:11:45.012Z",
+        "completedAt": "2026-08-19T22:12:30.280Z",
+        "durationMs": 45268,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 31144,
+          "outputTokens": 1186,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 32330
+        },
+        "cost": null
+      },
+      "verifier": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-verifier",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:7d71cfa3235d0453",
+        "promptId": "v2-verifier-r3",
+        "promptHash": "46378a48abdd3072",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d251e50fb3e6",
+        "startedAt": "2026-08-19T22:12:34.577Z",
+        "completedAt": "2026-08-19T22:13:23.335Z",
+        "durationMs": 48758,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 14377,
+          "outputTokens": 1205,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 15582
+        },
+        "cost": null
+      },
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 855,
+          "outputTokens": 388,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": null,
+          "totalTokens": 1243
+        },
+        "cost": null
+      },
+      "defense": null
+    }
+  },
+  "verifierReceipt": {
+    "status": "verified",
+    "findings": [],
+    "rawFindings": [],
+    "hasMaterialFindings": false,
+    "materialFindingCount": 0,
+    "coverageSatisfied": true,
+    "tokensUsed": 15582,
+    "durationMs": 48758,
+    "unresolvedContextRequests": [],
+    "contextTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "0181b19f00dc",
+        "round": 1,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "dd07fb2",
+        "round": 2,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "dd07fb2",
+        "round": 3,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "0181b19f00dc",
+        "round": 4,
+        "truncated": false
+      }
+    ],
+    "actualModel": "glm-5-turbo",
+    "budgetState": {
+      "fileReads": 4,
+      "searches": 0,
+      "retrievedChars": 1465,
+      "contextRounds": 4,
+      "currentRound": 0,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      },
+      "exhausted": true
+    },
+    "riskLedger": {
+      "complete": true,
+      "categories": [
+        {
+          "category": "changed_behavior",
+          "noneJustification": "The remaining changes are purely status label updates from REOPENED to CLOSED in section headings — no behavioral change to any executable logic, test, or code.",
+          "obligations": [
+            {
+              "description": "Status line changes from 'Phase 0.0 reopened' to 'Phases 0.0, 0.1A, 0.2 closed' with a commit SHA reference. If the SHA dd07fb2 is incorrect or does not correspond to the actual gate:0.2 passing commit, the status would be misleading.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-5",
+                  "R-1",
+                  "R-2"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The BASE SHA dd07fb2 is indeed the pre-PR commit. The HEAD status line at R-1 correctly references it as the gate:0.2 green commit. This is a self-referencing truth: the document at HEAD was built on dd07fb2, so citing it is accurate."
+              }
+            }
+          ]
+        },
+        {
+          "category": "dependency_interface_contracts",
+          "noneJustification": "This PR modifies only documentation files (docs/phase-0-spec.md, docs/roadmap.md). No code, no exports, no config schemas, no API/CLI surfaces, no type signatures are changed or depended upon.",
+          "obligations": []
+        },
+        {
+          "category": "state_side_effects",
+          "noneJustification": "Documentation-only change. No mutable state, shared modules, caches, databases, files, background jobs, or cleanup paths are affected.",
+          "obligations": []
+        },
+        {
+          "category": "config_runtime_assumptions",
+          "noneJustification": "No environment variables, feature flags, service versions, defaults, or deployment-specific values are referenced or assumed by this change.",
+          "obligations": []
+        },
+        {
+          "category": "normative_docs_tests",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "The status line in phase-0-spec.md claims gate:0.2 green on main at dd07fb2. This is a normative claim about CI gate outcomes that should be consistent with reality and with roadmap.md.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-2",
+                  "C-3",
+                  "C-4",
+                  "C-5",
+                  "C-6",
+                  "C-7",
+                  "C-8",
+                  "C-9",
+                  "R-1"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "Verified at R-1: the HEAD status line correctly references dd07fb2 (the BASE commit). The roadmap.md (C-9) consistently declares the same phase statuses. The three phase section headings in phase-0-spec.md were changed from REOPENED/unnamed to CLOSED, consistent with the top-level status claim."
+              }
+            },
+            {
+              "description": "The new docs/roadmap.md references gate names (gate:0.1B, gate:0.3, gate:0.4, etc.) that must correspond to actual gate definitions in phase-0-spec.md.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-9",
+                  "R-1"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The roadmap explicitly defers to phase-0-spec.md for authoritative gate definitions ('See phase-0-spec.md §X.Y'), and R-1 confirms phase-0-spec.md describes the gate command pattern (pnpm gate:X.Y). The roadmap does not invent new gates — it references existing ones by convention."
+              }
+            }
+          ]
+        },
+        {
+          "category": "counterexamples",
+          "noneJustification": "This is a documentation-only PR. There are no executable paths, control flow, data transformations, or inputs to construct counterexamples against. The factual claims (commit SHA, phase statuses) are either self-referencing (the SHA of the base commit) or status-label updates with no automated enfor",
+          "obligations": []
+        }
+      ]
+    },
+    "unresolvedObligations": [],
+    "rejectedSubmission": null
+  },
+  "decisionReason": "No material findings, evidence complete, verifier clean",
+  "writtenAt": "2026-08-19T22:13:23.339Z"
+}

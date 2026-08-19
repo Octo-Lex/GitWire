@@ -1,0 +1,710 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-19T22-11-44-995Z",
+  "candidate": {
+    "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+    "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+  },
+  "fixture": "RI-04",
+  "variant": "broken",
+  "run": 3,
+  "record": {
+    "fixture": "RI-04",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:41:03.267Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": false,
+    "tokensUsed": 8848,
+    "latencyMs": 115638,
+    "falseApprove": true,
+    "falsePositive": null
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "b8ccfb8",
+      "headSha": "624732c",
+      "invocationId": "rinv:3610c88dd6f2bc87e32475c53613e8ec8ab0a0be"
+    },
+    "coverage": {
+      "totalChangedFiles": 3,
+      "fullyCoveredFiles": 3,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 372,
+      "changedLinesRepresented": 372,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "packages/web/src/workers/triageWorker.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 11,
+        "deletions": 7,
+        "representedLines": 18,
+        "head": {
+          "sha": "624732c",
+          "blobSha": "2966e2e7aeb29d58a788cf0571d82f9b06089c96",
+          "contentDigest": "sha256:1e97c40bf044688c184c116b2eab182573f1e6f63b4f0e93755ccf08abb09e55"
+        },
+        "base": {
+          "sha": "b8ccfb8",
+          "blobSha": "9da23e36c41c4baeaf2fd970a8b4cef4c828f654",
+          "contentDigest": "sha256:8fd9bc627cc47025b443fe71fbe5fc00fe4edc58bc0153842409dd7df7b5ab01"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/tests/unit/triage-auto-comment.test.js",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 340,
+        "deletions": 0,
+        "representedLines": 340,
+        "head": {
+          "sha": "624732c",
+          "blobSha": "e118c07d59e5d220d292695a8f780967b0a49b03",
+          "contentDigest": "sha256:3b2efabb86bbc169e4f22ff9dd1725c768e71776703166fb590221f995f0a94b"
+        },
+        "base": null,
+        "policyExemption": null
+      },
+      {
+        "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 7,
+        "deletions": 7,
+        "representedLines": 14,
+        "head": {
+          "sha": "624732c",
+          "blobSha": "57353d1eaef5de1323b97335ba2dd723dbfade5d",
+          "contentDigest": "sha256:384cbdbe81c548dbbfe3ef3c644860aa5a544a68760630eba84be52f17aa88b2"
+        },
+        "base": {
+          "sha": "b8ccfb8",
+          "blobSha": "09710b6ad5511f06a6208bb93bdaf9686df5a4b7",
+          "contentDigest": "sha256:d1883978f36b8ab3defb57d8dbfd5d64461c311c963af5a83af447433ff602ab"
+        },
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [
+      {
+        "id": "ctx-3",
+        "type": "file_read",
+        "path": "packages/web/src/lib/logger.js",
+        "ref": "624732c",
+        "resolvedSha": "624732c",
+        "blobSha": "f3ccad82b80b2df3989313fb15f72384d2150e77",
+        "contentDigest": "sha256:b4a410152d7a2d22c7e44b8b9d55628abecda08fc7e7265b46f8b318739cce72",
+        "range": {
+          "startLine": 1,
+          "endLine": 7
+        },
+        "truncated": false,
+        "retrievalReason": "local_call_dependency"
+      },
+      {
+        "id": "ctx-4",
+        "type": "file_read",
+        "path": "packages/web/src/services/actionStateMachine.js",
+        "ref": "624732c",
+        "resolvedSha": "624732c",
+        "blobSha": "8205806d9d1304f5a17670267bfd756050b1efa2",
+        "contentDigest": "sha256:55678bc66fa388d71fd8482328bcac6e4cb58ca8bde387324f53ce45b9f8a7f4",
+        "range": {
+          "startLine": 1,
+          "endLine": 250
+        },
+        "truncated": false,
+        "retrievalReason": "local_call_dependency"
+      },
+      {
+        "id": "ctx-5",
+        "type": "file_read",
+        "path": "packages/web/config/index.js",
+        "ref": "624732c",
+        "resolvedSha": "624732c",
+        "blobSha": "ad1873579e954e829abe382ee2cef15199cabc60",
+        "contentDigest": "sha256:5c04aa824d24a933ac48dbb65421517293ab56a76c51a1ef82a55a5a45fc5ed1",
+        "range": {
+          "startLine": 1,
+          "endLine": 207
+        },
+        "truncated": false,
+        "retrievalReason": "local_import"
+      },
+      {
+        "id": "ctx-6",
+        "type": "file_read",
+        "path": "packages/web/src/lib/commentMarkers.js",
+        "ref": "624732c",
+        "resolvedSha": "624732c",
+        "blobSha": "21b7892ffbc971f34738af9f81b0abd32319a5ef",
+        "contentDigest": "sha256:1d93296acaccfa544b5bf61e70b1efd26bc9cdfc5f06e8f62cdcb172ea84bc16",
+        "range": {
+          "startLine": 1,
+          "endLine": 131
+        },
+        "truncated": false,
+        "retrievalReason": "local_import"
+      },
+      {
+        "id": "ctx-7",
+        "type": "file_read",
+        "path": "packages/web/src/lib/github.js",
+        "ref": "624732c",
+        "resolvedSha": "624732c",
+        "blobSha": "907a9b21ca0082d8d702da4a5043cf0efa671c4f",
+        "contentDigest": "sha256:cc15b81953640f3553e4f9bdc48ff81e178eccd064521d03fce4e01fff2b0fb6",
+        "range": {
+          "startLine": 1,
+          "endLine": 12
+        },
+        "truncated": false,
+        "retrievalReason": "local_import"
+      },
+      {
+        "id": "ctx-8",
+        "type": "file_read",
+        "path": "packages/web/src/lib/githubWrapper.js",
+        "ref": "624732c",
+        "resolvedSha": "624732c",
+        "blobSha": "963e8cb2ba42275366d2d60eb3612f7c8b6ea98a",
+        "contentDigest": "sha256:b914df35fea60794dc2d1392e1fbbebb5d03e3b6f42cede5764b02627c6a1bb8",
+        "range": {
+          "startLine": 1,
+          "endLine": 11
+        },
+        "truncated": true,
+        "retrievalReason": "local_import"
+      }
+    ],
+    "retrievalTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 5194
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/tests/unit/triage-auto-comment.test.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 4867
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 12502
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/lib/logger.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 234
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/services/actionStateMachine.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 9925
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/config/index.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 7158
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/lib/commentMarkers.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 4226
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/lib/github.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 371
+      },
+      {
+        "type": "file_read",
+        "result": "ok_truncated",
+        "path": "packages/web/src/lib/githubWrapper.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": true,
+        "contentLength": 523
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 3244
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "624732c",
+        "round": 2,
+        "truncated": false,
+        "contentLength": 928
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "624732c",
+        "round": 3,
+        "truncated": false,
+        "contentLength": 3426
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "624732c",
+        "round": 4,
+        "truncated": false,
+        "contentLength": 5499
+      }
+    ],
+    "primaryFindings": [],
+    "budgetConsumption": {
+      "fileReads": 13,
+      "searches": 0,
+      "retrievedChars": 58097,
+      "contextRounds": 4,
+      "exhausted": true,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:6f54a797de38e761",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-19T22:39:07.633Z",
+        "completedAt": "2026-08-19T22:39:52.324Z",
+        "durationMs": 44691,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 5558,
+          "outputTokens": 866,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 6424
+        },
+        "cost": null
+      },
+      "verifier": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-verifier",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:7d71cfa3235d0453",
+        "promptId": "v2-verifier-r3",
+        "promptHash": "46378a48abdd3072",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d251e50fb3e6",
+        "startedAt": "2026-08-19T22:39:58.921Z",
+        "completedAt": "2026-08-19T22:41:03.267Z",
+        "durationMs": 64346,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 6215,
+          "outputTokens": 1977,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 8192
+        },
+        "cost": null
+      },
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 225,
+          "outputTokens": 393,
+          "cacheReadTokens": 448,
+          "cacheWriteTokens": null,
+          "totalTokens": 1066
+        },
+        "cost": null
+      },
+      "defense": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-defense",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:3ca011fef7cbeb2f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 401,
+          "outputTokens": 193,
+          "cacheReadTokens": 320,
+          "cacheWriteTokens": null,
+          "totalTokens": 914
+        },
+        "cost": null
+      }
+    }
+  },
+  "verifierReceipt": {
+    "status": "verified",
+    "findings": [],
+    "rawFindings": [],
+    "hasMaterialFindings": false,
+    "materialFindingCount": 0,
+    "coverageSatisfied": true,
+    "tokensUsed": 8192,
+    "durationMs": 64346,
+    "unresolvedContextRequests": [],
+    "contextTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "624732c",
+        "round": 1,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "b8ccfb8",
+        "round": 2,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "624732c",
+        "round": 3,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "packages/web/src/workers/triageWorker.js",
+        "ref": "624732c",
+        "round": 4,
+        "truncated": false
+      }
+    ],
+    "actualModel": "glm-5-turbo",
+    "budgetState": {
+      "fileReads": 4,
+      "searches": 0,
+      "retrievedChars": 9884,
+      "contextRounds": 4,
+      "currentRound": 0,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      },
+      "exhausted": true
+    },
+    "riskLedger": {
+      "complete": true,
+      "categories": [
+        {
+          "category": "changed_behavior",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "Removing needs_more_info || duplicate_hint from the comment-posting condition changes when comments are posted: previously only for flagged issues, now for all issues with auto_comment enabled. This could cause unexpected comment spam on repos that relied on the implicit gating.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-3"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The diff clearly shows the intent: auto_comment=true should post a comment for every triaged issue. The old condition was a documented defect (PF-A1-01) — the condition contradicted the documented default behavior. This is the fix, not a regression."
+              }
+            },
+            {
+              "description": "Changing the footer from 'Labels applied automatically' to 'A maintainer will review shortly' could be misleading for repos where auto_label is true and labels are indeed applied.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-2",
+                  "C-4",
+                  "R-3"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The old footer was untruthful when auto_label was false (claimed labels were applied when they weren't). The new footer is a neutral, always-correct statement. This is a correctness improvement."
+              }
+            }
+          ]
+        },
+        {
+          "category": "dependency_interface_contracts",
+          "noneJustification": "No signatures, exports, or API surfaces were changed. Only the condition expression and comment text changed.",
+          "obligations": [
+            {
+              "description": "The auto_comment option's semantics changed from 'comment only on flagged issues' to 'comment on every issue'. Callers or config consumers expecting the old gating could be affected.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "R-1",
+                  "C-1"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "auto_comment is a boolean config flag read from repo config (triageOpts.auto_comment). The only semantic contract is: false means no comments, true (default) means comments are posted. The old code violated this contract by silently suppressing comments for normal issues. The fix restores the intend"
+              }
+            }
+          ]
+        },
+        {
+          "category": "state_side_effects",
+          "noneJustification": "No shared mutable state, caches, or databases were altered. The existing marker-based idempotency and state machine handle the increased comment volume safely.",
+          "obligations": [
+            {
+              "description": "More comments will now be created via postMarkedComment and the action state machine (propose/approve/execute/succeed). This increases GitHub API calls and state machine entries for repos with auto_comment enabled.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "R-1",
+                  "C-5"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The marker-backed idempotency (postMarkedComment) and state machine ensure exactly one comment per issue, even on retries. The increased volume is the intended behavior. Tests confirm idempotent retry behavior (test 5 in C-5)."
+              }
+            }
+          ]
+        },
+        {
+          "category": "config_runtime_assumptions",
+          "noneJustification": "No env vars, feature flags, or external service version assumptions were introduced.",
+          "obligations": [
+            {
+              "description": "The fix assumes auto_comment defaults to true when not explicitly set in repo config. If the config layer defaults to undefined/falsy, no comments would be posted at all.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "R-1",
+                  "C-5"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The code checks triageOpts.auto_comment !== false (negated strict inequality), which means undefined, null, and true all enable commenting. The test fixtures confirm this pattern (test 1 and 2 in C-5). The config system correctly supports this via default-falsy-but-strictly-checked pattern."
+              }
+            }
+          ]
+        },
+        {
+          "category": "normative_docs_tests",
+          "noneJustification": "All normative changes (test assertions, audit line numbers) are accounted for.",
+          "obligations": [
+            {
+              "description": "The new test file (triage-auto-comment.test.js) must accurately test the new behavior and not rely on stale assumptions from the old code.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-5"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The 6 tests comprehensively cover: normal issues get comments, auto_comment:false suppresses comments, needs_more_info adds extra sections, dry-run suppresses comments, marker-backed idempotent retry, and truthful footer for auto_label:false. All align with the new behavior described in the diff com"
+              }
+            },
+            {
+              "description": "The wave2-writer-audit.test.js line number updates must correspond to actual line shifts in the worker, not random changes.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-6",
+                  "C-7",
+                  "C-8",
+                  "C-9"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The audit test line numbers shifted by +4 for triagePR entries and +4 for triageIssue commentAction/triagePR sizeAction entries, consistent with the 4 net new lines added to the comment-posting condition block (old 1-line if → new 1-line if, but the comment block grew by 4 lines). These are mechanic"
+              }
+            }
+          ]
+        },
+        {
+          "category": "counterexamples",
+          "noneJustification": "No unaddressed edge cases found — the marker-based idempotency and clean condition change eliminate the defect without introducing new failure modes.",
+          "obligations": [
+            {
+              "description": "Counterexample: an issue classified with needs_more_info:false and duplicate_hint:null (a normal bug) on a repo with auto_comment:true should now get a comment. If the code still has an implicit dependency on these fields being truthy, the comment would be silently suppressed.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "R-1",
+                  "C-5"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The new condition is simply triageOpts.auto_comment !== false with no reference to classification fields. The test 'posts a triage summary comment for a normal issue when auto_comment is enabled' (C-5, test 1) explicitly sets needs_more_info:false and duplicate_hint:null and verifies the comment is "
+              }
+            },
+            {
+              "description": "Counterexample: a retry scenario where a previous run posted a comment with the old footer ('Labels applied automatically') and a new retry runs with the new code — would the updated comment have inconsistent or confusing content?",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "R-1",
+                  "C-5"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "On retry, postMarkedComment finds the existing marker and updates it (test 5 in C-5 confirms 'updated' action). The entire comment body is replaced via buildTriageComment, so the old footer is fully replaced with the new one. No inconsistency."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "unresolvedObligations": [],
+    "rejectedSubmission": null
+  },
+  "decisionReason": "No material findings, evidence complete, verifier clean",
+  "writtenAt": "2026-08-19T22:41:03.267Z"
+}

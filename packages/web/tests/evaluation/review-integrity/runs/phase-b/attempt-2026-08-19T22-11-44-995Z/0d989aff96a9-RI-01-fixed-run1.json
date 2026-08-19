@@ -1,0 +1,516 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-19T22-11-44-995Z",
+  "candidate": {
+    "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+    "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+  },
+  "fixture": "RI-01",
+  "variant": "fixed",
+  "run": 1,
+  "record": {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:20:10.780Z",
+    "verdict": "approved",
+    "blocked": false,
+    "checkState": "review_passed",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "Numbered list in README.md has duplicate item 3 and skips 4 after inserting roadmap.md as item 2",
+      "backlog.md 'Required before Phase 0.2' section heading is now stale/misleading after Phase 0.2 is ma"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "Numbered list in README.md has duplicate item 3 and skips 4 after inserting roadmap.md as item 2"
+      },
+      {
+        "severity": "P3",
+        "claim": "backlog.md 'Required before Phase 0.2' section heading is now stale/misleading after Phase 0.2 is marked closed"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "verified",
+    "v2DecisionReason": "No material findings, evidence complete, verifier clean",
+    "expectedDefectDetected": null,
+    "tokensUsed": 15348,
+    "latencyMs": 159535,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "dd07fb2",
+      "headSha": "20219bd384",
+      "invocationId": "rinv:e59b52f51bb0383addee8d987ba474c43ed31975"
+    },
+    "coverage": {
+      "totalChangedFiles": 4,
+      "fullyCoveredFiles": 4,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 443,
+      "changedLinesRepresented": 443,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "README.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 15,
+        "deletions": 16,
+        "representedLines": 31,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "f35e29412e4949e41f87fd794d4d63bfbd74d104",
+          "contentDigest": "sha256:b4ab2353f352a89bffcbfc835b3431635bfa5cb84d56a16f9540a39d1925d19d"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "3dec226bcb6e227d359aceac56aba4701289c29e",
+          "contentDigest": "sha256:53c6565ce84c4e3146cb405ff1d180dadf7371c6b6a3112159421228c2fa111c"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/constitution.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 3,
+        "deletions": 4,
+        "representedLines": 7,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7867491b4b5235dab38624055f0c06b45241de39",
+          "contentDigest": "sha256:11da23e66921475ce260dec18e5a25915aad2b36a105c425408847521e26ef85"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "5fe09be65faa108006fe3cdebc85068c997037d1",
+          "contentDigest": "sha256:f2c00edc3522dbb2f4e0c6219e331486bdbc231695fd46ef95812e45b4b37e7a"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/phase-0-spec.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 12,
+        "deletions": 8,
+        "representedLines": 20,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "93e16ca8be4be9b9b08da4f1e6e404f04bb1bbe2",
+          "contentDigest": "sha256:38e9940b0a1fb9219fc170f19cf988fa3a9d65dfbe590f73456305741a8ca3b3"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/roadmap.md",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 385,
+        "deletions": 0,
+        "representedLines": 385,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
+          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab"
+        },
+        "base": null,
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "README.md",
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 1323
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/backlog.md",
+        "ref": "dd07fb2",
+        "round": 2,
+        "truncated": false,
+        "contentLength": 6105
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "README.md",
+        "ref": "20219bd384",
+        "round": 3,
+        "truncated": false,
+        "contentLength": 634
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/constitution.md",
+        "ref": "20219bd384",
+        "round": 4,
+        "truncated": false,
+        "contentLength": 937
+      }
+    ],
+    "primaryFindings": [
+      {
+        "severity": "P3",
+        "category": "bug",
+        "claim": "Numbered list in README.md has duplicate item 3 and skips 4 after inserting roadmap.md as item 2",
+        "evidenceRefs": [
+          "changed:README.md@HEAD:L18-L22"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "README.md"
+        ]
+      },
+      {
+        "severity": "P3",
+        "category": "docs_gap",
+        "claim": "backlog.md 'Required before Phase 0.2' section heading is now stale/misleading after Phase 0.2 is marked closed",
+        "evidenceRefs": [
+          "repo-read:docs/backlog.md@HEAD:L26-L27",
+          "repo-read:docs/backlog.md@HEAD:L1-L3"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "docs/backlog.md"
+        ]
+      }
+    ],
+    "budgetConsumption": {
+      "fileReads": 4,
+      "searches": 0,
+      "retrievedChars": 8999,
+      "contextRounds": 4,
+      "exhausted": true,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:6f54a797de38e761",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-19T22:17:31.254Z",
+        "completedAt": "2026-08-19T22:19:09.058Z",
+        "durationMs": 97804,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 11203,
+          "outputTokens": 1139,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 12342
+        },
+        "cost": null
+      },
+      "verifier": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-verifier",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:7d71cfa3235d0453",
+        "promptId": "v2-verifier-r3",
+        "promptHash": "46378a48abdd3072",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d251e50fb3e6",
+        "startedAt": "2026-08-19T22:19:16.385Z",
+        "completedAt": "2026-08-19T22:20:10.779Z",
+        "durationMs": 54394,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 19082,
+          "outputTokens": 1134,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 20216
+        },
+        "cost": null
+      },
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 311,
+          "outputTokens": 402,
+          "cacheReadTokens": 448,
+          "cacheWriteTokens": null,
+          "totalTokens": 1161
+        },
+        "cost": null
+      },
+      "defense": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-defense",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:3ca011fef7cbeb2f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 490,
+          "outputTokens": 300,
+          "cacheReadTokens": 320,
+          "cacheWriteTokens": null,
+          "totalTokens": 1110
+        },
+        "cost": null
+      }
+    }
+  },
+  "verifierReceipt": {
+    "status": "verified",
+    "findings": [],
+    "rawFindings": [],
+    "hasMaterialFindings": false,
+    "materialFindingCount": 0,
+    "coverageSatisfied": true,
+    "tokensUsed": 20216,
+    "durationMs": 54394,
+    "unresolvedContextRequests": [],
+    "contextTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "dd07fb2",
+        "round": 2,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/roadmap.md",
+        "ref": "20219bd384",
+        "round": 3,
+        "truncated": false
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/roadmap.md",
+        "ref": "20219bd384",
+        "round": 4,
+        "truncated": false
+      }
+    ],
+    "actualModel": "glm-5-turbo",
+    "budgetState": {
+      "fileReads": 4,
+      "searches": 0,
+      "retrievedChars": 3801,
+      "contextRounds": 4,
+      "currentRound": 0,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      },
+      "exhausted": true
+    },
+    "riskLedger": {
+      "complete": true,
+      "categories": [
+        {
+          "category": "changed_behavior",
+          "noneJustification": "All four changed files are documentation only (README.md, docs/constitution.md, docs/phase-0-spec.md, docs/roadmap.md). No executable code, configuration, or scripts are modified. There is no changed behavior that could affect correctness of any runtime system.",
+          "obligations": []
+        },
+        {
+          "category": "dependency_interface_contracts",
+          "noneJustification": "No code interfaces, exports, config schemas, API/CLI surfaces, or type definitions are changed. The PR modifies only markdown documentation files, so no dependency or interface contracts are affected.",
+          "obligations": []
+        },
+        {
+          "category": "state_side_effects",
+          "noneJustification": "No mutable state, shared modules, caches, databases, files, background jobs, or cleanup paths are touched. All changes are to static documentation files with no runtime side effects.",
+          "obligations": []
+        },
+        {
+          "category": "config_runtime_assumptions",
+          "noneJustification": "No environment variables, feature flags, service versions, defaults, or deployment-specific values are introduced or changed. The PR contains no configuration or runtime assumptions.",
+          "obligations": []
+        },
+        {
+          "category": "normative_docs_tests",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "Status claim that 'gate:0.2 green on main (dd07fb2)' must be consistent across all documentation files — README.md, constitution.md, phase-0-spec.md, and roadmap.md.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-7",
+                  "C-9",
+                  "C-21"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "All four documents consistently state that Phases 0.0, 0.1A, and 0.2 are closed with gate:0.2 green. README.md (C-1) references roadmap.md; constitution.md (C-7) mirrors the same status; phase-0-spec.md (C-9) references the commit sha and roadmap; roadmap.md (C-21) is the authoritative orientation d"
+              }
+            },
+            {
+              "description": "The gate:0.5 exit gate was expanded with new Agent replacement/restart requirements in phase-0-spec.md; the roadmap.md 0.5 section must be consistent with this change.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-13",
+                  "R-1",
+                  "R-4"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The phase-0-spec.md gate:0.5 (C-13, R-1) adds the Agent replacement/restart requirement to the exit gate. The roadmap.md 0.5 section (R-4) explicitly states the same '0.5 exit proof' — proving Agent replacement/restart does not invalidate Host-owned execution identity or durable state. The two docum"
+              }
+            },
+            {
+              "description": "The README.md 'Read first' section was renumbered — the old 3-item list became a 4-item list. The content must remain internally consistent.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "The diff at C-1 shows the 'Read first' section was updated to insert a new item 2 (roadmap.md) and renumber the remaining items to 3 and 4. The content is internally consistent and the items are correct references to existing documentation files."
+              }
+            }
+          ]
+        },
+        {
+          "category": "counterexamples",
+          "noneJustification": "Since all changes are documentation-only with no executable code, there are no code paths, inputs, or runtime states to construct counterexamples against. Documentation accuracy is already covered under normative_docs_tests.",
+          "obligations": []
+        }
+      ]
+    },
+    "unresolvedObligations": [],
+    "rejectedSubmission": null
+  },
+  "decisionReason": "No material findings, evidence complete, verifier clean",
+  "writtenAt": "2026-08-19T22:20:10.780Z"
+}

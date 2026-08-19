@@ -1,0 +1,310 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-19T22-11-44-995Z",
+  "candidate": {
+    "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+    "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+  },
+  "fixture": "RI-01",
+  "variant": "broken",
+  "run": 3,
+  "record": {
+    "fixture": "RI-01",
+    "variant": "broken",
+    "run": 3,
+    "requestedModel": "glm-5-turbo",
+    "actualModel": "glm-5-turbo",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T22:17:31.237Z",
+    "verdict": "needs_discussion",
+    "blocked": true,
+    "checkState": "review_blocked",
+    "findingCount": 4,
+    "findingSeverities": [
+      "medium",
+      "medium",
+      "medium",
+      "low"
+    ],
+    "findingTitles": [
+      "phase-0-spec.md summary table still lists Phase 0.0 as 'REOPENED'",
+      "roadmap.md 0.5 framing differs from phase-0-spec.md 0.5 objective/title without explicit reconciliat",
+      "roadmap.md §0.8 renames React GUI phase and introduces 'Application Protocol' framing absent from ph",
+      "roadmap.md document roles section references docs/constitution.md with relative link that may not re"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P2",
+        "claim": "phase-0-spec.md summary table still lists Phase 0.0 as 'REOPENED'"
+      },
+      {
+        "severity": "P2",
+        "claim": "roadmap.md 0.5 framing differs from phase-0-spec.md 0.5 objective/title without explicit reconciliation"
+      },
+      {
+        "severity": "P2",
+        "claim": "roadmap.md §0.8 renames React GUI phase and introduces 'Application Protocol' framing absent from phase-0-spec.md §0.8"
+      },
+      {
+        "severity": "P3",
+        "claim": "roadmap.md document roles section references docs/constitution.md with relative link that may not resolve correctly"
+      }
+    ],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "not_run",
+    "v2DecisionReason": "P2 finding present — needs discussion, never approve",
+    "expectedDefectDetected": true,
+    "tokensUsed": 33589,
+    "latencyMs": 72935,
+    "falseApprove": false,
+    "falsePositive": null
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "dd07fb2",
+      "headSha": "0181b19f00dc",
+      "invocationId": "rinv:5fb742d251c34d2e309253a0ec563ee44ffcc588"
+    },
+    "coverage": {
+      "totalChangedFiles": 2,
+      "fullyCoveredFiles": 2,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 393,
+      "changedLinesRepresented": 393,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "docs/phase-0-spec.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 4,
+        "deletions": 4,
+        "representedLines": 8,
+        "head": {
+          "sha": "0181b19f00dc",
+          "blobSha": "77a9847924a044cf13609a4189553f77068ebfda",
+          "contentDigest": "sha256:5d26fb562821169745a9a39666dde56436ce1a171365a25c5a6fa33f97e9b5ac"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "93e16ca8be4be9b9b08da4f1e6e404f04bb1bbe2",
+          "contentDigest": "sha256:38e9940b0a1fb9219fc170f19cf988fa3a9d65dfbe590f73456305741a8ca3b3"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/roadmap.md",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 385,
+        "deletions": 0,
+        "representedLines": 385,
+        "head": {
+          "sha": "0181b19f00dc",
+          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
+          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab"
+        },
+        "base": null,
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "0181b19f00dc",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 34854
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/backlog.md",
+        "ref": "0181b19f00dc",
+        "round": 2,
+        "truncated": false,
+        "contentLength": 6105
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/constitution.md",
+        "ref": "0181b19f00dc",
+        "round": 3,
+        "truncated": false,
+        "contentLength": 5071
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/rules.md",
+        "ref": "0181b19f00dc",
+        "round": 4,
+        "truncated": false,
+        "contentLength": 9439
+      }
+    ],
+    "primaryFindings": [
+      {
+        "severity": "P2",
+        "category": "docs_gap",
+        "claim": "phase-0-spec.md summary table still lists Phase 0.0 as 'REOPENED'",
+        "evidenceRefs": [
+          "changed:docs/phase-0-spec.md@HEAD:L120-L120"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "docs/phase-0-spec.md"
+        ]
+      },
+      {
+        "severity": "P2",
+        "category": "docs_gap",
+        "claim": "roadmap.md 0.5 framing differs from phase-0-spec.md 0.5 objective/title without explicit reconciliation",
+        "evidenceRefs": [
+          "changed:docs/roadmap.md@HEAD:L191-L192",
+          "changed:docs/roadmap.md@HEAD:L195-L206"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "docs/roadmap.md",
+          "docs/phase-0-spec.md"
+        ]
+      },
+      {
+        "severity": "P2",
+        "category": "docs_gap",
+        "claim": "roadmap.md §0.8 renames React GUI phase and introduces 'Application Protocol' framing absent from phase-0-spec.md §0.8",
+        "evidenceRefs": [
+          "changed:docs/roadmap.md@HEAD:L248-L249",
+          "changed:docs/roadmap.md@HEAD:L252-L259"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "docs/roadmap.md",
+          "docs/phase-0-spec.md"
+        ]
+      },
+      {
+        "severity": "P3",
+        "category": "docs_gap",
+        "claim": "roadmap.md document roles section references docs/constitution.md with relative link that may not resolve correctly",
+        "evidenceRefs": [
+          "changed:docs/roadmap.md@HEAD:L382-L386"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "docs/roadmap.md"
+        ]
+      }
+    ],
+    "budgetConsumption": {
+      "fileReads": 4,
+      "searches": 0,
+      "retrievedChars": 55469,
+      "contextRounds": 4,
+      "exhausted": true,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5-turbo",
+        "observedModel": "glm-5-turbo",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:6f54a797de38e761",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-19T22:16:18.304Z",
+        "completedAt": "2026-08-19T22:17:21.183Z",
+        "durationMs": 62879,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 27466,
+          "outputTokens": 1805,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 29271
+        },
+        "cost": null
+      },
+      "verifier": null,
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 910,
+          "outputTokens": 1249,
+          "cacheReadTokens": 384,
+          "cacheWriteTokens": null,
+          "totalTokens": 2543
+        },
+        "cost": null
+      },
+      "defense": null
+    }
+  },
+  "verifierReceipt": null,
+  "decisionReason": "P2 finding present — needs discussion, never approve",
+  "writtenAt": "2026-08-19T22:17:31.237Z"
+}
