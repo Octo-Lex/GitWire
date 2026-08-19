@@ -5,12 +5,13 @@
 
 import { RISK_CATEGORY_IDS } from "../../src/services/approvalVerificationService.js";
 
-export function clearedObligation(description = "The change could alter caller-visible behavior at its call sites.", evidenceRef = "changed:src/app.js@HEAD:L2-L3") {
+export function clearedObligation(description = "The change could alter caller-visible behavior at its call sites.", evidenceHandle = "C-1") {
   return {
     description,
     resolution: {
       outcome: "evidence_cleared",
-      evidenceRefs: [evidenceRef],
+      evidenceHandles: [evidenceHandle],
+      evidenceRefs: [],
     },
   };
 }
@@ -36,11 +37,11 @@ export function materialObligation(description = "The change breaks a documented
 }
 
 /** Structurally complete ledger, every obligation evidence-cleared. */
-export function completeClearedLedger(evidenceRef) {
+export function completeClearedLedger(evidenceHandle) {
   return {
     categories: RISK_CATEGORY_IDS.map(id => ({
       category: id,
-      obligations: [clearedObligation(undefined, evidenceRef)],
+      obligations: [clearedObligation(undefined, evidenceHandle)],
       noneJustification: null,
     })),
   };
@@ -73,21 +74,21 @@ export function completeNoneJustifiedLedger() {
  * Ledger with one category's obligations replaced. When the replacement
  * array is empty, a noneJustification keeps the ledger structurally valid.
  */
-export function ledgerWithCategory(categoryId, obligations, noneJustification = null, evidenceRef) {
+export function ledgerWithCategory(categoryId, obligations, noneJustification = null, evidenceHandle) {
   return {
     categories: RISK_CATEGORY_IDS.map(id =>
       id === categoryId
         ? { category: id, obligations, noneJustification }
-        : { category: id, obligations: [clearedObligation(undefined, evidenceRef)], noneJustification: null }
+        : { category: id, obligations: [clearedObligation(undefined, evidenceHandle)], noneJustification: null }
     ),
   };
 }
 
 /** Ledger missing one category entirely. */
-export function ledgerMissingCategory(categoryId, evidenceRef) {
+export function ledgerMissingCategory(categoryId, evidenceHandle) {
   return {
     categories: RISK_CATEGORY_IDS
       .filter(id => id !== categoryId)
-      .map(id => ({ category: id, obligations: [clearedObligation(undefined, evidenceRef)], noneJustification: null })),
+      .map(id => ({ category: id, obligations: [clearedObligation(undefined, evidenceHandle)], noneJustification: null })),
   };
 }

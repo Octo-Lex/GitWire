@@ -91,7 +91,7 @@ function makeFakeVerifierAnthropic({ observedModel = "observed-model-1", usage }
           model: observedModel, stop_reason: "tool_use", usage: usage || { input_tokens: 50, output_tokens: 10 },
           content: [{
             type: "tool_use", id: "tu1", name: "submit_verification_result",
-            input: { status: "verified", findings: [], riskLedger: completeClearedLedger("changed:src/one.js@HEAD:L1-L2"), coverageSatisfied: true },
+            input: { status: "verified", findings: [], riskLedger: completeClearedLedger("C-1"), coverageSatisfied: true },
           }],
         };
       },
@@ -244,7 +244,7 @@ describe("Phase 10 C: verifier invocation execution profile", () => {
     expect(receipt.executionProfile.requestedModel).toBe("ver-requested");
     expect(receipt.executionProfile.observedModel).toBe("ver-observed");
     expect(receipt.executionProfile.adapter).toBe("anthropic-sdk-verifier");
-    expect(receipt.executionProfile.promptId).toBe("v2-verifier-r2");
+    expect(receipt.executionProfile.promptId).toBe("v2-verifier-r3");
     expect(receipt.executionProfile.terminalState).toBe("completed");
   });
 
@@ -294,7 +294,7 @@ describe("submission-path usage accounting and fallback recording", () => {
     overallCorrectness: "correct", overallConfidence: "high", summary: "clean",
   };
   const SUBMIT_INPUT_VERIFIER = {
-    status: "verified", findings: [], riskLedger: completeClearedLedger("changed:src/one.js@HEAD:L1-L2"), coverageSatisfied: true,
+    status: "verified", findings: [], riskLedger: completeClearedLedger("C-1"), coverageSatisfied: true,
   };
 
   it("primary: a retried submission accounts for BOTH responses' usage", async () => {
