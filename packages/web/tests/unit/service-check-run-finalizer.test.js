@@ -145,6 +145,46 @@ describe("finalizeGitwireCheck", function () {
     );
   });
 
+  // ── v2 checkState (RI-6 semantics) ───────────────────────────────────────
+
+  it("finalizes as neutral when v2 checkState is review_incomplete (never success)", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: { verdict: "needs_discussion", blocked: false, findings: [], checkState: "review_incomplete" },
+    });
+    expect(mockUpdateCheck).toHaveBeenCalledWith(
+      expect.objectContaining({ checkRunId: 99999, conclusion: "neutral" })
+    );
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.title).toContain("incomplete");
+  });
+
+  it("finalizes as failure when v2 checkState is review_blocked", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: {
+        verdict: "request_changes", blocked: true, findings: [{ title: "P0" }],
+        checkState: "review_blocked",
+      },
+    });
+    expect(mockUpdateCheck).toHaveBeenCalledWith(
+      expect.objectContaining({ checkRunId: 99999, conclusion: "failure" })
+    );
+  });
+
+  it("finalizes as success when v2 checkState is review_passed", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: { verdict: "approved", blocked: false, findings: [], checkState: "review_passed" },
+    });
+    expect(mockUpdateCheck).toHaveBeenCalledWith(
+      expect.objectContaining({ checkRunId: 99999, conclusion: "success" })
+    );
+  });
+
   // ── Cleanup (via atomic Lua compare-and-delete) ──────────────────────────
 
   it("uses atomic compare-and-delete to clean up Redis pointer", async function () {

@@ -30,6 +30,13 @@ scripts/update-webhook.js
 tests/
 __tests__/
 
+# Phase 10 exception: the frozen evaluation-corpus records ship in the
+# production image (the quality read model serves corpus measurements from
+# them). The root Dockerfile asserts their presence so packaging drift
+# fails the build instead of silently degrading the scorecard.
+!packages/web/tests/evaluation/review-integrity/runs/
+!packages/web/tests/evaluation/review-integrity/runs/**
+
 # Development configs
 .gitleaks.toml
 .editorconfig

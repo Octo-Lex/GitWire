@@ -284,3 +284,54 @@ describe("runAdversarialChallenge", () => {
     expect(result.missedRisks[0].title).toBe("Memory leak");
   });
 });
+
+// ── Execution-profile telemetry (client correction, 2026-08-17) ─────────────
+// The challenge call returns requested/observed identity and usage so the
+// integrity receipt can account for every billable response class.
+
+describe("runAdversarialChallenge execution-profile telemetry", () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  test("returns requested/observed identity and usage with the profile", async () => {
+    mockCreate.mockResolvedValue({
+      model: "glm-4.7-served",
+      content: [{ type: "text", text: JSON.stringify({
+        challenges: [
+          { finding_index: 0, disproven: false, reason: "Upheld", suggested_action: "keep", new_severity: null },
+        ],
+        missed_risks: [],
+      })}],
+      usage: { input_tokens: 500, output_tokens: 200 },
+    });
+
+    const result = await runAdversarialChallenge(
+      [{ title: "Bug", severity: "high", description: "desc" }],
+      { prTitle: "Fix auth", repoName: "org/repo" }
+    );
+
+    expect(result.executionProfile.requestedModel).toBe("claude-haiku-4-20250414");
+    expect(result.executionProfile.observedModel).toBe("glm-4.7-served");
+    expect(result.executionProfile.identitySource).toBe("provider_reported");
+    expect(result.executionProfile.usage.inputTokens).toBe(500);
+    expect(result.executionProfile.usage.outputTokens).toBe(200);
+    expect(result.executionProfile.usage.totalTokens).toBe(700);
+    expect(result.executionProfile.adapter).toBe("anthropic-sdk-adversarial");
+  });
+
+  test("API failure still yields a requested-only profile with null usage", async () => {
+    mockCreate.mockRejectedValue(new Error("provider down"));
+
+    const result = await runAdversarialChallenge(
+      [{ title: "Bug", severity: "high", description: "desc" }],
+      { prTitle: "Fix auth", repoName: "org/repo" }
+    );
+
+    expect(result.tokensUsed).toBe(0);
+    expect(result.executionProfile.requestedModel).toBe("claude-haiku-4-20250414");
+    expect(result.executionProfile.observedModel).toBeNull();
+    expect(result.executionProfile.identitySource).toBe("requested_only");
+    expect(result.executionProfile.usage).toBeNull();
+  });
+});

@@ -1,0 +1,958 @@
+{
+  "kind": "phase9-ab-run",
+  "manifestHash": "sha256:9b288c0af9fae6ab2cdc6c4384b5946750107cbf6a586519e334f6316fbac1be",
+  "invocation": 8,
+  "arm": "current-gitwire",
+  "variant": "fixed",
+  "repetition": 1,
+  "startedAt": "2026-08-16T11:26:11.670Z",
+  "finishedAt": "2026-08-16T11:30:46.090Z",
+  "execution": {
+    "status": "completed",
+    "requestedHarness": "current-gitwire",
+    "actualHarness": "current-gitwire",
+    "requestedProvider": "zai",
+    "actualProvider": "zai",
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "startedAt": "2026-08-16T11:26:11.671Z",
+    "completedAt": "2026-08-16T11:30:46.090Z",
+    "durationMs": 274419,
+    "toolTrace": [
+      {
+        "ts": "2026-08-16T11:26:11.682Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js",
+          "limit": 2000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 11.436,
+        "returnedBytes": 5039,
+        "returnedItems": 160
+      },
+      {
+        "ts": "2026-08-16T11:26:11.686Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "limit": 2000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.985,
+        "returnedBytes": 32525,
+        "returnedItems": 710
+      },
+      {
+        "ts": "2026-08-16T11:26:11.690Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/queue.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.564,
+        "returnedBytes": 19,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.694Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/github.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.433,
+        "returnedBytes": 20,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.697Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/githubWrapper.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.499,
+        "returnedBytes": 27,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.701Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/issueService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.458,
+        "returnedBytes": 31,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.704Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/duplicateDetectionService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.64,
+        "returnedBytes": 44,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.708Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/configService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.582,
+        "returnedBytes": 32,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.712Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/config/index.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.629,
+        "returnedBytes": 18,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.716Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/logger.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.919,
+        "returnedBytes": 20,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.719Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/decisionLogService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.703,
+        "returnedBytes": 37,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.723Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/idempotencyService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.612,
+        "returnedBytes": 37,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.726Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/waiverService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.514,
+        "returnedBytes": 32,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.731Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/telegramNotifyService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 4.636,
+        "returnedBytes": 40,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.735Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/actionStateMachine.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 4.269,
+        "returnedBytes": 37,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.740Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/auth/workerAdoption.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 4.186,
+        "returnedBytes": 38,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.744Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/triageFailureService.js",
+          "limit": 1
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 4.12,
+        "returnedBytes": 39,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:26:11.748Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/comment-markers-pagination.test.js",
+          "limit": 2000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 4.037,
+        "returnedBytes": 7512,
+        "returnedItems": 187
+      },
+      {
+        "ts": "2026-08-16T11:26:11.752Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/triage-auto-comment.test.js",
+          "limit": 2000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 4.169,
+        "returnedBytes": 14270,
+        "returnedItems": 364
+      },
+      {
+        "ts": "2026-08-16T11:26:11.757Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js",
+          "limit": 2000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 4.568,
+        "returnedBytes": 14686,
+        "returnedItems": 170
+      },
+      {
+        "ts": "2026-08-16T11:26:11.760Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/queue.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.596,
+        "returnedBytes": 545,
+        "returnedItems": 25
+      },
+      {
+        "ts": "2026-08-16T11:26:11.764Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/github.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.43,
+        "returnedBytes": 370,
+        "returnedItems": 11
+      },
+      {
+        "ts": "2026-08-16T11:26:11.768Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/githubWrapper.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.666,
+        "returnedBytes": 4121,
+        "returnedItems": 127
+      },
+      {
+        "ts": "2026-08-16T11:26:11.771Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/issueService.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.631,
+        "returnedBytes": 3915,
+        "returnedItems": 130
+      },
+      {
+        "ts": "2026-08-16T11:26:11.775Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/duplicateDetectionService.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.618,
+        "returnedBytes": 9795,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T11:26:11.779Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/configService.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.702,
+        "returnedBytes": 8124,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T11:26:11.782Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/config/index.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.506,
+        "returnedBytes": 7451,
+        "returnedItems": 206
+      },
+      {
+        "ts": "2026-08-16T11:26:11.786Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/logger.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.645,
+        "returnedBytes": 233,
+        "returnedItems": 6
+      },
+      {
+        "ts": "2026-08-16T11:26:11.789Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/decisionLogService.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.536,
+        "returnedBytes": 6487,
+        "returnedItems": 209
+      },
+      {
+        "ts": "2026-08-16T11:26:11.793Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/idempotencyService.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.746,
+        "returnedBytes": 9869,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T11:26:11.797Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/waiverService.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.526,
+        "returnedBytes": 7340,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T11:26:11.800Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/telegramNotifyService.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.447,
+        "returnedBytes": 2595,
+        "returnedItems": 106
+      },
+      {
+        "ts": "2026-08-16T11:26:11.804Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/actionStateMachine.js",
+          "limit": 250
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 3.77,
+        "returnedBytes": 10187,
+        "returnedItems": 250
+      },
+      {
+        "ts": "2026-08-16T11:26:11.808Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/auth/workerAdoption.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.604,
+        "returnedBytes": 4742,
+        "returnedItems": 111
+      },
+      {
+        "ts": "2026-08-16T11:26:11.811Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/services/triageFailureService.js",
+          "limit": 250
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 3.676,
+        "returnedBytes": 6691,
+        "returnedItems": 167
+      },
+      {
+        "ts": "2026-08-16T11:26:53.473Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/lib/commentMarkers.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 8.752,
+        "returnedBytes": 5039,
+        "returnedItems": 160
+      },
+      {
+        "ts": "2026-08-16T11:26:53.479Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "offset": 300,
+          "limit": 420
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 5.83,
+        "returnedBytes": 18423,
+        "returnedItems": 411
+      },
+      {
+        "ts": "2026-08-16T11:27:17.274Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "offset": 374,
+          "limit": 16
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 7.714,
+        "returnedBytes": 1067,
+        "returnedItems": 16
+      },
+      {
+        "ts": "2026-08-16T11:27:17.280Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "offset": 474,
+          "limit": 40
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 5.604,
+        "returnedBytes": 2009,
+        "returnedItems": 40
+      },
+      {
+        "ts": "2026-08-16T11:27:17.285Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/src/workers/triageWorker.js",
+          "offset": 570,
+          "limit": 45
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 5.3,
+        "returnedBytes": 2184,
+        "returnedItems": 45
+      },
+      {
+        "ts": "2026-08-16T11:28:44.634Z",
+        "operation": "read",
+        "params": {
+          "path": "packages/web/tests/unit/wave2-writer-audit.test.js"
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 6.422,
+        "returnedBytes": 14686,
+        "returnedItems": 170
+      },
+      {
+        "ts": "2026-08-16T11:28:44.634Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "Labels applied automatically",
+          "path": ".",
+          "timeoutMs": 10000
+        },
+        "status": "error",
+        "complete": false,
+        "partialReasons": [],
+        "durationMs": 0.549,
+        "returnedBytes": 0,
+        "errorCode": "E_PATH_ESCAPE"
+      },
+      {
+        "ts": "2026-08-16T11:28:44.635Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "auto_comment",
+          "path": ".",
+          "limit": 60,
+          "timeoutMs": 10000
+        },
+        "status": "error",
+        "complete": false,
+        "partialReasons": [],
+        "durationMs": 0.056,
+        "returnedBytes": 0,
+        "errorCode": "E_PATH_ESCAPE"
+      },
+      {
+        "ts": "2026-08-16T11:28:55.214Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "Labels applied automatically",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 77.897,
+        "returnedBytes": 243,
+        "returnedItems": 2
+      },
+      {
+        "ts": "2026-08-16T11:28:55.278Z",
+        "operation": "grep",
+        "params": {
+          "pattern": "auto_comment",
+          "limit": 60,
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 64.54,
+        "returnedBytes": 3849,
+        "returnedItems": 29
+      },
+      {
+        "ts": "2026-08-16T11:29:07.153Z",
+        "operation": "grep",
+        "params": {
+          "limit": 60,
+          "pattern": "findCommentByMarker|postMarkedComment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 65.625,
+        "returnedBytes": 3889,
+        "returnedItems": 30
+      },
+      {
+        "ts": "2026-08-16T11:29:07.173Z",
+        "operation": "grep",
+        "params": {
+          "limit": 40,
+          "path": "packages/web/tests",
+          "pattern": "triageWorker",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 20.68,
+        "returnedBytes": 5921,
+        "returnedItems": 30
+      },
+      {
+        "ts": "2026-08-16T11:29:18.996Z",
+        "operation": "read",
+        "params": {
+          "limit": 130,
+          "offset": 130,
+          "path": "packages/web/tests/unit/triage-mutation-recovery.test.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 6.531,
+        "returnedBytes": 6090,
+        "returnedItems": 130
+      },
+      {
+        "ts": "2026-08-16T11:29:19.007Z",
+        "operation": "grep",
+        "params": {
+          "limit": 50,
+          "path": "packages/web/tests/unit/wave2-triage-integration.test.js",
+          "pattern": "postMarkedComment|needs_more_info|duplicate_hint",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 11.052,
+        "returnedBytes": 146,
+        "returnedItems": 1
+      },
+      {
+        "ts": "2026-08-16T11:29:39.156Z",
+        "operation": "grep",
+        "params": {
+          "limit": 40,
+          "path": "packages/web/tests",
+          "pattern": "needs_more_info|would post triage comment|auto_comment",
+          "timeoutMs": 10000
+        },
+        "status": "success",
+        "complete": true,
+        "partialReasons": [],
+        "durationMs": 33.578,
+        "returnedBytes": 3030,
+        "returnedItems": 24
+      },
+      {
+        "ts": "2026-08-16T11:29:39.163Z",
+        "operation": "read",
+        "params": {
+          "limit": 60,
+          "offset": 20,
+          "path": "packages/web/tests/unit/triage-pr-guards.test.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 7.091,
+        "returnedBytes": 2110,
+        "returnedItems": 60
+      },
+      {
+        "ts": "2026-08-16T11:29:54.025Z",
+        "operation": "read",
+        "params": {
+          "limit": 60,
+          "offset": 1,
+          "path": "packages/web/src/workers/triageWorker.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 8.195,
+        "returnedBytes": 2837,
+        "returnedItems": 60
+      },
+      {
+        "ts": "2026-08-16T11:29:54.030Z",
+        "operation": "read",
+        "params": {
+          "limit": 110,
+          "offset": 20,
+          "path": "packages/web/tests/unit/triage-mutation-recovery.test.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 5.081,
+        "returnedBytes": 5178,
+        "returnedItems": 110
+      },
+      {
+        "ts": "2026-08-16T11:30:15.942Z",
+        "operation": "read",
+        "params": {
+          "limit": 200,
+          "offset": 100,
+          "path": "packages/web/src/workers/triageWorker.js"
+        },
+        "status": "partial",
+        "complete": false,
+        "partialReasons": [
+          "output_lines"
+        ],
+        "durationMs": 7.453,
+        "returnedBytes": 9754,
+        "returnedItems": 200
+      }
+    ],
+    "submission": {
+      "payload": {
+        "findings": [
+          {
+            "severity": "P3",
+            "category": "docs_gap",
+            "claim": "findCommentByMarker JSDoc still documents the wrong ambiguous-return shape (comments: []) after this PR edited that doc block",
+            "description": "The PR rewrote the JSDoc above findCommentByMarker (adding the pagination contract) but left the stale line 'Returns { ambiguous: true, comments: [] } if multiple matches found.' Both return sites in the implementation actually return the matched comments ({ ambiguous: true, comments: matches }), and the only caller, postMarkedComment, depends on that real shape: it reports result.detail.matchCount = existing.comments.length (triageWorker.js then uses result.detail?.matchCount in its ambiguous-error message). A future maintainer following the documented contract (empty array) would break the matchCount detail. Documentation-vs-behavior contract mismatch in the exact block this PR modified.",
+            "affectedPaths": [
+              "packages/web/src/lib/commentMarkers.js"
+            ],
+            "evidenceRefs": [
+              "changed:packages/web/src/lib/commentMarkers.js@HEAD:L38-L56",
+              "changed:packages/web/src/lib/commentMarkers.js@HEAD:L80-L83",
+              "changed:packages/web/src/lib/commentMarkers.js@HEAD:L90-L93",
+              "changed:packages/web/src/lib/commentMarkers.js@HEAD:L127-L133",
+              "changed:packages/web/src/workers/triageWorker.js@HEAD:L374-L378"
+            ],
+            "proof": {
+              "type": "static_trace",
+              "summary": "JSDoc at L45-46 claims comments:[] for the ambiguous case; code returns comments:matches at L82 and L93; postMarkedComment L130-133 reads existing.comments.length as matchCount, proving the doc contradicts the contract callers rely on."
+            },
+            "confidence": 0.9
+          }
+        ],
+        "unresolvedContextRequests": [],
+        "approvalEvidenceComplete": true
+      },
+      "submittedAt": "2026-08-16T11:30:46.090Z",
+      "submitAttempts": 1
+    },
+    "usage": {
+      "inputTokens": 130310,
+      "outputTokens": 11343,
+      "cacheReadTokens": 384576,
+      "cacheWriteTokens": 0,
+      "totalTokens": 526229,
+      "costUsd": 0.13390668
+    },
+    "terminationReason": "submitted",
+    "submissionDiagnostics": {
+      "stopReason": "toolUse",
+      "usedSubmitTool": true,
+      "submissionRetried": false,
+      "textTail": null
+    }
+  },
+  "submissionVerification": {
+    "evidenceComplete": true,
+    "findings": [
+      {
+        "claim": "findCommentByMarker JSDoc still documents the wrong ambiguous-return shape (comments: []) after this PR edited that doc block",
+        "severity": "P3",
+        "material": false,
+        "refs": [
+          {
+            "ref": "changed:packages/web/src/lib/commentMarkers.js@HEAD:L38-L56",
+            "parsed": true,
+            "type": "changed",
+            "verification": "deferred_to_ri4_patch_validation"
+          },
+          {
+            "ref": "changed:packages/web/src/lib/commentMarkers.js@HEAD:L80-L83",
+            "parsed": true,
+            "type": "changed",
+            "verification": "deferred_to_ri4_patch_validation"
+          },
+          {
+            "ref": "changed:packages/web/src/lib/commentMarkers.js@HEAD:L90-L93",
+            "parsed": true,
+            "type": "changed",
+            "verification": "deferred_to_ri4_patch_validation"
+          },
+          {
+            "ref": "changed:packages/web/src/lib/commentMarkers.js@HEAD:L127-L133",
+            "parsed": true,
+            "type": "changed",
+            "verification": "deferred_to_ri4_patch_validation"
+          },
+          {
+            "ref": "changed:packages/web/src/workers/triageWorker.js@HEAD:L374-L378",
+            "parsed": true,
+            "type": "changed",
+            "verification": "deferred_to_ri4_patch_validation"
+          }
+        ],
+        "evidenceComplete": true
+      }
+    ]
+  },
+  "ri4FindingValidation": [
+    {
+      "claim": "findCommentByMarker JSDoc still documents the wrong ambiguous-return shape (comments: []) after this PR edited that doc block",
+      "valid": true,
+      "errors": [],
+      "warnings": [
+        "affectedPath not in evidence: packages/web/src/lib/commentMarkers.js"
+      ],
+      "downgraded": false
+    }
+  ],
+  "expectedSignature": {
+    "severityClass": "none"
+  },
+  "mutationOccurred": false
+}

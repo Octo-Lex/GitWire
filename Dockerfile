@@ -18,6 +18,12 @@ RUN npm ci --omit=dev --ignore-scripts
 # Copy source (this layer only rebuilds when source actually changes)
 COPY . .
 
+# Phase 10: the frozen evaluation corpus must be present in the image —
+# .dockerignore re-includes it. The quality scorecard reads it at request
+# time; a missing corpus must fail the BUILD, not silently degrade the
+# dashboard to runtime-only measurements.
+RUN test -d packages/web/tests/evaluation/review-integrity/runs
+
 # Generate build-info from root package.json + git SHA (v0.20.2)
 ARG GITWIRE_COMMIT_SHA=unknown
 ARG GITWIRE_BUILT_AT=unknown
