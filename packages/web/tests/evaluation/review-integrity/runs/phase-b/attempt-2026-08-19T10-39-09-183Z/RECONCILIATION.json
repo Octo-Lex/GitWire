@@ -1,0 +1,1116 @@
+{
+  "attemptId": "attempt-2026-08-19T10-39-09-183Z",
+  "candidate": {
+    "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+    "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+  },
+  "expectedCoordinates": 24,
+  "uniqueCoordinates": 24,
+  "missingCoordinates": [],
+  "duplicateCoordinates": [],
+  "invocationAccounting": {
+    "providerReachedInvocations": 24,
+    "zeroTokenInvocations": 0,
+    "receiptPresentInvocations": 24,
+    "receiptAbsentInvocations": 0,
+    "consoleTokensUsedTotal": 492240,
+    "verifierClassCounts": {
+      "verified": 4,
+      "ledger_rejected": 3,
+      "not_run": 15,
+      "incomplete_other": 2
+    },
+    "falseApprovesOnBroken": [
+      "RI-01|broken|1",
+      "RI-04|broken|3"
+    ],
+    "detectionsOnBroken": [
+      "RI-01|broken|3"
+    ],
+    "approvesOnFixed": [
+      "RI-01|fixed|2",
+      "RI-02|fixed|2"
+    ],
+    "profileUsage": {
+      "primary": {
+        "input": 369251,
+        "output": 41181,
+        "cached": 0,
+        "total": 410432
+      },
+      "verifier": {
+        "input": 117420,
+        "output": 17937,
+        "cached": 0,
+        "total": 135357
+      },
+      "adversarial": {
+        "input": 9406,
+        "output": 12499,
+        "cached": 10112,
+        "total": 32017
+      },
+      "defense": {
+        "input": 13172,
+        "output": 5827,
+        "cached": 4352,
+        "total": 23351
+      }
+    },
+    "totals": {
+      "input": 509249,
+      "output": 77444,
+      "cached": 14464,
+      "all": 601157
+    },
+    "quotaUnits": {
+      "formula": "input*6.9 + cached*1.7 + output*24",
+      "value": 5397063
+    }
+  },
+  "invocations": [
+    {
+      "coordinate": "RI-01|broken|1",
+      "file": "0d989aff96a9-RI-01-broken-run1.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 27338,
+      "latencyMs": 87338,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": true,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "rejectedSubmissionPreserved": false,
+        "unresolvedObligations": 0,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 23448,
+          "output": 1840,
+          "cached": 0,
+          "total": 25288
+        },
+        "verifier": {
+          "input": 17375,
+          "output": 1600,
+          "cached": 0,
+          "total": 18975
+        },
+        "adversarial": {
+          "input": 735,
+          "output": 290,
+          "cached": 0,
+          "total": 1025
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-01|broken|2",
+      "file": "0d989aff96a9-RI-01-broken-run2.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 34984,
+      "latencyMs": 101929,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "incomplete",
+        "vClass": "ledger_rejected",
+        "ledgerComplete": false,
+        "rejectedSubmissionPreserved": true,
+        "unresolvedObligations": 0,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 25544,
+          "output": 2890,
+          "cached": 0,
+          "total": 28434
+        },
+        "verifier": {
+          "input": 9385,
+          "output": 987,
+          "cached": 0,
+          "total": 10372
+        },
+        "adversarial": {
+          "input": 805,
+          "output": 682,
+          "cached": 384,
+          "total": 1871
+        },
+        "defense": {
+          "input": 1337,
+          "output": 451,
+          "cached": 0,
+          "total": 1788
+        }
+      }
+    },
+    {
+      "coordinate": "RI-01|broken|3",
+      "file": "0d989aff96a9-RI-01-broken-run3.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_blocked",
+      "consoleTokensUsed": 33309,
+      "latencyMs": 69252,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": true,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 24239,
+          "output": 2898,
+          "cached": 0,
+          "total": 27137
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 755,
+          "output": 811,
+          "cached": 384,
+          "total": 1950
+        },
+        "defense": {
+          "input": 1051,
+          "output": 469,
+          "cached": 320,
+          "total": 1840
+        }
+      }
+    },
+    {
+      "coordinate": "RI-01|fixed|1",
+      "file": "0d989aff96a9-RI-01-fixed-run1.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 22316,
+      "latencyMs": 103398,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "incomplete",
+        "vClass": "incomplete_other",
+        "ledgerComplete": true,
+        "rejectedSubmissionPreserved": false,
+        "unresolvedObligations": 0,
+        "findings": 1
+      },
+      "roles": {
+        "primary": {
+          "input": 19099,
+          "output": 1149,
+          "cached": 0,
+          "total": 20248
+        },
+        "verifier": {
+          "input": 23445,
+          "output": 2709,
+          "cached": 0,
+          "total": 26154
+        },
+        "adversarial": {
+          "input": 160,
+          "output": 390,
+          "cached": 448,
+          "total": 998
+        },
+        "defense": {
+          "input": 271,
+          "output": 213,
+          "cached": 320,
+          "total": 804
+        }
+      }
+    },
+    {
+      "coordinate": "RI-01|fixed|2",
+      "file": "0d989aff96a9-RI-01-fixed-run2.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 9940,
+      "latencyMs": 93495,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "rejectedSubmissionPreserved": false,
+        "unresolvedObligations": 0,
+        "findings": 1
+      },
+      "roles": {
+        "primary": {
+          "input": 6403,
+          "output": 1343,
+          "cached": 0,
+          "total": 7746
+        },
+        "verifier": {
+          "input": 9755,
+          "output": 2551,
+          "cached": 0,
+          "total": 12306
+        },
+        "adversarial": {
+          "input": 172,
+          "output": 421,
+          "cached": 448,
+          "total": 1041
+        },
+        "defense": {
+          "input": 297,
+          "output": 207,
+          "cached": 320,
+          "total": 824
+        }
+      }
+    },
+    {
+      "coordinate": "RI-01|fixed|3",
+      "file": "0d989aff96a9-RI-01-fixed-run3.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 12970,
+      "latencyMs": 85659,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "incomplete",
+        "vClass": "incomplete_other",
+        "ledgerComplete": true,
+        "rejectedSubmissionPreserved": false,
+        "unresolvedObligations": 0,
+        "findings": 1
+      },
+      "roles": {
+        "primary": {
+          "input": 9478,
+          "output": 1142,
+          "cached": 0,
+          "total": 10620
+        },
+        "verifier": {
+          "input": 8116,
+          "output": 1562,
+          "cached": 0,
+          "total": 9678
+        },
+        "adversarial": {
+          "input": 188,
+          "output": 412,
+          "cached": 448,
+          "total": 1048
+        },
+        "defense": {
+          "input": 320,
+          "output": 255,
+          "cached": 320,
+          "total": 895
+        }
+      }
+    },
+    {
+      "coordinate": "RI-02|broken|1",
+      "file": "0d989aff96a9-RI-02-broken-run1.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 11860,
+      "latencyMs": 55570,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 7349,
+          "output": 2247,
+          "cached": 0,
+          "total": 9596
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 432,
+          "output": 700,
+          "cached": 448,
+          "total": 1580
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-02|broken|2",
+      "file": "0d989aff96a9-RI-02-broken-run2.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 12488,
+      "latencyMs": 55623,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 6544,
+          "output": 1890,
+          "cached": 0,
+          "total": 8434
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 401,
+          "output": 628,
+          "cached": 448,
+          "total": 1477
+        },
+        "defense": {
+          "input": 607,
+          "output": 391,
+          "cached": 320,
+          "total": 1318
+        }
+      }
+    },
+    {
+      "coordinate": "RI-02|broken|3",
+      "file": "0d989aff96a9-RI-02-broken-run3.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 16911,
+      "latencyMs": 61675,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 7629,
+          "output": 2916,
+          "cached": 0,
+          "total": 10545
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 593,
+          "output": 803,
+          "cached": 448,
+          "total": 1844
+        },
+        "defense": {
+          "input": 1272,
+          "output": 515,
+          "cached": 0,
+          "total": 1787
+        }
+      }
+    },
+    {
+      "coordinate": "RI-02|fixed|1",
+      "file": "0d989aff96a9-RI-02-fixed-run1.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 14378,
+      "latencyMs": 90438,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "incomplete",
+        "vClass": "ledger_rejected",
+        "ledgerComplete": false,
+        "rejectedSubmissionPreserved": true,
+        "unresolvedObligations": 0,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 11087,
+          "output": 1577,
+          "cached": 0,
+          "total": 12664
+        },
+        "verifier": {
+          "input": 6005,
+          "output": 1958,
+          "cached": 0,
+          "total": 7963
+        },
+        "adversarial": {
+          "input": 170,
+          "output": 213,
+          "cached": 448,
+          "total": 831
+        },
+        "defense": {
+          "input": 319,
+          "output": 155,
+          "cached": 320,
+          "total": 794
+        }
+      }
+    },
+    {
+      "coordinate": "RI-02|fixed|2",
+      "file": "0d989aff96a9-RI-02-fixed-run2.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 9456,
+      "latencyMs": 87924,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "rejectedSubmissionPreserved": false,
+        "unresolvedObligations": 0,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 6726,
+          "output": 1416,
+          "cached": 0,
+          "total": 8142
+        },
+        "verifier": {
+          "input": 8701,
+          "output": 2266,
+          "cached": 0,
+          "total": 10967
+        },
+        "adversarial": {
+          "input": 362,
+          "output": 295,
+          "cached": 384,
+          "total": 1041
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-02|fixed|3",
+      "file": "0d989aff96a9-RI-02-fixed-run3.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 12685,
+      "latencyMs": 84814,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "incomplete",
+        "vClass": "ledger_rejected",
+        "ledgerComplete": false,
+        "rejectedSubmissionPreserved": true,
+        "unresolvedObligations": 0,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 9711,
+          "output": 1032,
+          "cached": 0,
+          "total": 10743
+        },
+        "verifier": {
+          "input": 12282,
+          "output": 2801,
+          "cached": 0,
+          "total": 15083
+        },
+        "adversarial": {
+          "input": 214,
+          "output": 214,
+          "cached": 448,
+          "total": 876
+        },
+        "defense": {
+          "input": 364,
+          "output": 179,
+          "cached": 320,
+          "total": 863
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|broken|1",
+      "file": "0d989aff96a9-RI-03-broken-run1.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 30900,
+      "latencyMs": 59769,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 27453,
+          "output": 1409,
+          "cached": 0,
+          "total": 28862
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 360,
+          "output": 659,
+          "cached": 448,
+          "total": 1467
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-03|broken|2",
+      "file": "0d989aff96a9-RI-03-broken-run2.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 13631,
+      "latencyMs": 66626,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 8508,
+          "output": 1595,
+          "cached": 0,
+          "total": 10103
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 307,
+          "output": 379,
+          "cached": 448,
+          "total": 1134
+        },
+        "defense": {
+          "input": 804,
+          "output": 274,
+          "cached": 0,
+          "total": 1078
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|broken|3",
+      "file": "0d989aff96a9-RI-03-broken-run3.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 21355,
+      "latencyMs": 70966,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 13435,
+          "output": 2038,
+          "cached": 0,
+          "total": 15473
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 593,
+          "output": 705,
+          "cached": 448,
+          "total": 1746
+        },
+        "defense": {
+          "input": 1211,
+          "output": 432,
+          "cached": 0,
+          "total": 1643
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|fixed|1",
+      "file": "0d989aff96a9-RI-03-fixed-run1.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 33504,
+      "latencyMs": 69874,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 27761,
+          "output": 1663,
+          "cached": 0,
+          "total": 29424
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 412,
+          "output": 614,
+          "cached": 448,
+          "total": 1474
+        },
+        "defense": {
+          "input": 707,
+          "output": 307,
+          "cached": 256,
+          "total": 1270
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|fixed|2",
+      "file": "0d989aff96a9-RI-03-fixed-run2.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 17504,
+      "latencyMs": 90555,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 9268,
+          "output": 2080,
+          "cached": 0,
+          "total": 11348
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 781,
+          "output": 742,
+          "cached": 448,
+          "total": 1971
+        },
+        "defense": {
+          "input": 1122,
+          "output": 433,
+          "cached": 320,
+          "total": 1875
+        }
+      }
+    },
+    {
+      "coordinate": "RI-03|fixed|3",
+      "file": "0d989aff96a9-RI-03-fixed-run3.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 11068,
+      "latencyMs": 63294,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 4658,
+          "output": 1518,
+          "cached": 0,
+          "total": 6176
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 487,
+          "output": 733,
+          "cached": 448,
+          "total": 1668
+        },
+        "defense": {
+          "input": 806,
+          "output": 420,
+          "cached": 320,
+          "total": 1546
+        }
+      }
+    },
+    {
+      "coordinate": "RI-04|broken|1",
+      "file": "0d989aff96a9-RI-04-broken-run1.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 51750,
+      "latencyMs": 75480,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 44433,
+          "output": 2543,
+          "cached": 0,
+          "total": 46976
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 381,
+          "output": 840,
+          "cached": 448,
+          "total": 1669
+        },
+        "defense": {
+          "input": 798,
+          "output": 368,
+          "cached": 256,
+          "total": 1422
+        }
+      }
+    },
+    {
+      "coordinate": "RI-04|broken|2",
+      "file": "0d989aff96a9-RI-04-broken-run2.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 16172,
+      "latencyMs": 57786,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 12518,
+          "output": 1330,
+          "cached": 0,
+          "total": 13848
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 215,
+          "output": 445,
+          "cached": 448,
+          "total": 1108
+        },
+        "defense": {
+          "input": 346,
+          "output": 156,
+          "cached": 320,
+          "total": 822
+        }
+      }
+    },
+    {
+      "coordinate": "RI-04|broken|3",
+      "file": "0d989aff96a9-RI-04-broken-run3.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "approved",
+      "checkState": "review_passed",
+      "consoleTokensUsed": 10458,
+      "latencyMs": 116325,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": true,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": {
+        "status": "verified",
+        "vClass": "verified",
+        "ledgerComplete": true,
+        "rejectedSubmissionPreserved": false,
+        "unresolvedObligations": 0,
+        "findings": 0
+      },
+      "roles": {
+        "primary": {
+          "input": 7138,
+          "output": 1006,
+          "cached": 0,
+          "total": 8144
+        },
+        "verifier": {
+          "input": 22356,
+          "output": 1503,
+          "cached": 0,
+          "total": 23859
+        },
+        "adversarial": {
+          "input": 191,
+          "output": 413,
+          "cached": 448,
+          "total": 1052
+        },
+        "defense": {
+          "input": 375,
+          "output": 178,
+          "cached": 320,
+          "total": 873
+        }
+      }
+    },
+    {
+      "coordinate": "RI-04|fixed|1",
+      "file": "0d989aff96a9-RI-04-fixed-run1.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 39359,
+      "latencyMs": 46384,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 37593,
+          "output": 1022,
+          "cached": 0,
+          "total": 38615
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 188,
+          "output": 184,
+          "cached": 448,
+          "total": 820
+        },
+        "defense": null
+      }
+    },
+    {
+      "coordinate": "RI-04|fixed|2",
+      "file": "0d989aff96a9-RI-04-fixed-run2.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 16255,
+      "latencyMs": 61872,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 11034,
+          "output": 1373,
+          "cached": 0,
+          "total": 12407
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 297,
+          "output": 497,
+          "cached": 448,
+          "total": 1242
+        },
+        "defense": {
+          "input": 848,
+          "output": 282,
+          "cached": 0,
+          "total": 1130
+        }
+      }
+    },
+    {
+      "coordinate": "RI-04|fixed|3",
+      "file": "0d989aff96a9-RI-04-fixed-run3.json",
+      "candidate": {
+        "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+        "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+      },
+      "verdict": "needs_discussion",
+      "checkState": "review_incomplete",
+      "consoleTokensUsed": 11649,
+      "latencyMs": 51907,
+      "modelObserved": "glm-5.3",
+      "expectedDefectDetected": false,
+      "falseApprove": false,
+      "falsePositive": false,
+      "providerReached": true,
+      "receiptPresent": true,
+      "verifier": null,
+      "roles": {
+        "primary": {
+          "input": 8195,
+          "output": 1264,
+          "cached": 0,
+          "total": 9459
+        },
+        "verifier": null,
+        "adversarial": {
+          "input": 207,
+          "output": 429,
+          "cached": 448,
+          "total": 1084
+        },
+        "defense": {
+          "input": 317,
+          "output": 142,
+          "cached": 320,
+          "total": 779
+        }
+      }
+    }
+  ]
+}

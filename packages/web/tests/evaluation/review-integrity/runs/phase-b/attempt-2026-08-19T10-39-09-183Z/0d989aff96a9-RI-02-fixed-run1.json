@@ -1,0 +1,473 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-19T10-39-09-183Z",
+  "candidate": {
+    "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+    "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+  },
+  "fixture": "RI-02",
+  "variant": "fixed",
+  "run": 1,
+  "record": {
+    "fixture": "RI-02",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T10:52:33.642Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 0,
+    "findingSeverities": [],
+    "findingTitles": [],
+    "v2PrimaryFindings": [],
+    "v2VerifierFindings": [],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": null,
+    "tokensUsed": 14378,
+    "latencyMs": 90438,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "dd07fb2",
+      "headSha": "20219bd384",
+      "invocationId": "rinv:e59b52f51bb0383addee8d987ba474c43ed31975"
+    },
+    "coverage": {
+      "totalChangedFiles": 4,
+      "fullyCoveredFiles": 4,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 443,
+      "changedLinesRepresented": 443,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "README.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 15,
+        "deletions": 16,
+        "representedLines": 31,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "f35e29412e4949e41f87fd794d4d63bfbd74d104",
+          "contentDigest": "sha256:b4ab2353f352a89bffcbfc835b3431635bfa5cb84d56a16f9540a39d1925d19d"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "3dec226bcb6e227d359aceac56aba4701289c29e",
+          "contentDigest": "sha256:53c6565ce84c4e3146cb405ff1d180dadf7371c6b6a3112159421228c2fa111c"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/constitution.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 3,
+        "deletions": 4,
+        "representedLines": 7,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7867491b4b5235dab38624055f0c06b45241de39",
+          "contentDigest": "sha256:11da23e66921475ce260dec18e5a25915aad2b36a105c425408847521e26ef85"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "5fe09be65faa108006fe3cdebc85068c997037d1",
+          "contentDigest": "sha256:f2c00edc3522dbb2f4e0c6219e331486bdbc231695fd46ef95812e45b4b37e7a"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/phase-0-spec.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 12,
+        "deletions": 8,
+        "representedLines": 20,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "93e16ca8be4be9b9b08da4f1e6e404f04bb1bbe2",
+          "contentDigest": "sha256:38e9940b0a1fb9219fc170f19cf988fa3a9d65dfbe590f73456305741a8ca3b3"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/roadmap.md",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 385,
+        "deletions": 0,
+        "representedLines": 385,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
+          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab"
+        },
+        "base": null,
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "README.md",
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 875
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "dd07fb2",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "dd07fb2",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "dd07fb2",
+        "round": 3,
+        "truncated": false,
+        "contentLength": 2809
+      }
+    ],
+    "primaryFindings": [],
+    "budgetConsumption": {
+      "fileReads": 2,
+      "searches": 4,
+      "retrievedChars": 8594,
+      "contextRounds": 3,
+      "exhausted": false,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.3",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:02134341153d2a1a",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-19T10:51:03.207Z",
+        "completedAt": "2026-08-19T10:51:46.143Z",
+        "durationMs": 42936,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 11087,
+          "outputTokens": 1577,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 12664
+        },
+        "cost": null
+      },
+      "verifier": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-verifier",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.3",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:c17749bc3dd06469",
+        "promptId": "v2-verifier-r3",
+        "promptHash": "46378a48abdd3072",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-7264c40f9ed5",
+        "startedAt": "2026-08-19T10:51:58.971Z",
+        "completedAt": "2026-08-19T10:52:33.640Z",
+        "durationMs": 34669,
+        "terminalState": "provider_error",
+        "terminalReason": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear); dependency_interface_contracts obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear); counterexamples obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear)",
+        "usage": {
+          "inputTokens": 6005,
+          "outputTokens": 1958,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 7963
+        },
+        "cost": null
+      },
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 170,
+          "outputTokens": 213,
+          "cacheReadTokens": 448,
+          "cacheWriteTokens": null,
+          "totalTokens": 831
+        },
+        "cost": null
+      },
+      "defense": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-defense",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:3ca011fef7cbeb2f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 319,
+          "outputTokens": 155,
+          "cacheReadTokens": 320,
+          "cacheWriteTokens": null,
+          "totalTokens": 794
+        },
+        "cost": null
+      }
+    }
+  },
+  "verifierReceipt": {
+    "status": "incomplete",
+    "findings": [],
+    "rawFindings": [],
+    "hasMaterialFindings": false,
+    "materialFindingCount": 0,
+    "coverageSatisfied": false,
+    "tokensUsed": 7963,
+    "durationMs": 34669,
+    "unresolvedContextRequests": [],
+    "contextTrace": [
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      }
+    ],
+    "actualModel": "glm-5.3",
+    "budgetState": null,
+    "riskLedger": null,
+    "unresolvedObligations": [],
+    "rejectedSubmission": {
+      "validationErrors": [
+        "changed_behavior obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear)",
+        "dependency_interface_contracts obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear)",
+        "counterexamples obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear)"
+      ],
+      "submittedStatus": "verified",
+      "submittedFindingsCount": 1,
+      "submittedLedger": {
+        "categories": [
+          {
+            "category": "changed_behavior",
+            "obligations": [
+              {
+                "description": "Docs claim phases 0.0/0.1A/0.2 are closed with gate:0.2 green; if the gates do not actually exist or pass, the docs misstate project status.",
+                "resolution": {
+                  "evidenceHandles": [
+                    "R-1"
+                  ],
+                  "outcome": "evidence_cleared",
+                  "reason": "package.json defines gate:0.0/0.1A/0.2 scripts and .github/workflows/ci.yml runs 'pnpm gate:0.2' in CI, consistent with the closed-status claims. No executable behavior changed in this PR."
+                }
+              }
+            ]
+          },
+          {
+            "category": "dependency_interface_contracts",
+            "obligations": [
+              {
+                "description": "New docs/roadmap.md references other docs (rules.md, backlog.md, constitution.md, phase-0-spec.md); broken links would mislead readers.",
+                "resolution": {
+                  "evidenceHandles": [
+                    "R-2"
+                  ],
+                  "outcome": "evidence_cleared",
+                  "reason": "Repository search confirms all referenced docs (rules.md, backlog.md, constitution.md, phase-0-spec.md, non-goals.md) exist at HEAD."
+                }
+              }
+            ]
+          },
+          {
+            "category": "state_side_effects",
+            "noneJustification": "Documentation-only change; no code, mutable state, or side effects touched.",
+            "obligations": []
+          },
+          {
+            "category": "config_runtime_assumptions",
+            "noneJustification": "No config or runtime behavior altered; only markdown status text changed.",
+            "obligations": []
+          },
+          {
+            "category": "normative_docs_tests",
+            "obligations": [
+              {
+                "description": "Constitution principles and phase-0-spec normative content must remain consistent with the updated status text.",
+                "resolution": {
+                  "evidenceHandles": [
+                    "C-7",
+                    "C-8",
+                    "C-13",
+                    "C-14"
+                  ],
+                  "outcome": "evidence_cleared",
+                  "reason": "Constitution diff touches only the Status section; principles unchanged. Phase-0-spec edits are status-label and gate-criteria refinements consistent with roadmap.md's framing."
+                }
+              }
+            ]
+          },
+          {
+            "category": "counterexamples",
+            "obligations": [
+              {
+                "description": "A reader could follow the docs to a nonexistent gate script or command.",
+                "resolution": {
+                  "evidenceHandles": [
+                    "R-1"
+                  ],
+                  "outcome": "evidence_cleared",
+                  "reason": "Gates for closed phases (0.0/0.1A/0.2) exist in package.json; gates for future phases (0.1B–0.9) are described as not yet built, matching their open status."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "error": "Risk-ledger validation failed: changed_behavior obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear); dependency_interface_contracts obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear); counterexamples obligation[0]: evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear)"
+  },
+  "decisionReason": "Verifier incomplete — cannot confirm approval safety",
+  "writtenAt": "2026-08-19T10:52:33.642Z"
+}

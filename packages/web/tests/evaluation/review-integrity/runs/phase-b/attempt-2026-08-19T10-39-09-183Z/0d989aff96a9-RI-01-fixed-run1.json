@@ -1,0 +1,583 @@
+{
+  "kind": "phase-b-invocation",
+  "schemaVersion": 1,
+  "attemptId": "attempt-2026-08-19T10-39-09-183Z",
+  "candidate": {
+    "sha": "0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae",
+    "tree": "f48e1f78633d9d7a31c95220bdf3bdba2e5797d6"
+  },
+  "fixture": "RI-01",
+  "variant": "fixed",
+  "run": 1,
+  "record": {
+    "fixture": "RI-01",
+    "variant": "fixed",
+    "run": 1,
+    "requestedModel": "glm-5.3",
+    "actualModel": "glm-5.3",
+    "modelMatch": true,
+    "invalid": null,
+    "v2Mode": "live",
+    "timestamp": "2026-08-19T10:45:11.172Z",
+    "verdict": "needs_discussion",
+    "blocked": false,
+    "checkState": "review_incomplete",
+    "findingCount": 2,
+    "findingSeverities": [
+      "low",
+      "low"
+    ],
+    "findingTitles": [
+      "README 'Read first' list has a duplicated item number '3.'",
+      "Duplicate list number '3.' in README 'Read first' section"
+    ],
+    "v2PrimaryFindings": [
+      {
+        "severity": "P3",
+        "claim": "README 'Read first' list has a duplicated item number '3.'"
+      }
+    ],
+    "v2VerifierFindings": [
+      {
+        "severity": "P3",
+        "claim": "Duplicate list number '3.' in README 'Read first' section"
+      }
+    ],
+    "v2VerifierStatus": "incomplete",
+    "v2DecisionReason": "Verifier incomplete — cannot confirm approval safety",
+    "expectedDefectDetected": null,
+    "tokensUsed": 22316,
+    "latencyMs": 103398,
+    "falseApprove": null,
+    "falsePositive": false
+  },
+  "manifest": {
+    "version": 1,
+    "review": {
+      "repoId": 999,
+      "repoFullName": "org/repo",
+      "prNumber": 42,
+      "baseSha": "dd07fb2",
+      "headSha": "20219bd384",
+      "invocationId": "rinv:e59b52f51bb0383addee8d987ba474c43ed31975"
+    },
+    "coverage": {
+      "totalChangedFiles": 4,
+      "fullyCoveredFiles": 4,
+      "policyExemptFiles": 0,
+      "partialFiles": 0,
+      "unavailableFiles": 0,
+      "contextRequests": [],
+      "unresolvedContextRequests": [],
+      "changedLinesTotal": 443,
+      "changedLinesRepresented": 443,
+      "limitsExceeded": [],
+      "acquisitionComplete": true,
+      "approvalEvidenceComplete": true
+    },
+    "changedFiles": [
+      {
+        "path": "README.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 15,
+        "deletions": 16,
+        "representedLines": 31,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "f35e29412e4949e41f87fd794d4d63bfbd74d104",
+          "contentDigest": "sha256:b4ab2353f352a89bffcbfc835b3431635bfa5cb84d56a16f9540a39d1925d19d"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "3dec226bcb6e227d359aceac56aba4701289c29e",
+          "contentDigest": "sha256:53c6565ce84c4e3146cb405ff1d180dadf7371c6b6a3112159421228c2fa111c"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/constitution.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 3,
+        "deletions": 4,
+        "representedLines": 7,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7867491b4b5235dab38624055f0c06b45241de39",
+          "contentDigest": "sha256:11da23e66921475ce260dec18e5a25915aad2b36a105c425408847521e26ef85"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "5fe09be65faa108006fe3cdebc85068c997037d1",
+          "contentDigest": "sha256:f2c00edc3522dbb2f4e0c6219e331486bdbc231695fd46ef95812e45b4b37e7a"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/phase-0-spec.md",
+        "previousPath": null,
+        "status": "modified",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 12,
+        "deletions": 8,
+        "representedLines": 20,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "ffd66a6a234f61c748f80e9780716d7bcb2b77c6",
+          "contentDigest": "sha256:b2a6752969a5440df98c5ea959a1f0fca88676e3af0b35f4ac39b7185a45a445"
+        },
+        "base": {
+          "sha": "dd07fb2",
+          "blobSha": "93e16ca8be4be9b9b08da4f1e6e404f04bb1bbe2",
+          "contentDigest": "sha256:38e9940b0a1fb9219fc170f19cf988fa3a9d65dfbe590f73456305741a8ca3b3"
+        },
+        "policyExemption": null
+      },
+      {
+        "path": "docs/roadmap.md",
+        "previousPath": null,
+        "status": "added",
+        "coverage": "full",
+        "coverageReason": null,
+        "additions": 385,
+        "deletions": 0,
+        "representedLines": 385,
+        "head": {
+          "sha": "20219bd384",
+          "blobSha": "7c334156e8435aa9055ea87953c701a57446d04a",
+          "contentDigest": "sha256:687bb93c15a5c5ccf5741682ed36cd5d351d01dda29c60b756c0b78a9aa90cab"
+        },
+        "base": null,
+        "policyExemption": null
+      }
+    ],
+    "contextItems": [],
+    "retrievalTrace": [
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "docs/phase-0-spec.md",
+        "ref": "dd07fb2",
+        "round": 1,
+        "truncated": false,
+        "contentLength": 2088
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "README.md",
+        "ref": "20219bd384",
+        "round": 2,
+        "truncated": false,
+        "contentLength": 720
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 3,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      }
+    ],
+    "primaryFindings": [
+      {
+        "severity": "P3",
+        "category": "docs_gap",
+        "claim": "README 'Read first' list has a duplicated item number '3.'",
+        "evidenceRefs": [
+          "repo-read:README.md@HEAD:L20-L25"
+        ],
+        "proofType": "static_trace",
+        "affectedPaths": [
+          "README.md"
+        ]
+      }
+    ],
+    "budgetConsumption": {
+      "fileReads": 2,
+      "searches": 2,
+      "retrievedChars": 3833,
+      "contextRounds": 3,
+      "exhausted": false,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      }
+    },
+    "executionProfiles": {
+      "primary": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-primary",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.3",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:02134341153d2a1a",
+        "promptId": "v2-primary-r1",
+        "promptHash": "5be7acd28b8873d0",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-240f62cf9139",
+        "startedAt": "2026-08-19T10:43:27.778Z",
+        "completedAt": "2026-08-19T10:44:06.607Z",
+        "durationMs": 38829,
+        "terminalState": "completed",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 19099,
+          "outputTokens": 1149,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 20248
+        },
+        "cost": null
+      },
+      "verifier": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-verifier",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "glm-5.3",
+        "observedModel": "glm-5.3",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:bbd6e88f82ecbc8c",
+        "promptId": "v2-verifier-r3",
+        "promptHash": "46378a48abdd3072",
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d251e50fb3e6",
+        "startedAt": "2026-08-19T10:44:16.801Z",
+        "completedAt": "2026-08-19T10:45:11.172Z",
+        "durationMs": 54371,
+        "terminalState": "incomplete",
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 23445,
+          "outputTokens": 2709,
+          "cacheReadTokens": null,
+          "cacheWriteTokens": null,
+          "totalTokens": 26154
+        },
+        "cost": null
+      },
+      "adversarial": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-adversarial",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:447a22e2f375cd0f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 160,
+          "outputTokens": 390,
+          "cacheReadTokens": 448,
+          "cacheWriteTokens": null,
+          "totalTokens": 998
+        },
+        "cost": null
+      },
+      "defense": {
+        "schemaVersion": 1,
+        "provider": "api.z.ai",
+        "adapter": "anthropic-sdk-defense",
+        "protocol": "anthropic-messages",
+        "requestedRoute": "https://api.z.ai/api/anthropic",
+        "requestedModel": "claude-haiku-4-20250414",
+        "observedModel": "glm-4.7",
+        "observedDeployment": null,
+        "identitySource": "provider_reported",
+        "configurationFingerprint": "sha256:3ca011fef7cbeb2f",
+        "promptId": null,
+        "promptHash": null,
+        "repositoryToolContract": "gitwire-repository-tools",
+        "repositoryToolContractVersion": "2",
+        "integritySchemaVersion": 1,
+        "outputSchemaVersion": "2",
+        "budgetProfileId": "bp-d8b59b5cd890",
+        "startedAt": null,
+        "completedAt": null,
+        "durationMs": null,
+        "terminalState": null,
+        "terminalReason": null,
+        "usage": {
+          "inputTokens": 271,
+          "outputTokens": 213,
+          "cacheReadTokens": 320,
+          "cacheWriteTokens": null,
+          "totalTokens": 804
+        },
+        "cost": null
+      }
+    }
+  },
+  "verifierReceipt": {
+    "status": "incomplete",
+    "findings": [
+      {
+        "severity": "P3",
+        "category": "maintainability",
+        "claim": "Duplicate list number '3.' in README 'Read first' section",
+        "evidenceRefs": [
+          "repo-read:README.md@HEAD:L18-L30"
+        ],
+        "proofType": "static_trace"
+      }
+    ],
+    "rawFindings": [
+      {
+        "severity": "P3",
+        "claim": "Duplicate list number '3.' in README 'Read first' section"
+      }
+    ],
+    "hasMaterialFindings": false,
+    "materialFindingCount": 0,
+    "coverageSatisfied": true,
+    "tokensUsed": 26154,
+    "durationMs": 54371,
+    "unresolvedContextRequests": [],
+    "contextTrace": [
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 1,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "repo_search",
+        "result": "ok_truncated",
+        "path": null,
+        "ref": "20219bd384",
+        "round": 2,
+        "truncated": true,
+        "reason": "max_search_bytes"
+      },
+      {
+        "type": "file_read",
+        "result": "ok",
+        "path": "README.md",
+        "ref": "20219bd384",
+        "round": 2,
+        "truncated": false
+      }
+    ],
+    "actualModel": "glm-5.3",
+    "budgetState": {
+      "fileReads": 1,
+      "searches": 3,
+      "retrievedChars": 5165,
+      "contextRounds": 2,
+      "currentRound": 0,
+      "limits": {
+        "maxFileReads": 20,
+        "maxSearches": 6,
+        "maxSearchResults": 10,
+        "maxRetrievedChars": 90000,
+        "maxContextRounds": 4,
+        "maxBlobsScanned": 50,
+        "maxSearchBytes": 200000
+      },
+      "exhausted": false
+    },
+    "riskLedger": {
+      "complete": true,
+      "categories": [
+        {
+          "category": "changed_behavior",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "Docs claim phases 0.0/0.1A/0.2 are closed and gate:0.2 is green on main — verify the repo actually contains the scaffold, gate scripts, and CI that substantiate this, so the docs are not asserting false state.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-9",
+                  "C-7",
+                  "R-1"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "Repo at HEAD contains package.json with gate:0.0/0.1A/0.2 scripts, .github/workflows/ci.yml running 'pnpm gate:0.2', and packages/events referenced by docs/event-contract.md and phase-0-spec.md — the closure claims are substantiated."
+              }
+            }
+          ]
+        },
+        {
+          "category": "dependency_interface_contracts",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "New docs/roadmap.md links to other docs (phase-0-spec.md, constitution.md, rules.md, backlog.md) and README now links roadmap.md — all link targets must exist.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-21",
+                  "R-1"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "Searches confirm docs/rules.md, docs/backlog.md, docs/phase-0-spec.md, docs/constitution.md all exist at HEAD."
+              }
+            }
+          ]
+        },
+        {
+          "category": "state_side_effects",
+          "noneJustification": "No code or runtime state changes in this diff; all four changed files are Markdown documentation.",
+          "obligations": [
+            {
+              "description": "Docs-only diff; no mutable state, caches, jobs, or files affected.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-21"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "All changed files are Markdown; no runtime state touched."
+              }
+            }
+          ]
+        },
+        {
+          "category": "config_runtime_assumptions",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "phase-0-spec.md line 3 pins 'gate:0.2 green on main (dd07fb2)' — verify dd07fb2 is the repo's base SHA so the reference is coherent.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-9"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "dd07fb2 is exactly the base commit SHA of this PR, so the referenced commit exists."
+              }
+            }
+          ]
+        },
+        {
+          "category": "normative_docs_tests",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "Status statements in README, constitution.md, and phase-0-spec.md must be mutually consistent (all say 0.0/0.1A/0.2 closed), and the new 0.5 exit-gate sentence must not contradict roadmap.md's 0.5 exit proof.",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-7",
+                  "C-9",
+                  "C-13",
+                  "C-21"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "All three files state the same closure status; the added 0.5 clause matches roadmap.md's 0.5 exit proof in intent."
+              }
+            },
+            {
+              "description": "README 'Read first' ordered-list numbering stays correct after inserting roadmap.md.",
+              "resolution": {
+                "outcome": "material_finding",
+                "evidenceHandles": [
+                  "R-1"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": 0,
+                "reason": "Duplicate '3.' at README L21/L23 — cosmetic P3, not approval-blocking."
+              }
+            }
+          ]
+        },
+        {
+          "category": "counterexamples",
+          "noneJustification": null,
+          "obligations": [
+            {
+              "description": "Any input/state where the doc changes mislead a maintainer (e.g., a phase marked CLOSED whose gate script or CI is absent).",
+              "resolution": {
+                "outcome": "evidence_cleared",
+                "evidenceHandles": [
+                  "C-1",
+                  "C-9",
+                  "C-21",
+                  "R-1"
+                ],
+                "evidenceRefs": [],
+                "findingIndex": null,
+                "reason": "Gate scripts and CI for all three closed phases exist in package.json and .github/workflows/ci.yml; no counterexample found."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "unresolvedObligations": [],
+    "rejectedSubmission": null,
+    "rawTextSnippet": "{\n  \"status\": \"verified\",\n  \"findings\": [\n    {\n      \"severity\": \"P3\",\n      \"category\": \"maintainability\",\n      \"claim\": \"Duplicate list number '3.' in README 'Read first' section\",\n      \"description\": \"Inserting roadmap.md as item 2 and shifting phase-0-spec.md to item 3 left the following event-contract.md entry also numbered '3.' (then 4,5,6). Cosmetic numbering error; docs-rendered fine but incorrect markdown ordering.\",\n      \"affectedPaths\": [\"README.md\"],\n      \"evidenceRefs\": [\"repo-"
+  },
+  "decisionReason": "Verifier incomplete — cannot confirm approval safety",
+  "writtenAt": "2026-08-19T10:45:11.173Z"
+}
