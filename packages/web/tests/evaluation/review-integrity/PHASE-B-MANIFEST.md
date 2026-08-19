@@ -1,102 +1,111 @@
-# Phase B Run Manifest — Attempt-3 Candidate Freeze (v7): Evidence-Bound Clearances
+# Phase B Run Manifest — Attempt-4 Candidate Freeze (v8): APR Correction Wave
 
-Status: **PREPARED, NOT AUTHORIZED TO EXECUTE.** v7 supersedes v6 (PR #165)
-after the pre-spend review of v6's candidate identified an approval-safety
-defect (PR #164 review 4959646789) and the bounded correction landed
-(PR #166). The 24-invocation matrix still requires a **fresh quota
-authorization** (§4); nothing carries from any prior attempt.
+Status: **PREPARED, NOT AUTHORIZED TO EXECUTE.** v8 supersedes v7 (PR #168)
+after the Attempt-3 adjudication (PR #167 record, 2026-08-19) authorized the
+bounded correction wave, landed as PR #169. The 24-invocation matrix requires
+a **fresh explicit quota authorization** (§4); nothing carries from any prior
+attempt.
 
 ## 1. Candidate identity (frozen)
 
 | Field | Value |
 | --- | --- |
-| Candidate commit | `9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa` (integration PR #167, **unmerged**) |
-| Candidate tree | `5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68` = tree of `review-integrity-v2@1ccfe44` (identical tree object; empty diff) |
+| Candidate commit | `0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae` (integration PR #170, **unmerged**) |
+| Candidate tree | `f48e1f78633d9d7a31c95220bdf3bdba2e5797d6` = tree of `review-integrity-v2@5ad3e58` (identical tree object; empty diff) |
 | Master parent | `3d75dd69ee1cef58f1260682a08bf0acbfd353aa` |
-| Exact-head CI | Dispatched run 32124730156 at `1ccfe44`: every job green. PR run 32124814823 at `9c02b71`: every job green, plus CodeQL and DCO; review gate APPROVED |
-| Local profile | web unit 173 suites / 3884 passed + 1 skipped; evaluation 146; integration 20; core 61; rules 251; runtime 16; executor 128; dashboard 67 |
+| Exact-head CI | Dispatched run 32234483470 at `5ad3e58`: every job green. PR run 32234647644 at `0d989af`: every job green, plus CodeQL and DCO |
+| Local profile | web unit 174 suites / 3892 passed + 1 skipped; evaluation 146; integration 20; core 61; rules 251; runtime 16; executor 128; dashboard 67 |
 
-v6's candidate (`7152a55`, closed PR #164) is superseded: its
-`evidence_cleared` path validated references only as non-empty strings.
+v7's candidate (`9c02b71`, closed PR #167) is superseded: its tree predates
+the correction wave its own adjudication record authorized.
 
 ## 2. What this candidate carries (cumulative corrections)
 
-**RI-5 two-phase falsification contract** (PR #163, ruling 4959172520), as
-described in v6 §2: six generic risk categories; every obligation resolved
-as `evidence_cleared`, `material_finding`, or `unresolved`; `verified`
-computed from the ledger, never declared; unresolved obligations and
-structural incompleteness fail closed; prompt `v2-verifier-r2` with
-genericity enforced; receipts persist the ledger.
+**RI-5 two-phase falsification contract** (v6 §2): six generic risk
+categories; every obligation resolved `evidence_cleared`,
+`material_finding`, or `unresolved`; `verified` computed from the ledger,
+never declared; unresolved obligations and structural incompleteness fail
+closed; receipts persist the ledger.
 
-**Evidence-bound clearances** (PR #166, from review 4959646789): every
-`evidence_cleared` obligation must cite **at least one reference that parses
-and passes the RI-4 bounds validation** (`parseEvidenceRef` +
-`validateEvidenceRef`) against the ReviewEvidence and the verifier's
-successful broker reads — changed-path existence, side availability, and
-represented patch-hunk range for `changed:` references; a matching
-`file_read` context item with SHA and represented range for `repo-read:`
-references. Zero valid references fails closed before any status
-computation; one valid among invalid references satisfies the obligation
-(the ≥1-valid rule, matching the RI-4 finding contract). Five deterministic
-proofs: unparseable; nonexistent changed path; out-of-represented-range;
-repo-read absent from verifier context; ≥1-valid positive control.
+**Evidence-bound clearances** (v7 §2, PR #166): clearances require citations
+that survive deterministic RI-4 validation.
+
+**APR correction wave** (PR #169, from the Attempt-3 adjudication):
+
+- **A (APR-031 — Durable Operation Brackets).** A primary pre-receipt
+  failure persists a terminal integrity receipt before the fail-closed
+  result: the primary's `provider_error` execution profile, a sanitized
+  classification (credential-shaped material redacted, length-bounded), and
+  the pre-built evidence. Pre-receipt failures leave durable typed records.
+- **B (APR-022 — Model-Visible Means Durably Reconstructable).** Rejected
+  verifier submissions are preserved diagnostically:
+  `receipt.rejectedSubmission` carries full validation errors, the submitted
+  status and findings count, and a capped copy of the submitted ledger —
+  none of it authoritative. The F2 forensic wall (per-reference
+  sub-classification unrecoverable) closes.
+- **C (APR-027 — server-minted evidence handles).** Authoritative evidence
+  addressing is no longer model-generated syntax. GitWire mints `C-n`
+  handles per represented changed-file interval per side (verified valid at
+  mint) and `R-n` handles per successful repository read (derived from the
+  actual path/SHA/range; announced as `evidenceId` in the tool result). The
+  model selects handles in `resolution.evidenceHandles`; the backend
+  resolves them to canonical references that the **unchanged RI-4
+  validation** still checks. Raw model-written references are diagnostic
+  only and can never satisfy the clearance gate. Prompt `v2-verifier-r3`.
 
 **Unchanged:** RI-6 (sole deterministic authority), RI-7, corpus,
-thresholds, provider route, tool contract, prompt version (`v2-verifier-r2`
-— its text already demanded cited evidence; the defect was enforcement).
+thresholds, provider route, requested model, tool contract.
 
-## 3. Attempt-3 configuration freeze
+## 3. Attempt-4 configuration freeze
 
 ```text
-candidate:       9c02b71c4ee89f08dd2a63c51c06c86e5ce0b9aa
-tree:            5a866f0a493f2db6ceaf7e2e711b17b44e5b0c68
+candidate:       0d989aff96a939d2f0b6a1cf10c00ffe1ace97ae
+tree:            f48e1f78633d9d7a31c95220bdf3bdba2e5797d6
 provider/route:  unchanged (Anthropic SDK; https://api.z.ai/api/anthropic)
-requested model: glm-5.3 (explicit; retired 5.2/5.1 aliases no longer requested)
+requested model: glm-5.3 (explicit)
 runner override: ABLATION_MODEL=glm-5.3
 matrix:          same 8 fixtures × 3 (24 invocations), fixture-major
 order:           unchanged
-prompts/tools:   primary v2-primary-r1; verifier v2-verifier-r2 (falsification,
-                 evidence-bound); gitwire-repository-tools v2
+prompts/tools:   primary v2-primary-r1; verifier v2-verifier-r3 (falsification,
+                 evidence-bound, handle-gated); gitwire-repository-tools v2
 criteria:        unchanged (v4 §9 thresholds, suite-enforced)
 attempt:         fresh immutable attempt directory
 ```
 
-Provider facts (confirmed 2026-08-18, recorded on #160): supported set
-GLM-5.3 / GLM-5-Turbo / GLM-4.7; retired 5.2/5.1 auto-route to GLM-5.3;
-GLM-5.3 quota multipliers 6.9 input / 1.7 cached / 24 output; harness
-eligibility confirmed. Served-model identity remains descriptive telemetry.
+Provider facts (confirmed 2026-08-18 on #160): supported set GLM-5.3 /
+GLM-5-Turbo / GLM-4.7; retired 5.2/5.1 auto-route to GLM-5.3; GLM-5.3 quota
+multipliers 6.9 / 1.7 / 24; harness eligibility confirmed. Operational note
+from Attempt 3: an account-level limit engaged ~12:10 UTC after a ~2.73M
+quota-unit burst plus same-window production consumption, recovering ~13:13
+— schedule the matrix to avoid colliding with production review load, and
+expect the burst itself to approach short-window limits.
 
 ## 4. Quota authorization — FRESH EXPLICIT AUTHORIZATION REQUIRED
 
-Withheld by review 4959646789 against the v6 candidate; the corrected tree
-requires its own grant. Nothing carries from attempts 1 or 2 or from any
-prior configuration.
-
 ```text
-ATTEMPT_3_QUOTA_AUTHORIZATION: ____________  (client — explicit, before first call)
-SIGNED:                        ____________  (client — note: an eligible
-                                 non-author reviewer identity, per review
-                                 4959646789's repository-mechanics note)
+ATTEMPT_4_QUOTA_AUTHORIZATION: ____________  (client — explicit, before first call)
+SIGNED:                        ____________  (client — eligible non-author reviewer identity)
 ```
 
-Empty fields = no provider call authorized for attempt 3.
+Empty fields = no provider call authorized for attempt 4.
 
-## 5. Prior attempt record (both canonical, both failed)
+## 5. Prior attempt record (all canonical, all failed)
 
-| Attempt | Config | Served | Result | Evidence |
-| --- | --- | --- | --- | --- |
-| 1 (2026-08-18 01:30 UTC) | candidate `9586a68`, requested `glm-5.2` | GLM-5.3 (all 24) | 2/8 thresholds; 0/12 detections; 1 false APPROVE | `ri2/phase-b-attempt-1-evidence` @ `5c44192` |
-| 2 (2026-08-18 02:50 UTC) | candidate `9586a68`, requested `glm-5.1` | GLM-5.3 (all 24) | 4/8 thresholds; 2/12 detections; 3 false APPROVEs | `ri2/phase-b-attempt-2-evidence` @ `91aaac2` |
+| Attempt | Config | Result | Evidence |
+| --- | --- | --- | --- |
+| 1 | `9586a68`, requested glm-5.2 → served GLM-5.3 | 2/8; 0/12 detections; 1 false APPROVE | `ri2/phase-b-attempt-1-evidence` @ `5c44192` |
+| 2 | `9586a68`, requested glm-5.1 → served GLM-5.3 | 4/8; 2/12; 3 false APPROVEs | `ri2/phase-b-attempt-2-evidence` @ `91aaac2` |
+| 3 | `9c02b71`, glm-5.3, falsification+evidence-bound | 0/8; 0 verifier completions; 8 ledger-rejected; 13 pre-spend aborts (account-level limit) | `ri2/phase-b-attempt-3-evidence` @ `1b5c203` |
 
 ## 6. Everything else (unchanged, incorporated by reference)
 
 Runner evidence lifecycle (v4 §3), runner mechanics and --testTimeout note
-(v4 §4/§5), accounting model (v4 §7 with provider-confirmed multipliers in
-§3), capture fields (v4 §8 plus ledger fields), execution safety rules
-(v4 §10).
+(v4 §4/§5), accounting model (v4 §7 with provider multipliers), capture
+fields (v4 §8 plus ledger, rejectedSubmission, and pre-receipt terminal
+records), execution safety rules (v4 §10).
 
 ## 7. What this manifest does not authorize
 
-Any provider call for attempt 3 (§4 empty); merging PR #167 (its approving
-review is the maintainer's); any change beyond the corrections in §2;
-Phase C entry (gated on an attempt that passes the unchanged thresholds).
+Any provider call for attempt 4 (§4 empty); merging PR #170 (its approving
+review is the maintainer's); any change beyond §2; Phase C entry (gated on
+an attempt that passes the unchanged thresholds).
