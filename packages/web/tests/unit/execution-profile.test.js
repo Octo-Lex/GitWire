@@ -275,7 +275,7 @@ describe("Phase 10: persistIntegrityReceipt embeds execution profiles", () => {
     });
     const verifierExecutionProfile = buildExecutionProfile({
       requestedModel: "model-a", adapter: "anthropic-sdk-verifier",
-      promptId: "v2-verifier-r2", terminalState: "completed",
+      promptId: "v2-verifier-r3", terminalState: "completed",
     });
 
     await persistIntegrityReceipt({
@@ -288,7 +288,7 @@ describe("Phase 10: persistIntegrityReceipt embeds execution profiles", () => {
     expect(manifest.executionProfiles.primary.configurationFingerprint)
       .toBe(primaryExecutionProfile.configurationFingerprint);
     expect(manifest.executionProfiles.primary.identitySource).toBe(IDENTITY_SOURCE.PROVIDER_REPORTED);
-    expect(manifest.executionProfiles.verifier.promptId).toBe("v2-verifier-r2");
+    expect(manifest.executionProfiles.verifier.promptId).toBe("v2-verifier-r3");
     expect(manifest.executionProfiles.primary.schemaVersion).toBe(EXECUTION_PROFILE_SCHEMA_VERSION);
   });
 

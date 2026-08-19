@@ -61,6 +61,18 @@ const DEFAULT_MODEL = "claude-sonnet-4-20250514";
  * @param {object} opts.octokit
  * @param {boolean} [opts.commentFindings=true]
  */
+// Sanitize a pre-receipt failure classification (APR-031, correction A):
+// keep the diagnostically useful provider/SDK error text, strip anything
+// that could carry credential material, and bound its length.
+function sanitizeFailureClassification(raw) {
+  const text = String(raw || "unclassified failure");
+  const stripped = text
+    .replace(/sk-[A-Za-z0-9_-]+/g, "sk-<redacted>")
+    .replace(/(api[_-]?key\s*[:=]\s*)\S+/gi, "$1<redacted>")
+    .replace(/(bearer\s+)\S+/gi, "$1<redacted>");
+  return stripped.slice(0, 400);
+}
+
 export async function reviewPR({ pr, repository, octokit, commentFindings = true, principalId = null, surfaceId = null, logicalInvocation = "automatic" }) {
   const owner  = repository.owner.login;
   const repo   = repository.name;
@@ -605,7 +617,31 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         if (v2PrimaryError) {
           // Primary review failed (API/timeout/parse/schema). The empty
           // findings array must NOT be treated as a clean primary — that
-          // would allow a clean verifier to reach APPROVE. Fail closed.
+          // would allow a clean verifier to reach APPROVE. Fail closed —
+          // but first persist a terminal receipt (APR-031, correction A) so
+          // the pre-receipt failure is durably classified instead of
+          // vanishing from the evidence record.
+          try {
+            const sanitized = sanitizeFailureClassification(v2PrimaryError);
+            await persistIntegrityReceipt({
+              reviewRowId: reviewRow.id,
+              evidence: v2EvidencePreBuilt || { version: 1, review: { invocationId: v2InvocationId, baseSha: pr.base?.sha ?? null, headSha: pr.head.sha ?? null }, changedFiles: [], contextItems: [], retrievalTrace: [], coverage: { totalChangedFiles: 0, fullyCoveredFiles: 0, approvalEvidenceComplete: false } },
+              verifierReceipt: null,
+              decision: { event: "COMMENT", checkState: "review_incomplete", approvalEligible: false, decisionReason: "primary pre-receipt failure: " + sanitized },
+              primaryFindings: [],
+              budgetState: v2PrimaryMeta?.budgetState || null,
+              invocationId: v2InvocationId,
+              primaryExecutionProfile: v2PrimaryMeta?.executionProfile || null,
+            });
+            logger.warn(
+              { pr: pr.number, invocationId: v2InvocationId, classification: sanitized },
+              "AI review: pre-receipt failure persisted as terminal receipt (APR-031)"
+            );
+          } catch (persistErr) {
+            // The receipt is diagnostics; the fail-closed throw below is the
+            // safety mechanism and must fire regardless.
+            logger.warn({ err: persistErr.message }, "AI review: pre-receipt terminal receipt persistence failed");
+          }
           throw new Error("Primary review failed: " + v2PrimaryError);
         } else if (v2PrimaryFindings) {
           // V2 evidence-bound primary already ran — use pre-built evidence

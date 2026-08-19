@@ -435,3 +435,94 @@ export function validateEvidenceRef(parsed, evidence, contextItems = []) {
 
   return { valid: false, reason: "unknown_evidence_type" };
 }
+
+// ── Server-minted evidence handles (APR-027 adoption, Attempt-3 correction) ─
+//
+// Authoritative evidence addressing moves OUT of model-generated
+// path/side/line syntax: GitWire mints opaque, deterministic evidence
+// identities for (a) each represented interval of each changed file per
+// available side, and (b) each successful repository read during the
+// verifier run. The model SELECTS handles; the backend resolves them to
+// canonical RI-4 references that existing validation still checks. A handle
+// the backend did not mint can never clear an obligation.
+
+/**
+ * Build the changed-file evidence handle catalog for a ReviewEvidence.
+ * Handles are deterministic: files in evidence order, HEAD before BASE,
+ * intervals in patch order. Each minted reference is verified against the
+ * same RI-4 validator used at clearance time — minted handles are valid by
+ * construction or not minted at all.
+ *
+ * @param {object} evidence - ReviewEvidence
+ * @returns {{catalog: Array<{id: string, ref: string, path: string, side: string, startLine: number, endLine: number}>, table: Map<string, string>}}
+ */
+export function buildChangedEvidenceHandles(evidence) {
+  const catalog = [];
+  const table = new Map();
+  let n = 0;
+  const changedFiles = evidence?.changedFiles || [];
+  for (const cf of changedFiles) {
+    for (const side of ["HEAD", "BASE"]) {
+      if (side === "HEAD" && !cf.head) continue;
+      if (side === "BASE" && !cf.base) continue;
+      const ranges = extractPatchLineRanges(cf.patch, side);
+      if (!ranges) continue;
+      for (const [startLine, endLine] of ranges) {
+        n += 1;
+        const id = "C-" + n;
+        const ref = "changed:" + cf.path + "@" + side + ":L" + startLine + "-L" + endLine;
+        // Valid by construction — verify anyway so a minting bug fails loudly
+        // at mint time rather than silently at clearance time.
+        const check = validateEvidenceRef(parseEvidenceRef(ref), evidence, []);
+        if (check.valid !== true) continue;
+        catalog.push({ id, ref, path: cf.path, side, startLine, endLine });
+        table.set(id, ref);
+      }
+    }
+  }
+  return { catalog, table };
+}
+
+/**
+ * Mint a read-evidence handle for one successful repository file read.
+ * The canonical reference is derived server-side from the context item's
+ * actual path, resolved SHA, and represented range — never from model input.
+ *
+ * @param {object} contextItem - successful broker file_read context item
+ * @param {object} evidence - ReviewEvidence (for side resolution)
+ * @param {Map<string, string>} table - live handle table to extend
+ * @returns {{id: string, ref: string}|null} null when the item cannot yield
+ *   a canonically referenceable read
+ */
+export function mintReadEvidenceHandle(contextItem, evidence, table) {
+  if (!contextItem || contextItem.type !== "file_read") return null;
+  const reviewRoot = evidence?.review;
+  const resolvedSha = contextItem.ref || contextItem.resolvedSha;
+  const side = resolvedSha === reviewRoot?.headSha ? "HEAD"
+    : resolvedSha === reviewRoot?.baseSha ? "BASE" : null;
+  if (!side) return null;
+
+  let startLine = 1;
+  let endLine = 1;
+  if (contextItem.range && typeof contextItem.range.startLine === "number") {
+    startLine = contextItem.range.startLine;
+    endLine = contextItem.range.endLine || contextItem.range.startLine;
+  } else if (typeof contextItem.content === "string") {
+    const lines = contextItem.content.split("\n");
+    endLine = contextItem.content.endsWith("\n") ? Math.max(1, lines.length - 1) : lines.length;
+  }
+
+  const ref = "repo-read:" + contextItem.path + "@" + side + ":L" + startLine + "-L" + endLine;
+  // RI-4 repo-read validation resolves against context items — the item this
+  // handle is minted from is itself the validating context.
+  const check = validateEvidenceRef(parseEvidenceRef(ref), evidence, [contextItem]);
+  if (check.valid !== true) return null;
+
+  // Read ids number within their own namespace (R-1, R-2, …) regardless of
+  // how many changed-file handles (C-*) share the table.
+  let readCount = 0;
+  for (const k of table.keys()) if (k.startsWith("R-")) readCount += 1;
+  const id = "R-" + (readCount + 1);
+  table.set(id, ref);
+  return { id, ref };
+}

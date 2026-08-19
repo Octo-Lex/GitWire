@@ -14,7 +14,14 @@
 import { createHash } from "node:crypto";
 import { logger } from "../lib/logger.js";
 import { createContextBroker, DEFAULT_BUDGETS as BROKER_BUDGETS } from "./reviewContextBroker.js";
-import { validateFinding, SEVERITY, parseEvidenceRef, validateEvidenceRef } from "./findingValidator.js";
+import {
+  validateFinding,
+  SEVERITY,
+  parseEvidenceRef,
+  validateEvidenceRef,
+  buildChangedEvidenceHandles,
+  mintReadEvidenceHandle,
+} from "./findingValidator.js";
 import {
   buildExecutionProfile,
   classifyVerifierTerminal,
@@ -24,9 +31,9 @@ import {
 
 // ── Verifier prompt identity (descriptive instrumentation metadata) ──────────
 
-const VERIFIER_PROMPT_VERSION = "v2-verifier-r2";
+const VERIFIER_PROMPT_VERSION = "v2-verifier-r3";
 const VERIFIER_PROMPT_HASH = createHash("sha256")
-  .update(VERIFIER_PROMPT_VERSION + ":falsification-risk-ledger")
+  .update(VERIFIER_PROMPT_VERSION + ":falsification-risk-ledger-evidence-handles")
   .digest("hex").slice(0, 16);
 
 // ── Falsification risk-ledger vocabulary (generic, change-relative) ─────────
@@ -100,8 +107,11 @@ export const VERIFIER_STATUS = Object.freeze({
  *   - The review evidence (changed files, coverage manifest)
  *   - It has read/search tools available at immutable SHAs
  */
-export function buildVerifierSystemPrompt(evidence) {
+export function buildVerifierSystemPrompt(evidence, changedHandleCatalog = []) {
   const categoryLines = RISK_CATEGORIES.map(c => '  - "' + c.id + '": ' + c.label + " — " + c.prompt).join("\n");
+  const catalogLines = changedHandleCatalog.length > 0
+    ? changedHandleCatalog.map(h => "  " + h.id + " = " + h.ref).join("\n")
+    : "  (no changed-file evidence handles for this change)";
   return [
     "You are an independent approval verifier for a code review system.",
     "",
@@ -119,6 +129,24 @@ export function buildVerifierSystemPrompt(evidence) {
     "- BASE (old version, before the PR): " + (evidence?.review?.baseSha || "UNKNOWN"),
     "- HEAD (new version, after the PR): " + (evidence?.review?.headSha || "UNKNOWN"),
     "",
+    "## Evidence handles — how clearances cite evidence",
+    "",
+    "You do NOT construct evidence references. The system mints opaque",
+    "evidence handles and you SELECT them:",
+    "- Changed-file evidence handles are listed below (C-1, C-2, …), one per",
+    "  represented line interval of each changed file per side.",
+    "- Every successful read_repo_file result carries an \"evidenceId\" (R-1,",
+    "  R-2, …). That id is your citation for the material you just read.",
+    "- A clearance cites handles in resolution.evidenceHandles. Raw",
+    "  path/side/line strings you write yourself are diagnostic only — they",
+    "  can never satisfy the clearance gate.",
+    "- A handle that was never minted for this invocation cannot clear an",
+    "  obligation. If the evidence you need does not exist as a handle, read",
+    "  the file (minting one) or resolve the obligation differently.",
+    "",
+    "Changed-file evidence handles for this change:",
+    catalogLines,
+    "",
     "## Protocol — two phases, in order",
     "",
     "PHASE 1 (enumerate): Build a risk ledger of the correctness-material risk",
@@ -135,9 +163,10 @@ export function buildVerifierSystemPrompt(evidence) {
     "",
     "PHASE 2 (resolve): Resolve EVERY obligation, using the repository tools",
     "to gather evidence:",
-    "- evidence_cleared: you examined repository evidence (cite it in",
-    "  evidenceRefs) and the obligation does not hold — the change is safe",
-    "  on this axis. An evidence_cleared resolution with no evidenceRefs is",
+    "- evidence_cleared: you examined repository evidence and the obligation",
+    "  does not hold — cite the evidence HANDLES you examined in",
+    "  resolution.evidenceHandles (changed-file handles above, or the",
+    "  evidenceId from your reads). A clearance with no valid handle is",
     "  invalid: clearing requires evidence, not assertion.",
     "- material_finding: the obligation holds and constitutes a P0/P1/P2",
     "  defect — also emit it in findings and point findingIndex at it.",
@@ -163,7 +192,7 @@ export function buildVerifierSystemPrompt(evidence) {
     '      "claim": "short description",',
     '      "description": "detailed explanation",',
     '      "affectedPaths": ["path/to/file"],',
-    '      "evidenceRefs": ["changed:path@HEAD:Lstart-Lend" | "repo-read:path@SIDE:Lline"],',
+    '      "evidenceRefs": ["evidence references, diagnostic only"],',
     '      "proof": { "type": "static_trace" | "counterexample" | "reproduction" | "inference", "summary": "..." }',
     "    }",
     "  ],",
@@ -176,7 +205,7 @@ export function buildVerifierSystemPrompt(evidence) {
     '            "description": "concrete way this change could break correctness",',
     '            "resolution": {',
     '              "outcome": "evidence_cleared" | "material_finding" | "unresolved",',
-    '              "evidenceRefs": ["evidence you examined for a clearance"],',
+    '              "evidenceHandles": ["C-1", "R-2"],',
     '              "findingIndex": 0,',
     '              "reason": "why the obligation could not be resolved"',
     "            }",
@@ -202,12 +231,13 @@ export function buildVerifierSystemPrompt(evidence) {
     "  categories and EVERY obligation resolves evidence_cleared (or to a",
     "  validated material finding). The system computes the final status from",
     "  your ledger — a declared status cannot override it.",
-    "- Every evidence_cleared resolution MUST cite the repository evidence you",
-    "  examined in evidenceRefs.",
+    "- Every evidence_cleared resolution MUST cite at least one handle minted",
+    "  for this invocation; the backend resolves handles to canonical",
+    "  references and validates them deterministically.",
     "- Every material_finding resolution MUST point at its finding via",
-    "  findingIndex, and every P0/P1/P2 finding MUST include at least one",
-    "  evidence reference pointing to a specific file and line range in the",
-    "  changed files or retrieved repository context.",
+    "  findingIndex, and every P0/P1/P2 finding SHOULD include evidence",
+    "  references pointing to specific files and line ranges (diagnostic for",
+    "  findings; authoritative only for ledger clearances via handles).",
     "- An unresolved obligation or unresolved material context need fails",
     "  verification closed. Using your full retrieval budget is NOT",
     "  incompleteness by itself.",
@@ -217,8 +247,9 @@ export function buildVerifierSystemPrompt(evidence) {
     "  speculation, or historical/external facts that the repository is not",
     "  expected to contain, unless a repository contract specifically",
     "  requires that evidence to be committed or referenced.",
-    "- Follow dependency chains: when a changed path calls a helper, verify",
-    "  that helper's implementation at HEAD before clearing that obligation.",
+    "- Follow dependency chains: when a changed path calls a helper, read",
+    "  that helper at HEAD before clearing that obligation — the read mints",
+    "  the handle you cite.",
     "- You have a LIMITED number of file reads and searches. Spend them on",
     "  the obligations, not on exploration.",
   ].join("\n");
@@ -356,8 +387,13 @@ export async function runApprovalVerification({
   }
 
   // ── Build the prompt ─────────────────────────────────────────────────────
-  const systemPrompt = buildVerifierSystemPrompt(evidence);
+  // Evidence-handle table: changed-file handles minted upfront (valid by
+  // construction), read handles minted during retrieval. Authoritative
+  // clearance addressing resolves through this table only.
+  const { catalog: changedHandleCatalog, table: changedHandleTable } = buildChangedEvidenceHandles(evidence);
+  const systemPrompt = buildVerifierSystemPrompt(evidence, changedHandleCatalog);
   const userPrompt = buildVerifierUserPrompt(evidence);
+  const evidenceHandleTable = new Map(changedHandleTable);
 
   // ── Tool definitions for the context broker ──────────────────────────────
   const verifierTools = [
@@ -457,7 +493,8 @@ export async function runApprovalVerification({
                           type: "object",
                           properties: {
                             outcome: { type: "string", enum: ["evidence_cleared", "material_finding", "unresolved"] },
-                            evidenceRefs: { type: "array", items: { type: "string" } },
+                            evidenceHandles: { type: "array", items: { type: "string" }, description: "Minted evidence handle ids (C-n changed-file, R-n read). Authoritative citations." },
+                            evidenceRefs: { type: "array", items: { type: "string" }, description: "Diagnostic only — never satisfies the clearance gate." },
                             findingIndex: { type: "number" },
                             reason: { type: "string" },
                           },
@@ -650,6 +687,7 @@ export async function runApprovalVerification({
       const toolResults = [];
       for (const block of toolUseBlocks) {
         let result;
+        let mintedHandle = null;
         if (block.name === "read_repo_file") {
           result = await withDeadline(
             broker.readRepoFile(block.input.path, block.input.ref, { range: block.input.range }),
@@ -658,6 +696,9 @@ export async function runApprovalVerification({
           // Collect successful results for finding validation
           if (result && !result.error) {
             verifierContextItems.push(result);
+            // Mint a read-evidence handle: the backend derives the canonical
+            // reference from the actual path/SHA/range — never model input.
+            mintedHandle = mintReadEvidenceHandle(result, evidence, evidenceHandleTable);
           }
         } else if (block.name === "search_repo_text") {
           result = await withDeadline(
@@ -689,10 +730,15 @@ export async function runApprovalVerification({
           }
         }
 
+        // Announce the minted handle in the tool result so the model can
+        // cite it in its ledger without constructing any reference syntax.
+        const resultEnvelope = mintedHandle
+          ? Object.assign({}, result, { evidenceId: mintedHandle.id, evidenceRef: mintedHandle.ref })
+          : result;
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
-          content: JSON.stringify(result),
+          content: JSON.stringify(resultEnvelope),
         });
       }
 
@@ -744,11 +790,17 @@ export async function runApprovalVerification({
   // ── Falsification risk-ledger validation (fail-closed) ──────────────────
   // `verified` is computed from the ledger; a structurally invalid ledger can
   // never produce it, regardless of the model's declared status. Clearances
-  // are evidence-bound: every evidence_cleared obligation must cite at least
-  // one reference that survives the RI-4 parser and bounds validation.
-  const { errors: ledgerErrors, ledger } = validateRiskLedger(parsed, (parsed.findings || []).length, evidence, verifierContextItems);
+  // are handle-gated: every evidence_cleared obligation must cite ≥1 handle
+  // minted for this invocation whose resolved canonical reference passes the
+  // unchanged RI-4 validation. On rejection, the submitted payload and the
+  // full diagnostics are preserved (APR-022) without becoming authoritative.
+  const { errors: ledgerErrors, ledger } = validateRiskLedger(parsed, (parsed.findings || []).length, evidence, verifierContextItems, evidenceHandleTable);
   if (ledgerErrors.length > 0) {
-    return makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Risk-ledger validation failed: " + ledgerErrors.join("; "), actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators());
+    const failureReceipt = makeReceipt(VERIFIER_STATUS.INCOMPLETE, [], [], [], broker.getTrace(), false, tokensUsed, Date.now() - startTime, "Risk-ledger validation failed: " + ledgerErrors.join("; "), actualModel, undefined, undefined, undefined, invocationInfo, usageAccumulators());
+    failureReceipt.riskLedger = null;
+    failureReceipt.unresolvedObligations = [];
+    failureReceipt.rejectedSubmission = preserveRejectedSubmission(parsed, ledgerErrors);
+    return failureReceipt;
   }
   const unresolvedObligations = [];
   for (const cat of ledger.categories) {
@@ -1006,13 +1058,14 @@ export function validateVerifierSchema(parsed) {
  *
  * @param {object} parsed - the parsed verifier submission
  * @param {number} findingsCount - bounds-check for material_finding indexes
- * @param {object|null} evidence - ReviewEvidence, for evidence-bound clearance checks
+ * @param {object|null} evidence - ReviewEvidence, for canonical-reference checks
  * @param {object[]} verifierContextItems - successful broker reads, for repo-read checks
+ * @param {Map<string, string>} evidenceHandleTable - minted handle id → canonical ref
  * @returns {{errors: string[], ledger: object|null}} errors is empty iff the
  *   ledger is structurally complete; ledger is the normalized copy for the
  *   receipt (null when structurally invalid).
  */
-export function validateRiskLedger(parsed, findingsCount = 0, evidence = null, verifierContextItems = []) {
+export function validateRiskLedger(parsed, findingsCount = 0, evidence = null, verifierContextItems = [], evidenceHandleTable = new Map()) {
   const errors = [];
   const ledger = parsed && typeof parsed === "object" ? parsed.riskLedger : null;
 
@@ -1067,22 +1120,26 @@ export function validateRiskLedger(parsed, findingsCount = 0, evidence = null, v
         continue;
       }
       if (resolution.outcome === OBLIGATION_OUTCOMES.EVIDENCE_CLEARED) {
-        const refs = Array.isArray(resolution.evidenceRefs)
-          ? resolution.evidenceRefs.filter(r => typeof r === "string" && r.trim().length > 0)
+        const handles = Array.isArray(resolution.evidenceHandles)
+          ? resolution.evidenceHandles.filter(h => typeof h === "string" && h.trim().length > 0)
           : [];
-        if (refs.length === 0) {
-          errors.push(where + ": evidence_cleared requires at least one evidenceRef");
+        if (handles.length === 0) {
+          errors.push(where + ": evidence_cleared requires at least one evidenceHandle minted for this invocation");
         } else {
-          // Evidence-bound clearances: a citation-shaped string is not
-          // evidence. Every clearance must carry ≥1 reference that parses and
-          // passes the same RI-4 bounds validation used for findings —
-          // against the ReviewEvidence and the verifier's successful reads.
-          const validCount = refs.filter(function (r) {
-            const parsedRef = parseEvidenceRef(r);
+          // Handle-gated clearances (APR-027): authoritative addressing is
+          // server-minted. A clearance holds only when ≥1 cited handle exists
+          // in THIS invocation's table AND its backend-resolved canonical
+          // reference passes the unchanged RI-4 validation. Model-written
+          // path/side/line strings (evidenceRefs) are diagnostic only and
+          // can never satisfy this gate.
+          const validCount = handles.filter(function (id) {
+            const canonicalRef = evidenceHandleTable.get(id);
+            if (!canonicalRef) return false;
+            const parsedRef = parseEvidenceRef(canonicalRef);
             return parsedRef !== null && validateEvidenceRef(parsedRef, evidence, verifierContextItems).valid === true;
           }).length;
           if (validCount === 0) {
-            errors.push(where + ": evidence_cleared requires at least one valid repository evidence reference (parsed and bounds-checked against ReviewEvidence and verifier context)");
+            errors.push(where + ": evidence_cleared requires at least one handle that resolves to a valid canonical reference (unknown, cross-invocation, or non-validating handles do not clear)");
           }
         }
       }
@@ -1118,6 +1175,7 @@ export function validateRiskLedger(parsed, findingsCount = 0, evidence = null, v
         description: String(ob.description).slice(0, 300),
         resolution: {
           outcome: ob.resolution.outcome,
+          evidenceHandles: (ob.resolution.evidenceHandles || []).slice(0, 10).map(String),
           evidenceRefs: (ob.resolution.evidenceRefs || []).slice(0, 10).map(String),
           findingIndex: Number.isInteger(ob.resolution.findingIndex) ? ob.resolution.findingIndex : null,
           reason: ob.resolution.reason ? String(ob.resolution.reason).slice(0, 300) : null,
@@ -1126,4 +1184,49 @@ export function validateRiskLedger(parsed, findingsCount = 0, evidence = null, v
     })),
   };
   return { errors: [], ledger: normalized };
+}
+
+// ── Rejected-submission preservation (APR-022, Attempt-3 correction B) ──────
+//
+// Diagnostics only: the rejected payload survives capped and labeled, and
+// nothing in it can influence status computation. Fields the validator
+// consumed (status, findings count, the submitted ledger) plus the full
+// error list are retained so a future adjudication can sub-classify WHY
+// each clearance failed without another paid run.
+
+const REJECTED_SUBMISSION_BUDGET = 6000;
+
+function preserveRejectedSubmission(parsed, ledgerErrors) {
+  const capString = (s, n) => typeof s === "string" ? s.slice(0, n) : s;
+  let submittedLedger = null;
+  try {
+    submittedLedger = JSON.parse(JSON.stringify(parsed.riskLedger ?? null));
+  } catch (_e) {
+    submittedLedger = null;
+  }
+  if (submittedLedger !== null) {
+    const walk = (node) => {
+      if (typeof node === "string") return capString(node, 300);
+      if (Array.isArray(node)) return node.slice(0, 40).map(walk);
+      if (node && typeof node === "object") {
+        const out = {};
+        for (const [k, v] of Object.entries(node).slice(0, 30)) out[k] = walk(v);
+        return out;
+      }
+      return node;
+    };
+    submittedLedger = walk(submittedLedger);
+    // Final hard budget: drop the payload entirely if it still overflows.
+    try {
+      if (JSON.stringify(submittedLedger).length > REJECTED_SUBMISSION_BUDGET) submittedLedger = { note: "payload exceeded diagnostic budget", byteLength: JSON.stringify(submittedLedger).length };
+    } catch (_e2) {
+      submittedLedger = null;
+    }
+  }
+  return {
+    validationErrors: ledgerErrors.slice(0, 40).map(e => capString(e, 400)),
+    submittedStatus: capString(parsed.status ?? null, 40),
+    submittedFindingsCount: Array.isArray(parsed.findings) ? parsed.findings.length : null,
+    submittedLedger,
+  };
 }
