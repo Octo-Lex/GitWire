@@ -115,9 +115,112 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     "VALUES ($1,$2,$3,$4,$5) " +
     "ON CONFLICT (repo_id, pr_number, commit_sha) DO UPDATE SET " +
     "  check_run_id = COALESCE(EXCLUDED.check_run_id, ai_reviews.check_run_id), started_at = NOW() " +
-    "RETURNING id",
+    "RETURNING id, publication_state, github_review_id, verdict, published_outcome, " +
+    "judgment, integrity_state, policy_blocked",
     [repoId, pr.number, pr.head.sha, checkRunId, JSON.stringify(cfg)]
   );
+
+  // ── 3b. Recover an interrupted publication before any model work ──────────
+  // The ambiguous window: the review POST succeeded, then the process died
+  // before github_review_id was persisted (publication_state still
+  // 'submitting'). Resolve the prior attempt deterministically — paginate the
+  // PR's reviews and search for the exact publication marker — before
+  // re-running the model or posting again (frozen v1.2, recoverably
+  // exactly-once).
+  if (reviewRow.publication_state === "published" && reviewRow.github_review_id) {
+    if (checkRunId) {
+      await finaliseCheckRun(octokit, owner, repo, checkRunId, reviewRow.policy_blocked ? "failure" : "success", {
+        title:   "\u2705 AI review already published",
+        summary: "A prior invocation already published this review (recovery). Outcome: " +
+          (reviewRow.published_outcome ?? reviewRow.verdict ?? "unknown") + ".",
+        text:    "",
+      });
+    }
+    logger.info({ pr: pr.number, reviewId: reviewRow.github_review_id }, "AI review: recovered published invocation");
+    return {
+      verdict: reviewRow.verdict, recovered: true,
+      blocked: reviewRow.policy_blocked === true, findings: [],
+      publication: {
+        judgment: reviewRow.judgment,
+        publishedOutcome: reviewRow.published_outcome,
+        integrityState: reviewRow.integrity_state,
+        authorityState: reviewRow.policy_blocked ? "POLICY_BLOCKED" : "ADVISORY",
+        publicationAllowed: false,
+      },
+    };
+  }
+
+  if (reviewRow.publication_state === "submitting") {
+    const priorMarker = buildPublicationMarker(reviewRow.id, repoId, pr.number, pr.head.sha);
+    let matches;
+    try {
+      matches = await findMarkerMatches(octokit, owner, repo, pr.number, priorMarker);
+    } catch (lookupErr) {
+      // Fail closed: without a completed lookup we cannot prove the prior
+      // POST did not land, so no repost is allowed.
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+          title:   "\u26A0\uFE0F AI review publication lookup failed",
+          summary: "Could not verify whether a prior review publication exists: " + lookupErr.message,
+          text:    "",
+        });
+      }
+      const lookupFail = new Error("Publication recovery lookup failed, refusing to repost: " + lookupErr.message);
+      lookupFail.gitwireErrorCode = "E_PUBLICATION_LOOKUP";
+      throw lookupFail;
+    }
+
+    if (matches.length === 1) {
+      await db.query(
+        "UPDATE ai_reviews SET github_review_id = $1, publication_state = 'published', " +
+        "terminal_reason = 'recovered_after_crash' WHERE id = $2",
+        [matches[0].id, reviewRow.id]
+      );
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, reviewRow.policy_blocked ? "failure" : "success", {
+          title:   "\u2705 AI review recovered",
+          summary: "A prior invocation published this review after a crash; the publication was adopted, not repeated.",
+          text:    "",
+        });
+      }
+      logger.info({ pr: pr.number, reviewId: matches[0].id }, "AI review: adopted crashed publication via marker");
+      return {
+        verdict: reviewRow.verdict, recovered: true,
+        blocked: reviewRow.policy_blocked === true, findings: [],
+        publication: {
+          judgment: reviewRow.judgment,
+          publishedOutcome: reviewRow.published_outcome,
+          integrityState: reviewRow.integrity_state,
+          authorityState: reviewRow.policy_blocked ? "POLICY_BLOCKED" : "ADVISORY",
+          publicationAllowed: false,
+        },
+      };
+    }
+
+    if (matches.length > 1) {
+      await db.query(
+        "UPDATE ai_reviews SET publication_state = 'failed', " +
+        "terminal_reason = 'ambiguous_publication' WHERE id = $1",
+        [reviewRow.id]
+      ).catch(function (persistErr) {
+        logger.warn({ err: persistErr.message }, "AI review: ambiguity persist failed");
+      });
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "failure", {
+          title:   "\u274C AI review publication ambiguity",
+          summary: "The publication marker for this review appears in " + matches.length +
+            " GitHub reviews. No further publication was attempted; manual inspection is required.",
+          text:    "",
+        });
+      }
+      const ambiguity = new Error("Ambiguous publication: marker found in " + matches.length + " reviews");
+      ambiguity.gitwireErrorCode = "E_AMBIGUOUS_PUBLICATION";
+      throw ambiguity;
+    }
+
+    // Zero matches: the prior POST never landed — safe to run the review fresh.
+    logger.info({ pr: pr.number }, "AI review: submitting row had no published marker — proceeding fresh");
+  }
 
   try {
     // ── 4. Fetch all changed-file pages and account for every file ──────────
@@ -419,6 +522,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       }
       await db.query(
         "UPDATE ai_reviews SET verdict = 'superseded', summary = $1, " +
+        "integrity_state = 'SUPERSEDED', terminal_reason = 'head_superseded', " +
         "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
         [("Superseded: PR head moved from " + reviewHeadSha + " to " + (currentHeadSha ?? "unknown")).slice(0, 500), Date.now() - startTime, reviewRow.id]
       ).catch(function (persistErr) {
@@ -431,7 +535,33 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       };
     }
 
-    // ── 10. Post GitHub PR Review ──────────────────────────────────────────────
+    // ── 10a. Persist the publication receipt and intent before mutation ─────
+    // The receipt is durable BEFORE the GitHub POST: judgment, integrity,
+    // authority, coverage and evidence land first, then publication_state
+    // flips to 'submitting' so a crash mid-POST is recoverable from the
+    // marker search (3b).
+    const publicationMarker = buildPublicationMarker(reviewRow.id, repoId, pr.number, reviewHeadSha);
+    await db.query(
+      "UPDATE ai_reviews SET " +
+      "  judgment = $1, published_outcome = $2, integrity_state = $3, " +
+      "  authority_state = $4, publication_mode = $5, policy_blocked = $6, " +
+      "  github_review_event = $7, coverage = $8, evidence_receipts = $9, " +
+      "  publication_state = 'computed' WHERE id = $10",
+      [
+        publication.judgment, publication.publishedOutcome, publication.integrityState,
+        publication.authorityState, publication.publicationMode, publication.policyBlocked,
+        publication.githubReviewEvent, JSON.stringify(finalCoverage),
+        JSON.stringify(evidenceResult.receipts), reviewRow.id,
+      ]
+    );
+    if (commentFindings) {
+      await db.query(
+        "UPDATE ai_reviews SET publication_state = 'submitting' WHERE id = $1",
+        [reviewRow.id]
+      );
+    }
+
+    // ── 10b. Post GitHub PR Review ──────────────────────────────────────────────
     // Delivery is a hard boundary: a computed review that GitHub REJECTS is
     // a terminal delivery failure (E_REVIEW_DELIVERY) — error receipt,
     // FAILURE check, rethrow to the worker. Never finalized neutral and
@@ -449,6 +579,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           files,
           publication,
           coverage: finalCoverage,
+          publicationMarker,
         });
         reviewId = result.reviewId;
         githubSummary = result.summary;
@@ -461,6 +592,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         // Persist the error receipt (same shape as the broad catch).
         await db.query(
           "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
+          "publication_state = CASE WHEN publication_state = 'submitting' THEN 'failed' ELSE publication_state END, " +
+          "terminal_reason = 'delivery_failure', " +
           "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
           [("GitHub review delivery failed: " + deliveryErr.message).slice(0, 500), Date.now() - startTime, reviewRow.id]
         ).catch(function (persistErr) {
@@ -498,7 +631,9 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "  tokens_used = $8, github_review_id = $9, completed_at = NOW(), " +
       "  overall_correctness = $10, overall_confidence = $11, " +
       "  overall_explanation = $12, ignored_findings = $13, " +
-      "  review_engine = $14, duration_ms = $15 " +
+      "  review_engine = $14, duration_ms = $15, " +
+      "  publication_state = CASE WHEN $9::bigint IS NOT NULL THEN 'published' ELSE 'computed' END, " +
+      "  terminal_reason = CASE WHEN $9::bigint IS NOT NULL THEN 'completed' ELSE 'completed_unpublished' END " +
       "WHERE id = $16",
       [
         verdict, confidence, JSON.stringify(findings), summary || githubSummary,
@@ -577,6 +712,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 
     await db.query(
       "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
+      "terminal_reason = 'error', " +
       "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
       [err.message.slice(0, 500), durationMs, reviewRow.id]
     );
@@ -713,7 +849,7 @@ export function computeVerdict(findings, cfg) {
 // GitHub PR Review posting
 // ════════════════════════════════════════════════════════════════════════════
 
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files, publication, coverage }) {
+async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files, publication, coverage, publicationMarker }) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
@@ -808,6 +944,12 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   summaryLines.push(...renderBodyOnlyDetails(bodyOnly));
   var comments = buildInlineComments(anchored, files);
 
+  // Invisible deterministic publication marker: identifies this logical
+  // publication across crash recovery (exactly-once, frozen v1.2 WP-5).
+  if (publicationMarker) {
+    summaryLines.push("<!-- " + publicationMarker + " -->");
+  }
+
   var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
   var summary = summaryLines.slice(0, 3).join(" ");
 
@@ -830,6 +972,44 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   );
 
   return { reviewId: review.id, summary };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Exactly-once publication helpers (frozen v1.2, WP-5)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Deterministic publication marker for one logical review publication.
+ * Stable across retries: the ai_reviews row id is stable for a
+ * (repo, PR, head) invocation via the UNIQUE upsert, so a retry computes the
+ * same marker the crashed attempt embedded in its review body.
+ */
+export function buildPublicationMarker(reviewRowId, repoId, prNumber, headSha) {
+  return "gitwire-pub:" + reviewRowId + ":" + repoId + ":" + prNumber + ":" + headSha;
+}
+
+/**
+ * Paginate the PR's reviews completely and return those whose body carries
+ * the exact publication marker. Complete pagination is required: a partial
+ * list cannot distinguish "zero matches" from "not fetched yet".
+ */
+async function findMarkerMatches(octokit, owner, repo, prNumber, marker) {
+  const needle = "<!-- " + marker + " -->";
+  const matches = [];
+  for (let page = 1; page <= 20; page++) {
+    const { data } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+      { owner, repo, pull_number: prNumber, per_page: 100, page }
+    );
+    if (!Array.isArray(data) || data.length === 0) break;
+    for (const review of data) {
+      if (typeof review.body === "string" && review.body.includes(needle)) {
+        matches.push({ id: review.id });
+      }
+    }
+    if (data.length < 100) break;
+  }
+  return matches;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
