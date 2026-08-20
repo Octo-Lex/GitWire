@@ -170,6 +170,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/index.js', status: 'modified', additions: 5, deletions: 0, patch: '+hello' }] },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'abc123' } } },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 200 } },
     });
@@ -213,6 +214,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 11 } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/db.js', status: 'modified', additions: 10, deletions: 2, patch: '+sql query' }] },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'def456' } } },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 201 } },
     });

@@ -149,6 +149,7 @@ describe('review delivery boundary', () => {
 
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'abc' } } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1, patch: SMALL_PATCH }] },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 300 } },
@@ -171,6 +172,7 @@ describe('review delivery boundary', () => {
 
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 11 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'def' } } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1, patch: SMALL_PATCH }] },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 301 } },
@@ -192,6 +194,7 @@ describe('review delivery boundary', () => {
 
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 12 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'ghi' } } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1, patch: SMALL_PATCH }] },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': () => {

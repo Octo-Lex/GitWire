@@ -346,6 +346,72 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     });
     const shouldBlock = publication.policyBlocked;
 
+    // ── 9e. Exact-head supersession guard ────────────────────────────────────
+    // A review started at SHA A must not publish a current-looking conclusion
+    // after the PR moves to SHA B: re-read the PR head immediately before the
+    // first externally visible publication. On mismatch the invocation is
+    // terminal with no review mutation and no automatic replacement review
+    // (frozen v1.2 — synchronize re-review is out of scope).
+    const reviewHeadSha = pr.head.sha;
+    let currentHeadSha;
+    try {
+      const { data: currentPr } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+        { owner, repo, pull_number: pr.number }
+      );
+      currentHeadSha = currentPr?.head?.sha ?? null;
+    } catch (headErr) {
+      // Fail closed: without head confirmation the review cannot be proven
+      // current, so it must not be published. Receipted + neutralized by the
+      // broad catch, then rethrown so the worker visibly fails (transient
+      // API outages get a BullMQ retry, never a blind publication).
+      const confirmErr = new Error("Head confirmation failed, refusing to publish: " + headErr.message);
+      confirmErr.gitwireErrorCode = "E_HEAD_CONFIRMATION";
+      throw confirmErr;
+    }
+    if (!currentHeadSha) {
+      const confirmErr = new Error("Head confirmation failed: PR response carried no head SHA, refusing to publish");
+      confirmErr.gitwireErrorCode = "E_HEAD_CONFIRMATION";
+      throw confirmErr;
+    }
+    if (currentHeadSha !== reviewHeadSha) {
+      const supersededPublication = resolveReviewPublication({
+        judgment: verdict,
+        integrityState: "SUPERSEDED",
+        repositoryPolicy: {
+          blockOnVerdict: cfg.block_on_verdict,
+          minConfidenceToBlock: cfg.min_confidence_to_block,
+          confidence,
+        },
+        publicationMode: cfg.publication_mode || "advisory",
+      });
+      logger.info(
+        { repo: repository.full_name, pr: pr.number, reviewHeadSha, currentHeadSha },
+        "AI review: head superseded — no publication"
+      );
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+          title:   "\u23ED\uFE0F AI review superseded",
+          summary: "The PR head changed while the AI review was running" +
+            (currentHeadSha ? " (" + reviewHeadSha.slice(0, 12) + " \u2192 " + currentHeadSha.slice(0, 12) + ")" : "") +
+            ". No review was published for the old head.",
+          text:    "",
+        });
+      }
+      await db.query(
+        "UPDATE ai_reviews SET verdict = 'superseded', summary = $1, " +
+        "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
+        [("Superseded: PR head moved from " + reviewHeadSha + " to " + (currentHeadSha ?? "unknown")).slice(0, 500), Date.now() - startTime, reviewRow.id]
+      ).catch(function (persistErr) {
+        logger.warn({ err: persistErr.message }, "AI review: supersession persist failed");
+      });
+      return {
+        verdict: "superseded", superseded: true, findings: [], blocked: false,
+        reviewedHeadSha: reviewHeadSha, currentHeadSha: currentHeadSha ?? null,
+        publication: supersededPublication,
+      };
+    }
+
     // ── 10. Post GitHub PR Review ──────────────────────────────────────────────
     // Delivery is a hard boundary: a computed review that GitHub REJECTS is
     // a terminal delivery failure (E_REVIEW_DELIVERY) — error receipt,
@@ -495,6 +561,12 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
       [err.message.slice(0, 500), durationMs, reviewRow.id]
     );
+
+    // Head-confirmation failure is receipted and neutralized above; rethrow
+    // so the worker visibly fails rather than reporting a completed null.
+    if (err && err.gitwireErrorCode === "E_HEAD_CONFIRMATION") {
+      throw err;
+    }
 
     return null;
   }

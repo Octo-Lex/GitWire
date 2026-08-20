@@ -133,6 +133,7 @@ describe("body-detail retention (blocker 1)", () => {
 
     const oct = mockOctokit({
       "POST /repos/{owner}/{repo}/check-runs": { data: { id: 1 } },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": { data: { head: { sha: "s" } } },
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": FILES_RESPONSE,
       "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": { data: {} },
       "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews": { data: { id: 9 } },
@@ -161,6 +162,7 @@ describe("body-detail retention (blocker 1)", () => {
 
     const oct = mockOctokit({
       "POST /repos/{owner}/{repo}/check-runs": { data: { id: 2 } },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": { data: { head: { sha: "s" } } },
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": FILES_RESPONSE,
       "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": { data: {} },
       "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews": { data: { id: 10 } },
@@ -184,6 +186,7 @@ describe("body-detail retention (blocker 1)", () => {
 
     const oct = mockOctokit({
       "POST /repos/{owner}/{repo}/check-runs": { data: { id: 3 } },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": { data: { head: { sha: "s" } } },
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": FILES_RESPONSE,
       "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": { data: {} },
       "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews": { data: { id: 11 } },

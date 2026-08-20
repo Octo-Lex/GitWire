@@ -15,6 +15,12 @@ function mockOctokit(responses = {}) {
       calls.push({ route, params });
       const h = responses[route];
       if (h) return typeof h === 'function' ? h(params) : h;
+      // Supersession guard re-reads the PR head before publication; default
+      // to an unchanged head (all PRs in this suite run at 'abc123') unless a
+      // test overrides the route.
+      if (route === 'GET /repos/{owner}/{repo}/pulls/{pull_number}') {
+        return { data: { head: { sha: 'abc123' } } };
+      }
       return { data: {} };
     },
     _calls: calls,
