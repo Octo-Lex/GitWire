@@ -39,6 +39,7 @@ import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
 import { buildInlineComments, partitionAnchored, renderBodyOnlyDetails } from "./reviewAnchorResolver.js";
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
+import { resolveReviewPublication } from "./reviewPublicationPolicy.js";
 
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
@@ -313,6 +314,25 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       }
     }
 
+    // ── 9d. Resolve publication under the advisory contract ──────────────────
+    // Judgment is the normalized model-derived verdict; integrity and authority
+    // are GitWire-deterministic. Advisory mode (the pilot default) publishes
+    // every outcome as a GitHub COMMENT — blocking comes only from explicit
+    // repository policy applied to evidence-backed findings.
+    // Integrity stays COMPLETE until ReviewCoverage derives it from evidence.
+    const publication = resolveReviewPublication({
+      judgment: verdict,
+      integrityState: "COMPLETE",
+      materialEvidenceValid: true,
+      repositoryPolicy: {
+        blockOnVerdict: cfg.block_on_verdict,
+        minConfidenceToBlock: cfg.min_confidence_to_block,
+        confidence,
+      },
+      publicationMode: cfg.publication_mode || "advisory",
+    });
+    const shouldBlock = publication.policyBlocked;
+
     // ── 10. Post GitHub PR Review ──────────────────────────────────────────────
     // Delivery is a hard boundary: a computed review that GitHub REJECTS is
     // a terminal delivery failure (E_REVIEW_DELIVERY) — error receipt,
@@ -329,6 +349,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           scopeDroppedCount: validation.scopeDroppedCount,
           adversarialMeta,
           files,
+          publication,
         });
         reviewId = result.reviewId;
         githubSummary = result.summary;
@@ -359,9 +380,6 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 11. Update check run ──────────────────────────────────────────────────
-    const shouldBlock = cfg.block_on_verdict?.includes(verdict) &&
-      confidenceLevel(confidence) >= confidenceLevel(cfg.min_confidence_to_block);
-
     if (checkRunId) {
       await finaliseCheckRun(octokit, owner, repo, checkRunId,
         shouldBlock ? "failure" : "success",
@@ -438,7 +456,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "AI review: complete (bundle-driven v2)"
     );
 
-    return { verdict, confidence, findings, blocked: shouldBlock };
+    return { verdict, confidence, findings, blocked: shouldBlock, publication };
 
   } catch (err) {
     // A delivery failure was already classified, receipted, and finalized
@@ -613,7 +631,7 @@ export function computeVerdict(findings, cfg) {
 // GitHub PR Review posting
 // ════════════════════════════════════════════════════════════════════════════
 
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files }) {
+async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files, publication }) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
@@ -632,6 +650,9 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     "## \uD83E\uDD16 AI Code Review \u2014 " + VERDICT_LABEL[verdict],
     "",
     "**Confidence:** " + confidence + " \u00B7 **Findings:** " + findings.length,
+    "**AI judgment: " + (publication.judgment === "NEEDS_DISCUSSION" ? "NEEDS DISCUSSION" : publication.judgment) + "**" +
+    " \u00B7 Evidence: " + publication.integrityState +
+    " \u00B7 Authority: " + (publication.policyBlocked ? "repository policy blocked" : "advisory"),
     critical.length ? "\n**" + critical.length + " critical issue" + (critical.length > 1 ? "s" : "") + " require attention before merging.**" : "",
     scopeDroppedCount > 0 ? "\n*" + scopeDroppedCount + " out-of-scope finding" + (scopeDroppedCount !== 1 ? "s" : "") + " filtered out.*" : "",
     "",
@@ -694,9 +715,10 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
   var summary = summaryLines.slice(0, 3).join(" ");
 
-  var ghVerdict =
-    verdict === "request_changes" ? "REQUEST_CHANGES" :
-    verdict === "approved"        ? "APPROVE"         : "COMMENT";
+  // The publication policy owns the GitHub review event. Advisory mode always
+  // publishes COMMENT; only the legacy_stateful rollback mode may emit
+  // APPROVE / REQUEST_CHANGES.
+  var ghVerdict = publication.githubReviewEvent;
 
   var { data: review } = await octokit.request(
     "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
