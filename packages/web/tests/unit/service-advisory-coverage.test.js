@@ -301,8 +301,7 @@ describe('advisory coverage — INCOMPLETE publication', () => {
     expect(r.publication.publishedOutcome).toBe('APPROVE');
   });
 
-  test('all files ignore-excluded keeps the legacy no-reviewable-files success exit', async () => {
-    mockQuery.mockReset();
+  test('all files ignore-excluded keeps the legacy no-reviewable-files success exit', async () => {    mockQuery.mockReset();
     mockQuery
       .mockResolvedValueOnce({ rows: [{ ...CFG, ignore_patterns: ['**'] }] })
       .mockResolvedValueOnce({ rows: [{ id: 100 }] })
@@ -321,5 +320,84 @@ describe('advisory coverage — INCOMPLETE publication', () => {
     const checkPatch = oct._calls.filter((c) => c.route.includes('/check-runs/') && c.route.startsWith('PATCH'));
     expect(checkPatch[checkPatch.length - 1].params.conclusion).toBe('success');
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('advisory evidence — blocking eligibility is separate from visibility', () => {
+  test('request_changes with an out-of-patch material finding: published, visible, NOT blocking', async () => {
+    const oct = mockOctokit({
+      'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [
+        { filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1,
+          patch: '@@ -1,3 +1,3 @@\n context\n-old\n+new\n context' },
+      ] },
+      'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 200 } },
+    });
+
+    // P0 finding whose line (800) is NOT inside the acquired patch
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text', text: JSON.stringify({
+        findings: [{
+          title: 'claimed defect', body: 'claims a line the patch never showed',
+          priority: 'P0', confidence: 0.9, category: 'security',
+          code_location: { file_path: 'src/app.js', line: 800 },
+        }],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'defect',
+        overall_confidence: 0.9,
+      }) }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+
+    const r = await reviewPR({ pr: pr(), repository: REPO, octokit: oct });
+
+    // Visible: the finding is published (REQUEST_CHANGES survives)
+    expect(r.publication.publishedOutcome).toBe('REQUEST_CHANGES');
+    const reviewPost = oct._calls.find((c) => c.route.endsWith('/reviews'));
+    expect(reviewPost.params.body).toContain('claimed defect');
+    expect(reviewPost.params.body).toContain('unverified');
+
+    // But NOT blocking: evidence invalid despite the configured blocking policy
+    expect(r.evidence.materialEvidenceValid).toBe(false);
+    expect(r.blocked).toBe(false);
+    expect(r.publication.authorityState).toBe('ADVISORY');
+
+    const checkPatch = oct._calls.filter((c) => c.route.includes('/check-runs/') && c.route.startsWith('PATCH'));
+    expect(checkPatch[checkPatch.length - 1].params.conclusion).toBe('success');
+  });
+
+  test('request_changes with in-patch evidence still blocks under configured policy', async () => {
+    const oct = mockOctokit({
+      'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [
+        { filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1,
+          patch: '@@ -1,3 +1,3 @@\n context\n-old\n+new\n context' },
+      ] },
+      'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 200 } },
+    });
+
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text', text: JSON.stringify({
+        findings: [{
+          title: 'real defect', body: 'on a represented line',
+          priority: 'P0', confidence: 0.9, category: 'security',
+          code_location: { file_path: 'src/app.js', line: 2 },
+        }],
+        overall_correctness: 'patch is incorrect',
+        overall_explanation: 'defect',
+        overall_confidence: 0.9,
+      }) }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    });
+
+    const r = await reviewPR({ pr: pr(), repository: REPO, octokit: oct });
+
+    expect(r.evidence.materialEvidenceValid).toBe(true);
+    expect(r.blocked).toBe(true);
+    expect(r.publication.authorityState).toBe('POLICY_BLOCKED');
+    const checkPatch = oct._calls.filter((c) => c.route.includes('/check-runs/') && c.route.startsWith('PATCH'));
+    expect(checkPatch[checkPatch.length - 1].params.conclusion).toBe('failure');
   });
 });

@@ -40,6 +40,7 @@ import { buildInlineComments, partitionAnchored, renderBodyOnlyDetails } from ".
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
 import { resolveReviewPublication } from "./reviewPublicationPolicy.js";
 import { buildFileCoverage, finalizeCoverage, coverageSummaryLine } from "./reviewCoverageService.js";
+import { buildEvidenceReceipts } from "./reviewEvidenceService.js";
 
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
@@ -326,6 +327,24 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       }
     }
 
+    // ── 9c2. Evidence-bind material findings ─────────────────────────────────
+    // A material claim without valid evidence stays visible but cannot
+    // independently drive deterministic blocking authority (frozen v1.2).
+    const evidenceResult = buildEvidenceReceipts({
+      findings, files, headSha: pr.head.sha,
+    });
+    for (const receipt of evidenceResult.receipts) {
+      const finding = findings[receipt.findingIndex];
+      if (finding) finding.evidence_valid = receipt.valid;
+    }
+    if (findings.length > 0) {
+      const unverified = evidenceResult.receipts.filter((r) => !r.valid).length;
+      logger.info(
+        { pr: pr.number, findings: findings.length, unverified },
+        "AI review: evidence receipts built"
+      );
+    }
+
     // ── 9d. Resolve publication under the advisory contract ──────────────────
     // Judgment is the normalized model-derived verdict; integrity and authority
     // are GitWire-deterministic. Advisory mode (the pilot default) publishes
@@ -336,7 +355,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     const publication = resolveReviewPublication({
       judgment: verdict,
       integrityState: finalCoverage.approvalEvidenceComplete ? "COMPLETE" : "INCOMPLETE",
-      materialEvidenceValid: true,
+      materialEvidenceValid: evidenceResult.materialEvidenceValid,
       repositoryPolicy: {
         blockOnVerdict: cfg.block_on_verdict,
         minConfidenceToBlock: cfg.min_confidence_to_block,
@@ -536,7 +555,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "AI review: complete (bundle-driven v2)"
     );
 
-    return { verdict, confidence, findings, blocked: shouldBlock, publication, coverage: finalCoverage };
+    return { verdict, confidence, findings, blocked: shouldBlock, publication, coverage: finalCoverage, evidence: evidenceResult };
 
   } catch (err) {
     // A delivery failure was already classified, receipted, and finalized
@@ -740,7 +759,7 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     for (var i = 0; i < Math.min(5, critical.length + high.length); i++) {
       var f = (critical.concat(high))[i];
       var badge = f.adversarial_status === "upheld" ? " 🔮" : (f.adversarial_status === "missed_risk" ? " 🔍" : "");
-      summaryLines.push("- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " (`" + f.file + "`)" : "") + badge);
+      summaryLines.push("- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " (`" + f.file + "`)" : "") + badge + (f.evidence_valid === false ? " \u26A0\uFE0F *unverified*" : ""));
     }
     summaryLines.push("");
   }
@@ -748,7 +767,7 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   if (others.length) {
     summaryLines.push("### Other findings (" + others.length + ")");
     for (var j = 0; j < Math.min(5, others.length); j++) {
-      summaryLines.push("- **[" + others[j].severity + "]** " + others[j].title);
+      summaryLines.push("- **[" + others[j].severity + "]** " + others[j].title + (others[j].evidence_valid === false ? " \u26A0\uFE0F *unverified*" : ""));
     }
     summaryLines.push("");
   }

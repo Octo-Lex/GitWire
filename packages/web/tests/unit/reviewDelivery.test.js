@@ -185,7 +185,10 @@ describe('review delivery boundary', () => {
     expect(posts[0].params.comments).toEqual([]);
     // The finding itself is NOT dropped — it stays in the review body.
     expect(posts[0].params.body).toContain('finding at line 800');
-    expect(checkPatchCalls(oct).at(-1).params.conclusion).toBe('failure'); // request_changes blocks
+    // Advisory v1.2: the line-800 finding is outside the acquired patch, so
+    // its evidence is unvalidated — it stays visible but cannot block. The
+    // check concludes success (advisory), matching the pinned WP-7 row.
+    expect(checkPatchCalls(oct).at(-1).params.conclusion).toBe('success');
   });
 
   test('422 on the review POST is a TERMINAL delivery failure — error receipt, FAILURE check, rethrow, ONE POST', async () => {
