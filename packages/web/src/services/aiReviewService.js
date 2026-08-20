@@ -27,7 +27,6 @@ import { Trail }  from "./auditTrailService.js";
 import { Events } from "./pipelineEvents.js";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
-import { minimatch } from "minimatch";
 import {
   extractReviewJSON,
   buildReviewSystemPrompt,
@@ -40,6 +39,7 @@ import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js"
 import { buildInlineComments, partitionAnchored, renderBodyOnlyDetails } from "./reviewAnchorResolver.js";
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
 import { resolveReviewPublication } from "./reviewPublicationPolicy.js";
+import { buildFileCoverage, finalizeCoverage, coverageSummaryLine } from "./reviewCoverageService.js";
 
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
@@ -119,14 +119,21 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
   );
 
   try {
-    // ── 4. Fetch diff ─────────────────────────────────────────────────────────
-    const { files, totalAdded, totalRemoved } = await fetchDiff(octokit, owner, repo, pr, cfg);
+    // ── 4. Fetch all changed-file pages and account for every file ──────────
+    const { prFiles, paginationCapped } = await fetchChangedFiles(octokit, owner, repo, pr);
+    const { files, coverage, totalAdded, totalRemoved } = buildFileCoverage({
+      prFiles, cfg, headSha: pr.head.sha, paginationCapped,
+    });
 
     if (!files.length) {
+      const allExempt = coverage.files.length > 0 &&
+        coverage.files.every((r) => r.coverage === "policy_exempt");
       if (checkRunId) {
-        await finaliseCheckRun(octokit, owner, repo, checkRunId, "success", {
-          title:   "\u2705 No reviewable files changed",
-          summary: "All changed files are excluded by the ignore patterns.",
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, allExempt ? "success" : "neutral", {
+          title:   allExempt ? "\u2705 No reviewable files changed" : "\u26A0\uFE0F AI review not run \u2014 no files admitted",
+          summary: allExempt
+            ? "All changed files are excluded by the ignore patterns."
+            : "Changed files exist but none were admitted within the configured review limits. " + coverageSummaryLine(coverage),
           text:    "",
         });
       }
@@ -134,9 +141,14 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 5. Build review bundle ────────────────────────────────────────────────
-    const { bundle, changedFiles } = await buildReviewBundle({
+    const { bundle, changedFiles, coverageAdjustments } = await buildReviewBundle({
       files, pr, repository,
     });
+
+    // Bundle-stage truncation (per-file patch, aggregate budget) downgrades
+    // affected files from full to partial; incomplete evidence must reach the
+    // publication decision, not just the prompt budget.
+    const finalCoverage = finalizeCoverage(coverage, coverageAdjustments);
 
     logger.info(
       { repo: repository.full_name, pr: pr.number, bundleChars: bundle.length, files: changedFiles.length },
@@ -319,10 +331,11 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     // are GitWire-deterministic. Advisory mode (the pilot default) publishes
     // every outcome as a GitHub COMMENT — blocking comes only from explicit
     // repository policy applied to evidence-backed findings.
-    // Integrity stays COMPLETE until ReviewCoverage derives it from evidence.
+    // Integrity is derived from changed-file coverage: incomplete evidence can
+    // never produce a published clean APPROVE.
     const publication = resolveReviewPublication({
       judgment: verdict,
-      integrityState: "COMPLETE",
+      integrityState: finalCoverage.approvalEvidenceComplete ? "COMPLETE" : "INCOMPLETE",
       materialEvidenceValid: true,
       repositoryPolicy: {
         blockOnVerdict: cfg.block_on_verdict,
@@ -350,6 +363,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           adversarialMeta,
           files,
           publication,
+          coverage: finalCoverage,
         });
         reviewId = result.reviewId;
         githubSummary = result.summary;
@@ -383,7 +397,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     if (checkRunId) {
       await finaliseCheckRun(octokit, owner, repo, checkRunId,
         shouldBlock ? "failure" : "success",
-        buildCheckOutput(findings, verdict, confidence, githubSummary, validation.scopeDroppedCount)
+        buildCheckOutput(findings, verdict, confidence, githubSummary, validation.scopeDroppedCount, coverageSummaryLine(finalCoverage))
       );
     }
 
@@ -456,7 +470,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "AI review: complete (bundle-driven v2)"
     );
 
-    return { verdict, confidence, findings, blocked: shouldBlock, publication };
+    return { verdict, confidence, findings, blocked: shouldBlock, publication, coverage: finalCoverage };
 
   } catch (err) {
     // A delivery failure was already classified, receipted, and finalized
@@ -487,50 +501,27 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Fetch and filter PR diff
+// Fetch changed files — every page, so coverage can account for them all
 // ════════════════════════════════════════════════════════════════════════════
 
-async function fetchDiff(octokit, owner, repo, pr, cfg) {
-  const { data: prFiles } = await octokit.request(
-    "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
-    { owner, repo, pull_number: pr.number, per_page: 100 }
-  );
+const MAX_FILE_PAGES = 10; // changed-files pagination cap; beyond it evidence is incomplete
 
-  const ignorePatterns = cfg.ignore_patterns ?? [];
+async function fetchChangedFiles(octokit, owner, repo, pr) {
+  const prFiles = [];
+  let paginationCapped = false;
 
-  var filtered = prFiles.filter(function (f) {
-    if (f.status === "removed") return false;
-    if (ignorePatterns.some(function (pat) { return minimatch(f.filename, pat); })) return false;
-    return true;
-  });
-
-  // Respect limits
-  filtered = filtered.slice(0, cfg.max_files_to_review);
-
-  var totalAdded = 0, totalRemoved = 0, totalLines = 0;
-  var files = [];
-
-  for (var i = 0; i < filtered.length; i++) {
-    var f = filtered[i];
-    var added   = f.additions ?? 0;
-    var removed = f.deletions ?? 0;
-    totalAdded   += added;
-    totalRemoved += removed;
-    totalLines   += added + removed;
-
-    if (totalLines > cfg.max_lines_to_review) break;
-
-    files.push({
-      filename: f.filename,
-      status:   f.status,
-      added:    added,
-      removed:  removed,
-      patch:    f.patch ?? "",
-      sha:      f.sha,
-    });
+  for (let page = 1; page <= MAX_FILE_PAGES; page++) {
+    const { data } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+      { owner, repo, pull_number: pr.number, per_page: 100, page }
+    );
+    if (!Array.isArray(data) || data.length === 0) break;
+    prFiles.push(...data);
+    if (data.length < 100) break;
+    if (page === MAX_FILE_PAGES) paginationCapped = true;
   }
 
-  return { files, totalAdded, totalRemoved };
+  return { prFiles, paginationCapped };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -631,7 +622,7 @@ export function computeVerdict(findings, cfg) {
 // GitHub PR Review posting
 // ════════════════════════════════════════════════════════════════════════════
 
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files, publication }) {
+async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files, publication, coverage }) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
@@ -657,6 +648,20 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     scopeDroppedCount > 0 ? "\n*" + scopeDroppedCount + " out-of-scope finding" + (scopeDroppedCount !== 1 ? "s" : "") + " filtered out.*" : "",
     "",
   ];
+
+  // An incomplete review is never presented as a clean approval: say so in
+  // the published body, with the coverage numbers behind it.
+  if (publication.publishedOutcome === "INCOMPLETE" && coverage) {
+    const lacking = coverage.files.filter(
+      (r) => r.coverage === "partial" || r.coverage === "unavailable"
+    ).length;
+    summaryLines.push(
+      "**INCOMPLETE \u2014 no clean approval was issued.** GitWire could not completely review this change: " +
+      lacking + " of " + coverage.totalChangedFiles + " changed files lacked complete review evidence" +
+      (coverage.limitsExceeded.length ? " (limits reached: " + coverage.limitsExceeded.join(", ") + ")" : "") + "."
+    );
+    summaryLines.push("");
+  }
 
   if (critical.length || high.length) {
     summaryLines.push("### Key issues");
@@ -757,7 +762,7 @@ async function finaliseCheckRun(octokit, owner, repo, checkRunId, conclusion, ou
   });
 }
 
-function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCount) {
+function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCount, coverageLine) {
   var ICONS = { approved: "\u2705", needs_discussion: "\uD83D\uDCAC", request_changes: "\u274C" };
   var title = (ICONS[verdict] ?? "\uD83E\uDD16") + " AI Review \u2014 " + verdict.replace(/_/g, " ") + " (" + confidence + " confidence)";
 
@@ -769,9 +774,11 @@ function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCo
     ? "\n\n*" + scopeDroppedCount + " out-of-scope findings filtered.*"
     : "";
 
+  var coverageNote = coverageLine ? "\n\n" + coverageLine : "";
+
   return {
     title: title,
-    summary: (summary || findings.length + " finding" + (findings.length !== 1 ? "s" : "")) + scopeNote,
+    summary: (summary || findings.length + " finding" + (findings.length !== 1 ? "s" : "")) + scopeNote + coverageNote,
     text:    details || "No specific findings.",
   };
 }

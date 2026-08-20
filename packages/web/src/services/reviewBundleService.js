@@ -47,6 +47,9 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
 
   const parts = [];
   const changedFiles = files.map(function (f) { return f.filename; });
+  // Bundle-stage truncation, reported so review coverage can downgrade the
+  // affected files from full to partial (frozen v1.2, WP-2).
+  const coverageAdjustments = [];
 
   // ── 1. PR Metadata ─────────────────────────────────────────────────────
   parts.push("## PR Metadata");
@@ -76,6 +79,9 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
     parts.push("");
     parts.push("#### " + f.filename + " (+" + f.added + " -" + f.removed + ")");
     if (f.patch) {
+      if (f.patch.length > MAX_DIFF_PER_FILE) {
+        coverageAdjustments.push({ path: f.filename, coverage: "partial", reason: "patch_truncated" });
+      }
       const patch = f.patch.length > MAX_DIFF_PER_FILE
         ? f.patch.slice(0, MAX_DIFF_PER_FILE) + "\n... (truncated)"
         : f.patch;
@@ -199,18 +205,34 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
         const diffParts = [];
         let diffChars = 0;
         for (const f of files) {
+          const sliceCap = Math.min(MAX_DIFF_PER_FILE, diffBudget - diffChars - 100);
           const fileDiff = "#### " + f.filename + " (+" + f.added + " -" + f.removed + ")\n```diff\n" +
-            (f.patch ? f.patch.slice(0, Math.min(MAX_DIFF_PER_FILE, diffBudget - diffChars - 100)) : "(no diff)") +
+            (f.patch ? f.patch.slice(0, sliceCap) : "(no diff)") +
             "\n```";
-          if (diffChars + fileDiff.length > diffBudget) break;
+          if (diffChars + fileDiff.length > diffBudget) {
+            // This file and every remaining file fell out of the bundle.
+            for (const rest of files.slice(files.indexOf(f))) {
+              coverageAdjustments.push({ path: rest.filename, coverage: "partial", reason: "bundle_truncated" });
+            }
+            break;
+          }
+          if (f.patch && f.patch.length > sliceCap) {
+            coverageAdjustments.push({ path: f.filename, coverage: "partial", reason: "bundle_truncated" });
+          }
           diffParts.push(fileDiff);
           diffChars += fileDiff.length;
         }
         bundle = meta + "## Changes\n\n### Diffs\n\n" + diffParts.join("\n\n") + "\n\n" + context;
       } else {
+        for (const f of files) {
+          coverageAdjustments.push({ path: f.filename, coverage: "partial", reason: "bundle_truncated" });
+        }
         bundle = bundle.slice(0, MAX_BUNDLE_CHARS) + "\n\n... (bundle truncated)";
       }
     } else {
+      for (const f of files) {
+        coverageAdjustments.push({ path: f.filename, coverage: "partial", reason: "bundle_truncated" });
+      }
       bundle = bundle.slice(0, MAX_BUNDLE_CHARS) + "\n\n... (bundle truncated)";
     }
   }
@@ -219,5 +241,6 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
     bundle,
     changedFiles,
     totalChars: bundle.length,
+    coverageAdjustments,
   };
 }
