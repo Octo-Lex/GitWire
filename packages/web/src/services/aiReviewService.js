@@ -11,15 +11,20 @@
 // Flow:
 //   1. Check repo has AI review enabled
 //   2. Create a "pending" GitHub Check Run
-//   3. Fetch diff + build review bundle (context-enriched)
-//   4. Single-pass structured review via Claude with schema enforcement
-//   5. Extract JSON with cascade (handles fenced, JSONL, nested formats)
-//   6. Validate schema + scope-filter findings
-//   7. Compute verdict from validated report
-//   8. Post GitHub PR Review with finding annotations
-//   9. Update Check Run to pass/fail
-//  10. Write to audit trail
-//  11. Persist to ai_reviews table (with new structured columns)
+//   3. Persist review record (advisory receipt columns) + recover any
+//      interrupted publication before doing work
+//   4. Fetch ALL changed-file pages; account for every file (coverage)
+//   5. Build review bundle (context-enriched) with truncation metadata
+//   6. Single-pass structured review via Claude with schema enforcement
+//   7. Extract JSON with cascade (handles fenced, JSONL, nested formats)
+//   8. Validate schema + scope-filter findings
+//   9. Derive verdict; adversarial challenge; evidence-bind material
+//      findings; resolve publication (judgment / integrity / authority)
+//  10. Supersession guard; persist receipt + publication intent; post the
+//      GitHub review (COMMENT in advisory mode) with the publication marker
+//  11. Update Check Run to pass/fail
+//  12. Write to audit trail
+//  13. Persist the terminal review receipt (published / terminal_reason)
 
 import Anthropic from "@anthropic-ai/sdk";
 import { db }     from "../lib/db.js";
@@ -871,6 +876,7 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     "**AI judgment: " + (publication.judgment === "NEEDS_DISCUSSION" ? "NEEDS DISCUSSION" : publication.judgment) + "**" +
     " \u00B7 Evidence: " + publication.integrityState +
     " \u00B7 Authority: " + (publication.policyBlocked ? "repository policy blocked" : "advisory"),
+    coverage ? coverageSummaryLine(coverage) : "",
     critical.length ? "\n**" + critical.length + " critical issue" + (critical.length > 1 ? "s" : "") + " require attention before merging.**" : "",
     scopeDroppedCount > 0 ? "\n*" + scopeDroppedCount + " out-of-scope finding" + (scopeDroppedCount !== 1 ? "s" : "") + " filtered out.*" : "",
     "",
@@ -932,8 +938,11 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
 
   summaryLines.push(
     "---",
-    "_GitWire AI Review Gate (bundle-driven v2) · Structured schema · Scope-validated" +
-    (adversarialMeta ? " · Devil's Advocate" : "") + "_"
+    "_GitWire AI Review Gate (bundle-driven v2) \u00B7 Structured schema \u00B7 Scope-validated" +
+    (adversarialMeta ? " \u00B7 Devil's Advocate" : "") +
+    " \u00B7 " + (publication.policyBlocked
+      ? "Repository policy blocked this merge"
+      : "AI recommendation \u2014 maintainers and repository policy retain authority") + "_"
   );
 
   // Partition BEFORE the body join: findings NOT emitted inline —

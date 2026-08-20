@@ -255,6 +255,7 @@ export default defineConfig({
           { text: "First Triage", link: "/guides/first-triage" },
           { text: "First CI Heal", link: "/guides/first-ci-heal" },
           { text: "First Contributor Fix", link: "/guides/first-contributor-fix" },
+          { text: "AI Review (Advisory)", link: "/guides/ai-review" },
           { text: "Custom Enforcement", link: "/guides/custom-enforcement" },
           { text: "Audit & Compliance", link: "/guides/audit-compliance" },
         ],
