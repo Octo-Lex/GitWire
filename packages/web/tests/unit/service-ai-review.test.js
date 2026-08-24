@@ -155,7 +155,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [] }] })
       .mockResolvedValueOnce({ rows: [{ id: 100 }] })
-      .mockResolvedValue({ rows: [] }); // all subsequent DB calls (final update, etc.)
+      .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] }))); // all subsequent DB calls (final update, etc.)
 
     mockCreate.mockResolvedValueOnce({
       content: [{ type: 'text', text: JSON.stringify({
@@ -170,6 +170,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/index.js', status: 'modified', additions: 5, deletions: 0, patch: '+hello' }] },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'abc123' } } },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 200 } },
     });
@@ -191,7 +192,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [] }] })
       .mockResolvedValueOnce({ rows: [{ id: 101 }] })
-      .mockResolvedValue({ rows: [] });
+      .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
 
     mockCreate.mockResolvedValueOnce({
       content: [{ type: 'text', text: JSON.stringify({
@@ -212,7 +213,8 @@ describe('aiReviewService (bundle-driven v2)', () => {
 
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 11 } },
-      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/db.js', status: 'modified', additions: 10, deletions: 2, patch: '+sql query' }] },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/db.js', status: 'modified', additions: 10, deletions: 2, patch: '@@ -40,5 +40,6 @@\n context\n+sql query' }] },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'def456' } } },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 201 } },
     });
@@ -234,7 +236,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [] }] })
       .mockResolvedValueOnce({ rows: [{ id: 102 }] })
-      .mockResolvedValue({ rows: [] });
+      .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
 
     // Return non-JSON text
     mockCreate.mockResolvedValueOnce({

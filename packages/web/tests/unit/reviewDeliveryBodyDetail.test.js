@@ -122,17 +122,18 @@ describe("body-detail retention (blocker 1)", () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockCreate.mockReset();
-    mockQuery.mockResolvedValue({ rows: [] });
+    mockQuery.mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
   });
 
   test("THE LINE-800 CASE: unanchorable finding keeps description + suggestion + location in the body", async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [LEGACY_CONFIG] }).mockResolvedValueOnce({ rows: [{ id: 1 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [LEGACY_CONFIG] }).mockResolvedValueOnce({ rows: [{ id: 1 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce(modelResponse([
       finding(800, "big-line finding", "THIS DESCRIPTION MUST SURVIVE", "and this suggestion too"),
     ]));
 
     const oct = mockOctokit({
       "POST /repos/{owner}/{repo}/check-runs": { data: { id: 1 } },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": { data: { head: { sha: "s" } } },
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": FILES_RESPONSE,
       "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": { data: {} },
       "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews": { data: { id: 9 } },
@@ -156,11 +157,12 @@ describe("body-detail retention (blocker 1)", () => {
     const six = Array.from({ length: 6 }, (_, i) =>
       finding(i < 5 ? 2 : 900, `finding number ${i}`, `description of finding ${i} UNIQUE-${i}`)
     );
-    mockQuery.mockResolvedValueOnce({ rows: [LEGACY_CONFIG] }).mockResolvedValueOnce({ rows: [{ id: 2 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [LEGACY_CONFIG] }).mockResolvedValueOnce({ rows: [{ id: 2 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce(modelResponse(six));
 
     const oct = mockOctokit({
       "POST /repos/{owner}/{repo}/check-runs": { data: { id: 2 } },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": { data: { head: { sha: "s" } } },
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": FILES_RESPONSE,
       "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": { data: {} },
       "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews": { data: { id: 10 } },
@@ -177,13 +179,14 @@ describe("body-detail retention (blocker 1)", () => {
   });
 
   test("a finding with NO location at all still carries its detail in the body", async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [LEGACY_CONFIG] }).mockResolvedValueOnce({ rows: [{ id: 3 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [LEGACY_CONFIG] }).mockResolvedValueOnce({ rows: [{ id: 3 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce(modelResponse([
       { title: "locationless finding", body: "no file, no line, still a finding", priority: "P1", confidence: 0.9 },
     ]));
 
     const oct = mockOctokit({
       "POST /repos/{owner}/{repo}/check-runs": { data: { id: 3 } },
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}": { data: { head: { sha: "s" } } },
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/files": FILES_RESPONSE,
       "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": { data: {} },
       "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews": { data: { id: 11 } },

@@ -113,6 +113,29 @@ describe("finalizeGitwireCheck", function () {
     );
   });
 
+  // ── Review superseded (advisory v1.2 WP-3) ──────────────────────────────
+
+  it("finalizes as neutral superseded when the PR head moved during review", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: {
+        verdict: "superseded",
+        superseded: true,
+        blocked: false,
+        findings: [],
+        reviewedHeadSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        currentHeadSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      },
+    });
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.conclusion).toBe("neutral");
+    expect(call.title).toContain("superseded");
+    expect(call.summary).toContain("aaaaaaaaaaaa");
+    expect(call.summary).toContain("bbbbbbbbbbbb");
+    expect(call.summary).toContain("No review was published");
+  });
+
   // ── Review blocked merge ─────────────────────────────────────────────────
 
   it("finalizes as failure when review blocked merge", async function () {

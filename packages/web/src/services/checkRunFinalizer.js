@@ -102,6 +102,13 @@ export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNum
     conclusion = "neutral";
     title = "GitWire \u2014 no review needed";
     summary = "AI review is not configured for this repository, or the PR was skipped.";
+  } else if (reviewResult && reviewResult.superseded) {
+    conclusion = "neutral";
+    title = "GitWire \u2014 review superseded";
+    summary = "The PR head changed while the AI review was running (reviewed " +
+      (reviewResult.reviewedHeadSha || "?").slice(0, 12) + " \u2192 current " +
+      (reviewResult.currentHeadSha || "?").slice(0, 12) +
+      "). No review was published for the old head.";
   } else if (reviewResult.blocked) {
     conclusion = "failure";
     title = "GitWire \u2014 review blocked merge";

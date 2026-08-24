@@ -140,15 +140,16 @@ describe('review delivery boundary', () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockCreate.mockReset();
-    mockQuery.mockResolvedValue({ rows: [] });
+    mockQuery.mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
   });
 
   test('valid anchor: comment carries {path, line, side:RIGHT} and NEVER a position', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 200 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 200 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify(findingReport(2)) }], usage: { input_tokens: 10, output_tokens: 5 } });
 
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'abc' } } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1, patch: SMALL_PATCH }] },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 300 } },
@@ -166,11 +167,12 @@ describe('review delivery boundary', () => {
   });
 
   test('THE DEFECT SHAPE: file line 800 against a 3-line patch → body-only, review still posts and succeeds', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 201 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 201 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify(findingReport(800)) }], usage: { input_tokens: 10, output_tokens: 5 } });
 
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 11 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'def' } } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1, patch: SMALL_PATCH }] },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 301 } },
@@ -183,15 +185,19 @@ describe('review delivery boundary', () => {
     expect(posts[0].params.comments).toEqual([]);
     // The finding itself is NOT dropped — it stays in the review body.
     expect(posts[0].params.body).toContain('finding at line 800');
-    expect(checkPatchCalls(oct).at(-1).params.conclusion).toBe('failure'); // request_changes blocks
+    // Advisory v1.2: the line-800 finding is outside the acquired patch, so
+    // its evidence is unvalidated — it stays visible but cannot block. The
+    // check concludes success (advisory), matching the pinned WP-7 row.
+    expect(checkPatchCalls(oct).at(-1).params.conclusion).toBe('success');
   });
 
   test('422 on the review POST is a TERMINAL delivery failure — error receipt, FAILURE check, rethrow, ONE POST', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 202 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 202 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify(findingReport(2)) }], usage: { input_tokens: 10, output_tokens: 5 } });
 
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 12 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'ghi' } } },
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1, patch: SMALL_PATCH }] },
       'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': () => {
@@ -220,7 +226,7 @@ describe('review delivery boundary', () => {
   });
 
   test('non-delivery failures keep the pre-existing behavior (neutral + null)', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 203 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 203 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'narration, no JSON' }], usage: { input_tokens: 10, output_tokens: 5 } });
 
     const oct = mockOctokit({

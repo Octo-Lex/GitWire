@@ -11,15 +11,20 @@
 // Flow:
 //   1. Check repo has AI review enabled
 //   2. Create a "pending" GitHub Check Run
-//   3. Fetch diff + build review bundle (context-enriched)
-//   4. Single-pass structured review via Claude with schema enforcement
-//   5. Extract JSON with cascade (handles fenced, JSONL, nested formats)
-//   6. Validate schema + scope-filter findings
-//   7. Compute verdict from validated report
-//   8. Post GitHub PR Review with finding annotations
-//   9. Update Check Run to pass/fail
-//  10. Write to audit trail
-//  11. Persist to ai_reviews table (with new structured columns)
+//   3. Persist review record (advisory receipt columns) + recover any
+//      interrupted publication before doing work
+//   4. Fetch ALL changed-file pages; account for every file (coverage)
+//   5. Build review bundle (context-enriched) with truncation metadata
+//   6. Single-pass structured review via Claude with schema enforcement
+//   7. Extract JSON with cascade (handles fenced, JSONL, nested formats)
+//   8. Validate schema + scope-filter findings
+//   9. Derive verdict; adversarial challenge; evidence-bind material
+//      findings; resolve publication (judgment / integrity / authority)
+//  10. Supersession guard; persist receipt + publication intent; post the
+//      GitHub review (COMMENT in advisory mode) with the publication marker
+//  11. Update Check Run to pass/fail
+//  12. Write to audit trail
+//  13. Persist the terminal review receipt (published / terminal_reason)
 
 import Anthropic from "@anthropic-ai/sdk";
 import { db }     from "../lib/db.js";
@@ -27,7 +32,6 @@ import { Trail }  from "./auditTrailService.js";
 import { Events } from "./pipelineEvents.js";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
-import { minimatch } from "minimatch";
 import {
   extractReviewJSON,
   buildReviewSystemPrompt,
@@ -39,6 +43,9 @@ import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
 import { buildInlineComments, partitionAnchored, renderBodyOnlyDetails } from "./reviewAnchorResolver.js";
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
+import { resolveReviewPublication } from "./reviewPublicationPolicy.js";
+import { buildFileCoverage, finalizeCoverage, coverageSummaryLine } from "./reviewCoverageService.js";
+import { buildEvidenceReceipts } from "./reviewEvidenceService.js";
 
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
@@ -113,19 +120,147 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     "VALUES ($1,$2,$3,$4,$5) " +
     "ON CONFLICT (repo_id, pr_number, commit_sha) DO UPDATE SET " +
     "  check_run_id = COALESCE(EXCLUDED.check_run_id, ai_reviews.check_run_id), started_at = NOW() " +
-    "RETURNING id",
+    "RETURNING id, publication_state, github_review_id, verdict, published_outcome, " +
+    "judgment, integrity_state, policy_blocked",
     [repoId, pr.number, pr.head.sha, checkRunId, JSON.stringify(cfg)]
   );
 
+  // ── 3b. Recover an interrupted publication before any model work ──────────
+  // The ambiguous window: the review POST succeeded, then the process died
+  // before github_review_id was persisted (publication_state still
+  // 'submitting'). Resolve the prior attempt deterministically — paginate the
+  // PR's reviews and search for the exact publication marker — before
+  // re-running the model or posting again (frozen v1.2, recoverably
+  // exactly-once).
+  if (reviewRow.publication_state === "published" && reviewRow.github_review_id) {
+    if (checkRunId) {
+      await finaliseCheckRun(octokit, owner, repo, checkRunId, reviewRow.policy_blocked ? "failure" : "success", {
+        title:   "\u2705 AI review already published",
+        summary: "A prior invocation already published this review (recovery). Outcome: " +
+          (reviewRow.published_outcome ?? reviewRow.verdict ?? "unknown") + ".",
+        text:    "",
+      });
+    }
+    logger.info({ pr: pr.number, reviewId: reviewRow.github_review_id }, "AI review: recovered published invocation");
+    return {
+      verdict: reviewRow.verdict, recovered: true,
+      blocked: reviewRow.policy_blocked === true, findings: [],
+      publication: {
+        judgment: reviewRow.judgment,
+        publishedOutcome: reviewRow.published_outcome,
+        integrityState: reviewRow.integrity_state,
+        authorityState: reviewRow.policy_blocked ? "POLICY_BLOCKED" : "ADVISORY",
+        publicationAllowed: false,
+      },
+    };
+  }
+
+  if (reviewRow.publication_state === "submitting") {
+    const priorMarker = buildPublicationMarker(reviewRow.id, repoId, pr.number, pr.head.sha);
+    let matches;
+    try {
+      matches = await findMarkerMatches(octokit, owner, repo, pr.number, priorMarker);
+    } catch (lookupErr) {
+      // Fail closed: without a completed lookup we cannot prove the prior
+      // POST did not land, so no repost is allowed.
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+          title:   "\u26A0\uFE0F AI review publication lookup failed",
+          summary: "Could not verify whether a prior review publication exists: " + lookupErr.message,
+          text:    "",
+        });
+      }
+      const lookupFail = new Error("Publication recovery lookup failed, refusing to repost: " + lookupErr.message);
+      lookupFail.gitwireErrorCode = "E_PUBLICATION_LOOKUP";
+      throw lookupFail;
+    }
+
+    if (matches.length === 1) {
+      await db.query(
+        "UPDATE ai_reviews SET github_review_id = $1, publication_state = 'published', " +
+        "terminal_reason = 'recovered_after_crash' WHERE id = $2",
+        [matches[0].id, reviewRow.id]
+      );
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, reviewRow.policy_blocked ? "failure" : "success", {
+          title:   "\u2705 AI review recovered",
+          summary: "A prior invocation published this review after a crash; the publication was adopted, not repeated.",
+          text:    "",
+        });
+      }
+      logger.info({ pr: pr.number, reviewId: matches[0].id }, "AI review: adopted crashed publication via marker");
+      return {
+        verdict: reviewRow.verdict, recovered: true,
+        blocked: reviewRow.policy_blocked === true, findings: [],
+        publication: {
+          judgment: reviewRow.judgment,
+          publishedOutcome: reviewRow.published_outcome,
+          integrityState: reviewRow.integrity_state,
+          authorityState: reviewRow.policy_blocked ? "POLICY_BLOCKED" : "ADVISORY",
+          publicationAllowed: false,
+        },
+      };
+    }
+
+    if (matches.length > 1) {
+      await db.query(
+        "UPDATE ai_reviews SET publication_state = 'failed', " +
+        "terminal_reason = 'ambiguous_publication' WHERE id = $1",
+        [reviewRow.id]
+      ).catch(function (persistErr) {
+        logger.warn({ err: persistErr.message }, "AI review: ambiguity persist failed");
+      });
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "failure", {
+          title:   "\u274C AI review publication ambiguity",
+          summary: "The publication marker for this review appears in " + matches.length +
+            " GitHub reviews. No further publication was attempted; manual inspection is required.",
+          text:    "",
+        });
+      }
+      const ambiguity = new Error("Ambiguous publication: marker found in " + matches.length + " reviews");
+      ambiguity.gitwireErrorCode = "E_AMBIGUOUS_PUBLICATION";
+      throw ambiguity;
+    }
+
+    if (matches.length === 0) {
+      // Zero matches does NOT prove the POST never happened: a live owner may
+      // simply be between its claim and its POST right now. Release the
+      // crashed claim only when it is provably STALE; otherwise suppress —
+      // never a second concurrent POST (frozen v1.2 criterion 13).
+      const { rows: released } = await db.query(
+        "UPDATE ai_reviews SET publication_state = 'computed' " +
+        "WHERE id = $1 AND publication_state = 'submitting' " +
+        "AND (publication_claimed_at IS NULL OR publication_claimed_at < NOW() - INTERVAL '10 minutes') " +
+        "RETURNING id",
+        [reviewRow.id]
+      );
+      if (!released.length) {
+        return suppressConcurrentPublication({
+          octokit, owner, repo, checkRunId, reviewRowId: reviewRow.id,
+          summary: "Another invocation owns the publication for this review head; no duplicate review was posted.",
+        });
+      }
+      logger.info({ pr: pr.number }, "AI review: stale publication claim released — proceeding fresh");
+    }
+  }
+
   try {
-    // ── 4. Fetch diff ─────────────────────────────────────────────────────────
-    const { files, totalAdded, totalRemoved } = await fetchDiff(octokit, owner, repo, pr, cfg);
+    // ── 4. Fetch all changed-file pages and account for every file ──────────
+    const { prFiles, paginationCapped } = await fetchChangedFiles(octokit, owner, repo, pr);
+    const { files, coverage, totalAdded, totalRemoved } = buildFileCoverage({
+      prFiles, cfg, headSha: pr.head.sha, paginationCapped,
+    });
 
     if (!files.length) {
+      const allExempt = coverage.files.length > 0 &&
+        coverage.files.every((r) => r.coverage === "policy_exempt");
       if (checkRunId) {
-        await finaliseCheckRun(octokit, owner, repo, checkRunId, "success", {
-          title:   "\u2705 No reviewable files changed",
-          summary: "All changed files are excluded by the ignore patterns.",
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, allExempt ? "success" : "neutral", {
+          title:   allExempt ? "\u2705 No reviewable files changed" : "\u26A0\uFE0F AI review not run \u2014 no files admitted",
+          summary: allExempt
+            ? "All changed files are excluded by the ignore patterns."
+            : "Changed files exist but none were admitted within the configured review limits. " + coverageSummaryLine(coverage),
           text:    "",
         });
       }
@@ -133,9 +268,14 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 5. Build review bundle ────────────────────────────────────────────────
-    const { bundle, changedFiles } = await buildReviewBundle({
+    const { bundle, changedFiles, coverageAdjustments } = await buildReviewBundle({
       files, pr, repository,
     });
+
+    // Bundle-stage truncation (per-file patch, aggregate budget) downgrades
+    // affected files from full to partial; incomplete evidence must reach the
+    // publication decision, not just the prompt budget.
+    const finalCoverage = finalizeCoverage(coverage, coverageAdjustments);
 
     logger.info(
       { repo: repository.full_name, pr: pr.number, bundleChars: bundle.length, files: changedFiles.length },
@@ -313,7 +453,191 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       }
     }
 
-    // ── 10. Post GitHub PR Review ──────────────────────────────────────────────
+    // ── 9c2. Evidence-bind material findings ─────────────────────────────────
+    // A material claim without valid evidence stays visible but cannot
+    // independently drive deterministic blocking authority (frozen v1.2).
+    const evidenceResult = buildEvidenceReceipts({
+      findings, files, headSha: pr.head.sha,
+    });
+    for (const receipt of evidenceResult.receipts) {
+      const finding = findings[receipt.findingIndex];
+      if (finding) finding.evidence_valid = receipt.valid;
+    }
+    if (findings.length > 0) {
+      const unverified = evidenceResult.receipts.filter((r) => !r.valid).length;
+      logger.info(
+        { pr: pr.number, findings: findings.length, unverified },
+        "AI review: evidence receipts built"
+      );
+    }
+
+    // ── 9d. Resolve publication under the advisory contract ──────────────────
+    // Judgment is the normalized model-derived verdict; integrity and authority
+    // are GitWire-deterministic. Advisory mode (the pilot default) publishes
+    // every outcome as a GitHub COMMENT — blocking comes only from explicit
+    // repository policy applied to evidence-backed findings.
+    // Integrity is derived from changed-file coverage: incomplete evidence can
+    // never produce a published clean APPROVE.
+    const publication = resolveReviewPublication({
+      judgment: verdict,
+      integrityState: finalCoverage.approvalEvidenceComplete ? "COMPLETE" : "INCOMPLETE",
+      materialEvidenceValid: evidenceResult.materialEvidenceValid,
+      repositoryPolicy: {
+        blockOnVerdict: cfg.block_on_verdict,
+        minConfidenceToBlock: cfg.min_confidence_to_block,
+        confidence,
+      },
+      publicationMode: cfg.publication_mode || "advisory",
+    });
+    const shouldBlock = publication.policyBlocked;
+
+    // ── 9e. Exact-head supersession guard ────────────────────────────────────
+    // A review started at SHA A must not publish a current-looking conclusion
+    // after the PR moves to SHA B: re-read the PR head immediately before the
+    // first externally visible publication. On mismatch the invocation is
+    // terminal with no review mutation and no automatic replacement review
+    // (frozen v1.2 — synchronize re-review is out of scope).
+    const reviewHeadSha = pr.head.sha;
+    let currentHeadSha;
+    try {
+      const { data: currentPr } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+        { owner, repo, pull_number: pr.number }
+      );
+      currentHeadSha = currentPr?.head?.sha ?? null;
+    } catch (headErr) {
+      // Fail closed: without head confirmation the review cannot be proven
+      // current, so it must not be published. Receipted + neutralized by the
+      // broad catch, then rethrown so the worker visibly fails (transient
+      // API outages get a BullMQ retry, never a blind publication).
+      const confirmErr = new Error("Head confirmation failed, refusing to publish: " + headErr.message);
+      confirmErr.gitwireErrorCode = "E_HEAD_CONFIRMATION";
+      throw confirmErr;
+    }
+    if (!currentHeadSha) {
+      const confirmErr = new Error("Head confirmation failed: PR response carried no head SHA, refusing to publish");
+      confirmErr.gitwireErrorCode = "E_HEAD_CONFIRMATION";
+      throw confirmErr;
+    }
+    if (currentHeadSha !== reviewHeadSha) {
+      const supersededPublication = resolveReviewPublication({
+        judgment: verdict,
+        integrityState: "SUPERSEDED",
+        repositoryPolicy: {
+          blockOnVerdict: cfg.block_on_verdict,
+          minConfidenceToBlock: cfg.min_confidence_to_block,
+          confidence,
+        },
+        publicationMode: cfg.publication_mode || "advisory",
+      });
+      logger.info(
+        { repo: repository.full_name, pr: pr.number, reviewHeadSha, currentHeadSha },
+        "AI review: head superseded — no publication"
+      );
+      if (checkRunId) {
+        await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+          title:   "\u23ED\uFE0F AI review superseded",
+          summary: "The PR head changed while the AI review was running" +
+            (currentHeadSha ? " (" + reviewHeadSha.slice(0, 12) + " \u2192 " + currentHeadSha.slice(0, 12) + ")" : "") +
+            ". No review was published for the old head.",
+          text:    "",
+        });
+      }
+      await db.query(
+        "UPDATE ai_reviews SET verdict = 'superseded', summary = $1, " +
+        "integrity_state = 'SUPERSEDED', terminal_reason = 'head_superseded', " +
+        "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
+        [("Superseded: PR head moved from " + reviewHeadSha + " to " + (currentHeadSha ?? "unknown")).slice(0, 500), Date.now() - startTime, reviewRow.id]
+      ).catch(function (persistErr) {
+        logger.warn({ err: persistErr.message }, "AI review: supersession persist failed");
+      });
+      return {
+        verdict: "superseded", superseded: true, findings: [], blocked: false,
+        reviewedHeadSha: reviewHeadSha, currentHeadSha: currentHeadSha ?? null,
+        publication: supersededPublication,
+      };
+    }
+
+    // ── 10a. Atomically claim the publication before mutation ──────────────
+    // Exactly one concurrent invocation may move this row to 'submitting';
+    // the receipt fields land WITH the claim so the row stays reconstructable
+    // even if the process dies at the POST. A claim loser never treats
+    // "marker not found" as proof no POST happened — the owner may be between
+    // claim and POST — and adopts, suppresses, or fails closed instead
+    // (frozen v1.2 criterion 13).
+    const publicationMarker = buildPublicationMarker(reviewRow.id, repoId, pr.number, reviewHeadSha);
+    const { rows: claimedPublication } = await db.query(
+      "UPDATE ai_reviews SET " +
+      "  judgment = $1, published_outcome = $2, integrity_state = $3, " +
+      "  authority_state = $4, publication_mode = $5, policy_blocked = $6, " +
+      "  github_review_event = $7, coverage = $8, evidence_receipts = $9, " +
+      "  publication_state = 'submitting', publication_claimed_at = NOW() " +
+      "WHERE id = $10 " +
+      "  AND (publication_state IS NULL OR publication_state = 'computed') " +
+      "RETURNING id",
+      [
+        publication.judgment, publication.publishedOutcome, publication.integrityState,
+        publication.authorityState, publication.publicationMode, publication.policyBlocked,
+        publication.githubReviewEvent, JSON.stringify(finalCoverage),
+        JSON.stringify(evidenceResult.receipts), reviewRow.id,
+      ]
+    );
+
+    if (!claimedPublication.length) {
+      const { rows: [currentRow] } = await db.query(
+        "SELECT publication_state, github_review_id, verdict, published_outcome, " +
+        "judgment, integrity_state, policy_blocked FROM ai_reviews WHERE id = $1",
+        [reviewRow.id]
+      );
+      const state = currentRow?.publication_state;
+
+      if (state === "published" && currentRow.github_review_id) {
+        if (checkRunId) {
+          await finaliseCheckRun(octokit, owner, repo, checkRunId, currentRow.policy_blocked ? "failure" : "success", {
+            title:   "\u2705 AI review already published",
+            summary: "A concurrent invocation already published this review. Outcome: " +
+              (currentRow.published_outcome ?? currentRow.verdict ?? "unknown") + ".",
+            text:    "",
+          });
+        }
+        logger.info({ pr: pr.number }, "AI review: claim lost to a published row — adopting");
+        return {
+          verdict: currentRow.verdict, recovered: true,
+          blocked: currentRow.policy_blocked === true, findings: [],
+          publication: {
+            judgment: currentRow.judgment,
+            publishedOutcome: currentRow.published_outcome,
+            integrityState: currentRow.integrity_state,
+            authorityState: currentRow.policy_blocked ? "POLICY_BLOCKED" : "ADVISORY",
+            publicationAllowed: false,
+          },
+        };
+      }
+
+      if (state === "submitting") {
+        return suppressConcurrentPublication({
+          octokit, owner, repo, checkRunId, reviewRowId: reviewRow.id,
+          summary: "Another invocation owns the publication for this review head; no duplicate review was posted.",
+        });
+      }
+
+      if (state === "failed") {
+        if (checkRunId) {
+          await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+            title:   "\u26A0\uFE0F AI review publication previously failed",
+            summary: "A prior publication attempt for this review head failed terminally; nothing was reposted.",
+            text:    "",
+          });
+        }
+        return null;
+      }
+
+      const stateErr = new Error("Unknown publication state at claim boundary: '" + state + "' — refusing to publish");
+      stateErr.gitwireErrorCode = "E_PUBLICATION_STATE";
+      throw stateErr;
+    }
+
+    // ── 10b. Post GitHub PR Review ──────────────────────────────────────────────
     // Delivery is a hard boundary: a computed review that GitHub REJECTS is
     // a terminal delivery failure (E_REVIEW_DELIVERY) — error receipt,
     // FAILURE check, rethrow to the worker. Never finalized neutral and
@@ -329,6 +653,9 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
           scopeDroppedCount: validation.scopeDroppedCount,
           adversarialMeta,
           files,
+          publication,
+          coverage: finalCoverage,
+          publicationMarker,
         });
         reviewId = result.reviewId;
         githubSummary = result.summary;
@@ -341,6 +668,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         // Persist the error receipt (same shape as the broad catch).
         await db.query(
           "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
+          "publication_state = CASE WHEN publication_state = 'submitting' THEN 'failed' ELSE publication_state END, " +
+          "terminal_reason = 'delivery_failure', " +
           "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
           [("GitHub review delivery failed: " + deliveryErr.message).slice(0, 500), Date.now() - startTime, reviewRow.id]
         ).catch(function (persistErr) {
@@ -359,13 +688,10 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     }
 
     // ── 11. Update check run ──────────────────────────────────────────────────
-    const shouldBlock = cfg.block_on_verdict?.includes(verdict) &&
-      confidenceLevel(confidence) >= confidenceLevel(cfg.min_confidence_to_block);
-
     if (checkRunId) {
       await finaliseCheckRun(octokit, owner, repo, checkRunId,
         shouldBlock ? "failure" : "success",
-        buildCheckOutput(findings, verdict, confidence, githubSummary, validation.scopeDroppedCount)
+        buildCheckOutput(findings, verdict, confidence, githubSummary, validation.scopeDroppedCount, coverageSummaryLine(finalCoverage))
       );
     }
 
@@ -381,7 +707,9 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "  tokens_used = $8, github_review_id = $9, completed_at = NOW(), " +
       "  overall_correctness = $10, overall_confidence = $11, " +
       "  overall_explanation = $12, ignored_findings = $13, " +
-      "  review_engine = $14, duration_ms = $15 " +
+      "  review_engine = $14, duration_ms = $15, " +
+      "  publication_state = CASE WHEN $9::bigint IS NOT NULL THEN 'published' ELSE 'computed' END, " +
+      "  terminal_reason = CASE WHEN $9::bigint IS NOT NULL THEN 'completed' ELSE 'completed_unpublished' END " +
       "WHERE id = $16",
       [
         verdict, confidence, JSON.stringify(findings), summary || githubSummary,
@@ -438,7 +766,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       "AI review: complete (bundle-driven v2)"
     );
 
-    return { verdict, confidence, findings, blocked: shouldBlock };
+    return { verdict, confidence, findings, blocked: shouldBlock, publication, coverage: finalCoverage, evidence: evidenceResult };
 
   } catch (err) {
     // A delivery failure was already classified, receipted, and finalized
@@ -460,59 +788,44 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 
     await db.query(
       "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
+      "terminal_reason = 'error', " +
       "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
       [err.message.slice(0, 500), durationMs, reviewRow.id]
     );
+
+    // Head-confirmation and publication-state failures are receipted and
+    // neutralized above; rethrow so the worker visibly fails rather than
+    // reporting a completed null.
+    if (err && (err.gitwireErrorCode === "E_HEAD_CONFIRMATION" || err.gitwireErrorCode === "E_PUBLICATION_STATE")) {
+      throw err;
+    }
 
     return null;
   }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Fetch and filter PR diff
+// Fetch changed files — every page, so coverage can account for them all
 // ════════════════════════════════════════════════════════════════════════════
 
-async function fetchDiff(octokit, owner, repo, pr, cfg) {
-  const { data: prFiles } = await octokit.request(
-    "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
-    { owner, repo, pull_number: pr.number, per_page: 100 }
-  );
+const MAX_FILE_PAGES = 10; // changed-files pagination cap; beyond it evidence is incomplete
 
-  const ignorePatterns = cfg.ignore_patterns ?? [];
+async function fetchChangedFiles(octokit, owner, repo, pr) {
+  const prFiles = [];
+  let paginationCapped = false;
 
-  var filtered = prFiles.filter(function (f) {
-    if (f.status === "removed") return false;
-    if (ignorePatterns.some(function (pat) { return minimatch(f.filename, pat); })) return false;
-    return true;
-  });
-
-  // Respect limits
-  filtered = filtered.slice(0, cfg.max_files_to_review);
-
-  var totalAdded = 0, totalRemoved = 0, totalLines = 0;
-  var files = [];
-
-  for (var i = 0; i < filtered.length; i++) {
-    var f = filtered[i];
-    var added   = f.additions ?? 0;
-    var removed = f.deletions ?? 0;
-    totalAdded   += added;
-    totalRemoved += removed;
-    totalLines   += added + removed;
-
-    if (totalLines > cfg.max_lines_to_review) break;
-
-    files.push({
-      filename: f.filename,
-      status:   f.status,
-      added:    added,
-      removed:  removed,
-      patch:    f.patch ?? "",
-      sha:      f.sha,
-    });
+  for (let page = 1; page <= MAX_FILE_PAGES; page++) {
+    const { data } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+      { owner, repo, pull_number: pr.number, per_page: 100, page }
+    );
+    if (!Array.isArray(data) || data.length === 0) break;
+    prFiles.push(...data);
+    if (data.length < 100) break;
+    if (page === MAX_FILE_PAGES) paginationCapped = true;
   }
 
-  return { files, totalAdded, totalRemoved };
+  return { prFiles, paginationCapped };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -613,7 +926,7 @@ export function computeVerdict(findings, cfg) {
 // GitHub PR Review posting
 // ════════════════════════════════════════════════════════════════════════════
 
-async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files }) {
+async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, confidence, cfg, scopeDroppedCount, adversarialMeta, files, publication, coverage, publicationMarker }) {
   var VERDICT_LABEL = {
     approved:          "\u2705 Approved",
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
@@ -632,17 +945,35 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     "## \uD83E\uDD16 AI Code Review \u2014 " + VERDICT_LABEL[verdict],
     "",
     "**Confidence:** " + confidence + " \u00B7 **Findings:** " + findings.length,
+    "**AI judgment: " + (publication.judgment === "NEEDS_DISCUSSION" ? "NEEDS DISCUSSION" : publication.judgment) + "**" +
+    " \u00B7 Evidence: " + publication.integrityState +
+    " \u00B7 Authority: " + (publication.policyBlocked ? "repository policy blocked" : "advisory"),
+    coverage ? coverageSummaryLine(coverage) : "",
     critical.length ? "\n**" + critical.length + " critical issue" + (critical.length > 1 ? "s" : "") + " require attention before merging.**" : "",
     scopeDroppedCount > 0 ? "\n*" + scopeDroppedCount + " out-of-scope finding" + (scopeDroppedCount !== 1 ? "s" : "") + " filtered out.*" : "",
     "",
   ];
+
+  // An incomplete review is never presented as a clean approval: say so in
+  // the published body, with the coverage numbers behind it.
+  if (publication.publishedOutcome === "INCOMPLETE" && coverage) {
+    const lacking = coverage.files.filter(
+      (r) => r.coverage === "partial" || r.coverage === "unavailable"
+    ).length;
+    summaryLines.push(
+      "**INCOMPLETE \u2014 no clean approval was issued.** GitWire could not completely review this change: " +
+      lacking + " of " + coverage.totalChangedFiles + " changed files lacked complete review evidence" +
+      (coverage.limitsExceeded.length ? " (limits reached: " + coverage.limitsExceeded.join(", ") + ")" : "") + "."
+    );
+    summaryLines.push("");
+  }
 
   if (critical.length || high.length) {
     summaryLines.push("### Key issues");
     for (var i = 0; i < Math.min(5, critical.length + high.length); i++) {
       var f = (critical.concat(high))[i];
       var badge = f.adversarial_status === "upheld" ? " 🔮" : (f.adversarial_status === "missed_risk" ? " 🔍" : "");
-      summaryLines.push("- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " (`" + f.file + "`)" : "") + badge);
+      summaryLines.push("- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " (`" + f.file + "`)" : "") + badge + (f.evidence_valid === false ? " \u26A0\uFE0F *unverified*" : ""));
     }
     summaryLines.push("");
   }
@@ -650,7 +981,7 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   if (others.length) {
     summaryLines.push("### Other findings (" + others.length + ")");
     for (var j = 0; j < Math.min(5, others.length); j++) {
-      summaryLines.push("- **[" + others[j].severity + "]** " + others[j].title);
+      summaryLines.push("- **[" + others[j].severity + "]** " + others[j].title + (others[j].evidence_valid === false ? " \u26A0\uFE0F *unverified*" : ""));
     }
     summaryLines.push("");
   }
@@ -679,8 +1010,11 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
 
   summaryLines.push(
     "---",
-    "_GitWire AI Review Gate (bundle-driven v2) · Structured schema · Scope-validated" +
-    (adversarialMeta ? " · Devil's Advocate" : "") + "_"
+    "_GitWire AI Review Gate (bundle-driven v2) \u00B7 Structured schema \u00B7 Scope-validated" +
+    (adversarialMeta ? " \u00B7 Devil's Advocate" : "") +
+    " \u00B7 " + (publication.policyBlocked
+      ? "Repository policy blocked this merge"
+      : "AI recommendation \u2014 maintainers and repository policy retain authority") + "_"
   );
 
   // Partition BEFORE the body join: findings NOT emitted inline —
@@ -691,12 +1025,19 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   summaryLines.push(...renderBodyOnlyDetails(bodyOnly));
   var comments = buildInlineComments(anchored, files);
 
+  // Invisible deterministic publication marker: identifies this logical
+  // publication across crash recovery (exactly-once, frozen v1.2 WP-5).
+  if (publicationMarker) {
+    summaryLines.push("<!-- " + publicationMarker + " -->");
+  }
+
   var body    = summaryLines.filter(function (l) { return l !== ""; }).join("\n");
   var summary = summaryLines.slice(0, 3).join(" ");
 
-  var ghVerdict =
-    verdict === "request_changes" ? "REQUEST_CHANGES" :
-    verdict === "approved"        ? "APPROVE"         : "COMMENT";
+  // The publication policy owns the GitHub review event. Advisory mode always
+  // publishes COMMENT; only the legacy_stateful rollback mode may emit
+  // APPROVE / REQUEST_CHANGES.
+  var ghVerdict = publication.githubReviewEvent;
 
   var { data: review } = await octokit.request(
     "POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
@@ -712,6 +1053,83 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   );
 
   return { reviewId: review.id, summary };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Exactly-once publication helpers (frozen v1.2, WP-5)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Deterministic publication marker for one logical review publication.
+ * Stable across retries: the ai_reviews row id is stable for a
+ * (repo, PR, head) invocation via the UNIQUE upsert, so a retry computes the
+ * same marker the crashed attempt embedded in its review body.
+ */
+export function buildPublicationMarker(reviewRowId, repoId, prNumber, headSha) {
+  return "gitwire-pub:" + reviewRowId + ":" + repoId + ":" + prNumber + ":" + headSha;
+}
+
+/**
+ * Terminate an invocation that lost the publication to a concurrent owner:
+ * truthful neutral check, durable terminal reason, no GitHub mutation.
+ */
+async function suppressConcurrentPublication({ octokit, owner, repo, checkRunId, reviewRowId, summary }) {
+  if (checkRunId) {
+    await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+      title:   "\u2705 AI review publication handled by another invocation",
+      summary,
+      text:    "",
+    });
+  }
+  await db.query(
+    "UPDATE ai_reviews SET terminal_reason = 'publication_suppressed_concurrent' WHERE id = $1",
+    [reviewRowId]
+  ).catch(function (persistErr) {
+    logger.warn({ err: persistErr.message }, "AI review: suppression persist failed");
+  });
+  return {
+    verdict: "suppressed", suppressedPublication: true,
+    blocked: false, findings: [],
+    publication: { publicationAllowed: false },
+  };
+}
+
+const REVIEW_LOOKUP_PAGE_CAP = 20; // safety cap; a full final page fails closed
+
+/**
+ * Paginate the PR's reviews and return those whose body carries the exact
+ * publication marker. The lookup is bounded at REVIEW_LOOKUP_PAGE_CAP pages;
+ * if the cap is reached with a FULL final page, another page may exist, so
+ * the lookup is incomplete and throws (E_PUBLICATION_LOOKUP) — it is never
+ * reported as zero matches, because a marker beyond the cap must not
+ * authorize a second publication (frozen v1.2 criterion 13).
+ */
+async function findMarkerMatches(octokit, owner, repo, prNumber, marker) {
+  const needle = "<!-- " + marker + " -->";
+  const matches = [];
+  for (let page = 1; page <= REVIEW_LOOKUP_PAGE_CAP; page++) {
+    const { data } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+      { owner, repo, pull_number: prNumber, per_page: 100, page }
+    );
+    if (!Array.isArray(data) || data.length === 0) break;
+    for (const review of data) {
+      if (typeof review.body === "string" && review.body.includes(needle)) {
+        matches.push({ id: review.id });
+      }
+    }
+    if (data.length < 100) break;
+    if (page === REVIEW_LOOKUP_PAGE_CAP) {
+      const capped = new Error(
+        "marker lookup did not complete — review pagination cap (" +
+        REVIEW_LOOKUP_PAGE_CAP * 100 + " reviews) reached with a full final page; " +
+        "the marker may exist beyond it"
+      );
+      capped.gitwireErrorCode = "E_PUBLICATION_LOOKUP";
+      throw capped;
+    }
+  }
+  return matches;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -735,7 +1153,7 @@ async function finaliseCheckRun(octokit, owner, repo, checkRunId, conclusion, ou
   });
 }
 
-function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCount) {
+function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCount, coverageLine) {
   var ICONS = { approved: "\u2705", needs_discussion: "\uD83D\uDCAC", request_changes: "\u274C" };
   var title = (ICONS[verdict] ?? "\uD83E\uDD16") + " AI Review \u2014 " + verdict.replace(/_/g, " ") + " (" + confidence + " confidence)";
 
@@ -747,9 +1165,11 @@ function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCo
     ? "\n\n*" + scopeDroppedCount + " out-of-scope findings filtered.*"
     : "";
 
+  var coverageNote = coverageLine ? "\n\n" + coverageLine : "";
+
   return {
     title: title,
-    summary: (summary || findings.length + " finding" + (findings.length !== 1 ? "s" : "")) + scopeNote,
+    summary: (summary || findings.length + " finding" + (findings.length !== 1 ? "s" : "")) + scopeNote + coverageNote,
     text:    details || "No specific findings.",
   };
 }
