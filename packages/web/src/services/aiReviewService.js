@@ -223,8 +223,26 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       throw ambiguity;
     }
 
-    // Zero matches: the prior POST never landed — safe to run the review fresh.
-    logger.info({ pr: pr.number }, "AI review: submitting row had no published marker — proceeding fresh");
+    if (matches.length === 0) {
+      // Zero matches does NOT prove the POST never happened: a live owner may
+      // simply be between its claim and its POST right now. Release the
+      // crashed claim only when it is provably STALE; otherwise suppress —
+      // never a second concurrent POST (frozen v1.2 criterion 13).
+      const { rows: released } = await db.query(
+        "UPDATE ai_reviews SET publication_state = 'computed' " +
+        "WHERE id = $1 AND publication_state = 'submitting' " +
+        "AND (publication_claimed_at IS NULL OR publication_claimed_at < NOW() - INTERVAL '10 minutes') " +
+        "RETURNING id",
+        [reviewRow.id]
+      );
+      if (!released.length) {
+        return suppressConcurrentPublication({
+          octokit, owner, repo, checkRunId, reviewRowId: reviewRow.id,
+          summary: "Another invocation owns the publication for this review head; no duplicate review was posted.",
+        });
+      }
+      logger.info({ pr: pr.number }, "AI review: stale publication claim released — proceeding fresh");
+    }
   }
 
   try {
@@ -540,18 +558,23 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       };
     }
 
-    // ── 10a. Persist the publication receipt and intent before mutation ─────
-    // The receipt is durable BEFORE the GitHub POST: judgment, integrity,
-    // authority, coverage and evidence land first, then publication_state
-    // flips to 'submitting' so a crash mid-POST is recoverable from the
-    // marker search (3b).
+    // ── 10a. Atomically claim the publication before mutation ──────────────
+    // Exactly one concurrent invocation may move this row to 'submitting';
+    // the receipt fields land WITH the claim so the row stays reconstructable
+    // even if the process dies at the POST. A claim loser never treats
+    // "marker not found" as proof no POST happened — the owner may be between
+    // claim and POST — and adopts, suppresses, or fails closed instead
+    // (frozen v1.2 criterion 13).
     const publicationMarker = buildPublicationMarker(reviewRow.id, repoId, pr.number, reviewHeadSha);
-    await db.query(
+    const { rows: claimedPublication } = await db.query(
       "UPDATE ai_reviews SET " +
       "  judgment = $1, published_outcome = $2, integrity_state = $3, " +
       "  authority_state = $4, publication_mode = $5, policy_blocked = $6, " +
       "  github_review_event = $7, coverage = $8, evidence_receipts = $9, " +
-      "  publication_state = 'computed' WHERE id = $10",
+      "  publication_state = 'submitting', publication_claimed_at = NOW() " +
+      "WHERE id = $10 " +
+      "  AND (publication_state IS NULL OR publication_state = 'computed') " +
+      "RETURNING id",
       [
         publication.judgment, publication.publishedOutcome, publication.integrityState,
         publication.authorityState, publication.publicationMode, publication.policyBlocked,
@@ -559,11 +582,59 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
         JSON.stringify(evidenceResult.receipts), reviewRow.id,
       ]
     );
-    if (commentFindings) {
-      await db.query(
-        "UPDATE ai_reviews SET publication_state = 'submitting' WHERE id = $1",
+
+    if (!claimedPublication.length) {
+      const { rows: [currentRow] } = await db.query(
+        "SELECT publication_state, github_review_id, verdict, published_outcome, " +
+        "judgment, integrity_state, policy_blocked FROM ai_reviews WHERE id = $1",
         [reviewRow.id]
       );
+      const state = currentRow?.publication_state;
+
+      if (state === "published" && currentRow.github_review_id) {
+        if (checkRunId) {
+          await finaliseCheckRun(octokit, owner, repo, checkRunId, currentRow.policy_blocked ? "failure" : "success", {
+            title:   "\u2705 AI review already published",
+            summary: "A concurrent invocation already published this review. Outcome: " +
+              (currentRow.published_outcome ?? currentRow.verdict ?? "unknown") + ".",
+            text:    "",
+          });
+        }
+        logger.info({ pr: pr.number }, "AI review: claim lost to a published row — adopting");
+        return {
+          verdict: currentRow.verdict, recovered: true,
+          blocked: currentRow.policy_blocked === true, findings: [],
+          publication: {
+            judgment: currentRow.judgment,
+            publishedOutcome: currentRow.published_outcome,
+            integrityState: currentRow.integrity_state,
+            authorityState: currentRow.policy_blocked ? "POLICY_BLOCKED" : "ADVISORY",
+            publicationAllowed: false,
+          },
+        };
+      }
+
+      if (state === "submitting") {
+        return suppressConcurrentPublication({
+          octokit, owner, repo, checkRunId, reviewRowId: reviewRow.id,
+          summary: "Another invocation owns the publication for this review head; no duplicate review was posted.",
+        });
+      }
+
+      if (state === "failed") {
+        if (checkRunId) {
+          await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+            title:   "\u26A0\uFE0F AI review publication previously failed",
+            summary: "A prior publication attempt for this review head failed terminally; nothing was reposted.",
+            text:    "",
+          });
+        }
+        return null;
+      }
+
+      const stateErr = new Error("Unknown publication state at claim boundary: '" + state + "' — refusing to publish");
+      stateErr.gitwireErrorCode = "E_PUBLICATION_STATE";
+      throw stateErr;
     }
 
     // ── 10b. Post GitHub PR Review ──────────────────────────────────────────────
@@ -722,9 +793,10 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       [err.message.slice(0, 500), durationMs, reviewRow.id]
     );
 
-    // Head-confirmation failure is receipted and neutralized above; rethrow
-    // so the worker visibly fails rather than reporting a completed null.
-    if (err && err.gitwireErrorCode === "E_HEAD_CONFIRMATION") {
+    // Head-confirmation and publication-state failures are receipted and
+    // neutralized above; rethrow so the worker visibly fails rather than
+    // reporting a completed null.
+    if (err && (err.gitwireErrorCode === "E_HEAD_CONFIRMATION" || err.gitwireErrorCode === "E_PUBLICATION_STATE")) {
       throw err;
     }
 
@@ -995,6 +1067,31 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
  */
 export function buildPublicationMarker(reviewRowId, repoId, prNumber, headSha) {
   return "gitwire-pub:" + reviewRowId + ":" + repoId + ":" + prNumber + ":" + headSha;
+}
+
+/**
+ * Terminate an invocation that lost the publication to a concurrent owner:
+ * truthful neutral check, durable terminal reason, no GitHub mutation.
+ */
+async function suppressConcurrentPublication({ octokit, owner, repo, checkRunId, reviewRowId, summary }) {
+  if (checkRunId) {
+    await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
+      title:   "\u2705 AI review publication handled by another invocation",
+      summary,
+      text:    "",
+    });
+  }
+  await db.query(
+    "UPDATE ai_reviews SET terminal_reason = 'publication_suppressed_concurrent' WHERE id = $1",
+    [reviewRowId]
+  ).catch(function (persistErr) {
+    logger.warn({ err: persistErr.message }, "AI review: suppression persist failed");
+  });
+  return {
+    verdict: "suppressed", suppressedPublication: true,
+    blocked: false, findings: [],
+    publication: { publicationAllowed: false },
+  };
 }
 
 /**

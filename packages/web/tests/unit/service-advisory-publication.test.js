@@ -134,7 +134,14 @@ function freshDb(insertRow = { id: 100 }) {
   mockQuery
     .mockResolvedValueOnce({ rows: [CFG] })
     .mockResolvedValueOnce({ rows: [insertRow] })
-    .mockResolvedValue({ rows: [] });
+    // Default: the atomic publication claim wins, and a stale-claim release
+    // succeeds. Individual tests override via the Once queue.
+    .mockImplementation((sql) => {
+      const s = String(sql);
+      if (s.includes("publication_claimed_at = NOW()")) return Promise.resolve({ rows: [{ id: 100 }] });
+      if (s.includes("INTERVAL '10 minutes'")) return Promise.resolve({ rows: [{ id: 100 }] });
+      return Promise.resolve({ rows: [] });
+    });
 }
 
 describe('buildPublicationMarker', () => {
@@ -153,19 +160,15 @@ describe('exactly-once publication — happy path', () => {
 
     const r = await reviewPR({ pr: pr(), repository: REPO, octokit: oct });
 
-    // Receipt before mutation: the computed-state UPDATE precedes the submitting UPDATE
-    const computedIdx = mockQuery.mock.calls.findIndex(
-      (c) => String(c[0]).includes("publication_state = 'computed'")
+    // Receipt and claim land atomically BEFORE the GitHub POST
+    const claimCall = mockQuery.mock.calls.find(
+      (c) => String(c[0]).includes("publication_claimed_at = NOW()")
     );
-    const submittingIdx = mockQuery.mock.calls.findIndex(
-      (c) => String(c[0]).includes("publication_state = 'submitting'")
-    );
-    const postIdx = oct._calls.findIndex((c) => c.route.endsWith('/reviews'));
-    expect(computedIdx).toBeGreaterThanOrEqual(0);
-    expect(submittingIdx).toBeGreaterThan(computedIdx);
-    expect(postIdx).toBeGreaterThanOrEqual(0);
+    expect(claimCall).toBeTruthy();
+    expect(claimCall[0]).toContain("AND (publication_state IS NULL OR publication_state = 'computed')");
 
     // Marker embedded invisibly in the published body
+    const postIdx = oct._calls.findIndex((c) => c.route.endsWith('/reviews'));
     const post = oct._calls[postIdx];
     expect(post.params.body).toContain('<!-- ' + MARKER + ' -->');
 
@@ -282,5 +285,115 @@ describe('exactly-once publication — crash recovery', () => {
     expect(r.publication.publishedOutcome).toBe('APPROVE');
     expect(mockCreate).not.toHaveBeenCalled();
     expect(oct._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST'))).toHaveLength(0);
+  });
+});
+
+describe('exactly-once publication — concurrent ownership (criterion 13)', () => {
+  test('claim lost to a live submitting owner: suppress, never a second POST', async () => {
+    freshDb();
+    // claim (3rd db call) returns no row; loser re-read (4th) sees a live owner
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] })                                          // claim loses
+      .mockResolvedValueOnce({ rows: [{ publication_state: 'submitting' }] });      // loser re-read
+
+    const oct = baseOct();
+    cleanModel();
+
+    const r = await reviewPR({ pr: pr(), repository: REPO, octokit: oct });
+
+    expect(r.suppressedPublication).toBe(true);
+    expect(oct._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST'))).toHaveLength(0);
+    const suppress = mockQuery.mock.calls.find(
+      (c) => String(c[0]).includes("terminal_reason = 'publication_suppressed_concurrent'")
+    );
+    expect(suppress).toBeTruthy();
+    const patches = oct._calls.filter((c) => c.route.startsWith('PATCH /repos/{owner}/{repo}/check-runs/'));
+    expect(patches.at(-1).params.conclusion).toBe('neutral');
+  });
+
+  test('claim lost to a published row: adopt the stored publication', async () => {
+    freshDb();
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        publication_state: 'published', github_review_id: 556,
+        verdict: 'request_changes', published_outcome: 'REQUEST_CHANGES',
+        judgment: 'REQUEST_CHANGES', integrity_state: 'COMPLETE', policy_blocked: true,
+      }] });
+
+    const oct = baseOct();
+    cleanModel();
+
+    const r = await reviewPR({ pr: pr(), repository: REPO, octokit: oct });
+
+    expect(r.recovered).toBe(true);
+    expect(r.publication.publishedOutcome).toBe('REQUEST_CHANGES');
+    expect(r.blocked).toBe(true);
+    expect(oct._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST'))).toHaveLength(0);
+  });
+
+  test('claim lost to an unknown state: fail closed', async () => {
+    freshDb();
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ publication_state: 'nonsense' }] });
+
+    const oct = baseOct();
+    cleanModel();
+
+    await expect(
+      reviewPR({ pr: pr(), repository: REPO, octokit: oct })
+    ).rejects.toMatchObject({ gitwireErrorCode: 'E_PUBLICATION_STATE' });
+
+    expect(oct._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST'))).toHaveLength(0);
+  });
+
+  test('live owner between claim and POST cannot be released by a 0-match search', async () => {
+    // Crashed-style submitting row whose claim is RECENT: the marker search
+    // finds nothing (the owner has not POSTed yet), but the stale-release
+    // guard refuses — no second concurrent publication.
+    freshDb({ id: 100, publication_state: 'submitting', github_review_id: null });
+    // 3rd db call is the stale-release UPDATE; make it lose the guard
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const oct = baseOct({
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: [
+        { id: 555, body: 'no marker here' },
+      ] },
+    });
+
+    const r = await reviewPR({ pr: pr(), repository: REPO, octokit: oct });
+
+    expect(r.suppressedPublication).toBe(true);
+    expect(oct._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST'))).toHaveLength(0);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  test('ADVISOR SPEC: two invocations, same repo/PR/SHA, both reach the boundary — exactly ONE GitHub review POST', async () => {
+    // Worker A: fresh row, wins the claim, posts once.
+    freshDb();
+    const octA = baseOct();
+    cleanModel();
+    const resultA = await reviewPR({ pr: pr(), repository: REPO, octokit: octA });
+
+    expect(resultA.publication.publishedOutcome).toBe('APPROVE');
+
+    // Worker B (concurrent at the boundary): same row now claimed by A.
+    // Its recovery sees 'submitting', the marker search finds nothing yet
+    // (A is between claim and POST), and the stale-release guard refuses.
+    freshDb({ id: 100, publication_state: 'submitting', github_review_id: null });
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // stale-release loses to A's live claim
+    const octB = baseOct({
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: [] },
+    });
+
+    const resultB = await reviewPR({ pr: pr(), repository: REPO, octokit: octB });
+
+    expect(resultB.suppressedPublication).toBe(true);
+
+    const totalPosts =
+      octA._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST')).length +
+      octB._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST')).length;
+    expect(totalPosts).toBe(1);
   });
 });

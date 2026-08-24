@@ -159,7 +159,12 @@ async function runMatrixCase({
   mockQuery
     .mockResolvedValueOnce({ rows: [cfg] })
     .mockResolvedValueOnce({ rows: [insertRow] })
-    .mockResolvedValue({ rows: [] });
+    .mockImplementation((sql) => {
+      const s = String(sql);
+      if (s.includes("publication_claimed_at = NOW()")) return Promise.resolve({ rows: [{ id: 100 }] });
+      if (s.includes("INTERVAL '10 minutes'")) return Promise.resolve({ rows: [{ id: 100 }] });
+      return Promise.resolve({ rows: [] });
+    });
   mockCreate.mockImplementationOnce(model);
 
   const responses = {
@@ -278,7 +283,11 @@ describe('frozen v1.2 deterministic matrix', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ ...BASE_CFG, max_files_to_review: 200 }] })
       .mockResolvedValueOnce({ rows: [{ id: 100 }] })
-      .mockResolvedValue({ rows: [] });
+      .mockImplementation((sql) => {
+        const s = String(sql);
+        if (s.includes("publication_claimed_at = NOW()")) return Promise.resolve({ rows: [{ id: 100 }] });
+        return Promise.resolve({ rows: [] });
+      });
     mockCreate.mockImplementationOnce(() => report({ correct: true }));
 
     const page1 = Array.from({ length: 100 }, (_, i) => file('p1-' + i + '.js', { additions: 5, deletions: 0 }));

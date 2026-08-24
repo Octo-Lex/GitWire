@@ -155,7 +155,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [] }] })
       .mockResolvedValueOnce({ rows: [{ id: 100 }] })
-      .mockResolvedValue({ rows: [] }); // all subsequent DB calls (final update, etc.)
+      .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] }))); // all subsequent DB calls (final update, etc.)
 
     mockCreate.mockResolvedValueOnce({
       content: [{ type: 'text', text: JSON.stringify({
@@ -192,7 +192,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [] }] })
       .mockResolvedValueOnce({ rows: [{ id: 101 }] })
-      .mockResolvedValue({ rows: [] });
+      .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
 
     mockCreate.mockResolvedValueOnce({
       content: [{ type: 'text', text: JSON.stringify({
@@ -236,7 +236,7 @@ describe('aiReviewService (bundle-driven v2)', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [] }] })
       .mockResolvedValueOnce({ rows: [{ id: 102 }] })
-      .mockResolvedValue({ rows: [] });
+      .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
 
     // Return non-JSON text
     mockCreate.mockResolvedValueOnce({

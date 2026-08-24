@@ -19,7 +19,12 @@ ALTER TABLE ai_reviews
   ADD COLUMN IF NOT EXISTS publication_state   TEXT,
   ADD COLUMN IF NOT EXISTS terminal_reason     TEXT,
   ADD COLUMN IF NOT EXISTS coverage            JSONB,
-  ADD COLUMN IF NOT EXISTS evidence_receipts   JSONB;
+  ADD COLUMN IF NOT EXISTS evidence_receipts   JSONB,
+  -- Lease stamp for the atomic publication claim: set when an invocation
+  -- transitions the row to 'submitting'; a crashed claim becomes re-takeable
+  -- only after it goes stale, so a live owner between claim and POST can
+  -- never be released by a concurrent loser.
+  ADD COLUMN IF NOT EXISTS publication_claimed_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_ar_integrity_state    ON ai_reviews(integrity_state);
 CREATE INDEX IF NOT EXISTS idx_ar_publication_state ON ai_reviews(publication_state);
