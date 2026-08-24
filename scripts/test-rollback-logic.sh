@@ -174,6 +174,14 @@ echo "=== transaction / rollback tests (mocked Docker) ==="
 # State variables the mocks read.
 MOCK_HEALTH_EXEC='{"status":"ok","ready":true,"container_runtime":"docker","git_sha":"sha-prev","validator_image_ref":"ref","validator_image_digest":"sha256:abc"}'
 MOCK_HEALTH_APP='{"status":"ok","db_migration_status":"current","git_sha":"sha-prev"}'
+# Migration fixtures for the rollback app gate's set-inclusion check: the
+# rollback image's manifest is a subset of the applied set (forward-only
+# superset is the production-normal shape).
+MOCK_REQUIRED_MIGRATIONS='001_init.sql
+042_attribution_gap_evidence.sql'
+MOCK_APPLIED_MIGRATIONS='001_init.sql
+042_attribution_gap_evidence.sql
+043_advisory_review_publication.sql'
 MOCK_DASH_OK=true
 MOCK_IMAGE_ID="sha256:aaaabbbbcccc"
 MOCK_CONTAINER_IMAGE="sha256:aaaabbbbcccc"
@@ -200,7 +208,12 @@ docker() {
       case "$container" in
         *gitwire-executor-service*) printf '%s' "$MOCK_HEALTH_EXEC" ;;
         *gitwire-app*)
-          if [[ "$url" == */health ]]; then printf '%s' "$MOCK_HEALTH_APP"; fi
+          if [[ "$*" == *"db/migrations"* ]]; then
+            printf '%s\n' "$MOCK_REQUIRED_MIGRATIONS"
+          elif [[ "$url" == */health ]]; then printf '%s' "$MOCK_HEALTH_APP"; fi
+          ;;
+        *postgres*)
+          if [[ "$*" == *"schema_migrations"* ]]; then printf '%s\n' "$MOCK_APPLIED_MIGRATIONS"; fi
           ;;
         *dashboard*)
           if [[ "$MOCK_DASH_OK" == "true" ]]; then return 0; else return 1; fi
@@ -303,6 +316,11 @@ tunnel:absent
 reset_mocks_ok() {
   MOCK_HEALTH_EXEC='{"status":"ok","ready":true,"container_runtime":"docker","git_sha":"sha-prev","validator_image_ref":"ref","validator_image_digest":"sha256:abc"}'
   MOCK_HEALTH_APP='{"status":"ok","db_migration_status":"current","git_sha":"sha-prev"}'
+  MOCK_REQUIRED_MIGRATIONS='001_init.sql
+042_attribution_gap_evidence.sql'
+  MOCK_APPLIED_MIGRATIONS='001_init.sql
+042_attribution_gap_evidence.sql
+043_advisory_review_publication.sql'
   MOCK_DASH_OK=true
   MOCK_IMAGE_ID="sha256:aaaabbbbcccc"
   MOCK_CONTAINER_IMAGE="sha256:aaaabbbbcccc"
