@@ -152,7 +152,10 @@ beforeEach(() => {
   mockQuery
     .mockResolvedValueOnce({ rows: [CFG] })
     .mockResolvedValueOnce({ rows: [{ id: 100 }] })
-    .mockResolvedValue({ rows: [] });
+    .mockImplementation((sql) => {
+      if (String(sql).includes("publication_claimed_at = NOW()")) return Promise.resolve({ rows: [{ id: 100 }] });
+      return Promise.resolve({ rows: [] });
+    });
 });
 
 describe('advisory coverage — pagination and accounting', () => {
@@ -211,7 +214,10 @@ describe('advisory coverage — INCOMPLETE publication', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ ...CFG, max_files_to_review: 2 }] })
       .mockResolvedValueOnce({ rows: [{ id: 100 }] })
-      .mockResolvedValue({ rows: [] });
+      .mockImplementation((sql) => {
+        if (String(sql).includes("publication_claimed_at = NOW()")) return Promise.resolve({ rows: [{ id: 100 }] });
+        return Promise.resolve({ rows: [] });
+      });
 
     const oct = mockOctokit({
       'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
@@ -301,7 +307,8 @@ describe('advisory coverage — INCOMPLETE publication', () => {
     expect(r.publication.publishedOutcome).toBe('APPROVE');
   });
 
-  test('all files ignore-excluded keeps the legacy no-reviewable-files success exit', async () => {    mockQuery.mockReset();
+  test('all files ignore-excluded keeps the legacy no-reviewable-files success exit', async () => {
+    mockQuery.mockReset();
     mockQuery
       .mockResolvedValueOnce({ rows: [{ ...CFG, ignore_patterns: ['**'] }] })
       .mockResolvedValueOnce({ rows: [{ id: 100 }] })

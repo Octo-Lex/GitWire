@@ -140,11 +140,11 @@ describe('review delivery boundary', () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockCreate.mockReset();
-    mockQuery.mockResolvedValue({ rows: [] });
+    mockQuery.mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
   });
 
   test('valid anchor: comment carries {path, line, side:RIGHT} and NEVER a position', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 200 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 200 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify(findingReport(2)) }], usage: { input_tokens: 10, output_tokens: 5 } });
 
     const oct = mockOctokit({
@@ -167,7 +167,7 @@ describe('review delivery boundary', () => {
   });
 
   test('THE DEFECT SHAPE: file line 800 against a 3-line patch → body-only, review still posts and succeeds', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 201 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 201 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify(findingReport(800)) }], usage: { input_tokens: 10, output_tokens: 5 } });
 
     const oct = mockOctokit({
@@ -192,7 +192,7 @@ describe('review delivery boundary', () => {
   });
 
   test('422 on the review POST is a TERMINAL delivery failure — error receipt, FAILURE check, rethrow, ONE POST', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 202 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 202 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify(findingReport(2)) }], usage: { input_tokens: 10, output_tokens: 5 } });
 
     const oct = mockOctokit({
@@ -226,7 +226,7 @@ describe('review delivery boundary', () => {
   });
 
   test('non-delivery failures keep the pre-existing behavior (neutral + null)', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 203 }] }).mockResolvedValue({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 203 }] }).mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'narration, no JSON' }], usage: { input_tokens: 10, output_tokens: 5 } });
 
     const oct = mockOctokit({

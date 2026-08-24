@@ -125,7 +125,10 @@ beforeEach(() => {
   mockQuery
     .mockResolvedValueOnce({ rows: [CFG] })
     .mockResolvedValueOnce({ rows: [{ id: 100 }] })
-    .mockResolvedValue({ rows: [] });
+    .mockImplementation((sql) => {
+      if (String(sql).includes("publication_claimed_at = NOW()")) return Promise.resolve({ rows: [{ id: 100 }] });
+      return Promise.resolve({ rows: [] });
+    });
 });
 
 describe('exact-head supersession guard', () => {
