@@ -1094,15 +1094,20 @@ async function suppressConcurrentPublication({ octokit, owner, repo, checkRunId,
   };
 }
 
+const REVIEW_LOOKUP_PAGE_CAP = 20; // safety cap; a full final page fails closed
+
 /**
- * Paginate the PR's reviews completely and return those whose body carries
- * the exact publication marker. Complete pagination is required: a partial
- * list cannot distinguish "zero matches" from "not fetched yet".
+ * Paginate the PR's reviews and return those whose body carries the exact
+ * publication marker. The lookup is bounded at REVIEW_LOOKUP_PAGE_CAP pages;
+ * if the cap is reached with a FULL final page, another page may exist, so
+ * the lookup is incomplete and throws (E_PUBLICATION_LOOKUP) — it is never
+ * reported as zero matches, because a marker beyond the cap must not
+ * authorize a second publication (frozen v1.2 criterion 13).
  */
 async function findMarkerMatches(octokit, owner, repo, prNumber, marker) {
   const needle = "<!-- " + marker + " -->";
   const matches = [];
-  for (let page = 1; page <= 20; page++) {
+  for (let page = 1; page <= REVIEW_LOOKUP_PAGE_CAP; page++) {
     const { data } = await octokit.request(
       "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
       { owner, repo, pull_number: prNumber, per_page: 100, page }
@@ -1114,6 +1119,15 @@ async function findMarkerMatches(octokit, owner, repo, prNumber, marker) {
       }
     }
     if (data.length < 100) break;
+    if (page === REVIEW_LOOKUP_PAGE_CAP) {
+      const capped = new Error(
+        "marker lookup did not complete — review pagination cap (" +
+        REVIEW_LOOKUP_PAGE_CAP * 100 + " reviews) reached with a full final page; " +
+        "the marker may exist beyond it"
+      );
+      capped.gitwireErrorCode = "E_PUBLICATION_LOOKUP";
+      throw capped;
+    }
   }
   return matches;
 }
