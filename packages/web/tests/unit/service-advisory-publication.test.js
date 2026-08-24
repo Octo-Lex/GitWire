@@ -369,8 +369,7 @@ describe('exactly-once publication — concurrent ownership (criterion 13)', () 
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  test('ADVISOR SPEC: two invocations, same repo/PR/SHA, both reach the boundary — exactly ONE GitHub review POST', async () => {
-    // Worker A: fresh row, wins the claim, posts once.
+  test('ADVISOR SPEC: two invocations, same repo/PR/SHA, both reach the boundary — exactly ONE GitHub review POST', async () => {    // Worker A: fresh row, wins the claim, posts once.
     freshDb();
     const octA = baseOct();
     cleanModel();
@@ -395,5 +394,53 @@ describe('exactly-once publication — concurrent ownership (criterion 13)', () 
       octA._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST')).length +
       octB._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST')).length;
     expect(totalPosts).toBe(1);
+  });
+});
+
+describe('exactly-once publication — marker lookup completeness (criterion 13)', () => {
+  function pageOf(n) {
+    return Array.from({ length: n }, (_, i) => ({ id: 900000 + i, body: 'review without the marker' }));
+  }
+
+  test('20 FULL pages + another page may exist → incomplete lookup, fail closed, zero POST', async () => {
+    freshDb({ id: 100, publication_state: 'submitting', github_review_id: null });
+    const oct = baseOct({
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews': (params) =>
+        ({ data: pageOf(100) }), // every page full — the cap cannot prove completeness
+    });
+
+    await expect(
+      reviewPR({ pr: pr(), repository: REPO, octokit: oct })
+    ).rejects.toMatchObject({ gitwireErrorCode: 'E_PUBLICATION_LOOKUP' });
+
+    // never treated as zero matches: no release, no model, no POST
+    expect(oct._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST'))).toHaveLength(0);
+    expect(mockCreate).not.toHaveBeenCalled();
+    const release = mockQuery.mock.calls.find((c) => String(c[0]).includes("INTERVAL '10 minutes'"));
+    expect(release).toBeUndefined();
+
+    const patches = oct._calls.filter((c) => c.route.startsWith('PATCH /repos/{owner}/{repo}/check-runs/'));
+    expect(patches.at(-1).params.conclusion).toBe('neutral');
+  });
+
+  test('cap boundary with a SHORT final page → lookup completes; zero-match path proceeds normally', async () => {
+    freshDb({ id: 100, publication_state: 'submitting', github_review_id: null });
+    // claimed_at absent → NULL → stale-releasable, so a COMPLETED zero-match
+    // lookup must proceed to exactly one fresh POST.
+    const oct = baseOct({
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews': (params) =>
+        ({ data: pageOf(params.page < 20 ? 100 : 50) }),
+    });
+    cleanModel();
+
+    const r = await reviewPR({ pr: pr(), repository: REPO, octokit: oct });
+
+    expect(r.recovered).toBeUndefined();
+    const posts = oct._calls.filter((c) => c.route.endsWith('/reviews') && c.route.startsWith('POST'));
+    expect(posts).toHaveLength(1);
+    const reviewPages = oct._calls.filter(
+      (c) => c.route.endsWith('/reviews') && c.route.startsWith('GET')
+    );
+    expect(reviewPages.length).toBe(20);
   });
 });
