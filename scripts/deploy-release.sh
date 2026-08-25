@@ -458,15 +458,20 @@ verify_app() {
   body="$(wait_for_http http://localhost:3000/health 150 || true)"
   [[ -n "$body" ]] || fail "app /health did not respond"
 
-  printf '%s' "$body" >/tmp/app-health.json
-  EXPECTED_SHA="$RELEASE_SHA" \
+  printf '%s' "$body" >"${GATE_TMPDIR:-/tmp}/app-health.json"
+  # Deployment health = exact release identity + schema currency. The composite
+  # health.status is deliberately NOT consumed here: it also degrades on
+  # workflow health (e.g. triage backlog), which must stay observable but must
+  # not veto a deployment whose application is otherwise correct. Verified the
+  # hard way on 2026-08-24: a pre-existing triage degradation failed the
+  # forward gate (and, via forward-only migration drift, the rollback gate).
+  EXPECTED_SHA="$RELEASE_SHA" GATE_TMPDIR="${GATE_TMPDIR:-/tmp}" \
   node --input-type=module -e '
     import fs from "node:fs";
-    const h = JSON.parse(fs.readFileSync("/tmp/app-health.json", "utf8"));
+    const h = JSON.parse(fs.readFileSync(process.env.GATE_TMPDIR + "/app-health.json", "utf8"));
     const checks = [
-      ["status", h.status, "ok"],
-      ["db_migration_status", h.db_migration_status, "current"],
       ["git_sha", h.git_sha, process.env.EXPECTED_SHA],
+      ["db_migration_status", h.db_migration_status, "current"],
     ];
     for (const [name, got, want] of checks) {
       if (got !== want) { console.error(`app gate: ${name}=${got}, expected ${want}`); process.exit(1); }
@@ -852,15 +857,50 @@ rollback_verify_app() {
   local body
   body="$(docker exec gitwire-gitwire-app-1 wget -qO- http://localhost:3000/health 2>/dev/null || true)"
   [[ -n "$body" ]] || return 1
-  printf '%s' "$body" >/tmp/rollback-app-health.json
-  EXPECTED_SHA="$PREVIOUS_GIT_SHA" \
+
+  # Forward-compatible rollback schema semantics: the rollback image's own
+  # migration manifest is the REQUIRED set, and the database may additionally
+  # carry newer forward-only migrations (rollback restores images but never
+  # reverses migrations — a rolled-back app older than the schema can never
+  # report db_migration_status=current, which previously made this gate
+  # unsatisfiable). Fail closed on missing old migrations or an unreadable
+  # migration state. Set inclusion, not applied>=available counts: only the
+  # image's manifest proves the required migrations are actually present.
+  local required_migrations applied_migrations
+  required_migrations="$(docker exec gitwire-gitwire-app-1 sh -c 'ls /app/packages/web/db/migrations/*.sql 2>/dev/null | xargs -n1 basename' 2>/dev/null || true)"
+  [[ -n "$required_migrations" ]] || return 1
+  applied_migrations="$(docker exec gitwire-postgres-1 psql -U gitwire -d gitops_hub -t -A -c "SELECT version FROM schema_migrations" 2>/dev/null || true)"
+  [[ -n "$applied_migrations" ]] || return 1
+  local gate_tmp="${GATE_TMPDIR:-/tmp}"
+  printf '%s\n' "$required_migrations" >"$gate_tmp/rollback-required-migrations.txt"
+  printf '%s\n' "$applied_migrations" >"$gate_tmp/rollback-applied-migrations.txt"
+  printf '%s' "$body" >"$gate_tmp/rollback-app-health.json"
+
+  EXPECTED_SHA="$PREVIOUS_GIT_SHA" GATE_TMPDIR="$gate_tmp" \
   node --input-type=module -e '
     import fs from "node:fs";
-    const h = JSON.parse(fs.readFileSync("/tmp/rollback-app-health.json", "utf8"));
-    if (h.status !== "ok") process.exit(1);
-    if (h.db_migration_status !== "current") process.exit(1);
+    const t = process.env.GATE_TMPDIR;
+    const h = JSON.parse(fs.readFileSync(t + "/rollback-app-health.json", "utf8"));
+    // Health response + the database visibility of the application itself:
+    // the composite health.status (workflow-coupled) is observability, not a
+    // rollback veto, but db_migration_status must be a value the application
+    // actually read ("current" or the forward-schema "behind"). "unknown"
+    // means the app cannot see the database itself — host-side psql
+    // succeeding is not evidence the app can, and a restored service with a
+    // broken DB path must not be declared a successful rollback (Codex P1).
+    if (!["current", "behind"].includes(h.db_migration_status)) process.exit(1);
     // For immutable rollback targets, git_sha must match the previous release SHA.
     if (process.env.EXPECTED_SHA && h.git_sha !== process.env.EXPECTED_SHA) process.exit(1);
+    const required = fs.readFileSync(t + "/rollback-required-migrations.txt", "utf8")
+      .split("\n").map(s => s.trim()).filter(s => s.endsWith(".sql"));
+    const applied = new Set(fs.readFileSync(t + "/rollback-applied-migrations.txt", "utf8")
+      .split("\n").map(s => s.trim()).filter(Boolean));
+    const missing = required.filter(m => !applied.has(m));
+    if (missing.length > 0) {
+      console.error("rollback gate: missing required migrations: " + missing.join(", "));
+      process.exit(1);
+    }
+    console.log("✓ rollback app gate passed (schema superset verified)");
   ' || return 1
   return 0
 }

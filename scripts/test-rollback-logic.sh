@@ -174,6 +174,14 @@ echo "=== transaction / rollback tests (mocked Docker) ==="
 # State variables the mocks read.
 MOCK_HEALTH_EXEC='{"status":"ok","ready":true,"container_runtime":"docker","git_sha":"sha-prev","validator_image_ref":"ref","validator_image_digest":"sha256:abc"}'
 MOCK_HEALTH_APP='{"status":"ok","db_migration_status":"current","git_sha":"sha-prev"}'
+# Migration fixtures for the rollback app gate's set-inclusion check: the
+# rollback image's manifest is a subset of the applied set (forward-only
+# superset is the production-normal shape).
+MOCK_REQUIRED_MIGRATIONS='001_init.sql
+042_attribution_gap_evidence.sql'
+MOCK_APPLIED_MIGRATIONS='001_init.sql
+042_attribution_gap_evidence.sql
+043_advisory_review_publication.sql'
 MOCK_DASH_OK=true
 MOCK_IMAGE_ID="sha256:aaaabbbbcccc"
 MOCK_CONTAINER_IMAGE="sha256:aaaabbbbcccc"
@@ -200,7 +208,12 @@ docker() {
       case "$container" in
         *gitwire-executor-service*) printf '%s' "$MOCK_HEALTH_EXEC" ;;
         *gitwire-app*)
-          if [[ "$url" == */health ]]; then printf '%s' "$MOCK_HEALTH_APP"; fi
+          if [[ "$*" == *"db/migrations"* ]]; then
+            printf '%s\n' "$MOCK_REQUIRED_MIGRATIONS"
+          elif [[ "$url" == */health ]]; then printf '%s' "$MOCK_HEALTH_APP"; fi
+          ;;
+        *postgres*)
+          if [[ "$*" == *"schema_migrations"* ]]; then printf '%s\n' "$MOCK_APPLIED_MIGRATIONS"; fi
           ;;
         *dashboard*)
           if [[ "$MOCK_DASH_OK" == "true" ]]; then return 0; else return 1; fi
@@ -303,6 +316,11 @@ tunnel:absent
 reset_mocks_ok() {
   MOCK_HEALTH_EXEC='{"status":"ok","ready":true,"container_runtime":"docker","git_sha":"sha-prev","validator_image_ref":"ref","validator_image_digest":"sha256:abc"}'
   MOCK_HEALTH_APP='{"status":"ok","db_migration_status":"current","git_sha":"sha-prev"}'
+  MOCK_REQUIRED_MIGRATIONS='001_init.sql
+042_attribution_gap_evidence.sql'
+  MOCK_APPLIED_MIGRATIONS='001_init.sql
+042_attribution_gap_evidence.sql
+043_advisory_review_publication.sql'
   MOCK_DASH_OK=true
   MOCK_IMAGE_ID="sha256:aaaabbbbcccc"
   MOCK_CONTAINER_IMAGE="sha256:aaaabbbbcccc"
@@ -496,6 +514,170 @@ if check_exec_readiness '{"status":"error","ready":true,"container_runtime":"doc
   bad "bootstrap readiness: status=error accepted"
 else
   ok "bootstrap readiness: status=error rejected"
+fi
+
+# ── Deployment-gate regressions (2026-08-24 incident) ───────────────────────
+# Composite health.status (workflow/triage-coupled) must not veto deployment;
+# rollback verifies schema by SET INCLUSION (forward-only superset allowed).
+
+echo ""
+echo "=== deployment-gate regressions ==="
+
+# Node must be able to open the gate temp files; on MINGW /tmp is not
+# node-addressable, so point GATE_TMPDIR at a Windows-resolvable temp dir.
+if command -v cygpath >/dev/null 2>&1; then
+  GATE_TMPDIR="$(cygpath -m "${TEMP:-/tmp}")"
+else
+  GATE_TMPDIR="/tmp"
+fi
+export GATE_TMPDIR
+
+FAKE_HEALTH_JSON='{}'
+FAKE_REQUIRED_MIGRATIONS=""
+FAKE_APPLIED_MIGRATIONS=""
+
+docker() {
+  case "$*" in
+    *"image inspect"*"{{.Id}}"*)
+      printf '%s\n' "$STUB_IMAGE_ID"
+      return 0
+      ;;
+    *"/health"*)
+      [[ -n "$FAKE_HEALTH_JSON" ]] && printf '%s' "$FAKE_HEALTH_JSON"
+      return 0
+      ;;
+    *"db/migrations"*)
+      [[ -n "$FAKE_REQUIRED_MIGRATIONS" ]] && printf '%s\n' "$FAKE_REQUIRED_MIGRATIONS"
+      return 0
+      ;;
+    *"schema_migrations"*)
+      [[ -n "$FAKE_APPLIED_MIGRATIONS" ]] && printf '%s\n' "$FAKE_APPLIED_MIGRATIONS"
+      return 0
+      ;;
+  esac
+  return 0
+}
+
+# Fast health-wait override: the real wait_for_http retries for up to 300s,
+# which is correct in production but would stall the empty-response test.
+wait_for_http() {
+  if [[ -n "$FAKE_HEALTH_JSON" ]]; then
+    printf '%s' "$FAKE_HEALTH_JSON"
+    return 0
+  fi
+  return 1
+}
+
+FWD_SHA="ffffffffffffffffffffffffffffffffffffffff"
+PREV_SHA="3d75dd69ee1cef58f1260682a08bf0acbfd353aa"
+
+# F1: degraded triage + current schema + matching SHA → forward gate passes
+RELEASE_SHA="$FWD_SHA"
+FAKE_HEALTH_JSON='{"status":"degraded","git_sha":"'"$FWD_SHA"'","db_migration_status":"current","workflows":{"triage":{"status":"degraded","failed_count":7}}}'
+if ( verify_app ) >/dev/null 2>&1; then
+  ok "forward gate: degraded triage + current schema + exact SHA passes (triage cannot veto)"
+else
+  bad "forward gate: degraded triage + current schema + exact SHA should pass"
+fi
+
+# F2: SHA mismatch → forward gate fails
+FAKE_HEALTH_JSON='{"status":"ok","git_sha":"deadbeef","db_migration_status":"current"}'
+if ( verify_app ) >/dev/null 2>&1; then
+  bad "forward gate: SHA mismatch accepted"
+else
+  ok "forward gate: SHA mismatch rejected"
+fi
+
+# F3: schema not current → forward gate fails
+FAKE_HEALTH_JSON='{"status":"ok","git_sha":"'"$FWD_SHA"'","db_migration_status":"behind"}'
+if ( verify_app ) >/dev/null 2>&1; then
+  bad "forward gate: db_migration_status=behind accepted"
+else
+  ok "forward gate: db_migration_status=behind rejected"
+fi
+
+# F4: no health response → forward gate fails
+FAKE_HEALTH_JSON=""
+if ( verify_app ) >/dev/null 2>&1; then
+  bad "forward gate: empty health response accepted"
+else
+  ok "forward gate: empty health response rejected"
+fi
+
+# ── Rollback gate: set-inclusion schema semantics ────────────────────────────
+
+REQUIRED_42="001_init.sql
+002_x.sql
+042_attribution_gap_evidence.sql"
+APPLIED_43="$REQUIRED_42
+043_advisory_review_publication.sql"
+
+# R1: the exact 2026-08-24 incident shape — old release over forward-migrated
+# schema (status degraded, migration "behind", applied superset) → PASSES
+PREVIOUS_GIT_SHA="$PREV_SHA"
+FAKE_HEALTH_JSON='{"status":"degraded","git_sha":"'"$PREV_SHA"'","db_migration_status":"behind","workflows":{"triage":{"status":"degraded"}}}'
+FAKE_REQUIRED_MIGRATIONS="$REQUIRED_42"
+FAKE_APPLIED_MIGRATIONS="$APPLIED_43"
+if ( rollback_verify_app ) >/dev/null 2>&1; then
+  ok "rollback gate: forward-schema superset over old release passes (incident shape)"
+else
+  bad "rollback gate: forward-schema superset should pass"
+fi
+
+# R2: a required migration missing from the applied set → fails
+FAKE_APPLIED_MIGRATIONS="001_init.sql
+042_attribution_gap_evidence.sql
+043_advisory_review_publication.sql"
+if ( rollback_verify_app ) >/dev/null 2>&1; then
+  bad "rollback gate: missing required migration accepted"
+else
+  ok "rollback gate: missing required migration rejected"
+fi
+
+# R3: unreadable applied set (psql empty) → fails closed
+FAKE_APPLIED_MIGRATIONS=""
+if ( rollback_verify_app ) >/dev/null 2>&1; then
+  bad "rollback gate: unreadable applied set accepted"
+else
+  ok "rollback gate: unreadable applied set fails closed"
+fi
+
+# R4: SHA mismatch → fails
+FAKE_APPLIED_MIGRATIONS="$APPLIED_43"
+FAKE_HEALTH_JSON='{"status":"degraded","git_sha":"not-the-previous-sha","db_migration_status":"behind"}'
+if ( rollback_verify_app ) >/dev/null 2>&1; then
+  bad "rollback gate: SHA mismatch accepted"
+else
+  ok "rollback gate: SHA mismatch rejected"
+fi
+
+# R5: migration state unreadable in the health payload → fails closed
+FAKE_HEALTH_JSON='{"status":"degraded","git_sha":"'"$PREV_SHA"'"}'
+if ( rollback_verify_app ) >/dev/null 2>&1; then
+  bad "rollback gate: undefined db_migration_status accepted"
+else
+  ok "rollback gate: undefined db_migration_status fails closed"
+fi
+
+# R7 (Codex P1): app cannot see its own database ("unknown") while host-side
+# psql still reads fine → must FAIL: the app's DB path is broken even though
+# the host-side set inclusion would pass.
+FAKE_HEALTH_JSON='{"status":"degraded","git_sha":"'"$PREV_SHA"'","db_migration_status":"unknown"}'
+FAKE_REQUIRED_MIGRATIONS="$REQUIRED_42"
+FAKE_APPLIED_MIGRATIONS="$APPLIED_43"
+if ( rollback_verify_app ) >/dev/null 2>&1; then
+  bad "rollback gate: db_migration_status=unknown with readable host psql accepted"
+else
+  ok "rollback gate: db_migration_status=unknown fails closed even when host psql reads"
+fi
+
+# R6: required-migration manifest unreadable → fails closed
+FAKE_HEALTH_JSON='{"status":"degraded","git_sha":"'"$PREV_SHA"'","db_migration_status":"behind"}'
+FAKE_REQUIRED_MIGRATIONS=""
+if ( rollback_verify_app ) >/dev/null 2>&1; then
+  bad "rollback gate: unreadable migration manifest accepted"
+else
+  ok "rollback gate: unreadable migration manifest fails closed"
 fi
 
 echo ""

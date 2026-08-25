@@ -130,11 +130,24 @@ which requires both Docker socket reachability AND complete validator identity.
   Redis healthy.
 - **Executor**: `status=ok`, `ready=true`, `git_sha`, `container_runtime`,
   validator identity matches configuration.
-- **App**: `status=ok`, `db_migration_status=current`, `git_sha=release SHA`.
+- **App**: `/health` responds, `git_sha=release SHA`,
+  `db_migration_status=current`.
 - **Dashboard**: `/dashboard` responds.
 - **Image identity**: running container image IDs match pulled images;
   RepoDigests carry manifest digests.
 - **Non-interference**: all seven non-release services unchanged.
+
+#### Application deployment health vs workflow health
+
+The app gate deliberately does **not** consume the composite
+`/health.status`. That field is *observability*: it reports `degraded` when
+migrations drift **or** when a workflow (e.g. triage) is degraded/unknown.
+Workflow health must stay visible to operators, but it must not veto a
+deployment whose application identity and schema are correct — on
+2026-08-24 a pre-existing triage degradation failed an otherwise-healthy
+deploy *and* its rollback purely through this coupling. Deployment health is
+the specific fields: health reachability, exact release `git_sha`, and
+`db_migration_status=current`.
 
 ### Coherent rollback (post-mutation failures)
 
@@ -163,6 +176,27 @@ currently-running release services into `releases/bootstrap-<timestamp>/`.
 
 The deploy script captures the migration list before mutation and warns in the
 summary if it changed during a failed deploy. It never runs reverse SQL.
+
+##### Forward-compatible rollback schema semantics
+
+Because migrations are never reversed, a rolled-back app can run over a schema
+that is *newer* than itself (e.g. rollback to release N-1 after release N
+applied migration `NNN`). Such an app reports `db_migration_status="behind"`
+even though nothing is wrong — the old code simply cannot see migrations it
+does not know. The rollback app gate therefore does **not** demand
+`db_migration_status=current` (unsatisfiable in exactly this case). It
+verifies, fail-closed:
+
+- `/health` responds and `git_sha` equals the previous release SHA;
+- the migration state is readable in the payload;
+- **every** migration shipped in the rollback image (its own
+  `db/migrations` manifest) is present in `schema_migrations` — set
+  inclusion, not count comparison, because only the manifest proves the
+  required migrations actually exist. Extra newer migrations are allowed.
+
+An unreadable migration manifest or applied set, or a missing required
+migration, fails the rollback. The same forward-compatibility expectation is
+why production migrations must be additive-only toward the previous release.
 
 ---
 
