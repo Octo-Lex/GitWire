@@ -881,9 +881,14 @@ rollback_verify_app() {
     import fs from "node:fs";
     const t = process.env.GATE_TMPDIR;
     const h = JSON.parse(fs.readFileSync(t + "/rollback-app-health.json", "utf8"));
-    // Health response + readable migration state; the composite health.status
-    // (workflow-coupled) is observability, not a rollback veto.
-    if (h.db_migration_status === undefined) process.exit(1);
+    // Health response + the database visibility of the application itself:
+    // the composite health.status (workflow-coupled) is observability, not a
+    // rollback veto, but db_migration_status must be a value the application
+    // actually read ("current" or the forward-schema "behind"). "unknown"
+    // means the app cannot see the database itself — host-side psql
+    // succeeding is not evidence the app can, and a restored service with a
+    // broken DB path must not be declared a successful rollback (Codex P1).
+    if (!["current", "behind"].includes(h.db_migration_status)) process.exit(1);
     // For immutable rollback targets, git_sha must match the previous release SHA.
     if (process.env.EXPECTED_SHA && h.git_sha !== process.env.EXPECTED_SHA) process.exit(1);
     const required = fs.readFileSync(t + "/rollback-required-migrations.txt", "utf8")

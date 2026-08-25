@@ -659,6 +659,18 @@ else
   ok "rollback gate: undefined db_migration_status fails closed"
 fi
 
+# R7 (Codex P1): app cannot see its own database ("unknown") while host-side
+# psql still reads fine → must FAIL: the app's DB path is broken even though
+# the host-side set inclusion would pass.
+FAKE_HEALTH_JSON='{"status":"degraded","git_sha":"'"$PREV_SHA"'","db_migration_status":"unknown"}'
+FAKE_REQUIRED_MIGRATIONS="$REQUIRED_42"
+FAKE_APPLIED_MIGRATIONS="$APPLIED_43"
+if ( rollback_verify_app ) >/dev/null 2>&1; then
+  bad "rollback gate: db_migration_status=unknown with readable host psql accepted"
+else
+  ok "rollback gate: db_migration_status=unknown fails closed even when host psql reads"
+fi
+
 # R6: required-migration manifest unreadable → fails closed
 FAKE_HEALTH_JSON='{"status":"degraded","git_sha":"'"$PREV_SHA"'","db_migration_status":"behind"}'
 FAKE_REQUIRED_MIGRATIONS=""
