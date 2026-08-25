@@ -73,6 +73,31 @@ export async function clearRetryOutcome(repoId, prNumber, headSha, checkRunId) {
  *
  * @returns {Promise<boolean>} true if PATCH succeeded (or no-op), false if PATCH failed
  */
+/**
+ * Deterministic maintainer-facing title for a completed, non-blocked review
+ * result. INCOMPLETE integrity takes precedence over the judgment in the
+ * short title — it is the most important maintainer qualification of the
+ * result. Legacy results without a v1.2 publication object fall back to the
+ * legacy verdict vocabulary.
+ */
+export function formatReviewResultTitle(reviewResult) {
+  const publication = reviewResult ? reviewResult.publication : undefined;
+  if (publication && publication.integrityState === "INCOMPLETE") {
+    return "GitWire \u2014 AI review incomplete";
+  }
+  const judgment = (publication && publication.judgment)
+    || (reviewResult && reviewResult.verdict === "request_changes" ? "REQUEST_CHANGES"
+      : reviewResult && reviewResult.verdict === "needs_discussion" ? "NEEDS_DISCUSSION"
+      : reviewResult && reviewResult.verdict === "approved" ? "APPROVE"
+      : undefined);
+  switch (judgment) {
+    case "APPROVE":         return "GitWire \u2014 AI review: approve";
+    case "NEEDS_DISCUSSION": return "GitWire \u2014 AI review: needs discussion";
+    case "REQUEST_CHANGES": return "GitWire \u2014 AI review: changes requested";
+    default:                return "GitWire \u2014 AI review completed";
+  }
+}
+
 export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNumber, headSha, reviewResult, checkRunId, errorContext }) {
   let resolvedCheckRunId = checkRunId;
 
@@ -114,9 +139,16 @@ export async function finalizeGitwireCheck({ octokit, owner, repo, repoId, prNum
     title = "GitWire \u2014 review blocked merge";
     summary = "AI review found " + reviewResult.findings.length + " finding(s). Verdict: " + reviewResult.verdict + ".";
   } else {
+    // Truthful maintainer-facing label (v1.2.1): the title describes the
+    // review RESULT, never a blanket "passed". The GitHub conclusion still
+    // describes pipeline execution — an INCOMPLETE review the pipeline
+    // correctly detected and published remains conclusion: success.
     conclusion = "success";
-    title = "GitWire \u2014 review passed";
-    summary = "AI review completed. Verdict: " + reviewResult.verdict + ", " + reviewResult.findings.length + " finding(s).";
+    title = formatReviewResultTitle(reviewResult);
+    summary = "AI review completed. Verdict: " + reviewResult.verdict + ", " + reviewResult.findings.length + " finding(s)."
+      + (reviewResult.publication && reviewResult.publication.integrityState === "INCOMPLETE"
+        ? " Review evidence incomplete \u2014 no clean approval was issued."
+        : "");
   }
 
   return _applyCheckConclusion({ octokit, owner, repo, repoId, prNumber, headSha, checkRunId: resolvedCheckRunId, conclusion, title, summary });

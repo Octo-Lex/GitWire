@@ -282,7 +282,7 @@ describe("Phase 4 worker check ownership lifecycle", () => {
     const storedOutcome = {
       checkRunId: 5000,
       conclusion: "success",
-      title: "GitWire \u2014 review passed",
+      title: "GitWire \u2014 AI review: approve",
       summary: "AI review completed. Verdict: approved, 0 finding(s).",
     };
 
@@ -345,7 +345,7 @@ describe("Phase 4 worker check ownership lifecycle", () => {
     const storedOutcome = {
       checkRunId: 5000,
       conclusion: "success",
-      title: "GitWire \u2014 review passed",
+      title: "GitWire \u2014 AI review: approve",
       summary: "AI review completed. Verdict: approved, 0 finding(s).",
     };
 

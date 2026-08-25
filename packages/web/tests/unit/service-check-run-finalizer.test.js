@@ -102,7 +102,7 @@ describe("finalizeGitwireCheck", function () {
 
   // ── Review passed ────────────────────────────────────────────────────────
 
-  it("finalizes as success when review passed", async function () {
+  it("finalizes as success for an approved review", async function () {
     mockRedisGet.mockResolvedValue("99999");
     await finalizeGitwireCheck({
       ...baseArgs,
@@ -111,6 +111,120 @@ describe("finalizeGitwireCheck", function () {
     expect(mockUpdateCheck).toHaveBeenCalledWith(
       expect.objectContaining({ checkRunId: 99999, conclusion: "success" })
     );
+  });
+
+  // ── Check-run truthfulness (v1.2.1 / Track A) ────────────────────────────
+  // PR #205 is the pinned regression: judgment NEEDS_DISCUSSION, integrity
+  // INCOMPLETE, authority ADVISORY must NEVER surface as "review passed".
+
+  function presentationTitle(reviewResult) {
+    const call = mockUpdateCheck.mock.calls[0][0];
+    return call.title;
+  }
+
+  it("#205 shape: NEEDS_DISCUSSION + INCOMPLETE + ADVISORY → incomplete title, never 'review passed', conclusion success", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: {
+        verdict: "needs_discussion", blocked: false, findings: [{ title: "x" }],
+        publication: {
+          judgment: "NEEDS_DISCUSSION", publishedOutcome: "INCOMPLETE",
+          integrityState: "INCOMPLETE", authorityState: "ADVISORY",
+          githubReviewEvent: "COMMENT",
+        },
+      },
+    });
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.conclusion).toBe("success");
+    expect(call.title).toContain("incomplete");
+    expect(call.title).not.toContain("review passed");
+  });
+
+  it("COMPLETE + APPROVE → 'AI review: approve' title, conclusion success", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: {
+        verdict: "approved", blocked: false, findings: [],
+        publication: { judgment: "APPROVE", integrityState: "COMPLETE", publishedOutcome: "APPROVE", authorityState: "ADVISORY" },
+      },
+    });
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.conclusion).toBe("success");
+    expect(call.title).toContain("approve");
+    expect(call.title).not.toContain("review passed");
+  });
+
+  it("legacy result without publication (approved) → truthful approve title, not 'review passed'", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: { verdict: "approved", blocked: false, findings: [] },
+    });
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.conclusion).toBe("success");
+    expect(call.title).not.toContain("review passed");
+    expect(call.title).toContain("approve");
+  });
+
+  it("COMPLETE + NEEDS_DISCUSSION → 'needs discussion' title, conclusion success", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: {
+        verdict: "needs_discussion", blocked: false, findings: [{ title: "x" }],
+        publication: { judgment: "NEEDS_DISCUSSION", integrityState: "COMPLETE", publishedOutcome: "NEEDS_DISCUSSION", authorityState: "ADVISORY" },
+      },
+    });
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.conclusion).toBe("success");
+    expect(call.title).toContain("needs discussion");
+    expect(call.title).not.toContain("review passed");
+  });
+
+  it("COMPLETE + REQUEST_CHANGES unblocked → 'changes requested' title, conclusion success", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: {
+        verdict: "request_changes", blocked: false, findings: [{ title: "x" }],
+        publication: { judgment: "REQUEST_CHANGES", integrityState: "COMPLETE", publishedOutcome: "REQUEST_CHANGES", authorityState: "ADVISORY" },
+      },
+    });
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.conclusion).toBe("success");
+    expect(call.title).toContain("changes requested");
+    expect(call.title).not.toContain("review passed");
+  });
+
+  it("INCOMPLETE takes precedence over judgment in the short title (REQUEST_CHANGES + INCOMPLETE)", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: {
+        verdict: "request_changes", blocked: false, findings: [],
+        publication: { judgment: "REQUEST_CHANGES", integrityState: "INCOMPLETE", publishedOutcome: "REQUEST_CHANGES", authorityState: "ADVISORY" },
+      },
+    });
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.title).toContain("incomplete");
+    expect(call.title).not.toContain("changes requested");
+    expect(call.title).not.toContain("review passed");
+  });
+
+  it("blocked semantics unchanged: failure + 'review blocked merge'", async function () {
+    mockRedisGet.mockResolvedValue("99999");
+    await finalizeGitwireCheck({
+      ...baseArgs,
+      reviewResult: {
+        verdict: "request_changes", blocked: true, findings: [{ title: "x" }],
+        publication: { judgment: "REQUEST_CHANGES", integrityState: "COMPLETE", publishedOutcome: "REQUEST_CHANGES", authorityState: "POLICY_BLOCKED" },
+      },
+    });
+    const call = mockUpdateCheck.mock.calls[0][0];
+    expect(call.conclusion).toBe("failure");
+    expect(call.title).toContain("review blocked merge");
   });
 
   // ── Review superseded (advisory v1.2 WP-3) ──────────────────────────────
