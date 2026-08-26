@@ -1,0 +1,323 @@
+{
+ "metric_families": {
+  "integrity": {
+   "reviews": 25,
+   "complete": 0,
+   "incomplete": 25,
+   "incomplete_rate_pct": 100
+  },
+  "coverage": {
+   "total_changed_files": 443,
+   "fully_reviewed_files": 124,
+   "reviewed_file_share_pct": 28,
+   "file_loss_mechanisms": {
+    "patch_truncated": 201,
+    "max_lines_exceeded": 118
+   },
+   "reviews_with_patch_truncated": 25,
+   "reviews_with_max_lines_exceeded": 21,
+   "reviews_exceeding_line_budget": 21,
+   "reviews_incomplete_without_line_budget": 4
+  },
+  "finding_precision": {
+   "overall": {
+    "n": 63,
+    "validity": {
+     "PARTIAL": 11,
+     "INVALID": 27,
+     "NOT_ADJUDICABLE": 25
+    },
+    "usefulness": {
+     "INFORMATIVE": 28,
+     "NOISE": 33,
+     "ACTIONABLE": 2
+    },
+    "severity_calibration": {
+     "OVERSTATED": 39,
+     "CORRECT": 24
+    },
+    "evidence_quality": {
+     "WEAK": 18,
+     "ABSENT": 32,
+     "SUFFICIENT": 13
+    },
+    "valid_rate_pct": 0,
+    "invalid_rate_pct": 42.9
+   },
+   "by_native_severity": {
+    "high": {
+     "n": 25,
+     "validity": {
+      "PARTIAL": 4,
+      "INVALID": 13,
+      "NOT_ADJUDICABLE": 8
+     },
+     "usefulness": {
+      "INFORMATIVE": 7,
+      "NOISE": 17,
+      "ACTIONABLE": 1
+     },
+     "severity_calibration": {
+      "OVERSTATED": 24,
+      "CORRECT": 1
+     },
+     "evidence_quality": {
+      "WEAK": 3,
+      "ABSENT": 15,
+      "SUFFICIENT": 7
+     },
+     "valid_rate_pct": 0,
+     "invalid_rate_pct": 52
+    },
+    "medium": {
+     "n": 26,
+     "validity": {
+      "NOT_ADJUDICABLE": 14,
+      "INVALID": 9,
+      "PARTIAL": 3
+     },
+     "usefulness": {
+      "ACTIONABLE": 1,
+      "INFORMATIVE": 14,
+      "NOISE": 11
+     },
+     "severity_calibration": {
+      "CORRECT": 11,
+      "OVERSTATED": 15
+     },
+     "evidence_quality": {
+      "ABSENT": 16,
+      "WEAK": 8,
+      "SUFFICIENT": 2
+     },
+     "valid_rate_pct": 0,
+     "invalid_rate_pct": 34.6
+    },
+    "low": {
+     "n": 12,
+     "validity": {
+      "NOT_ADJUDICABLE": 3,
+      "PARTIAL": 4,
+      "INVALID": 5
+     },
+     "usefulness": {
+      "INFORMATIVE": 7,
+      "NOISE": 5
+     },
+     "severity_calibration": {
+      "CORRECT": 12
+     },
+     "evidence_quality": {
+      "WEAK": 7,
+      "SUFFICIENT": 4,
+      "ABSENT": 1
+     },
+     "valid_rate_pct": 0,
+     "invalid_rate_pct": 41.7
+    }
+   }
+  },
+  "usefulness": {
+   "INFORMATIVE": 28,
+   "NOISE": 33,
+   "ACTIONABLE": 2
+  },
+  "verification": {
+   "evidence_valid_true": {
+    "n": 26,
+    "validity": {
+     "PARTIAL": 8,
+     "INVALID": 12,
+     "NOT_ADJUDICABLE": 6
+    },
+    "usefulness": {
+     "INFORMATIVE": 13,
+     "NOISE": 12,
+     "ACTIONABLE": 1
+    },
+    "severity_calibration": {
+     "OVERSTATED": 10,
+     "CORRECT": 16
+    },
+    "evidence_quality": {
+     "WEAK": 14,
+     "SUFFICIENT": 12
+    },
+    "valid_rate_pct": 0,
+    "invalid_rate_pct": 46.2
+   },
+   "evidence_valid_false": {
+    "n": 37,
+    "validity": {
+     "INVALID": 15,
+     "NOT_ADJUDICABLE": 19,
+     "PARTIAL": 3
+    },
+    "usefulness": {
+     "INFORMATIVE": 15,
+     "ACTIONABLE": 1,
+     "NOISE": 21
+    },
+    "severity_calibration": {
+     "OVERSTATED": 29,
+     "CORRECT": 8
+    },
+    "evidence_quality": {
+     "ABSENT": 32,
+     "SUFFICIENT": 1,
+     "WEAK": 4
+    },
+    "valid_rate_pct": 0,
+    "invalid_rate_pct": 40.5
+   }
+  },
+  "calibration": {
+   "OVERSTATED": 39,
+   "CORRECT": 24
+  },
+  "evidence": {
+   "WEAK": 18,
+   "ABSENT": 32,
+   "SUFFICIENT": 13
+  },
+  "publication": {
+   "receipts": 25,
+   "github_identity_reconciled": "25/25 PASS",
+   "duplicate_publications": 0,
+   "events": {
+    "COMMENT": 25
+   }
+  },
+  "operations": {
+   "duration_ms_median": 23617,
+   "duration_ms_min": 7927,
+   "duration_ms_max": 58010,
+   "tokens_median": 15931,
+   "tokens_min": 4473,
+   "tokens_max": 20166,
+   "tokens_total": 390785
+  },
+  "cohorts": {
+   "by_version": {
+    "v1.2": {
+     "reviews": 16,
+     "incomplete_reviews": 16,
+     "findings": {
+      "n": 38,
+      "validity": {
+       "PARTIAL": 10,
+       "INVALID": 16,
+       "NOT_ADJUDICABLE": 12
+      },
+      "usefulness": {
+       "INFORMATIVE": 18,
+       "NOISE": 19,
+       "ACTIONABLE": 1
+      },
+      "severity_calibration": {
+       "OVERSTATED": 23,
+       "CORRECT": 15
+      },
+      "evidence_quality": {
+       "WEAK": 13,
+       "ABSENT": 19,
+       "SUFFICIENT": 6
+      },
+      "valid_rate_pct": 0,
+      "invalid_rate_pct": 42.1
+     },
+     "median_changed_files": 19
+    },
+    "v1.2.1": {
+     "reviews": 9,
+     "incomplete_reviews": 9,
+     "findings": {
+      "n": 25,
+      "validity": {
+       "NOT_ADJUDICABLE": 13,
+       "INVALID": 11,
+       "PARTIAL": 1
+      },
+      "usefulness": {
+       "INFORMATIVE": 10,
+       "NOISE": 14,
+       "ACTIONABLE": 1
+      },
+      "severity_calibration": {
+       "OVERSTATED": 16,
+       "CORRECT": 9
+      },
+      "evidence_quality": {
+       "ABSENT": 13,
+       "SUFFICIENT": 7,
+       "WEAK": 5
+      },
+      "valid_rate_pct": 0,
+      "invalid_rate_pct": 44
+     },
+     "median_changed_files": 20
+    }
+   },
+   "by_diff_size": {
+    "small_3_to_15_files": {
+     "reviews": 5,
+     "findings": {
+      "n": 15,
+      "validity": {
+       "PARTIAL": 4,
+       "INVALID": 7,
+       "NOT_ADJUDICABLE": 4
+      },
+      "usefulness": {
+       "INFORMATIVE": 7,
+       "NOISE": 7,
+       "ACTIONABLE": 1
+      },
+      "severity_calibration": {
+       "OVERSTATED": 11,
+       "CORRECT": 4
+      },
+      "evidence_quality": {
+       "WEAK": 6,
+       "ABSENT": 8,
+       "SUFFICIENT": 1
+      },
+      "valid_rate_pct": 0,
+      "invalid_rate_pct": 46.7
+     },
+     "median_changed_files": 14,
+     "median_partial_files": 8
+    },
+    "large_17_to_20_files": {
+     "reviews": 20,
+     "findings": {
+      "n": 48,
+      "validity": {
+       "INVALID": 20,
+       "NOT_ADJUDICABLE": 21,
+       "PARTIAL": 7
+      },
+      "usefulness": {
+       "NOISE": 26,
+       "INFORMATIVE": 21,
+       "ACTIONABLE": 1
+      },
+      "severity_calibration": {
+       "CORRECT": 20,
+       "OVERSTATED": 28
+      },
+      "evidence_quality": {
+       "SUFFICIENT": 12,
+       "ABSENT": 24,
+       "WEAK": 12
+      },
+      "valid_rate_pct": 0,
+      "invalid_rate_pct": 41.7
+     },
+     "median_changed_files": 20,
+     "median_partial_files": 14
+    }
+   }
+  }
+ }
+}
