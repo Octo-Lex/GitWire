@@ -1,0 +1,665 @@
+[
+ {
+  "receipt_id": 565,
+  "pr": 199,
+  "repo": "AgentGears/AlCode",
+  "judgment": "REQUEST_CHANGES",
+  "findings_n": 4,
+  "total_files": 6,
+  "accounted": 6,
+  "full": 2,
+  "partial": 4,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [],
+  "loss_mechanisms": {
+   "patch_truncated": 4
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 56909,
+  "tokens": 13272
+ },
+ {
+  "receipt_id": 566,
+  "pr": 200,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 5,
+  "total_files": 14,
+  "accounted": 14,
+  "full": 6,
+  "partial": 8,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [],
+  "loss_mechanisms": {
+   "patch_truncated": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 27098,
+  "tokens": 18368
+ },
+ {
+  "receipt_id": 567,
+  "pr": 201,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 3,
+  "total_files": 15,
+  "accounted": 15,
+  "full": 6,
+  "partial": 9,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [],
+  "loss_mechanisms": {
+   "patch_truncated": 9
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 22375,
+  "tokens": 18315
+ },
+ {
+  "receipt_id": 568,
+  "pr": 202,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 3,
+  "total_files": 15,
+  "accounted": 15,
+  "full": 5,
+  "partial": 10,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 9,
+   "max_lines_exceeded": 1
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 58010,
+  "tokens": 20166
+ },
+ {
+  "receipt_id": 569,
+  "pr": 203,
+  "repo": "AgentGears/AlCode",
+  "judgment": "APPROVE",
+  "findings_n": 2,
+  "total_files": 17,
+  "accounted": 17,
+  "full": 6,
+  "partial": 11,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 9,
+   "max_lines_exceeded": 2
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 27968,
+  "tokens": 17645
+ },
+ {
+  "receipt_id": 570,
+  "pr": 204,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 3,
+  "total_files": 17,
+  "accounted": 17,
+  "full": 6,
+  "partial": 11,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 9,
+   "max_lines_exceeded": 2
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 23617,
+  "tokens": 16920
+ },
+ {
+  "receipt_id": 571,
+  "pr": 205,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 4,
+  "total_files": 18,
+  "accounted": 18,
+  "full": 6,
+  "partial": 12,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 9,
+   "max_lines_exceeded": 3
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 25746,
+  "tokens": 17937
+ },
+ {
+  "receipt_id": 572,
+  "pr": 206,
+  "repo": "AgentGears/AlCode",
+  "judgment": "APPROVE",
+  "findings_n": 0,
+  "total_files": 19,
+  "accounted": 19,
+  "full": 6,
+  "partial": 13,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 10,
+   "max_lines_exceeded": 3
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 12102,
+  "tokens": 15591
+ },
+ {
+  "receipt_id": 573,
+  "pr": 207,
+  "repo": "AgentGears/AlCode",
+  "judgment": "APPROVE",
+  "findings_n": 0,
+  "total_files": 19,
+  "accounted": 19,
+  "full": 6,
+  "partial": 13,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 10,
+   "max_lines_exceeded": 3
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 12408,
+  "tokens": 15988
+ },
+ {
+  "receipt_id": 575,
+  "pr": 209,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 4,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 6,
+  "partial": 14,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 9,
+   "max_lines_exceeded": 5
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 22108,
+  "tokens": 17583
+ },
+ {
+  "receipt_id": 576,
+  "pr": 210,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 3,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 6,
+  "partial": 14,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 9,
+   "max_lines_exceeded": 5
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 25443,
+  "tokens": 17834
+ },
+ {
+  "receipt_id": 577,
+  "pr": 211,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 3,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 6,
+  "partial": 14,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 9,
+   "max_lines_exceeded": 5
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 46846,
+  "tokens": 18574
+ },
+ {
+  "receipt_id": 578,
+  "pr": 212,
+  "repo": "AgentGears/AlCode",
+  "judgment": "APPROVE",
+  "findings_n": 0,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 6,
+  "partial": 14,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 9,
+   "max_lines_exceeded": 5
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 11309,
+  "tokens": 13698
+ },
+ {
+  "receipt_id": 579,
+  "pr": 213,
+  "repo": "AgentGears/AlCode",
+  "judgment": "APPROVE",
+  "findings_n": 0,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 6,
+  "partial": 14,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 6
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 10621,
+  "tokens": 13574
+ },
+ {
+  "receipt_id": 580,
+  "pr": 180,
+  "repo": "Octo-Lex/GitWire",
+  "judgment": "APPROVE",
+  "findings_n": 0,
+  "total_files": 3,
+  "accounted": 3,
+  "full": 2,
+  "partial": 1,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [],
+  "loss_mechanisms": {
+   "patch_truncated": 1
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 9657,
+  "tokens": 4473
+ },
+ {
+  "receipt_id": 582,
+  "pr": 215,
+  "repo": "AgentGears/AlCode",
+  "judgment": "APPROVE",
+  "findings_n": 4,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 6,
+  "partial": 14,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 6
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 23816,
+  "tokens": 17190
+ },
+ {
+  "receipt_id": 583,
+  "pr": 216,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 2,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 5,
+  "partial": 15,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 7,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 23082,
+  "tokens": 15850
+ },
+ {
+  "receipt_id": 584,
+  "pr": 217,
+  "repo": "AgentGears/AlCode",
+  "judgment": "APPROVE",
+  "findings_n": 0,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 4,
+  "partial": 16,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 7927,
+  "tokens": 11899
+ },
+ {
+  "receipt_id": 586,
+  "pr": 219,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 4,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 4,
+  "partial": 16,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 33665,
+  "tokens": 15931
+ },
+ {
+  "receipt_id": 587,
+  "pr": 220,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 3,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 4,
+  "partial": 16,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 15408,
+  "tokens": 14479
+ },
+ {
+  "receipt_id": 588,
+  "pr": 221,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 4,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 4,
+  "partial": 16,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 19682,
+  "tokens": 15303
+ },
+ {
+  "receipt_id": 589,
+  "pr": 222,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 2,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 4,
+  "partial": 16,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 21595,
+  "tokens": 14766
+ },
+ {
+  "receipt_id": 590,
+  "pr": 223,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 3,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 4,
+  "partial": 16,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 35214,
+  "tokens": 14777
+ },
+ {
+  "receipt_id": 591,
+  "pr": 224,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 4,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 4,
+  "partial": 16,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 38412,
+  "tokens": 16039
+ },
+ {
+  "receipt_id": 592,
+  "pr": 225,
+  "repo": "AgentGears/AlCode",
+  "judgment": "NEEDS_DISCUSSION",
+  "findings_n": 3,
+  "total_files": 20,
+  "accounted": 20,
+  "full": 4,
+  "partial": 16,
+  "unavailable": 0,
+  "exempt": 0,
+  "approval_evidence_complete": false,
+  "limits": [
+   "max_lines_to_review"
+  ],
+  "loss_mechanisms": {
+   "patch_truncated": 8,
+   "max_lines_exceeded": 8
+  },
+  "budget": {
+   "max_files": 30,
+   "max_lines": 2000
+  },
+  "duration_ms": 27155,
+  "tokens": 14613
+ }
+]
