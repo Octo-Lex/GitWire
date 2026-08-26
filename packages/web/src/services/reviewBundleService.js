@@ -18,7 +18,13 @@ import { logger } from "../lib/logger.js";
 import { getConfigForRepo } from "./configService.js";
 
 const MAX_BUNDLE_CHARS = 180000; // ~45K tokens, well within Claude context
-const MAX_DIFF_PER_FILE = 4000;
+// Gate C intervention: per-file patch cap raised 4,000 -> 12,000 with the
+// aggregate budget unchanged. Readiness proof (study branch, gatec-readiness):
+// on the frozen 25-review cohort this raises fully-reviewed file share from
+// 28.0% to 64.1% and cuts patch truncations from 201 to 41; the 180k rebuild
+// path never triggered in any scenario (max bundle 96,019 under the HI stress
+// context). bundle_truncated in production coverage records is a stop condition.
+const MAX_DIFF_PER_FILE = 12000;
 const MAX_CONTEXT_ITEMS = 5;
 
 /**
