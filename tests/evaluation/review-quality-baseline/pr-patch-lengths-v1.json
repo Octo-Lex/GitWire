@@ -1,0 +1,3253 @@
+{
+ "565": {
+  "repo": "AgentGears/AlCode",
+  "pr": 199,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 11,
+    "deletions": 3,
+    "patch_len": 3115
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 24,
+    "deletions": 0,
+    "patch_len": 1152
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-kernel.ts",
+    "status": "added",
+    "additions": 454,
+    "deletions": 0,
+    "patch_len": 20368
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-replay.ts",
+    "status": "added",
+    "additions": 224,
+    "deletions": 0,
+    "patch_len": 9833
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-service.ts",
+    "status": "added",
+    "additions": 250,
+    "deletions": 0,
+    "patch_len": 11529
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline.test.ts",
+    "status": "added",
+    "additions": 453,
+    "deletions": 0,
+    "patch_len": 17945
+   }
+  ]
+ },
+ "566": {
+  "repo": "AgentGears/AlCode",
+  "pr": 200,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 27,
+    "deletions": 7,
+    "patch_len": 7115
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 6,
+    "deletions": 0,
+    "patch_len": 352
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 65,
+    "deletions": 0,
+    "patch_len": 2511
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 117,
+    "deletions": 0,
+    "patch_len": 4484
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 260,
+    "deletions": 0,
+    "patch_len": 11077
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 130,
+    "deletions": 0,
+    "patch_len": 4973
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 226,
+    "deletions": 0,
+    "patch_len": 9333
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 284,
+    "deletions": 0,
+    "patch_len": 12595
+   }
+  ]
+ },
+ "567": {
+  "repo": "AgentGears/AlCode",
+  "pr": 201,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 29,
+    "deletions": 7,
+    "patch_len": 7362
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 6,
+    "deletions": 0,
+    "patch_len": 352
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 65,
+    "deletions": 0,
+    "patch_len": 2511
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 117,
+    "deletions": 0,
+    "patch_len": 4484
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 268,
+    "deletions": 0,
+    "patch_len": 11523
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 184,
+    "deletions": 0,
+    "patch_len": 7124
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 268,
+    "deletions": 0,
+    "patch_len": 11042
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 295,
+    "deletions": 0,
+    "patch_len": 13296
+   }
+  ]
+ },
+ "568": {
+  "repo": "AgentGears/AlCode",
+  "pr": 202,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 29,
+    "deletions": 7,
+    "patch_len": 7362
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 104,
+    "deletions": 0,
+    "patch_len": 4166
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 160,
+    "deletions": 0,
+    "patch_len": 6195
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 268,
+    "deletions": 0,
+    "patch_len": 11523
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 184,
+    "deletions": 0,
+    "patch_len": 7124
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 268,
+    "deletions": 0,
+    "patch_len": 11042
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 295,
+    "deletions": 0,
+    "patch_len": 13296
+   }
+  ]
+ },
+ "569": {
+  "repo": "AgentGears/AlCode",
+  "pr": 203,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 31,
+    "deletions": 7,
+    "patch_len": 7630
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 104,
+    "deletions": 0,
+    "patch_len": 4166
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 160,
+    "deletions": 0,
+    "patch_len": 6195
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 268,
+    "deletions": 0,
+    "patch_len": 11523
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 184,
+    "deletions": 0,
+    "patch_len": 7124
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 271,
+    "deletions": 0,
+    "patch_len": 11170
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 5,
+    "deletions": 4,
+    "patch_len": 1887
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 440,
+    "deletions": 0,
+    "patch_len": 16553
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 318,
+    "deletions": 0,
+    "patch_len": 14655
+   }
+  ]
+ },
+ "570": {
+  "repo": "AgentGears/AlCode",
+  "pr": 204,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 31,
+    "deletions": 7,
+    "patch_len": 7630
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 104,
+    "deletions": 0,
+    "patch_len": 4166
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 160,
+    "deletions": 0,
+    "patch_len": 6195
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 268,
+    "deletions": 0,
+    "patch_len": 11523
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 184,
+    "deletions": 0,
+    "patch_len": 7124
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 271,
+    "deletions": 0,
+    "patch_len": 11170
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 5,
+    "deletions": 4,
+    "patch_len": 1887
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 440,
+    "deletions": 0,
+    "patch_len": 16319
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 318,
+    "deletions": 0,
+    "patch_len": 14655
+   }
+  ]
+ },
+ "571": {
+  "repo": "AgentGears/AlCode",
+  "pr": 205,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 33,
+    "deletions": 7,
+    "patch_len": 7901
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 126,
+    "deletions": 0,
+    "patch_len": 5106
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 174,
+    "deletions": 0,
+    "patch_len": 6853
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 268,
+    "deletions": 0,
+    "patch_len": 11523
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 184,
+    "deletions": 0,
+    "patch_len": 7124
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 271,
+    "deletions": 0,
+    "patch_len": 11170
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 5,
+    "deletions": 4,
+    "patch_len": 1887
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 440,
+    "deletions": 0,
+    "patch_len": 16319
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 325,
+    "deletions": 0,
+    "patch_len": 15057
+   }
+  ]
+ },
+ "572": {
+  "repo": "AgentGears/AlCode",
+  "pr": 206,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 35,
+    "deletions": 7,
+    "patch_len": 8154
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 126,
+    "deletions": 0,
+    "patch_len": 5106
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 174,
+    "deletions": 0,
+    "patch_len": 6853
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 118,
+    "deletions": 0,
+    "patch_len": 4133
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 295,
+    "deletions": 0,
+    "patch_len": 12568
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 184,
+    "deletions": 0,
+    "patch_len": 7124
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 271,
+    "deletions": 0,
+    "patch_len": 11170
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 5,
+    "deletions": 4,
+    "patch_len": 1887
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 440,
+    "deletions": 0,
+    "patch_len": 16319
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 325,
+    "deletions": 0,
+    "patch_len": 15057
+   }
+  ]
+ },
+ "573": {
+  "repo": "AgentGears/AlCode",
+  "pr": 207,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 35,
+    "deletions": 7,
+    "patch_len": 8154
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 126,
+    "deletions": 0,
+    "patch_len": 5106
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 174,
+    "deletions": 0,
+    "patch_len": 6853
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 181,
+    "deletions": 0,
+    "patch_len": 6808
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 324,
+    "deletions": 0,
+    "patch_len": 13904
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 235,
+    "deletions": 0,
+    "patch_len": 8962
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 290,
+    "deletions": 0,
+    "patch_len": 11818
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 325,
+    "deletions": 0,
+    "patch_len": 15057
+   }
+  ]
+ },
+ "575": {
+  "repo": "AgentGears/AlCode",
+  "pr": 209,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 126,
+    "deletions": 0,
+    "patch_len": 5106
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 174,
+    "deletions": 0,
+    "patch_len": 6853
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 181,
+    "deletions": 0,
+    "patch_len": 6808
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 324,
+    "deletions": 0,
+    "patch_len": 13904
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 279,
+    "deletions": 0,
+    "patch_len": 10632
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 384,
+    "deletions": 0,
+    "patch_len": 16174
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 169,
+    "deletions": 0,
+    "patch_len": 5781
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 333,
+    "deletions": 0,
+    "patch_len": 15590
+   }
+  ]
+ },
+ "576": {
+  "repo": "AgentGears/AlCode",
+  "pr": 210,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 126,
+    "deletions": 0,
+    "patch_len": 5106
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 174,
+    "deletions": 0,
+    "patch_len": 6853
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 181,
+    "deletions": 0,
+    "patch_len": 6808
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 324,
+    "deletions": 0,
+    "patch_len": 13904
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 279,
+    "deletions": 0,
+    "patch_len": 10632
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 384,
+    "deletions": 0,
+    "patch_len": 16174
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 211,
+    "deletions": 0,
+    "patch_len": 7109
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 333,
+    "deletions": 0,
+    "patch_len": 15590
+   }
+  ]
+ },
+ "577": {
+  "repo": "AgentGears/AlCode",
+  "pr": 211,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 126,
+    "deletions": 0,
+    "patch_len": 5106
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 174,
+    "deletions": 0,
+    "patch_len": 6853
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 181,
+    "deletions": 0,
+    "patch_len": 6808
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 324,
+    "deletions": 0,
+    "patch_len": 13904
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 279,
+    "deletions": 0,
+    "patch_len": 10632
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 384,
+    "deletions": 0,
+    "patch_len": 16174
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 211,
+    "deletions": 0,
+    "patch_len": 7109
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 333,
+    "deletions": 0,
+    "patch_len": 15590
+   }
+  ]
+ },
+ "578": {
+  "repo": "AgentGears/AlCode",
+  "pr": 212,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 126,
+    "deletions": 0,
+    "patch_len": 5106
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 174,
+    "deletions": 0,
+    "patch_len": 6853
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 181,
+    "deletions": 0,
+    "patch_len": 6808
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 324,
+    "deletions": 0,
+    "patch_len": 13904
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 279,
+    "deletions": 0,
+    "patch_len": 10632
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 384,
+    "deletions": 0,
+    "patch_len": 16174
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 211,
+    "deletions": 0,
+    "patch_len": 7109
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 333,
+    "deletions": 0,
+    "patch_len": 15590
+   }
+  ]
+ },
+ "579": {
+  "repo": "AgentGears/AlCode",
+  "pr": 213,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 0,
+    "patch_len": 447
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 178,
+    "deletions": 0,
+    "patch_len": 7325
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 181,
+    "deletions": 0,
+    "patch_len": 6808
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 324,
+    "deletions": 0,
+    "patch_len": 13904
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 279,
+    "deletions": 0,
+    "patch_len": 10632
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 384,
+    "deletions": 0,
+    "patch_len": 16174
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 211,
+    "deletions": 0,
+    "patch_len": 7109
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 333,
+    "deletions": 0,
+    "patch_len": 15590
+   }
+  ]
+ },
+ "580": {
+  "repo": "Octo-Lex/GitWire",
+  "pr": 180,
+  "files": [
+   {
+    "filename": "packages/web/src/services/checkRunFinalizer.js",
+    "status": "modified",
+    "additions": 34,
+    "deletions": 2,
+    "patch_len": 2964
+   },
+   {
+    "filename": "packages/web/tests/unit/check-run-worker-lifecycle.test.js",
+    "status": "modified",
+    "additions": 2,
+    "deletions": 2,
+    "patch_len": 689
+   },
+   {
+    "filename": "packages/web/tests/unit/service-check-run-finalizer.test.js",
+    "status": "modified",
+    "additions": 115,
+    "deletions": 1,
+    "patch_len": 5713
+   }
+  ]
+ },
+ "582": {
+  "repo": "AgentGears/AlCode",
+  "pr": 215,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 178,
+    "deletions": 0,
+    "patch_len": 7295
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 181,
+    "deletions": 0,
+    "patch_len": 6808
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 324,
+    "deletions": 0,
+    "patch_len": 13904
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 311,
+    "deletions": 0,
+    "patch_len": 11966
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 378,
+    "deletions": 0,
+    "patch_len": 15787
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 211,
+    "deletions": 0,
+    "patch_len": 7109
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 333,
+    "deletions": 0,
+    "patch_len": 15590
+   }
+  ]
+ },
+ "583": {
+  "repo": "AgentGears/AlCode",
+  "pr": 216,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 70,
+    "deletions": 0,
+    "patch_len": 2781
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 137,
+    "deletions": 0,
+    "patch_len": 5828
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 178,
+    "deletions": 0,
+    "patch_len": 7295
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 362,
+    "deletions": 0,
+    "patch_len": 13997
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 414,
+    "deletions": 0,
+    "patch_len": 17143
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 211,
+    "deletions": 0,
+    "patch_len": 7109
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 333,
+    "deletions": 0,
+    "patch_len": 15590
+   }
+  ]
+ },
+ "584": {
+  "repo": "AgentGears/AlCode",
+  "pr": 217,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 97,
+    "deletions": 0,
+    "patch_len": 4066
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 151,
+    "deletions": 0,
+    "patch_len": 6557
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 178,
+    "deletions": 0,
+    "patch_len": 7295
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 362,
+    "deletions": 0,
+    "patch_len": 13997
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 414,
+    "deletions": 0,
+    "patch_len": 17143
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 211,
+    "deletions": 0,
+    "patch_len": 7109
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 442,
+    "deletions": 0,
+    "patch_len": 16363
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 333,
+    "deletions": 0,
+    "patch_len": 15590
+   }
+  ]
+ },
+ "586": {
+  "repo": "AgentGears/AlCode",
+  "pr": 219,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 97,
+    "deletions": 0,
+    "patch_len": 4066
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 151,
+    "deletions": 0,
+    "patch_len": 6557
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 178,
+    "deletions": 0,
+    "patch_len": 7295
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 389,
+    "deletions": 0,
+    "patch_len": 15055
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 430,
+    "deletions": 0,
+    "patch_len": 17918
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 280,
+    "deletions": 0,
+    "patch_len": 9548
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 484,
+    "deletions": 0,
+    "patch_len": 18204
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 342,
+    "deletions": 0,
+    "patch_len": 16057
+   }
+  ]
+ },
+ "587": {
+  "repo": "AgentGears/AlCode",
+  "pr": 220,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 116,
+    "deletions": 0,
+    "patch_len": 4767
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 7989
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 8232
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 389,
+    "deletions": 0,
+    "patch_len": 15055
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 430,
+    "deletions": 0,
+    "patch_len": 17918
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 4758
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 280,
+    "deletions": 0,
+    "patch_len": 9548
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 484,
+    "deletions": 0,
+    "patch_len": 18204
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 342,
+    "deletions": 0,
+    "patch_len": 16057
+   }
+  ]
+ },
+ "588": {
+  "repo": "AgentGears/AlCode",
+  "pr": 221,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 116,
+    "deletions": 0,
+    "patch_len": 4767
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 7989
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 8232
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 389,
+    "deletions": 0,
+    "patch_len": 15055
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 430,
+    "deletions": 0,
+    "patch_len": 17918
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 169,
+    "deletions": 0,
+    "patch_len": 6012
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 280,
+    "deletions": 0,
+    "patch_len": 9548
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 484,
+    "deletions": 0,
+    "patch_len": 18204
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 363,
+    "deletions": 0,
+    "patch_len": 17093
+   }
+  ]
+ },
+ "589": {
+  "repo": "AgentGears/AlCode",
+  "pr": 222,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 116,
+    "deletions": 0,
+    "patch_len": 4767
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 7989
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 8232
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 440,
+    "deletions": 0,
+    "patch_len": 16992
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 464,
+    "deletions": 0,
+    "patch_len": 19633
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 193,
+    "deletions": 0,
+    "patch_len": 7021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 280,
+    "deletions": 0,
+    "patch_len": 9548
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 484,
+    "deletions": 0,
+    "patch_len": 18204
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 370,
+    "deletions": 0,
+    "patch_len": 17405
+   }
+  ]
+ },
+ "590": {
+  "repo": "AgentGears/AlCode",
+  "pr": 223,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 116,
+    "deletions": 0,
+    "patch_len": 4767
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 7989
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 8232
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 440,
+    "deletions": 0,
+    "patch_len": 16992
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 464,
+    "deletions": 0,
+    "patch_len": 19633
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 215,
+    "deletions": 0,
+    "patch_len": 7911
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 133,
+    "deletions": 0,
+    "patch_len": 5169
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 280,
+    "deletions": 0,
+    "patch_len": 9548
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 484,
+    "deletions": 0,
+    "patch_len": 18204
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 411,
+    "deletions": 0,
+    "patch_len": 19385
+   }
+  ]
+ },
+ "591": {
+  "repo": "AgentGears/AlCode",
+  "pr": 224,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 116,
+    "deletions": 0,
+    "patch_len": 4767
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 7989
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 8232
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 440,
+    "deletions": 0,
+    "patch_len": 16992
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 464,
+    "deletions": 0,
+    "patch_len": 19633
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 215,
+    "deletions": 0,
+    "patch_len": 7911
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 194,
+    "deletions": 0,
+    "patch_len": 7372
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 298,
+    "deletions": 0,
+    "patch_len": 10210
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 484,
+    "deletions": 0,
+    "patch_len": 18204
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 427,
+    "deletions": 0,
+    "patch_len": 20227
+   }
+  ]
+ },
+ "592": {
+  "repo": "AgentGears/AlCode",
+  "pr": 225,
+  "files": [
+   {
+    "filename": ".github/workflows/a1-adaptive-program.yml",
+    "status": "modified",
+    "additions": 37,
+    "deletions": 7,
+    "patch_len": 8425
+   },
+   {
+    "filename": "packages/agent-protocol/src/index.ts",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 0,
+    "patch_len": 167
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-execution-v2-routing.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 2593
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.test.ts",
+    "status": "added",
+    "additions": 116,
+    "deletions": 0,
+    "patch_len": 4767
+   },
+   {
+    "filename": "packages/agent-protocol/src/program-revision-v1.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 7989
+   },
+   {
+    "filename": "packages/coding-agent/src/index.ts",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 0,
+    "patch_len": 546
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.test.ts",
+    "status": "added",
+    "additions": 200,
+    "deletions": 0,
+    "patch_len": 8232
+   },
+   {
+    "filename": "packages/coding-agent/src/program-revision-protocol-client-v1.ts",
+    "status": "added",
+    "additions": 213,
+    "deletions": 0,
+    "patch_len": 8391
+   },
+   {
+    "filename": "packages/host-runtime/src/adaptive-v2.ts",
+    "status": "modified",
+    "additions": 51,
+    "deletions": 0,
+    "patch_len": 2235
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.test.ts",
+    "status": "added",
+    "additions": 266,
+    "deletions": 0,
+    "patch_len": 10438
+   },
+   {
+    "filename": "packages/host-runtime/src/program-adaptive-application-projection-v1.ts",
+    "status": "added",
+    "additions": 365,
+    "deletions": 0,
+    "patch_len": 15748
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.test.ts",
+    "status": "added",
+    "additions": 440,
+    "deletions": 0,
+    "patch_len": 16992
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision-protocol-v1.ts",
+    "status": "added",
+    "additions": 464,
+    "deletions": 0,
+    "patch_len": 19633
+   },
+   {
+    "filename": "packages/host-runtime/src/program-revision.ts",
+    "status": "modified",
+    "additions": 28,
+    "deletions": 4,
+    "patch_len": 3021
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-baseline-recovery-regression-v1.test.ts",
+    "status": "added",
+    "additions": 215,
+    "deletions": 0,
+    "patch_len": 7911
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-currentness-v1.test.ts",
+    "status": "added",
+    "additions": 230,
+    "deletions": 0,
+    "patch_len": 8499
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-envelope-regression-v1.test.ts",
+    "status": "added",
+    "additions": 298,
+    "deletions": 0,
+    "patch_len": 10210
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-review-regressions-v1.test.ts",
+    "status": "added",
+    "additions": 484,
+    "deletions": 0,
+    "patch_len": 18204
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.test.ts",
+    "status": "added",
+    "additions": 329,
+    "deletions": 0,
+    "patch_len": 12402
+   },
+   {
+    "filename": "packages/host-runtime/src/program-semantic-recovery-v1.ts",
+    "status": "added",
+    "additions": 435,
+    "deletions": 0,
+    "patch_len": 20815
+   }
+  ]
+ }
+}
