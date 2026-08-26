@@ -42,16 +42,23 @@ beforeEach(() => {
 });
 
 describe('buildReviewBundle — truncation adjustments', () => {
-  test('patch beyond MAX_DIFF_PER_FILE is reported as patch_truncated', async () => {
+  test('12k default: 5k patch stays full, 13k patch truncates at 12,000', async () => {
+    // Gate C intervention regression (was: 4k default truncated a 5k patch —
+    // see the immutable pre-intervention proof on the study branch).
     const result = await buildReviewBundle({
-      files: [bigFile('a.js', 100), bigFile('big.js', 5000)],
+      files: [bigFile('a.js', 100), bigFile('mid.js', 5000), bigFile('big.js', 13000)],
       pr: PR, repository: REPO,
     });
 
     expect(result.coverageAdjustments).toEqual([
       { path: 'big.js', coverage: 'partial', reason: 'patch_truncated' },
     ]);
-    // the small file is untouched
+    // the 5k file is NO LONGER truncated at the 12k default: it is absent
+    // from the adjustments (exact equality above) and its full patch survives
+    expect(result.bundle).toContain('x'.repeat(5000));
+    // the 13k patch ('+' + 13k x's) slices to '+' + 11,999 x's + marker
+    expect(result.bundle).toContain('x'.repeat(11999) + '\n... (truncated)');
+    expect(result.bundle).not.toContain('x'.repeat(12000));
     expect(result.bundle).toContain('a.js');
   });
 
