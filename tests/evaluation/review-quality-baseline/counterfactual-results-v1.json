@@ -1,0 +1,41 @@
+{
+ "modeled": {
+  "cap_4000": {
+   "fully_reviewed_files": 124,
+   "total_changed_files": 443,
+   "reviewed_file_share_pct": 28,
+   "reviews_evidence_complete": 0,
+   "reviews_incomplete": 25,
+   "reviews_with_patch_truncation": 25,
+   "reviews_with_bundle_truncation": 0,
+   "reviews_line_limit_tripped": 21,
+   "file_loss_mechanisms": {
+    "patch_truncated": 201,
+    "bundle_truncated": 0,
+    "max_lines_exceeded": 118
+   }
+  },
+  "cap_12000": {
+   "fully_reviewed_files": 284,
+   "total_changed_files": 443,
+   "reviewed_file_share_pct": 64.1,
+   "reviews_evidence_complete": 1,
+   "reviews_incomplete": 24,
+   "reviews_with_patch_truncation": 23,
+   "reviews_with_bundle_truncation": 0,
+   "reviews_line_limit_tripped": 21,
+   "file_loss_mechanisms": {
+    "patch_truncated": 41,
+    "bundle_truncated": 0,
+    "max_lines_exceeded": 118
+   }
+  }
+ },
+ "observed_baseline": {
+  "fully_reviewed_files": 124,
+  "total_changed_files": 443,
+  "patch_truncated": 201,
+  "max_lines_exceeded": 118,
+  "reviews_line_limit_tripped": 21
+ }
+}
