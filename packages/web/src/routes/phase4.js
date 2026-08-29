@@ -216,7 +216,7 @@ phase4Router.post("/review/config/:owner/:repo", async (req, res, next) => {
         max_lines_to_review ?? 2000, architecture_context ?? null,
         ignore_patterns ?? ["*.lock","package-lock.json","yarn.lock","*.min.js","dist/**","build/**"],
         engine ?? "claude", model ?? "claude-sonnet-4-20250514",
-        max_duration_seconds ?? 300, bundle_max_chars ?? 180000,
+        max_duration_seconds ?? 600, bundle_max_chars ?? 180000,
         require_file_scope ?? true,
       ]
     );

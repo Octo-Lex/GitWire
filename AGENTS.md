@@ -46,7 +46,7 @@ when prose and this block disagree, **this block is authoritative**.
   "version": "0.23.1",
   "services": ["gitwire-app", "gitwire-executor-service", "postgres", "redis", "bot", "landing", "tunnel", "dashboard", "docs", "demo"],
   "workers": ["startWebhookWorker", "startTriageWorker", "startCIHealWorker", "startCIEvidenceWorker", "startDiagnosisWorker", "startPatchWorker", "startVerificationWorker", "startCriticWorker", "startSyncWorker", "startMaintainerWorker", "startIssueFixWorker", "startMergeQueueWorker", "startPhase3Worker", "startPhase4Worker"],
-  "migrations": { "first": "001", "last": "043", "count": 43 }
+  "migrations": { "first": "001", "last": "044", "count": 44 }
 }
 ```
 <!-- gitwire:source-of-truth:end -->
