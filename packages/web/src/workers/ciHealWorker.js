@@ -320,8 +320,7 @@ async function healWorkflowRun({ payload }) {
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "skipped",
       reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
-
-principalId,
+principalId,
       conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
     });
     return;
