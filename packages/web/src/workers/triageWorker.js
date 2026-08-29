@@ -211,7 +211,7 @@ async function triageIssue({ payload }, job = null) {
     const prompt = buildIssueTriagePrompt(issue, labelNames);
     const message = await anthropic.messages.create({
       model:      "claude-sonnet-4-20250514",
-      max_tokens: 512,
+      max_tokens: 4096,
       messages:   [{ role: "user", content: prompt }],
       system:
         "You are a GitHub triage assistant. Respond only with valid JSON matching the schema in the user prompt. No explanation, no markdown.",
@@ -531,7 +531,7 @@ async function triagePR({ payload }, job = null) {
 
     const message = await anthropic.messages.create({
       model:      "claude-sonnet-4-20250514",
-      max_tokens: 512,
+      max_tokens: 4096,
       messages:   [{ role: "user", content: buildPRTriagePrompt(pr) }],
       system:
         "You are a GitHub triage assistant. Respond only with valid JSON matching the schema in the user prompt. No explanation, no markdown.",

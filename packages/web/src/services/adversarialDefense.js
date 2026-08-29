@@ -108,7 +108,7 @@ export async function runDefensePass(findings, challenges, opts) {
   try {
     var message = await anthropic.messages.create({
       model:      model,
-      max_tokens: 2048,
+      max_tokens: 8192,
       system:     DEFENSE_SYSTEM_PROMPT,
       messages:   [{ role: "user", content: userPrompt }],
     });

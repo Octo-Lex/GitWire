@@ -125,7 +125,7 @@ export async function runAdversarialChallenge(findings, opts) {
   try {
     var message = await anthropic.messages.create({
       model:      model,
-      max_tokens: 2048,
+      max_tokens: 8192,
       system:     ADVERSARIAL_SYSTEM_PROMPT,
       messages:   [{ role: "user", content: userPrompt }],
     });
