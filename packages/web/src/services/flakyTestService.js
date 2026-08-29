@@ -252,7 +252,7 @@ async function parseTestArtifactWithClaude(artifactName, rawData) {
   try {
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 2048,
+      max_tokens: 8192,
       system: "You are a test result parser. Return ONLY valid JSON, no explanation.",
       messages: [{
         role: "user",

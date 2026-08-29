@@ -935,7 +935,7 @@ async function generateFixWithClaude(fileContent, filePath, logs, diagnosis, rep
   try {
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
+      max_tokens: 16384,
       messages: [{ role: "user", content: prompt }],
       system: "You are an expert software engineer. Fix CI failures with minimal, precise changes. Return only valid JSON.",
     });
@@ -1039,7 +1039,7 @@ async function diagnoseWithClaude(logData, run, repository) {
   try {
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 512,
+      max_tokens: 4096,
       messages: [{ role: "user", content: prompt }],
       system: "You are a CI failure analysis expert. Analyze logs precisely and return only valid JSON.",
     });

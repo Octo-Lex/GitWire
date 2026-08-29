@@ -119,6 +119,8 @@ await jest.unstable_mockModule('../../src/services/reviewHeartbeat.js', () => ({
 }));
 
 const { reviewPR } = await import('../../src/services/aiReviewService.js');
+// Same mocked instance reviewPR resolves through (module is mocked above).
+const { withHeartbeat } = await import('../../src/services/reviewHeartbeat.js');
 
 const REPO = { id: 1, full_name: 'o/r', owner: { login: 'o' }, name: 'r', default_branch: 'main' };
 
@@ -279,5 +281,75 @@ describe('aiReviewService (bundle-driven v2)', () => {
 
     expect(r).toBeNull();
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  // ── Effective review-duration resolution (Unit A recovery) ─────────────────
+  // The review path resolves its hard timeout from the persisted
+  // ai_review_config row (cfg.max_duration_seconds * 1000) and only falls
+  // back to DEFAULT_MAX_DURATION_MS when the row omits the column. These
+  // cases prove the effective configuration path, not the fallback constant.
+  describe('effective review duration (Unit A: 600 s)', () => {
+    beforeEach(() => {
+      withHeartbeat.mockClear();
+    });
+
+    function setupCleanReview(cfgOverrides = {}) {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [], ...cfgOverrides }] })
+        .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+        .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation: "The patch looks clean.",
+          overall_confidence: 0.95,
+        }) }],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      });
+
+      return mockOctokit({
+        'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/index.js', status: 'modified', additions: 5, deletions: 0, patch: '+hello' }] },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'abc123' } } },
+        'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+        'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 200 } },
+      });
+    }
+
+    test('normally activated repository (persisted 600 s row) reviews with a 600 s timeout', async () => {
+      // Row as POST /review/config now creates and migration 044 produces.
+      const oct = setupCleanReview({ max_duration_seconds: 600 });
+      const r = await reviewPR({
+        pr: { number: 21, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 'feat: x', user: { login: 'dev' }, body: '' },
+        repository: REPO,
+        octokit: oct,
+      });
+      expect(r).toBeTruthy();
+      expect(withHeartbeat).toHaveBeenCalledTimes(1);
+      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 600000 });
+    });
+
+    test('config row omitting max_duration_seconds falls back to the 600 s default', async () => {
+      const oct = setupCleanReview();
+      const r = await reviewPR({
+        pr: { number: 22, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 'feat: y', user: { login: 'dev' }, body: '' },
+        repository: REPO,
+        octokit: oct,
+      });
+      expect(r).toBeTruthy();
+      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 600000 });
+    });
+
+    test('explicit operator-set duration is honored (resolution is row-driven, not hardcoded)', async () => {
+      const oct = setupCleanReview({ max_duration_seconds: 300 });
+      await reviewPR({
+        pr: { number: 23, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 'feat: z', user: { login: 'dev' }, body: '' },
+        repository: REPO,
+        octokit: oct,
+      });
+      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 300000 });
+    });
   });
 });

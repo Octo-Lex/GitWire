@@ -53,7 +53,7 @@ const anthropic = new Anthropic({
 });
 
 const CHECK_RUN_NAME = "GitWire AI Review";
-const DEFAULT_MAX_DURATION_MS = 300000; // 5 minutes
+const DEFAULT_MAX_DURATION_MS = 600000; // 10 minutes (thinking-model latency)
 const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -869,7 +869,7 @@ async function runStructuredReview(bundle, changedFiles, opts) {
   try {
     const message = await anthropic.messages.create({
       model:      opts.model || DEFAULT_MODEL,
-      max_tokens: 4096,
+      max_tokens: 16384,
       system:     systemPrompt,
       messages:   [{ role: "user", content: userPrompt }],
     });
