@@ -371,9 +371,9 @@ describe('aiReviewService (bundle-driven v2)', () => {
 
   // ── RC-01: review output headroom + client transport timeout ────────────────
   // 32,768 replaces the 16,384 ceiling that a production-shaped bundle
-  // exhausted (19,746 output tokens demanded, empty output). The SDK applies
-  // its constructor timeout to non-streaming requests, so the larger ceiling
-  // also requires an explicit 600,000 ms transport bound.
+  // exhausted (19,746 output tokens demanded, empty output). The client
+  // transport timeout is pinned explicitly to the 600,000 ms review deadline
+  // so the bound never rides on SDK defaults.
   describe('RC-01: output headroom and client transport', () => {
     function setupHeadroomReview() {
       mockQuery
