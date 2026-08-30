@@ -50,6 +50,10 @@ import { buildEvidenceReceipts } from "./reviewEvidenceService.js";
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
   baseURL: config.anthropic.baseURL,
+  // Transport bound pinned to the 600 s review deadline. The SDK default is
+  // also 600 s today; stating it explicitly keeps the bound independent of
+  // SDK version drift as the review output ceiling grows.
+  timeout:  600000,
 });
 
 const CHECK_RUN_NAME = "GitWire AI Review";
@@ -869,7 +873,7 @@ async function runStructuredReview(bundle, changedFiles, opts) {
   try {
     const message = await anthropic.messages.create({
       model:      opts.model || DEFAULT_MODEL,
-      max_tokens: 16384,
+      max_tokens: 32768,
       system:     systemPrompt,
       messages:   [{ role: "user", content: userPrompt }],
     });
