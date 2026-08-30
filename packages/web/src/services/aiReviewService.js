@@ -50,9 +50,9 @@ import { buildEvidenceReceipts } from "./reviewEvidenceService.js";
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
   baseURL: config.anthropic.baseURL,
-  // Transport bound matching the 600 s review deadline. The SDK applies the
-  // constructor timeout to non-streaming requests; without it the larger
-  // output budget cannot complete in transport.
+  // Transport bound pinned to the 600 s review deadline. The SDK default is
+  // also 600 s today; stating it explicitly keeps the bound independent of
+  // SDK version drift as the review output ceiling grows.
   timeout:  600000,
 });
 

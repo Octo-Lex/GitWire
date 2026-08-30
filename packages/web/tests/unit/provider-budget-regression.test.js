@@ -56,9 +56,8 @@ describe('provider output-budget regression (Unit A)', () => {
   });
 
   it('Anthropic client transport timeout: 600000 ms (RC-01)', () => {
-    // The SDK applies the constructor timeout to non-streaming requests;
-    // without an explicit bound the 32,768-token ceiling cannot complete
-    // in transport. Behavioral proof: service-ai-review.test.js.
+    // Pin the transport bound explicitly to the 600 s review deadline so it
+    // never rides on SDK defaults. Behavioral proof: service-ai-review.test.js.
     const src = readSrc('services/aiReviewService.js');
     expect(src).toContain('timeout:  600000,');
   });
