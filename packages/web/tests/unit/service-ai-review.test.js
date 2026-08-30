@@ -49,9 +49,25 @@ await jest.unstable_mockModule('../../src/services/pipelineEvents.js', () => ({
 }));
 
 // Mock Anthropic SDK
+// Several modules under test construct their own Anthropic client at module
+// load. Record every constructor's options and, per instance, which options
+// object served each messages.create call, so a test can prove a specific
+// request ran on a client constructed with specific transport options.
 const mockCreate = jest.fn();
+const anthropicCtorOptions = [];
+let lastCreateCtorOptions = null;
 await jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
-  default: class { constructor() { this.messages = { create: mockCreate }; } },
+  default: class {
+    constructor(options) {
+      anthropicCtorOptions.push(options);
+      this.messages = {
+        create: (request) => {
+          lastCreateCtorOptions = options;
+          return mockCreate(request);
+        },
+      };
+    }
+  },
 }));
 
 // Mock config
@@ -350,6 +366,75 @@ describe('aiReviewService (bundle-driven v2)', () => {
         octokit: oct,
       });
       expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 300000 });
+    });
+  });
+
+  // ── RC-01: review output headroom + client transport timeout ────────────────
+  // 32,768 replaces the 16,384 ceiling that a production-shaped bundle
+  // exhausted (19,746 output tokens demanded, empty output). The client
+  // transport timeout is pinned explicitly to the 600,000 ms review deadline
+  // so the bound never rides on SDK defaults.
+  describe('RC-01: output headroom and client transport', () => {
+    function setupHeadroomReview() {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [], max_duration_seconds: 600 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+        .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+
+      mockCreate.mockResolvedValueOnce({
+        content: [{ type: 'text', text: JSON.stringify({
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_explanation: "The patch looks clean.",
+          overall_confidence: 0.95,
+        }) }],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      });
+
+      return mockOctokit({
+        'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/index.js', status: 'modified', additions: 5, deletions: 0, patch: '+hello' }] },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'abc123' } } },
+        'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+        'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 200 } },
+      });
+    }
+
+    test('primary structured review call sends max_tokens 32768', async () => {
+      const oct = setupHeadroomReview();
+      const r = await reviewPR({
+        pr: { number: 31, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 'feat: headroom', user: { login: 'dev' }, body: '' },
+        repository: REPO,
+        octokit: oct,
+      });
+
+      expect(r).toBeTruthy();
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      const request = mockCreate.mock.calls[0][0];
+      expect(request.max_tokens).toBe(32768);
+      expect(request.max_tokens).not.toBe(16384);
+      // Non-regression: the ceiling moves, nothing else about the call does.
+      expect(request.model).toBe('claude-sonnet-4-20250514');
+      expect('reasoning_effort' in request).toBe(false);
+    });
+
+    test('the client serving the review call is constructed with a 600000 ms transport timeout', async () => {
+      const oct = setupHeadroomReview();
+      const r = await reviewPR({
+        pr: { number: 32, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 'feat: transport', user: { login: 'dev' }, body: '' },
+        repository: REPO,
+        octokit: oct,
+      });
+
+      expect(r).toBeTruthy();
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      // The structured-review request must run on the client whose
+      // constructor carried the explicit transport bound.
+      expect(lastCreateCtorOptions).toBeTruthy();
+      expect(lastCreateCtorOptions.timeout).toBe(600000);
+      expect(lastCreateCtorOptions.apiKey).toBe('test');
+      expect(lastCreateCtorOptions.baseURL).toBe('http://test');
+      expect(anthropicCtorOptions).toContain(lastCreateCtorOptions);
     });
   });
 });

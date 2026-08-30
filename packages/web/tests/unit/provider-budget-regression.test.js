@@ -7,6 +7,12 @@
 // emits reasoning blocks before text. At the old budgets, the thinking alone
 // consumed the entire max_tokens allocation, producing empty responses and
 // taking down both the review and triage pipelines for ~2 days.
+//
+// RC-01 (2026-08-30) raised the main review ceiling 16,384 -> 32,768 after a
+// production-shaped bundle exhausted the 16,384 budget (19,746 output tokens
+// demanded, empty output). The same change bound the Anthropic client
+// transport at 600,000 ms so the SDK permits the larger non-streaming
+// request; the behavioral proof lives in service-ai-review.test.js.
 
 import { jest } from '@jest/globals';
 import { readFileSync } from 'node:fs';
@@ -21,7 +27,7 @@ function readSrc(relPath) {
 
 describe('provider output-budget regression (Unit A)', () => {
   const EXPECTED = [
-    { file: 'services/aiReviewService.js', value: 'max_tokens: 16384,', label: 'runStructuredReview (main review)', old: 'max_tokens: 4096,' },
+    { file: 'services/aiReviewService.js', value: 'max_tokens: 32768,', label: 'runStructuredReview (main review, RC-01)', old: 'max_tokens: 16384,' },
     { file: 'services/adversarialReview.js', value: 'max_tokens: 8192,', label: 'adversarialReview', old: 'max_tokens: 2048,' },
     { file: 'services/adversarialDefense.js', value: 'max_tokens: 8192,', label: 'adversarialDefense', old: 'max_tokens: 2048,' },
     { file: 'services/flakyTestService.js', value: 'max_tokens: 8192,', label: 'flakyTestService', old: 'max_tokens: 2048,' },
@@ -47,6 +53,13 @@ describe('provider output-budget regression (Unit A)', () => {
     const src = readSrc('services/aiReviewService.js');
     expect(src).toContain('DEFAULT_MAX_DURATION_MS = 600000');
     expect(src).not.toContain('DEFAULT_MAX_DURATION_MS = 300000');
+  });
+
+  it('Anthropic client transport timeout: 600000 ms (RC-01)', () => {
+    // Pin the transport bound explicitly to the 600 s review deadline so it
+    // never rides on SDK defaults. Behavioral proof: service-ai-review.test.js.
+    const src = readSrc('services/aiReviewService.js');
+    expect(src).toContain('timeout:  600000,');
   });
 
   // ── ciHealWorker: two provider call sites in one file ────────────────────
