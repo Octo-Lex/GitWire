@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "name": "gate-c-coverage-measurement-v1",
+  "measuredAt": "2026-08-31",
+  "cohort": "gate-c-coverage-cohort-v1 (25 reviews, 331 changed files, all 331 accounted)",
+  "source": "production ai_reviews.coverage records, read-only",
+  "fields": {
+    "fullyRepresentedChangedFileShare": { "full": 228, "changedFiles": 331, "share": 0.6888 },
+    "perFilePatchTruncation": { "instances": 44, "rate": 0.1329, "reviewsWithAny": 18, "reviews": 25 },
+    "lineBudgetExceedance": { "maxLinesExceededInstances": 59, "reviewsWithAny": 12, "reviews": 25, "residualNote": "per-file record carries the reason flag only; per-review residual line counts are not stored in the coverage record" },
+    "completeVsIncomplete": { "approvalEvidenceComplete": 7, "incomplete": 18, "reviews": 25 },
+    "bundleTruncated": { "instances": 0, "reviewsWithAny": 0 }
+  },
+  "byExecutionCeiling": {
+    "at16384": { "reviews": 10, "changedFiles": 111, "full": 87, "share": 0.7838, "patchTruncInstances": 15, "reviewsWithPatchTrunc": 8, "maxLinesInstances": 9, "reviewsWithMaxLines": 3, "complete": 2 },
+    "at32768": { "reviews": 15, "changedFiles": 220, "full": 141, "share": 0.6409, "patchTruncInstances": 29, "reviewsWithPatchTrunc": 10, "maxLinesInstances": 50, "reviewsWithMaxLines": 9, "complete": 5 }
+  },
+  "referencePoints": {
+    "trackBBaseline4k": { "fullShare": 0.280, "patchTruncInstances": 201, "reviewsWithPatchTrunc": 25, "maxLinesInstances": 118, "reviewsWithMaxLines": 21, "complete": 1 },
+    "offlineCounterfactual12k": { "fullShare": 0.641, "patchTruncInstances": 41, "incomplete": 24 }
+  },
+  "stopConditions": {
+    "bundleTruncatedInProductionCoverage": "not fired (0 instances)",
+    "coverageMovedOppositePrediction": "not fired (share 0.280 -> 0.689, direction consistent with the 12k prediction of 0.641)",
+    "v1_2InvariantFailure": "none observed in this measurement scope (all 25 published with github_review_id; full marker-level identity reconciliation not re-run in this pass)"
+  },
+  "limitations": [
+    "Composition limitation, not an estimated variable: execution capacity changed mid-cohort (10 reviews at 16,384, 15 at 32,768); partition figures above are disclosure, not effect estimates.",
+    "Cohort composition differs from the Track B baseline cohort (different PRs, repo mix, thinking-model era throughout this cohort).",
+    "All seven COMPLETE reviews are small PRs (six single-file, two four-file; range 1-4 changed files), which inflates the COMPLETE count relative to the counterfactual's 24/25 INCOMPLETE expectation for large PRs.",
+    "Repo mix is AlCode-heavy (17/25)."
+  ],
+  "notDone": [
+    "No finding-quality adjudication (paid or unpaid).",
+    "No causal quality claims about the 12k per-file cap.",
+    "No automatic successor intervention."
+  ]
+}

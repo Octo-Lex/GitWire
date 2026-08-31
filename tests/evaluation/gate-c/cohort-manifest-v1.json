@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "name": "gate-c-coverage-cohort-v1",
+  "frozenAt": "2026-08-31T00:00:00Z",
+  "frozenBy": "first-25 rule; 25th member (row 676) started 2026-08-31T02:51:32Z",
+  "activationBoundary": "2026-08-29T18:15:17Z",
+  "executionSettingBoundary": "2026-08-30T12:41:02Z",
+  "eligibilityRule": "First 25 organic published reviews after the activation boundary: publication_state='published' AND github_review_id IS NOT NULL, ordinary webhook-triggered production reviews; controlled/manual invocations, unpublished/error rows, and rows beyond the 25th are excluded. Rule frozen before measurement; not altered by observed composition.",
+  "members": [
+    { "row": 644, "repo": "AgentGears/AlCode", "pr": 257, "sha": "31930779d6bdf304e11b026d5620b68f11cb7dd5", "verdict": "needs_discussion", "githubReviewId": 5059579863, "startedAt": "2026-08-30T00:32:20Z", "maxTokens": 16384 },
+    { "row": 645, "repo": "AgentGears/AlCode", "pr": 258, "sha": "453a2f679658b97756250c615215956ef8ed85c0", "verdict": "approved", "githubReviewId": 5059583138, "startedAt": "2026-08-30T00:37:00Z", "maxTokens": 16384 },
+    { "row": 646, "repo": "ElephantRock/ERLab", "pr": 50, "sha": "eb80d86d0aca606a8caed8f6548ccbb18d53a9e3", "verdict": "approved", "githubReviewId": 5059629137, "startedAt": "2026-08-30T01:04:49Z", "maxTokens": 16384 },
+    { "row": 647, "repo": "ElephantRock/ERLab", "pr": 51, "sha": "98b7853407cc52ef7836d9edc4c44a2417b4a1e3", "verdict": "needs_discussion", "githubReviewId": 5059650768, "startedAt": "2026-08-30T01:18:30Z", "maxTokens": 16384 },
+    { "row": 648, "repo": "ElephantRock/ERLab", "pr": 52, "sha": "410cac12e754f1e4d59cc78c01c5eed48c41e76a", "verdict": "approved", "githubReviewId": 5059687461, "startedAt": "2026-08-30T01:41:52Z", "maxTokens": 16384 },
+    { "row": 651, "repo": "AgentGears/AlCode", "pr": 259, "sha": "5fee2d3d5943ba8a8cc065969729f5b3b413384a", "verdict": "needs_discussion", "githubReviewId": 5059876910, "startedAt": "2026-08-30T03:45:01Z", "maxTokens": 16384 },
+    { "row": 653, "repo": "AgentGears/AlCode", "pr": 261, "sha": "8227fbb6be8a8bb44f372f15d48b2f3bff981050", "verdict": "approved", "githubReviewId": 5059940989, "startedAt": "2026-08-30T04:24:40Z", "maxTokens": 16384 },
+    { "row": 654, "repo": "Octo-Lex/GitWire", "pr": 189, "sha": "0bd7150544879781d51c2e646a2b750d10722843", "verdict": "needs_discussion", "githubReviewId": 5059944385, "startedAt": "2026-08-30T04:26:23Z", "maxTokens": 16384, "selfRepo": true },
+    { "row": 655, "repo": "AgentGears/AlCode", "pr": 262, "sha": "9fc0738c7d879ee946749b97e09647fa7df12bbd", "verdict": "approved", "githubReviewId": 5059949215, "startedAt": "2026-08-30T04:31:59Z", "maxTokens": 16384 },
+    { "row": 658, "repo": "Octo-Lex/GitWire", "pr": 191, "sha": "a1c69c02fbe717b49affd19d55953ca326717db7", "verdict": "approved", "githubReviewId": 5059981602, "startedAt": "2026-08-30T04:58:26Z", "maxTokens": 16384, "selfRepo": true },
+    { "row": 662, "repo": "AgentGears/AlCode", "pr": 265, "sha": "ed33ca552739777269607708de59e90f62b0c63e", "verdict": "approved", "githubReviewId": 5061162998, "startedAt": "2026-08-30T15:01:52Z", "maxTokens": 32768 },
+    { "row": 663, "repo": "AgentGears/AlCode", "pr": 266, "sha": "67cde50c781ae4d97dadd738e0949f5b73df8a08", "verdict": "approved", "githubReviewId": 5061174603, "startedAt": "2026-08-30T15:07:24Z", "maxTokens": 32768 },
+    { "row": 664, "repo": "AgentGears/AlCode", "pr": 267, "sha": "1e38dc24e4777a00d1e4ea39a6455ca0bfb2c7e3", "verdict": "approved", "githubReviewId": 5061223074, "startedAt": "2026-08-30T15:36:11Z", "maxTokens": 32768 },
+    { "row": 665, "repo": "AgentGears/AlCode", "pr": 268, "sha": "4a9bdf979515d088aa4a304c66f9143ef89fba30", "verdict": "approved", "githubReviewId": 5061222686, "startedAt": "2026-08-30T15:38:28Z", "maxTokens": 32768 },
+    { "row": 666, "repo": "AgentGears/AlCode", "pr": 269, "sha": "a50b24bfc50d93303326de4445ad771663a2c16a", "verdict": "approved", "githubReviewId": 5061234483, "startedAt": "2026-08-30T15:43:30Z", "maxTokens": 32768 },
+    { "row": 667, "repo": "Alajmah/NodeChain", "pr": 32, "sha": "6b2157e78a5fe660b36532d06dfdfbdbea9cdb4f", "verdict": "approved", "githubReviewId": 5062181638, "startedAt": "2026-08-30T23:24:07Z", "maxTokens": 32768 },
+    { "row": 668, "repo": "ElephantRock/ERLab", "pr": 53, "sha": "456642c6ee5cb2ef9a43b210f6c8c2fc8be18258", "verdict": "approved", "githubReviewId": 5062332847, "startedAt": "2026-08-31T00:26:06Z", "maxTokens": 32768 },
+    { "row": 669, "repo": "ElephantRock/ERLab", "pr": 54, "sha": "d2d9f9b5efffab75241f68b4da381e081465af9b", "verdict": "approved", "githubReviewId": 5062364168, "startedAt": "2026-08-31T00:40:44Z", "maxTokens": 32768 },
+    { "row": 670, "repo": "AgentGears/AlCode", "pr": 270, "sha": "eadc97972cfbb3ecd76b7317a780592d986abdbd", "verdict": "approved", "githubReviewId": 5062518507, "startedAt": "2026-08-31T01:26:10Z", "maxTokens": 32768 },
+    { "row": 671, "repo": "AgentGears/AlCode", "pr": 271, "sha": "38ee9cdb2d1ff97c823c7c2b7d6b02419b13b0a6", "verdict": "approved", "githubReviewId": 5062511000, "startedAt": "2026-08-31T01:29:00Z", "maxTokens": 32768 },
+    { "row": 672, "repo": "AgentGears/AlCode", "pr": 272, "sha": "8117d1d96d84b4dc1f7e6eaedc2dacbb5657dc1a", "verdict": "approved", "githubReviewId": 5062512770, "startedAt": "2026-08-31T01:34:30Z", "maxTokens": 32768 },
+    { "row": 673, "repo": "AgentGears/AlCode", "pr": 273, "sha": "20679462333fe6685e759cc0d4f62b99adfb990d", "verdict": "approved", "githubReviewId": 5062782955, "startedAt": "2026-08-31T02:47:24Z", "maxTokens": 32768 },
+    { "row": 674, "repo": "AgentGears/AlCode", "pr": 274, "sha": "ed9c8162d5f96b8c1d26ac92c72324ff70d2bc2e", "verdict": "approved", "githubReviewId": 5062763143, "startedAt": "2026-08-31T02:48:16Z", "maxTokens": 32768 },
+    { "row": 675, "repo": "AgentGears/AlCode", "pr": 275, "sha": "3e9889b05afdafa6ca9e5de79c0dcdb3e7f4cf51", "verdict": "approved", "githubReviewId": 5062772642, "startedAt": "2026-08-31T02:50:49Z", "maxTokens": 32768 },
+    { "row": 676, "repo": "AgentGears/AlCode", "pr": 276, "sha": "f32c15fc5a0829b6257baac2ed66360d74fe9a50", "verdict": "approved", "githubReviewId": 5062774671, "startedAt": "2026-08-31T02:51:32Z", "maxTokens": 32768 }
+  ],
+  "partition": { "maxTokens16384": 10, "maxTokens32768": 15 },
+  "repoComposition": { "AgentGears/AlCode": 17, "ElephantRock/ERLab": 5, "Octo-Lex/GitWire": 2, "Alajmah/NodeChain": 1 },
+  "exclusions": {
+    "unpublishedOrErrorRowsInWindow": [643, 649, 652, 656, 657, 659, 660],
+    "controlledInvocation": { "row": 661, "reason": "RC-01 acceptance invocation (manual trigger), not organic" },
+    "beyondCohort": { "rows": [677, 678, 679, 680, 681, 682], "reason": "eligible but started after the 25th member; cohort closed at 25" }
+  },
+  "disclosures": [
+    "2/25 cohort reviews were GitWire reviewing GitWire development PRs; these were ordinary webhook-triggered production reviews and were retained under the pre-existing organic eligibility rule.",
+    "Execution capacity changed within the cohort (10 reviews at max_tokens 16,384, 15 at 32,768). This is a composition limitation of the coverage measurement, not an experimental variable whose effect is estimated.",
+    "Seven unpublished/error rows in the window self-exclude under the frozen rule and are disclosed as provider-error-era exclusions."
+  ]
+}
