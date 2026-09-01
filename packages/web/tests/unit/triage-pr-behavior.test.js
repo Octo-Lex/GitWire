@@ -192,7 +192,7 @@ beforeEach(() => {
   mockGetConfigForRepo.mockResolvedValue({});
   mockIsWaived.mockResolvedValue(null);
   mockAnthropicCreate.mockResolvedValue({
-    content: [{ text: JSON.stringify({
+    content: [{ type: "text", text: JSON.stringify({
       type: "bugfix",
       size_label: "size/S",
       risk: "low",
@@ -375,7 +375,7 @@ describe("PR Triage Behavior Tests", () => {
   describe("No size label returned", () => {
     it("classification with null size_label produces no mutation", async () => {
       mockAnthropicCreate.mockResolvedValue({
-        content: [{ text: JSON.stringify({
+        content: [{ type: "text", text: JSON.stringify({
           type: "docs", size_label: null, risk: "low",
           triage_summary: "Docs only",
         }) }],
@@ -475,5 +475,113 @@ describe("PR Triage Behavior Tests", () => {
         expect.objectContaining({ targetType: "pr", targetNumber: 42 })
       );
     });
+  });
+});
+
+// ── TR-01: provider response shapes (PR path) ────────────────────────────────
+// The production provider returns Anthropic-style content arrays where a
+// reasoning model emits thinking blocks before the text block. These tests
+// prove triagePR consumes every documented response shape without ever
+// dereferencing content[0].text, and that response failures never mutate.
+describe("TR-01 provider response shapes (PR path)", () => {
+  const PR_JSON = JSON.stringify({
+    type: "bugfix", size_label: "size/S", risk: "low", triage_summary: "ok",
+  });
+
+  beforeEach(() => {
+    mockGetInstallationClient.mockResolvedValue({
+      request: jest.fn().mockResolvedValue({ data: [{ name: "size/S" }] }),
+    });
+  });
+
+  function expectNoMutation() {
+    expect(mockPropose).not.toHaveBeenCalled();
+    expect(mockCompleteOperation).not.toHaveBeenCalled();
+    expect(mockAbandonOperation).toHaveBeenCalled();
+  }
+
+  async function run(payload) {
+    const { triagePR } = await import("../../src/workers/triageWorker.js");
+    return triagePR(payload || buildPayload());
+  }
+
+  it("1. plain text block → parses normally", async () => {
+    mockAnthropicCreate.mockResolvedValue({ content: [{ type: "text", text: PR_JSON }] });
+    await run();
+    expect(mockPropose).toHaveBeenCalledTimes(1);
+    expect(mockCompleteOperation).toHaveBeenCalled();
+  });
+
+  it("2. thinking block before text → ignores thinking, parses text", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [
+        { type: "thinking", thinking: "Reasoning about this pull request." },
+        { type: "text", text: PR_JSON },
+      ],
+    });
+    await run();
+    expect(mockPropose).toHaveBeenCalledTimes(1);
+    expect(mockCompleteOperation).toHaveBeenCalled();
+  });
+
+  it("3. multiple text blocks → joins in order and parses", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [
+        { type: "text", text: '{"type": "bugfix", "size_label": "size/S",' },
+        { type: "text", text: ' "risk": "low", "triage_summary": "split"}' },
+      ],
+    });
+    await run();
+    expect(mockPropose).toHaveBeenCalledTimes(1);
+    expect(mockCompleteOperation).toHaveBeenCalled();
+  });
+
+  it("4. fenced JSON text → parses", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: "text", text: "```json\n" + PR_JSON + "\n```" }],
+    });
+    await run();
+    expect(mockPropose).toHaveBeenCalledTimes(1);
+  });
+
+  it("5. no text blocks → explicit invalid_provider_response failure, never a .trim TypeError", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: "thinking", thinking: "Reasoning consumed the output allowance." }],
+    });
+    let captured;
+    try { await run(); } catch (e) { captured = e; }
+    expect(captured).toBeInstanceOf(SyntaxError);
+    expect(captured.message).toMatch(/no usable text blocks/);
+    expect(captured).not.toBeInstanceOf(TypeError);
+    expectNoMutation();
+  });
+
+  it("5b. empty content array → same explicit failure", async () => {
+    mockAnthropicCreate.mockResolvedValue({ content: [] });
+    await expect(run()).rejects.toThrow(SyntaxError);
+    expectNoMutation();
+  });
+
+  it("6. malformed JSON text → existing invalid_provider_response behavior", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: "text", text: "Sorry, I cannot classify this PR." }],
+    });
+    await expect(run()).rejects.toThrow(SyntaxError);
+    expectNoMutation();
+  });
+
+  it("7. provider Connection error → propagates unchanged for provider-unavailable classification", async () => {
+    mockAnthropicCreate.mockRejectedValue(new Error("Connection error."));
+    await expect(run()).rejects.toThrow("Connection error.");
+    expectNoMutation();
+  });
+
+  it("8. valid response → single size-label mutation, no duplicates", async () => {
+    mockAnthropicCreate.mockResolvedValue({ content: [{ type: "text", text: PR_JSON }] });
+    await run();
+    expect(mockPropose).toHaveBeenCalledTimes(1);
+    expect(mockSucceed).toHaveBeenCalledTimes(1);
+    expect(mockCompleteOperation).toHaveBeenCalledTimes(1);
+    expect(mockAbandonOperation).not.toHaveBeenCalled();
   });
 });

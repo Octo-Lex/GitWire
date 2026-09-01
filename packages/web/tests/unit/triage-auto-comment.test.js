@@ -176,6 +176,7 @@ function makeIssuePayload(overrides = {}) {
 function mockClaudeNormal() {
   mockAnthropicCreate.mockResolvedValue({
     content: [{
+      type: "text",
       text: JSON.stringify({
         type: "bug",
         priority: "high",
@@ -193,6 +194,7 @@ function mockClaudeNormal() {
 function mockClaudeNeedsMoreInfo() {
   mockAnthropicCreate.mockResolvedValue({
     content: [{
+      type: "text",
       text: JSON.stringify({
         type: "question",
         priority: "medium",
@@ -342,6 +344,7 @@ describe("PF-A1-01: triage auto_comment semantics", () => {
   it("includes duplicate_hint section in the comment when applicable", async () => {
     mockAnthropicCreate.mockResolvedValue({
       content: [{
+        type: "text",
         text: JSON.stringify({
           type: "bug",
           priority: "medium",
