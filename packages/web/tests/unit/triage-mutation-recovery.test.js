@@ -141,7 +141,7 @@ beforeEach(() => {
   mockDetectDuplicates.mockResolvedValue({ duplicates: [], related: [] });
   mockFindCompletedTriageAction.mockResolvedValue(null);
   mockAnthropicCreate.mockResolvedValue({
-    content: [{ text: JSON.stringify({
+    content: [{ type: "text", text: JSON.stringify({
       type: "bug", priority: "low", labels: ["bug"],
       needs_more_info: true, duplicate_hint: null, triage_summary: "test summary",
     }) }],
@@ -231,7 +231,7 @@ describe("Mutation recovery (cases 7-9, 11)", () => {
     mockGetInstallationClient.mockResolvedValue(mockOctokit());
     mockGetConfigForRepo.mockResolvedValue({});
     mockAnthropicCreate.mockResolvedValue({
-      content: [{ text: JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({
         type: "bug", priority: "low", labels: ["bug"],
         needs_more_info: false, duplicate_hint: null, triage_summary: "test",
       }) }],
@@ -281,7 +281,7 @@ describe("Lifecycle recovery (case 10)", () => {
     mockExecute.mockResolvedValue({});
     mockSucceed.mockResolvedValue({});
     mockAnthropicCreate.mockResolvedValue({
-      content: [{ text: JSON.stringify({
+      content: [{ type: "text", text: JSON.stringify({
         type: "bug", priority: "low", labels: ["bug"],
         needs_more_info: false, duplicate_hint: null, triage_summary: "ok",
       }) }],
@@ -292,6 +292,106 @@ describe("Lifecycle recovery (case 10)", () => {
     // The retry must have acquired a fresh lease and completed successfully
     expect(mockBeginOperation).toHaveBeenCalled();
     expect(mockCompleteOperation).toHaveBeenCalledWith("triage", expect.any(String), "lease-2");
+    expect(mockAbandonOperation).not.toHaveBeenCalled();
+  });
+});
+
+// ── TR-01: provider response shapes (issue path) ─────────────────────────────
+// The production provider returns Anthropic-style content arrays where a
+// reasoning model emits thinking blocks before the text block. These tests
+// prove triageIssue consumes every documented response shape without ever
+// dereferencing content[0].text, and that response failures never mutate.
+describe("TR-01 provider response shapes (issue path)", () => {
+  const ISSUE_JSON = JSON.stringify({
+    type: "bug", priority: "low", labels: ["bug"],
+    needs_more_info: false, duplicate_hint: null, triage_summary: "ok",
+  });
+
+  function expectNoMutation() {
+    expect(mockPropose).not.toHaveBeenCalled();
+    expect(mockSaveTriage).not.toHaveBeenCalled();
+    expect(mockPostMarkedComment).not.toHaveBeenCalled();
+    expect(mockCompleteOperation).not.toHaveBeenCalled();
+    expect(mockAbandonOperation).toHaveBeenCalled();
+  }
+
+  it("1. plain text block → parses normally", async () => {
+    mockAnthropicCreate.mockResolvedValue({ content: [{ type: "text", text: ISSUE_JSON }] });
+    await triageIssue(buildIssuePayload());
+    expect(mockSaveTriage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: "bug", priority: "low" }));
+    expect(mockCompleteOperation).toHaveBeenCalled();
+  });
+
+  it("2. thinking block before text → ignores thinking, parses text", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [
+        { type: "thinking", thinking: "Let me reason about this issue first." },
+        { type: "text", text: ISSUE_JSON },
+      ],
+    });
+    await triageIssue(buildIssuePayload());
+    expect(mockSaveTriage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: "bug" }));
+    expect(mockCompleteOperation).toHaveBeenCalled();
+  });
+
+  it("3. multiple text blocks → joins in order and parses", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [
+        { type: "text", text: '{"type": "bug", "priority": "low", "labels": ["bug"],' },
+        { type: "text", text: ' "needs_more_info": false, "duplicate_hint": null, "triage_summary": "split"}' },
+      ],
+    });
+    await triageIssue(buildIssuePayload());
+    expect(mockSaveTriage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: "bug", priority: "low" }));
+  });
+
+  it("4. fenced JSON text → parses", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: "text", text: "```json\n" + ISSUE_JSON + "\n```" }],
+    });
+    await triageIssue(buildIssuePayload());
+    expect(mockSaveTriage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: "bug" }));
+  });
+
+  it("5. no text blocks → explicit invalid_provider_response failure, never a .trim TypeError", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: "thinking", thinking: "The reasoning consumed the output allowance." }],
+    });
+    let captured;
+    try { await triageIssue(buildIssuePayload()); } catch (e) { captured = e; }
+    expect(captured).toBeInstanceOf(SyntaxError);
+    expect(captured.message).toMatch(/no usable text blocks/);
+    expect(captured).not.toBeInstanceOf(TypeError);
+    expectNoMutation();
+  });
+
+  it("5b. empty content array → same explicit failure", async () => {
+    mockAnthropicCreate.mockResolvedValue({ content: [] });
+    await expect(triageIssue(buildIssuePayload())).rejects.toThrow(SyntaxError);
+    expectNoMutation();
+  });
+
+  it("6. malformed JSON text → existing invalid_provider_response behavior", async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: "text", text: "Sorry, I cannot classify this issue." }],
+    });
+    await expect(triageIssue(buildIssuePayload())).rejects.toThrow(SyntaxError);
+    expectNoMutation();
+  });
+
+  it("7. provider Connection error → propagates unchanged for provider-unavailable classification", async () => {
+    mockAnthropicCreate.mockRejectedValue(new Error("Connection error."));
+    await expect(triageIssue(buildIssuePayload())).rejects.toThrow("Connection error.");
+    expectNoMutation();
+  });
+
+  it("8. valid response → single label + single comment mutation, no duplicates", async () => {
+    mockAnthropicCreate.mockResolvedValue({ content: [{ type: "text", text: ISSUE_JSON }] });
+    await triageIssue(buildIssuePayload());
+    // exactly one label action and one comment action
+    expect(mockPropose).toHaveBeenCalledTimes(2);
+    expect(mockPostMarkedComment).toHaveBeenCalledTimes(1);
+    expect(mockCompleteOperation).toHaveBeenCalledTimes(1);
     expect(mockAbandonOperation).not.toHaveBeenCalled();
   });
 });

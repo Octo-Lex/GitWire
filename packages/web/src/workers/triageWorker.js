@@ -217,18 +217,7 @@ async function triageIssue({ payload }, job = null) {
         "You are a GitHub triage assistant. Respond only with valid JSON matching the schema in the user prompt. No explanation, no markdown.",
     });
 
-    let classification;
-    try {
-      let raw = message.content[0].text.trim();
-      // Strip markdown code fences if Claude wrapped the JSON
-      if (raw.startsWith('```')) {
-        raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-      }
-      classification = JSON.parse(raw);
-    } catch (err) {
-      logger.error({ err, raw: message.content[0].text }, "Failed to parse Claude triage response");
-      throw err;
-    }
+    const classification = parseTriageClassification(message, "Failed to parse Claude triage response");
 
     logger.info({ issue: issue.number, classification }, "Issue classified");
 
@@ -537,17 +526,7 @@ async function triagePR({ payload }, job = null) {
         "You are a GitHub triage assistant. Respond only with valid JSON matching the schema in the user prompt. No explanation, no markdown.",
     });
 
-    let classification;
-    try {
-      let raw = message.content[0].text.trim();
-      if (raw.startsWith("```")) {
-        raw = raw.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
-      }
-      classification = JSON.parse(raw);
-    } catch (err) {
-      logger.error({ err, raw: message.content[0].text }, "Failed to parse Claude PR triage response");
-      throw err;
-    }
+    const classification = parseTriageClassification(message, "Failed to parse Claude PR triage response");
 
     logger.info({ pr: pr.number, classification }, "PR classified");
 
@@ -637,6 +616,44 @@ async function triagePR({ payload }, job = null) {
     await abandonOperation("triage", operationKey, lease.token).catch((abandonErr) => {
       logger.warn({ err: abandonErr.message || abandonErr, repo: repository.full_name, pr: pr.number }, "Failed to abandon PR triage lease");
     });
+    throw err;
+  }
+}
+
+// ── Provider-response extraction ─────────────────────────────────────────────
+// The production provider returns Anthropic-style content arrays, and the
+// reasoning model it serves emits thinking blocks before the text block.
+// content[0].text is therefore not a usable assumption. Both triage surfaces
+// extract text through this one local helper instead of dereferencing
+// content[0].
+function extractTriageText(message) {
+  const content = message?.content;
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block) => block?.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("")
+    .trim();
+}
+
+// Parse the extracted text as the triage classification JSON, preserving the
+// markdown-fence handling. An empty extraction becomes an explicit SyntaxError
+// so the failure enters the existing invalid_provider_response lifecycle
+// instead of throwing a TypeError on provider-response property access.
+function parseTriageClassification(message, logLabel) {
+  const rawText = extractTriageText(message);
+  let raw = rawText;
+  if (raw.startsWith("```")) {
+    raw = raw.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    logger.error({ err, raw: rawText }, logLabel);
+    if (rawText.length === 0) {
+      throw new SyntaxError("Triage provider response contained no usable text blocks");
+    }
     throw err;
   }
 }

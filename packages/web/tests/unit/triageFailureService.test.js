@@ -82,6 +82,17 @@ describe("triageFailureService — classification", () => {
     expect(c.retryable).toBe(true);
   });
 
+  it("5b. empty provider extraction (TR-01 explicit SyntaxError) → invalid_provider_response, retryable", () => {
+    // Thrown by parseTriageClassification when the provider response contains
+    // no usable text blocks (e.g. thinking-only content at an exhausted
+    // budget). Must enter the existing invalid_provider_response lifecycle.
+    const err = new SyntaxError("Triage provider response contained no usable text blocks");
+    const c = classifyTriageFailure(err);
+    expect(c.failureClass).toBe("invalid_provider_response");
+    expect(c.retryable).toBe(true);
+    expect(isPermanentFailure(c)).toBe(false);
+  });
+
   it("github 401 → github_auth (not provider_auth), permanent", () => {
     const err = Object.assign(new Error("GitHub: Bad credentials"), { status: 401 });
     // No anthropic shape markers → classified as github_auth
