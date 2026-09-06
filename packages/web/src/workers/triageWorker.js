@@ -27,10 +27,18 @@ import { propose, approve, execute, succeed, fail, cancel, findCompletedTriageAc
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 import { classifyTriageFailure, isPermanentFailure, sanitizeForRetention } from "../services/triageFailureService.js";
 import { postMarkedComment, buildMarker } from "../lib/commentMarkers.js";
+import https from "node:https";
 
-const anthropic = new Anthropic({ 
+const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
+  // Pin this client's connections to IPv4. The provider's resolver returns
+  // mixed A/AAAA records and the app container has no IPv6 route, and the
+  // SDK's default address selection persistently fails to establish fresh
+  // connections ("Connection error") while family-4 connections succeed
+  // consistently. Scoped to the triage client only; no retry, endpoint, or
+  // model change.
+  httpAgent: new https.Agent({ keepAlive: true, family: 4 }),
 });
 
 export function startTriageWorker() {

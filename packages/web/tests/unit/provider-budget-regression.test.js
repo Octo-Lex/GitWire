@@ -49,6 +49,16 @@ describe('provider output-budget regression (Unit A)', () => {
     expect(count).toBeGreaterThanOrEqual(2); // issue triage + PR triage
   });
 
+  it('triageWorker: triage client connections pinned to IPv4 (TR-01 transport)', () => {
+    // The provider resolver returns mixed A/AAAA records and the app
+    // container has no IPv6 route; the SDK default address selection
+    // persistently fails fresh connections while family-4 succeeds.
+    // Behavioral proof: 2026-09-06 production probes (10/10 family-4
+    // vs 0/N default over the same period).
+    const src = readSrc('workers/triageWorker.js');
+    expect(src).toContain('new https.Agent({ keepAlive: true, family: 4 })');
+  });
+
   it('review duration fallback: 600 seconds (not 300)', () => {
     const src = readSrc('services/aiReviewService.js');
     expect(src).toContain('DEFAULT_MAX_DURATION_MS = 600000');
