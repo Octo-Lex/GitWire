@@ -45,6 +45,7 @@ import { buildInlineComments, partitionAnchored, renderBodyOnlyDetails } from ".
 import { runDefensePass, refineWithDefense } from "./adversarialDefense.js";
 import { resolveReviewPublication } from "./reviewPublicationPolicy.js";
 import { buildFileCoverage, finalizeCoverage, coverageSummaryLine } from "./reviewCoverageService.js";
+import https from "node:https";
 import { buildEvidenceReceipts } from "./reviewEvidenceService.js";
 
 const anthropic = new Anthropic({
@@ -54,6 +55,11 @@ const anthropic = new Anthropic({
   // also 600 s today; stating it explicitly keeps the bound independent of
   // SDK version drift as the review output ceiling grows.
   timeout:  600000,
+  // RT-01: pin connections to IPv4. The provider resolver returns mixed
+  // A/AAAA records and the app container has no IPv6 route; the SDK's
+  // default address selection persistently fails fresh connections while
+  // family-4 succeeds (see triageWorker.js and PR #194 evidence).
+  httpAgent: new https.Agent({ keepAlive: true, family: 4 }),
 });
 
 const CHECK_RUN_NAME = "GitWire AI Review";

@@ -59,6 +59,19 @@ describe('provider output-budget regression (Unit A)', () => {
     expect(src).toContain('new https.Agent({ keepAlive: true, family: 4 })');
   });
 
+  it('all three review-pillar clients pinned to IPv4 (RT-01 transport)', () => {
+    // Primary, adversarial challenge, and adversarial defense each construct
+    // a separate Anthropic client — a separate connection pool. Leaving any
+    // one unpinned preserves a fresh-dial failure surface; the adversarial
+    // paths fail open on transport errors, silently reducing review depth.
+    // Baseline before the fix: 98 review successes vs 35 Connection-error
+    // failures in 72h of production logs (2026-09-11).
+    for (const file of ['services/aiReviewService.js', 'services/adversarialReview.js', 'services/adversarialDefense.js']) {
+      const src = readSrc(file);
+      expect(src).toContain('new https.Agent({ keepAlive: true, family: 4 })');
+    }
+  });
+
   it('review duration fallback: 600 seconds (not 300)', () => {
     const src = readSrc('services/aiReviewService.js');
     expect(src).toContain('DEFAULT_MAX_DURATION_MS = 600000');

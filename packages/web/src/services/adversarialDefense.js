@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import https from "node:https";
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { extractReviewJSON } from "@gitwire/rules";
@@ -7,6 +8,11 @@ import { refineFindings } from "./adversarialReview.js";
 const anthropic = new Anthropic({
   apiKey:  config.anthropic.apiKey,
   baseURL: config.anthropic.baseURL,
+  // RT-01: pin connections to IPv4. The provider resolver returns mixed
+  // A/AAAA records and the app container has no IPv6 route; the SDK's
+  // default address selection persistently fails fresh connections while
+  // family-4 succeeds (see triageWorker.js and PR #194 evidence).
+  httpAgent: new https.Agent({ keepAlive: true, family: 4 }),
 });
 
 // ==============================================================================
