@@ -52,7 +52,7 @@ const AUDIT = {
     { file: "workers/triageWorker.js", line: 564, func: "triagePR label recovery", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
     { file: "workers/triageWorker.js", line: 597, func: "triagePR", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "pr.user.login", classification: "worker_auth_context" },
     // triageOperations.js — retry route decision log; http_auth_context (req.auth)
-    { file: "routes/triageOperations.js", line: 159, func: "retry route", principalIdExpr: "req.auth.principalId", contextSource: "req.auth (authContext)", legacyActor: "n/a", classification: "http_auth_context" },
+    { file: "routes/triageOperations.js", line: 363, func: "retry route", principalIdExpr: "req.auth.principalId", contextSource: "req.auth (authContext)", legacyActor: "n/a", classification: "http_auth_context" },
   ],
 
   audit_trail_entries: [

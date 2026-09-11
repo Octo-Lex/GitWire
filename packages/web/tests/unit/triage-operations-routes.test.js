@@ -10,13 +10,28 @@ const mockActiveJobs = [];
 const mockWaitingJobs = [];
 const mockJobMap = new Map();
 const mockQueueReadOk = { value: true }; // toggle to simulate queue unavailability
+const mockJobCounts = { failed: null }; // when set, returned by getJobCounts
 
 const triageQueue = {
   getFailed: jest.fn(async () => [...mockFailedJobs]),
   getActive: jest.fn(async () => [...mockActiveJobs]),
   getWaiting: jest.fn(async () => [...mockWaitingJobs]),
   getJob: jest.fn(async (id) => mockJobMap.get(id) ?? null),
+  getJobCounts: jest.fn(async () =>
+    mockJobCounts.failed !== null
+      ? { failed: mockJobCounts.failed, active: mockActiveJobs.length, waiting: mockWaitingJobs.length }
+      : null,
+  ),
 };
+
+// GitHub current-target mock (TD-01 retry re-read)
+const mockGitHubTarget = { value: { state: "open", id: 555, number: 42, title: "Fresh title" } };
+const mockGitHubError = { value: null }; // set to an Error to simulate read failure
+const mockGitHubRequest = jest.fn(async () => {
+  if (mockGitHubError.value) throw mockGitHubError.value;
+  return { data: mockGitHubTarget.value };
+});
+const mockGetInstallationClient = jest.fn(async () => ({ request: mockGitHubRequest }));
 
 function makeFailedJob(overrides = {}) {
   const id = String(overrides.id ?? Math.floor(Math.random() * 100000));
@@ -43,8 +58,10 @@ function makeFailedJob(overrides = {}) {
         latestFailedAt: "2026-08-06T14:20:42Z",
         attempts: 1,
       },
+      ...(overrides.disposition ? { gitwireDisposition: overrides.disposition } : {}),
     },
     retry: jest.fn(async () => {}),
+    updateData: jest.fn(async function (d) { this.data = d; }),
   };
   mockJobMap.set(id, job);
   if (overrides.addToFailed !== false) mockFailedJobs.push(job);
@@ -78,6 +95,14 @@ const mockAuthorize = jest.fn().mockResolvedValue({
 });
 await jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
   authorize: mockAuthorize,
+}));
+
+// GitHub mocks (TD-01 retry current-target re-read)
+await jest.unstable_mockModule("../../src/lib/github.js", () => ({
+  getInstallationClient: mockGetInstallationClient,
+}));
+await jest.unstable_mockModule("../../src/lib/githubWrapper.js", () => ({
+  wrapOctokit: (c) => c,
 }));
 
 // isOperationComplete mock — default false (not complete), toggle per-test
@@ -119,6 +144,9 @@ beforeEach(() => {
   mockActiveJobs.length = 0;
   mockWaitingJobs.length = 0;
   mockJobMap.clear();
+  mockJobCounts.failed = null;
+  mockGitHubTarget.value = { state: "open", id: 555, number: 42, title: "Fresh title" };
+  mockGitHubError.value = null;
   jest.clearAllMocks();
   mockIsOperationComplete.mockResolvedValue(false);
   mockLogDecision.mockResolvedValue(undefined);
@@ -126,6 +154,11 @@ beforeEach(() => {
   triageQueue.getFailed.mockImplementation(async () => [...mockFailedJobs]);
   triageQueue.getActive.mockImplementation(async () => [...mockActiveJobs]);
   triageQueue.getWaiting.mockImplementation(async () => [...mockWaitingJobs]);
+  triageQueue.getJobCounts.mockImplementation(async () =>
+    mockJobCounts.failed !== null
+      ? { failed: mockJobCounts.failed, active: mockActiveJobs.length, waiting: mockWaitingJobs.length }
+      : null,
+  );
 });
 
 // ── Status endpoint (cases 1-2) ─────────────────────────────────────────────
@@ -170,6 +203,7 @@ describe("GET /api/triage/failures", () => {
     const allowedKeys = new Set([
       "job_id", "job_name", "repository", "target_type", "target_number",
       "failure_class", "safe_message", "failed_at", "attempts", "retryable_now",
+      "disposition",
     ]);
     for (const key of Object.keys(entry)) {
       expect(allowedKeys.has(key)).toBe(true);
@@ -394,8 +428,15 @@ describe("/health triage workflow block (cases 14-17)", () => {
     expect(serialized).not.toContain("SecretRepo");
     expect(serialized).not.toContain('"77"'); // issue number should not appear as a value
     expect(serialized).not.toContain("LLM provider");
-    // Must only contain: status, failed_count, oldest_failure_at
-    expect(Object.keys(block).sort()).toEqual(["failed_count", "oldest_failure_at", "status"]);
+    // Must only contain: status, counts, and timestamps — nothing identifying
+    expect(Object.keys(block).sort()).toEqual([
+      "actionable_failed_count",
+      "disposed_failed_count",
+      "failed_count",
+      "oldest_actionable_failure_at",
+      "oldest_failure_at",
+      "status",
+    ]);
   });
 
   it("17. existing migration degradation behavior still works (status ok when no failures, no degradation)", async () => {
@@ -405,5 +446,272 @@ describe("/health triage workflow block (cases 14-17)", () => {
     const block = await getTriageHealthBlock({ timeoutMs: 1000 });
     expect(block.status).toBe("healthy");
     expect(block.failed_count).toBe(0);
+  });
+});
+
+// ── TD-01: disposition persistence + audit ──────────────────────────────────
+describe("TD-01 POST /api/triage/failures/:jobId/disposition", () => {
+  it("sets each of the four states with audit + persisted metadata", async () => {
+    for (const state of ["unresolved", "recovered", "superseded", "dismissed"]) {
+      const job = makeFailedJob({ disposition: state === "unresolved" ? undefined : { state: "unresolved", reason: "was unresolved", at: "2026-01-01T00:00:00Z" } });
+      const app = buildApp();
+      const res = await supertest(app)
+        .post(`/api/triage/failures/${job.id}/disposition`)
+        .send({ state, reason: `operator accepts ${state}`, actor: "attacker" });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.disposition.state).toBe(state);
+      // Persisted on retained job data — never deleted
+      expect(job.data.gitwireDisposition.state).toBe(state);
+      expect(job.data.gitwireDisposition.reason).toBe(`operator accepts ${state}`);
+      expect(job.data.gitwireDisposition.principalId).toBe("test-principal-uuid");
+      // Audited: source triage-disposition, principal from req.auth
+      const call = mockLogDecision.mock.calls.find((c) => c[0]?.source === "triage-disposition" && c[0]?.decision === `disposition-${state}`);
+      expect(call).toBeTruthy();
+      expect(call[0].principalId).toBe("test-principal-uuid");
+      expect(call[0].principalId).not.toBe("attacker");
+      expect(mockFailedJobs).toContain(job); // still retained in failed set
+    }
+  });
+
+  it("rejects invalid state → 400", async () => {
+    const job = makeFailedJob();
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/disposition`).send({ state: "vanished", reason: "some reason" });
+    expect(res.statusCode).toBe(400);
+    expect(job.data.gitwireDisposition).toBeUndefined();
+  });
+
+  it("rejects missing or too-short reason → 400", async () => {
+    const job = makeFailedJob();
+    const app = buildApp();
+    const r1 = await supertest(app).post(`/api/triage/failures/${job.id}/disposition`).send({ state: "dismissed", reason: "" });
+    const r2 = await supertest(app).post(`/api/triage/failures/${job.id}/disposition`).send({ state: "dismissed", reason: "ok" });
+    expect(r1.statusCode).toBe(400);
+    expect(r2.statusCode).toBe(400);
+  });
+
+  it("unknown job → 404; denied authorization → 403", async () => {
+    const app = buildApp();
+    const r404 = await supertest(app).post("/api/triage/failures/424242/disposition").send({ state: "dismissed", reason: "not found test" });
+    expect(r404.statusCode).toBe(404);
+
+    const job = makeFailedJob();
+    mockAuthorize.mockResolvedValue({ allowed: false, code: "permission_missing" });
+    const r403 = await supertest(app).post(`/api/triage/failures/${job.id}/disposition`).send({ state: "dismissed", reason: "deny test" });
+    expect(r403.statusCode).toBe(403);
+    expect(job.data.gitwireDisposition).toBeUndefined();
+  });
+});
+
+// ── TD-01: disposition filter on the failure list ───────────────────────────
+describe("TD-01 GET /api/triage/failures?disposition=", () => {
+  it("filters by disposition state and reports it per entry", async () => {
+    makeFailedJob({ id: "a1", gitwireFailure: { failureClass: "invalid_provider_response", retryable: true, safeMessage: "malformed JSON", firstFailedAt: "2026-08-06T14:20:42Z" } });
+    makeFailedJob({ id: "a2", disposition: { state: "dismissed", reason: "handled already", at: "2026-09-01T00:00:00Z" } });
+    makeFailedJob({ id: "a3", disposition: { state: "superseded", reason: "PR merged", at: "2026-09-01T00:00:00Z" } });
+
+    const app = buildApp();
+    const open = await supertest(app).get("/api/triage/failures?disposition=unresolved");
+    expect(open.body.data.map((d) => d.job_id)).toEqual(["a1"]);
+    expect(open.body.data[0].disposition.state).toBe("unresolved");
+
+    const dismissed = await supertest(app).get("/api/triage/failures?disposition=dismissed");
+    expect(dismissed.body.data.map((d) => d.job_id)).toEqual(["a2"]);
+    expect(dismissed.body.data[0].disposition.reason).toBe("handled already");
+
+    // retryable_now flips to false for disposed entries
+    const r = await supertest(app).get("/api/triage/failures");
+    const byId = Object.fromEntries(r.body.data.map((d) => [d.job_id, d]));
+    expect(byId.a1.retryable_now).toBe(true);
+    expect(byId.a2.retryable_now).toBe(false);
+    expect(byId.a3.retryable_now).toBe(false);
+  });
+});
+
+// ── TD-01: health semantics — actionable counts only ────────────────────────
+describe("TD-01 health: actionable vs disposed counts", () => {
+  it("mixed backlog: degraded iff unresolved present; counts split", async () => {
+    makeFailedJob({ id: "h1", gitwireFailure: { failureClass: "x", safeMessage: "m", firstFailedAt: "2026-08-20T00:00:00Z" } });
+    makeFailedJob({ id: "h2", disposition: { state: "dismissed", reason: "done", at: "2026-09-01T00:00:00Z" } });
+    makeFailedJob({ id: "h3", disposition: { state: "superseded", reason: "merged", at: "2026-09-01T00:00:00Z" } });
+
+    const block = await getTriageHealthBlock({ timeoutMs: 1000 });
+    expect(block.status).toBe("degraded");
+    expect(block.failed_count).toBe(3);
+    expect(block.actionable_failed_count).toBe(1);
+    expect(block.disposed_failed_count).toBe(2);
+    expect(block.oldest_actionable_failure_at).toBe("2026-08-20T00:00:00.000Z");
+  });
+
+  it("fully disposed backlog → healthy with retained history", async () => {
+    makeFailedJob({ id: "d1", disposition: { state: "dismissed", reason: "done", at: "2026-09-01T00:00:00Z" } });
+    makeFailedJob({ id: "d2", disposition: { state: "recovered", reason: "later success", at: "2026-09-01T00:00:00Z" } });
+    const block = await getTriageHealthBlock({ timeoutMs: 1000 });
+    expect(block.status).toBe("healthy");
+    expect(block.failed_count).toBe(2);
+    expect(block.actionable_failed_count).toBe(0);
+    expect(block.disposed_failed_count).toBe(2);
+    expect(block.oldest_actionable_failure_at).toBeNull();
+  });
+
+  it("default-absent disposition is unresolved (fail-safe)", async () => {
+    makeFailedJob(); // no gitwireDisposition at all
+    const block = await getTriageHealthBlock({ timeoutMs: 1000 });
+    expect(block.status).toBe("degraded");
+    expect(block.actionable_failed_count).toBe(1);
+  });
+
+  it("malformed disposition metadata is unresolved (fail-safe)", async () => {
+    makeFailedJob({ disposition: { state: "banana" } });
+    const block = await getTriageHealthBlock({ timeoutMs: 1000 });
+    expect(block.status).toBe("degraded");
+    expect(block.actionable_failed_count).toBe(1);
+  });
+
+  it("bounded window: failures beyond the inspection bound count as actionable", async () => {
+    // 501 unresolved failures; the inspection window returns only 500.
+    for (let i = 0; i < 501; i++) {
+      makeFailedJob({ id: `w${i}`, addToFailed: false });
+    }
+    const all = [...mockJobMap.values()];
+    mockFailedJobs.push(...all.slice(0, 500)); // simulate the 500-job window
+    mockJobCounts.failed = 501; // true total from the counter
+
+    const block = await getTriageHealthBlock({ timeoutMs: 1000 });
+    expect(block.failed_count).toBe(501);
+    expect(block.actionable_failed_count).toBe(501); // fail-safe: uninspected = actionable
+    expect(block.disposed_failed_count).toBe(0);
+    expect(block.status).toBe("degraded");
+  });
+
+  it("bounded window: 500 backlog with 499 disposed still degrades (1 actionable at the bound)", async () => {
+    for (let i = 0; i < 500; i++) {
+      makeFailedJob({
+        id: `b${i}`,
+        addToFailed: false,
+        disposition: i === 0 ? undefined : { state: "dismissed", reason: "bulk evidence", at: "2026-09-01T00:00:00Z" },
+      });
+    }
+    mockFailedJobs.push(...[...mockJobMap.values()]);
+    mockJobCounts.failed = 500;
+
+    const block = await getTriageHealthBlock({ timeoutMs: 1000 });
+    expect(block.failed_count).toBe(500);
+    expect(block.actionable_failed_count).toBe(1);
+    expect(block.disposed_failed_count).toBe(499);
+    expect(block.status).toBe("degraded");
+  });
+
+  it("counter unavailable → falls back to window length (legacy behavior)", async () => {
+    mockJobCounts.failed = null; // getJobCounts returns null
+    makeFailedJob();
+    const block = await getTriageHealthBlock({ timeoutMs: 1000 });
+    expect(block.failed_count).toBe(1);
+    expect(block.actionable_failed_count).toBe(1);
+  });
+
+  it("operator status summary carries the same actionable semantics", async () => {
+    makeFailedJob({ disposition: { state: "superseded", reason: "merged", at: "2026-09-01T00:00:00Z" } });
+    const summary = await getTriageStatusSummary({ timeoutMs: 1000 });
+    expect(summary.status).toBe("healthy");
+    expect(summary.failed_count).toBe(1);
+    expect(summary.actionable_failed_count).toBe(0);
+    expect(summary.disposed_failed_count).toBe(1);
+  });
+});
+
+// ── TD-01: retry operates on the CURRENT target ─────────────────────────────
+describe("TD-01 retry current-target semantics", () => {
+  it("disposed failures refuse retry → 409 for all non-unresolved states", async () => {
+    for (const state of ["recovered", "superseded", "dismissed"]) {
+      const job = makeFailedJob({ disposition: { state, reason: "closed out", at: "2026-09-01T00:00:00Z" } });
+      const app = buildApp();
+      const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "try again" });
+      expect(res.statusCode).toBe(409);
+      expect(job.retry).not.toHaveBeenCalled();
+    }
+  });
+
+  it("open target: refreshes the retained payload with the fresh GitHub object, then requeues", async () => {
+    const job = makeFailedJob();
+    mockGitHubTarget.value = { state: "open", id: 555, number: 42, title: "Retitled after failure", body: "current body" };
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "provider restored" });
+    expect(res.statusCode).toBe(202);
+    expect(job.retry).toHaveBeenCalled();
+    // The re-read happened against the live GitHub route
+    expect(mockGitHubRequest).toHaveBeenCalledWith(
+      "GET /repos/{owner}/{repo}/issues/{issue_number}",
+      expect.objectContaining({ owner: "org", repo: "repo", issue_number: 42 }),
+    );
+    // The retained payload now carries the CURRENT target object
+    expect(job.updateData).toHaveBeenCalled();
+    expect(job.data.payload.issue.title).toBe("Retitled after failure");
+    // The retry decision records the re-read
+    const call = mockLogDecision.mock.calls.find((c) => c[0]?.source === "triage-retry");
+    expect(call[0].conditions).toContainEqual({ check: "current_target_reread", result: "open" });
+  });
+
+  it("closed issue → superseded, not retried", async () => {
+    const job = makeFailedJob();
+    mockGitHubTarget.value = { state: "closed", id: 555, number: 42 };
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "check target" });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.queued).toBe(false);
+    expect(res.body.superseded).toBe(true);
+    expect(job.retry).not.toHaveBeenCalled();
+    expect(job.data.gitwireDisposition.state).toBe("superseded");
+    expect(job.data.gitwireDisposition.reason).toContain("closed");
+    const call = mockLogDecision.mock.calls.find((c) => c[0]?.source === "triage-disposition");
+    expect(call[0].decision).toBe("disposition-superseded");
+  });
+
+  it("merged PR → superseded, not retried", async () => {
+    const job = makeFailedJob({
+      payload: {
+        action: "opened",
+        installation: { id: 11111 },
+        repository: { id: 999, full_name: "org/repo" },
+        pull_request: { id: 777, number: 43, additions: 10, deletions: 2 },
+      },
+    });
+    mockGitHubTarget.value = { state: "closed", merged: true, id: 777, number: 43 };
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "check target" });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.superseded).toBe(true);
+    expect(job.retry).not.toHaveBeenCalled();
+    expect(job.data.gitwireDisposition.reason).toContain("merged");
+  });
+
+  it("deleted target (404) → superseded", async () => {
+    const job = makeFailedJob();
+    mockGitHubError.value = Object.assign(new Error("Not Found"), { status: 404 });
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "check target" });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.superseded).toBe(true);
+    expect(job.data.gitwireDisposition.state).toBe("superseded");
+    expect(job.data.gitwireDisposition.reason).toContain("no longer exists");
+  });
+
+  it("GitHub read failure (5xx) → 503, disposition stays unresolved", async () => {
+    const job = makeFailedJob();
+    mockGitHubError.value = Object.assign(new Error("Server Error"), { status: 500 });
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "check target" });
+    expect(res.statusCode).toBe(503);
+    expect(job.retry).not.toHaveBeenCalled();
+    expect(job.data.gitwireDisposition).toBeUndefined(); // still unresolved
+  });
+
+  it("installation client unavailable → 503, disposition stays unresolved", async () => {
+    const job = makeFailedJob();
+    mockGetInstallationClient.mockRejectedValue(new Error("installation not found"));
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/retry`).send({ reason: "check target" });
+    expect(res.statusCode).toBe(503);
+    expect(job.data.gitwireDisposition).toBeUndefined();
   });
 });
