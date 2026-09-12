@@ -949,3 +949,149 @@ describe("Verification behavioral — node-executor pass receipts rejected (not 
     ).rejects.toThrow(/receipt result is 'fail', must be 'pass'/);
   });
 });
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// VI-02 — artifact-not-applied no-execution recording
+// ════════════════════════════════════════════════════════════════════════════
+
+async function createArtifactApplyFailedInput(overrides = {}) {
+  const base = await createInconclusiveVerificationInput();
+  return {
+    ...base,
+    commands: [],
+    exit_status: null,
+    output_refs: [],
+    output_hashes: [],
+    redacted_summary: "artifact_apply_failed: hash mismatch",
+    inconclusive_reason: "artifact_apply_failed",
+    ...overrides,
+  };
+}
+
+describe("Verification behavioral — VI-02 artifact-apply-failed no-execution recording", () => {
+  it("records the artifact-apply-failed shape exactly once with persisted inconclusive result", async () => {
+    const input = await createArtifactApplyFailedInput();
+    const result = await recordVerificationResult(1, input, {
+      actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+      expected_version: 1,
+      correlation_id: "vi02-corr-1",
+    });
+
+    // Returned proposal is redacted; the CAS write carries the transition
+    expect(result).toBeTruthy();
+    const updateCalls0 = mockClient.query.mock.calls.filter(
+      ([sql]) => sql && sql.includes("UPDATE repair_proposals")
+    );
+    expect(updateCalls0[0][1][1]).toBe("failed"); // status bind parameter
+
+    const updateCalls = mockClient.query.mock.calls.filter(
+      ([sql]) => sql && sql.includes("UPDATE repair_proposals")
+    );
+    const insertCalls = mockClient.query.mock.calls.filter(
+      ([sql]) => sql && sql.includes("INSERT INTO repair_proposal_events")
+    );
+    expect(updateCalls).toHaveLength(1);
+    expect(insertCalls).toHaveLength(1);
+
+    // Persisted shape: commands [], checks [], exit_status null, reason kept
+    const persisted = JSON.parse(updateCalls[0][1][0]);
+    expect(persisted.overall).toBe("inconclusive");
+    expect(persisted.inconclusive_reason).toBe("artifact_apply_failed");
+    expect(persisted.commands).toEqual([]);
+    expect(persisted.checks).toEqual([]);
+    expect(persisted.exit_status).toBeNull();
+  });
+
+  it("replay with the same fingerprint is a no-op (records exactly once)", async () => {
+    const input = await createArtifactApplyFailedInput();
+    // First call transitions proposed -> failed
+    await recordVerificationResult(1, input, {
+      actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+      expected_version: 1,
+    });
+    // Second call sees status=failed + same persisted fingerprint -> replay no-op
+    const baseProposal = createMockProposal({
+      status: "failed",
+      validation_result: JSON.stringify({
+        overall: "inconclusive",
+        inconclusive_reason: "artifact_apply_failed",
+        verification_fingerprint: input.verification_fingerprint,
+      }),
+    });
+    mockClient.query.mockImplementation((sql) => {
+      if (sql.includes("FOR UPDATE")) return Promise.resolve({ rows: [baseProposal] });
+      return Promise.resolve({ rows: [] });
+    });
+    mockClient.query.mockClear(); // isolate the replay call's write attempts
+    const replay = await recordVerificationResult(1, input, {
+      actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+      expected_version: 1,
+    });
+    expect(replay).toBeTruthy();
+    const updateCalls = mockClient.query.mock.calls.filter(
+      ([sql]) => sql && sql.includes("UPDATE repair_proposals")
+    );
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("rejects empty commands with overall pass (fail-closed at an earlier gate)", async () => {
+    const input = await createArtifactApplyFailedInput({ overall: "pass" });
+    // overall:pass without an execution receipt is rejected at the receipt
+    // gate before the commands guard; either way the shape stays fail-closed
+    // and never records.
+    await expect(
+      recordVerificationResult(1, input, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/execution_receipt_ref and execution_receipt_hash are required/);
+  });
+
+  it("rejects empty commands with overall fail", async () => {
+    const input = await createArtifactApplyFailedInput({ overall: "fail" });
+    await expect(
+      recordVerificationResult(1, input, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/non-empty array/);
+  });
+
+  it("rejects empty commands when inconclusive_reason is missing", async () => {
+    const input = await createArtifactApplyFailedInput({ inconclusive_reason: undefined });
+    await expect(
+      recordVerificationResult(1, input, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/non-empty array/);
+  });
+
+  it("rejects empty commands for a different inconclusive_reason", async () => {
+    const input = await createArtifactApplyFailedInput({ inconclusive_reason: "executor_error" });
+    await expect(
+      recordVerificationResult(1, input, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/non-empty array/);
+  });
+
+  it("non-empty inconclusive commands still go through canonical command-set validation", async () => {
+    // A non-empty command list that does NOT cover the plan's commands must
+    // still fail conformance — the VI-02 skip applies only to the exact
+    // no-execution shape.
+    const base = await createInconclusiveVerificationInput();
+    const partial = {
+      ...base,
+      commands: base.commands.slice(0, 1), // only one of the plan's commands
+    };
+    await expect(
+      recordVerificationResult(1, partial, {
+        actor_kind: ACTOR_KINDS.VERIFICATION_WORKER,
+        expected_version: 1,
+      })
+    ).rejects.toThrow(/Verification command validation failed/);
+  });
+});
