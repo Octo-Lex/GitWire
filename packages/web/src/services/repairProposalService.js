@@ -2062,7 +2062,21 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
       throw new Error(`Verification input field '${field}' is required`);
     }
   }
-  if (!Array.isArray(verificationInput.commands) || verificationInput.commands.length === 0) {
+  // VI-02: the sandbox's artifact-not-applied path is a legitimate no-execution
+  // outcome — nothing ran, so there are no executed commands and no command-
+  // versus-plan conformance to check. Recognize exactly this shape and
+  // nothing else: empty commands are permitted only for an inconclusive
+  // result whose structured reason is artifact_apply_failed.
+  const isArtifactApplyFailedNoExec =
+    verificationInput.overall === "inconclusive" &&
+    verificationInput.inconclusive_reason === "artifact_apply_failed" &&
+    Array.isArray(verificationInput.commands) &&
+    verificationInput.commands.length === 0;
+
+  if (
+    !Array.isArray(verificationInput.commands) ||
+    (verificationInput.commands.length === 0 && !isArtifactApplyFailedNoExec)
+  ) {
     throw new Error("Verification input commands must be a non-empty array");
   }
 
@@ -2190,12 +2204,17 @@ export async function recordVerificationResult(id, verificationInput = {}, optio
     // Comparing raw envelope.required_validation against executed commands
     // fails because the executor receives compiled command IDs (test, build),
     // not semantic IDs (test_or_build_result, policy_scope_check).
-    const compiledPlan = compileValidationPlan(envelope.required_validation, recorderEvidenceRefs);
-    const requiredCommands = compiledPlan.executable_commands;
-    const executedCommands = verificationInput.commands.map((c) => c.command).sort();
-    const commandCheck = validateCommandSetInternal(executedCommands, requiredCommands);
-    if (!commandCheck.valid) {
-      throw new Error(`Verification command validation failed: ${commandCheck.errors.join("; ")}`);
+    // VI-02: skipped only for the recognized artifact-not-applied
+    // no-execution shape; every other result validates commands against
+    // the plan exactly as before.
+    if (!isArtifactApplyFailedNoExec) {
+      const compiledPlan = compileValidationPlan(envelope.required_validation, recorderEvidenceRefs);
+      const requiredCommands = compiledPlan.executable_commands;
+      const executedCommands = verificationInput.commands.map((c) => c.command).sort();
+      const commandCheck = validateCommandSetInternal(executedCommands, requiredCommands);
+      if (!commandCheck.valid) {
+        throw new Error(`Verification command validation failed: ${commandCheck.errors.join("; ")}`);
+      }
     }
 
     // P0 FIX: Derive and validate aggregate result from command outcomes.

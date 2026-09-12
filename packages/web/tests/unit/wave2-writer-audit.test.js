@@ -71,8 +71,8 @@ const AUDIT = {
     { file: "services/repairProposalService.js", line: 1384, func: "transitionProposal", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
     { file: "services/repairProposalService.js", line: 1525, func: "recordCiEvidenceCollection", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
     { file: "services/repairProposalService.js", line: 1935, func: "recordPatchProposal", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
-    { file: "services/repairProposalService.js", line: 2345, func: "recordVerificationResult", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
-    { file: "services/repairProposalService.js", line: 3290, func: "recordCriticReview", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 2364, func: "recordVerificationResult", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
+    { file: "services/repairProposalService.js", line: 3309, func: "recordCriticReview", principalIdExpr: "params.principalId || options.principalId", contextSource: "caller params", legacyActor: "actor param", classification: "worker_auth_context" },
   ],
 
   managed_actions: [
