@@ -135,7 +135,7 @@ triageOperationsRouter.post("/failures/:jobId/disposition", async (req, res, nex
     }
     const decision = await authorize({
       principal: req.auth,
-      permission: "issue:update",
+      permission: "repository:update",
       resource: {
         type: "repository",
         installationId: payload.installation.id,
@@ -228,12 +228,14 @@ triageOperationsRouter.post("/failures/:jobId/retry", async (req, res, next) => 
     // Enforce repository-scoped authorization before allowing the retry.
     // authContext is observe-only (Wave 2); the central authorize() service
     // is the gate. Requires server-owned installationId + repositoryId.
+    // OA-01: canonical repository:update — the bootstrap admin and legacy-key
+    // roles grant it; issue:update is granted by no canonical role.
     if (!repository.id || !payload.installation?.id) {
       return res.status(422).json({ error: "Unusable historical payload — missing authoritative installation or repository IDs for authorization" });
     }
     const decision = await authorize({
       principal: req.auth,
-      permission: "issue:update",
+      permission: "repository:update",
       resource: {
         type: "repository",
         installationId: payload.installation.id,

@@ -318,6 +318,11 @@ describe("POST /api/triage/failures/:jobId/retry", () => {
     expect(retryCall).toBeTruthy();
     expect(retryCall[0].principalId).toBe("test-principal-uuid");
     expect(retryCall[0].principalId).not.toBe("attacker-controlled-id");
+    // OA-01: the retry gate requests the canonical repository:update permission
+    const authzCall = mockAuthorize.mock.calls.find(
+      (c) => c[0]?.resource?.type === "repository",
+    );
+    expect(authzCall[0].permission).toBe("repository:update");
   });
 
   it("12. retry reason is recorded in the decision log", async () => {
@@ -488,6 +493,29 @@ describe("TD-01 POST /api/triage/failures/:jobId/disposition", () => {
     const r2 = await supertest(app).post(`/api/triage/failures/${job.id}/disposition`).send({ state: "dismissed", reason: "ok" });
     expect(r1.statusCode).toBe(400);
     expect(r2.statusCode).toBe(400);
+  });
+
+  it("authorizes with the canonical repository:update permission (OA-01)", async () => {
+    const job = makeFailedJob();
+    const app = buildApp();
+    await supertest(app).post(`/api/triage/failures/${job.id}/disposition`).send({ state: "dismissed", reason: "permission pin" });
+    const authzCall = mockAuthorize.mock.calls.find((c) => c[0]?.resource?.type === "repository");
+    expect(authzCall).toBeTruthy();
+    expect(authzCall[0].permission).toBe("repository:update");
+    expect(authzCall[0].resource).toEqual({
+      type: "repository",
+      installationId: 11111,
+      repositoryId: 999,
+    });
+  });
+
+  it("denied authorization → 403 and no disposition written", async () => {
+    const job = makeFailedJob();
+    mockAuthorize.mockResolvedValue({ allowed: false, code: "permission_missing" });
+    const app = buildApp();
+    const res = await supertest(app).post(`/api/triage/failures/${job.id}/disposition`).send({ state: "dismissed", reason: "deny case" });
+    expect(res.statusCode).toBe(403);
+    expect(job.data.gitwireDisposition).toBeUndefined();
   });
 
   it("unknown job → 404; denied authorization → 403", async () => {
