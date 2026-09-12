@@ -72,6 +72,16 @@ describe('provider output-budget regression (Unit A)', () => {
     }
   });
 
+  it('ciHealWorker: CI-heal client connections pinned to IPv4 (RT-02 transport)', () => {
+    // The single ciHealWorker Anthropic constructor serves the CI-heal
+    // diagnosis path (diagnoseWithClaude) plus heal generation and log
+    // analysis in the same worker. Baseline before the fix: 37 'Claude
+    // diagnosis failed' APIConnectionError events in 6h of production logs
+    // against 250 failing CI runs of demand and zero heal PRs in >=2 days.
+    const src = readSrc('workers/ciHealWorker.js');
+    expect(src).toContain('new https.Agent({ keepAlive: true, family: 4 })');
+  });
+
   it('review duration fallback: 600 seconds (not 300)', () => {
     const src = readSrc('services/aiReviewService.js');
     expect(src).toContain('DEFAULT_MAX_DURATION_MS = 600000');
