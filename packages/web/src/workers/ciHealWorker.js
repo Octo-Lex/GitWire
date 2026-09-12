@@ -3,6 +3,7 @@
 // Flow: upsert run -> fetch logs -> diagnose -> generate patch -> create PR.
 
 import Anthropic from "@anthropic-ai/sdk";
+import https from "node:https";
 import { createWorker, QUEUES } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
@@ -29,6 +30,12 @@ import { redis } from "../lib/queue.js";
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
+  // RT-02: pin connections to IPv4. The provider resolver returns mixed
+  // A/AAAA records and the app container has no IPv6 route; the SDK's
+  // default address selection persistently fails fresh connections while
+  // family-4 succeeds (see triageWorker.js, aiReviewService.js, and the
+  // TR-01/RT-01 production evidence).
+  httpAgent: new https.Agent({ keepAlive: true, family: 4 }),
 });
 
 // ── Self-activity filter ──────────────────────────────────────────────────
@@ -320,7 +327,8 @@ async function healWorkflowRun({ payload }) {
       targetType: "pr", targetNumber: 0, pillar: "ci_healing",
       decision: "skipped",
       reason: "Policy waived: " + waiver.reason + " (by " + waiver.granted_by + ")",
-principalId,
+
+principalId,
       conditions: [{ check: "waiver_active(" + waiver.id + ")", result: true }],
     });
     return;
