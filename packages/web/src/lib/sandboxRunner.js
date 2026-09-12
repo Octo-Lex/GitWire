@@ -468,6 +468,20 @@ export async function runSandboxVerification(options) {
   // Apply artifact to source files (fail-closed on any mismatch)
   const applyResult = applyArtifact(sourceFiles, parsedArtifact);
   if (!applyResult.applied) {
+    // VI-02 amendment (no-execution digest binding): backend.run() is never
+    // called on this path, so the executor-service backend's module-load
+    // placeholder digest (sha256:0000...) would leak into the receipt and
+    // result even though the configured immutable validator identity is
+    // available and complete. Bind the no-execution result to the configured
+    // validator digest when the selected backend is executor-service and
+    // identity is complete; every other backend keeps the isolation digest,
+    // and incomplete executor-service identity stays fail-closed on the
+    // isolation value — the placeholder is never blessed.
+    const noExecutionDigest =
+      backend.id === "executor-service" && validatorImage.identity_complete
+        ? validatorImage.digest
+        : isolation.sandbox_image_digest;
+
     // Patch application failed — produce inconclusive result with receipt
     const receipt = buildExecutionReceipt({
       execution_backend_id: isolation.execution_backend_id,
@@ -476,7 +490,7 @@ export async function runSandboxVerification(options) {
       patch_artifact_hash,
       base_sha,
       input_bundle_hash,
-      sandbox_image_digest: isolation.sandbox_image_digest,
+      sandbox_image_digest: noExecutionDigest,
       validation_plan_hash,
       commands_executed: [],
       per_command_exit_statuses: [],
@@ -518,7 +532,7 @@ export async function runSandboxVerification(options) {
       commands: [],
       exit_status: null,
       validation_plan_hash,
-      sandbox_image_digest: isolation.sandbox_image_digest,
+      sandbox_image_digest: noExecutionDigest,
       limits_applied: appliedLimits,
       redacted_summary: `artifact_apply_failed: ${applyResult.failure}`,
       inconclusive_reason: "artifact_apply_failed",

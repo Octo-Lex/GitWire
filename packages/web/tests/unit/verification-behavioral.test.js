@@ -1095,3 +1095,99 @@ describe("Verification behavioral — VI-02 artifact-apply-failed no-execution r
     ).rejects.toThrow(/Verification command validation failed/);
   });
 });
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// VI-02 amendment — no-execution digest binding on the artifact-apply-failure path
+// ════════════════════════════════════════════════════════════════════════════
+
+describe("Verification behavioral — VI-02 amendment: no-execution digest binding", () => {
+  const CONFIGURED_DIGEST = "sha256:" + "a1b2c3d4".repeat(8);
+  const PINNED_REF = `ghcr.io/gitwire/validator@${CONFIGURED_DIGEST}`;
+  const PLACEHOLDER = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+  // An artifact whose edit targets a file absent from sourceFiles — applyArtifact
+  // fails closed ("source file not found") before any backend invocation.
+  const BAD_APPLY_ARTIFACT = JSON.stringify({
+    base_sha: HEAD_SHA,
+    files: [{ path: "src/missing.js", change_type: "fix", edits: [{ line_start: 1, line_end: 1, new_content: "// fix" }] }],
+  });
+
+  function runOpts(extra = {}) {
+    return {
+      artifactContent: BAD_APPLY_ARTIFACT,
+      base_sha: HEAD_SHA,
+      taskEnvelope: TASK_ENVELOPE,
+      sourceFiles: [{ path: "src/example.js", content: "original" }],
+      source_snapshot_hash: "sha256:snap",
+      patch_artifact_hash: "sha256:artifact",
+      input_bundle_hash: "sha256:bundle",
+      ...extra,
+    };
+  }
+
+  afterEach(() => {
+    delete process.env.GITWIRE_VALIDATOR_IMAGE_REF;
+    delete process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST;
+  });
+
+  it("executor-service + complete validator identity binds the configured digest; backend.run is never called", async () => {
+    process.env.GITWIRE_VALIDATOR_IMAGE_REF = PINNED_REF;
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = CONFIGURED_DIGEST;
+
+    const result = await runSandboxVerification(runOpts({ backend_id: "executor-service" }));
+
+    expect(result.overall).toBe("inconclusive");
+    expect(result.inconclusive_reason).toBe("artifact_apply_failed");
+    expect(result.commands).toEqual([]);
+    // Both the returned result and the execution receipt carry the configured
+    // immutable validator digest — not the backend's placeholder.
+    expect(result.sandbox_image_digest).toBe(CONFIGURED_DIGEST);
+    const receiptBody = JSON.parse(result.receipt.receipt_content);
+    expect(receiptBody.sandbox_image_digest).toBe(CONFIGURED_DIGEST);
+    // backend.run() was never invoked: a clean artifact-apply-failure return
+    // from the executor-service backend is only possible pre-execution.
+    expect(receiptBody.plan_execution_reason_codes).toContain("artifact_apply_failed");
+  });
+
+  it("incomplete validator identity stays fail-closed on the isolation placeholder", async () => {
+    // REF unset → identity incomplete → the zero placeholder must NOT be
+    // blessed into the configured slot.
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = CONFIGURED_DIGEST;
+
+    const result = await runSandboxVerification(runOpts({ backend_id: "executor-service" }));
+
+    expect(result.overall).toBe("inconclusive");
+    expect(result.sandbox_image_digest).toBe(PLACEHOLDER);
+    const receiptBody = JSON.parse(result.receipt.receipt_content);
+    expect(receiptBody.sandbox_image_digest).toBe(PLACEHOLDER);
+  });
+
+  it("node-executor backend behavior is unchanged on apply failure", async () => {
+    // With validator identity configured, the node backend must still bind its
+    // own static isolation digest — the amendment applies to executor-service only.
+    process.env.GITWIRE_VALIDATOR_IMAGE_REF = PINNED_REF;
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = CONFIGURED_DIGEST;
+
+    const result = await runSandboxVerification(runOpts({ backend_id: "node-executor" }));
+
+    expect(result.overall).toBe("inconclusive");
+    expect(result.sandbox_image_digest).toBe(SANDBOX_IMAGE_DIGEST);
+    expect(result.sandbox_image_digest).not.toBe(CONFIGURED_DIGEST);
+    const receiptBody = JSON.parse(result.receipt.receipt_content);
+    expect(receiptBody.sandbox_image_digest).toBe(SANDBOX_IMAGE_DIGEST);
+  });
+
+  it("non-executor-service default backend also keeps its isolation digest (unchanged)", async () => {
+    // Whatever the registry selects by default (docker-executor when a runtime
+    // is reachable, else node-executor), the amendment must not touch it.
+    process.env.GITWIRE_VALIDATOR_IMAGE_REF = PINNED_REF;
+    process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST = CONFIGURED_DIGEST;
+
+    const result = await runSandboxVerification(runOpts());
+    expect(result.overall).toBe("inconclusive");
+    expect(result.sandbox_image_digest).not.toBe(CONFIGURED_DIGEST);
+    const receiptBody = JSON.parse(result.receipt.receipt_content);
+    expect(receiptBody.sandbox_image_digest).toBe(result.sandbox_image_digest);
+  });
+});
