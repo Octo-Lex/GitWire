@@ -202,3 +202,77 @@ describe("Wave 2 — real authorize() integration", () => {
     expect(params).toContain("allowed");        // code
   });
 });
+
+// ── OA-01: TD-01 operator routes gate on repository:update ──────────────────
+// The bootstrap admin and legacy-key roles grant repository:update; no
+// canonical role grants issue:update. These regressions pin the permission
+// matrix the triage retry/disposition endpoints now depend on.
+describe("OA-01 — repository:update permission matrix", () => {
+  const REPO_RESOURCE = { type: "repository", installationId: 100, repositoryId: 200 };
+  const ACTIVE_PRINCIPAL = { principalId: "p1", authenticationMethod: "api_key" };
+
+  function mockPrincipalRow() {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: "p1", principal_type: "user", display_name: "test", status: "active", auth_epoch: 0, github_user_id: null, installation_id: null }],
+    });
+  }
+
+  it("bootstrap admin (fleet scope, repository:update) → ALLOWED", async () => {
+    mockPrincipalRow();
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ assignment_id: "a-admin", scope_type: "fleet", scope_id: null, permission: "repository:update" }],
+    });
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // decision-log insert
+
+    const decision = await authorize({ principal: ACTIVE_PRINCIPAL, permission: "repository:update", resource: REPO_RESOURCE });
+    expect(decision.allowed).toBe(true);
+    expect(decision.code).toBe(DecisionCode.ALLOWED);
+    expect(decision.matchedScopeType).toBe("fleet");
+  });
+
+  it("operator role (read/list only) → PERMISSION_MISSING for repository:update", async () => {
+    mockPrincipalRow();
+    // First query (scoped assignments): no rows. Second query
+    // (permission-anywhere, SQL-filtered to repository:update): also empty —
+    // the operator role holds only repository:read/list, so the engine sees
+    // no repository:update grant anywhere.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // decision-log insert
+
+    const decision = await authorize({ principal: ACTIVE_PRINCIPAL, permission: "repository:update", resource: REPO_RESOURCE });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe(DecisionCode.PERMISSION_MISSING);
+  });
+
+  it("unauthenticated sentinel (no principalId) → UNAUTHENTICATED", async () => {
+    const decision = await authorize({ principal: { principalId: null }, permission: "repository:update", resource: REPO_RESOURCE });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe(DecisionCode.UNAUTHENTICATED);
+  });
+
+  it("repository scoping preserved: repository-scoped grant on a DIFFERENT repository → SCOPE_MISMATCH", async () => {
+    mockPrincipalRow();
+    // Scoped-assignment query: no match for installation 100 / repository 200.
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    // Permission-anywhere query: the principal does hold repository:update,
+    // but only scoped to another repository.
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ assignment_id: "a-repo", scope_type: "repository", scope_id: "999", permission: "repository:update" }],
+    });
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // decision-log insert
+
+    const decision = await authorize({ principal: ACTIVE_PRINCIPAL, permission: "repository:update", resource: REPO_RESOURCE });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe(DecisionCode.SCOPE_MISMATCH);
+  });
+
+  it("repository resource without server-owned IDs → RESOURCE_UNKNOWN (scoping input contract)", async () => {
+    mockPrincipalRow();
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // decision-log insert
+
+    const decision = await authorize({ principal: ACTIVE_PRINCIPAL, permission: "repository:update", resource: { type: "repository" } });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe(DecisionCode.RESOURCE_UNKNOWN);
+  });
+});
