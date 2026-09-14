@@ -701,7 +701,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     if (checkRunId) {
       await finaliseCheckRun(octokit, owner, repo, checkRunId,
         shouldBlock ? "failure" : "success",
-        buildCheckOutput(findings, verdict, confidence, githubSummary, validation.scopeDroppedCount, coverageSummaryLine(finalCoverage))
+        buildCheckOutput(findings, verdict, confidence, githubSummary, validation.scopeDroppedCount, coverageSummaryLine(finalCoverage), publication.publishedOutcome)
       );
     }
 
@@ -942,6 +942,16 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
     needs_discussion:  "\uD83D\uDCAC Needs discussion",
     request_changes:   "\u274C Changes requested",
   };
+  // PB-01: the human-facing headline derives from the FINALIZED publication
+  // outcome, never the raw model verdict. An INCOMPLETE publication must
+  // never read as an approval — the model verdict stays visible on the
+  // judgment line below, where Evidence: INCOMPLETE qualifies it.
+  var OUTCOME_LABEL = {
+    APPROVE:          "\u2705 Approved",
+    NEEDS_DISCUSSION: "\uD83D\uDCAC Needs discussion",
+    REQUEST_CHANGES:  "\u274C Changes requested",
+    INCOMPLETE:       "\u26A0\uFE0F Review incomplete",
+  };
 
   var critical = findings.filter(function (f) { return f.severity === "critical"; });
   var high     = findings.filter(function (f) { return f.severity === "high"; });
@@ -952,7 +962,7 @@ async function postGitHubReview({ octokit, owner, repo, pr, findings, verdict, c
   var upheldFindings = findings.filter(function (f) { return f.adversarial_status === "upheld"; });
 
   var summaryLines = [
-    "## \uD83E\uDD16 AI Code Review \u2014 " + VERDICT_LABEL[verdict],
+    "## \uD83E\uDD16 AI Code Review \u2014 " + (OUTCOME_LABEL[publication.publishedOutcome] ?? VERDICT_LABEL[verdict]),
     "",
     "**Confidence:** " + confidence + " \u00B7 **Findings:** " + findings.length,
     "**AI judgment: " + (publication.judgment === "NEEDS_DISCUSSION" ? "NEEDS DISCUSSION" : publication.judgment) + "**" +
@@ -1163,9 +1173,16 @@ async function finaliseCheckRun(octokit, owner, repo, checkRunId, conclusion, ou
   });
 }
 
-function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCount, coverageLine) {
+function buildCheckOutput(findings, verdict, confidence, summary, scopeDroppedCount, coverageLine, publishedOutcome) {
   var ICONS = { approved: "\u2705", needs_discussion: "\uD83D\uDCAC", request_changes: "\u274C" };
-  var title = (ICONS[verdict] ?? "\uD83E\uDD16") + " AI Review \u2014 " + verdict.replace(/_/g, " ") + " (" + confidence + " confidence)";
+  // PB-01: the check title states the FINALIZED publication outcome. An
+  // INCOMPLETE publication reads as incomplete evidence, never as approved —
+  // the raw verdict glyph set only applies to outcomes it matches.
+  var OUTCOME_ICONS = { APPROVE: "\u2705", NEEDS_DISCUSSION: "\uD83D\uDCAC", REQUEST_CHANGES: "\u274C", INCOMPLETE: "\u26A0\uFE0F" };
+  var OUTCOME_WORDS = { APPROVE: "approved", NEEDS_DISCUSSION: "needs discussion", REQUEST_CHANGES: "changes requested", INCOMPLETE: "incomplete evidence" };
+  var title = (OUTCOME_ICONS[publishedOutcome] ?? ICONS[verdict] ?? "\uD83E\uDD16") +
+    " AI Review \u2014 " + (OUTCOME_WORDS[publishedOutcome] ?? verdict.replace(/_/g, " ")) +
+    " (" + confidence + " confidence)";
 
   var details = findings.map(function (f) {
     return "- **[" + f.severity.toUpperCase() + "]** " + f.title + (f.file ? " \u2014 `" + f.file + "`" : "") + "\n  " + f.description;

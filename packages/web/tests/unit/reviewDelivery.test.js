@@ -103,6 +103,7 @@ await jest.unstable_mockModule('../../src/services/adversarialReview.js', () => 
 }));
 
 const { reviewPR } = await import('../../src/services/aiReviewService.js');
+const { buildReviewBundle } = await import('../../src/services/reviewBundleService.js');
 
 const REPO = { id: 1, full_name: 'octo/repo', owner: { login: 'octo' }, name: 'repo' };
 
@@ -238,5 +239,82 @@ describe('review delivery boundary', () => {
     const r = await reviewPR({ pr: { number: 8, head: { sha: 'jkl' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
     expect(r).toBeNull();
     expect(reviewPostCalls(oct)).toHaveLength(0);
+  });
+});
+
+describe('PB-01 — headline derives from the finalized publication outcome', () => {
+  const CLEAN_REPORT = {
+    findings: [],
+    overall_correctness: 'patch is correct',
+    overall_explanation: 'no defects in the visible diff',
+    overall_confidence: 0.9,
+  };
+
+  const BUNDLE_BASE = {
+    bundle: '## PR Metadata\nTest PR\n## Changes\n```diff\n+hello\n```',
+    changedFiles: ['src/app.js', 'src/big.py'],
+    totalChars: 100,
+    coverageAdjustments: [],
+  };
+
+  function approvedOct() {
+    return mockOctokit({
+      'POST /repos/{owner}/{repo}/check-runs': { data: { id: 21 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'pb1' } } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [
+        { filename: 'src/app.js', status: 'modified', additions: 2, deletions: 1, patch: SMALL_PATCH },
+        { filename: 'src/big.py', status: 'added', additions: 941, deletions: 0, patch: '+huge'.repeat(4000) },
+      ] },
+      'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 400 } },
+    });
+  }
+
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify(CLEAN_REPORT) }], usage: { input_tokens: 10, output_tokens: 5 } });
+    mockQuery.mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+    mockQuery.mockResolvedValueOnce({ rows: [CONFIG_ROW] }).mockResolvedValueOnce({ rows: [{ id: 210 }] });
+    buildReviewBundle.mockReset();
+    buildReviewBundle.mockResolvedValue({ ...BUNDLE_BASE });
+  });
+
+  test('approved model verdict + patch_truncated coverage publishes Review incomplete, never an approval headline', async () => {
+    // The exact production shape of review 924 (Alsoul PR 31): the model
+    // approved, but one file's patch exceeded the 12k per-file cap and was
+    // truncated, so the finalized publication outcome is INCOMPLETE.
+    buildReviewBundle.mockResolvedValueOnce({
+      ...BUNDLE_BASE,
+      coverageAdjustments: [{ path: 'src/big.py', coverage: 'partial', reason: 'patch_truncated' }],
+    });
+
+    const oct = approvedOct();
+    const r = await reviewPR({ pr: { number: 31, head: { sha: 'pb1' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+
+    // The model verdict is still approved — the presentation must not be.
+    expect(r.verdict).toBe('approved');
+
+    const post = reviewPostCalls(oct)[0];
+    const headline = post.params.body.split('\n')[0];
+    expect(headline).toContain('Review incomplete');
+    expect(headline).not.toContain('Approved');
+
+    const patch = checkPatchCalls(oct).at(-1);
+    expect(patch.params.output.title).toContain('incomplete evidence');
+    expect(patch.params.output.title).not.toContain('approved');
+  });
+
+  test('COMPLETE approved publication keeps the approval headline', async () => {
+    const oct = approvedOct();
+    const r = await reviewPR({ pr: { number: 32, head: { sha: 'pb1' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+
+    expect(r.verdict).toBe('approved');
+    const post = reviewPostCalls(oct)[0];
+    const headline = post.params.body.split('\n')[0];
+    expect(headline).toContain('\u2705 Approved');
+
+    const patch = checkPatchCalls(oct).at(-1);
+    expect(patch.params.output.title).toContain('approved');
   });
 });
