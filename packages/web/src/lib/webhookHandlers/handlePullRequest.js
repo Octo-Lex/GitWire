@@ -49,6 +49,16 @@ export async function handlePullRequest(payload, deliveryId, ctx, meta = {}) {
       },
     }, { priority: 5 });
     ctx.logger.info({ pr: payload.pull_request?.number }, "PR synchronize — reconcile job queued");
+
+    // FR-02: truthfulness only — if a published GitWire review addresses an
+    // older head, mark it superseded. This never enqueues another AI review
+    // (review frequency on synchronize stays a separate policy decision).
+    await ctx.phase4Queue.add("supersede-review", {
+      pr:           payload.pull_request,
+      repository:   payload.repository,
+      installation: payload.installation,
+    }, { priority: 3 });
+    ctx.logger.info({ pr: payload.pull_request?.number }, "PR synchronize — supersession check queued");
   }
 
   // Managed actions: cleanup when PR is closed/merged
