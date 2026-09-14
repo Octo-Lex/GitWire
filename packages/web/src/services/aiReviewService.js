@@ -1090,6 +1090,106 @@ export function buildPublicationMarker(reviewRowId, repoId, prNumber, headSha) {
 }
 
 /**
+ * FR-02: mark the latest published review for a PR as superseded when the
+ * authoritative PR head has moved past the reviewed SHA. Called from the
+ * synchronize path — never enqueues another AI review (a review-frequency
+ * policy decision that stays out of scope).
+ *
+ * Race-safety contract:
+ *   - the comparison uses the CURRENT PR head from the GitHub API at
+ *     processing time, never the webhook payload's SHA (out-of-order
+ *     deliveries cannot downgrade a newer publication);
+ *   - only the LATEST published row is considered, so historical reviews
+ *     for older heads are preserved as evidence and never re-marked;
+ *   - a row already SUPERSEDED is a no-op, and the GitHub notice is
+ *     marker-anchored so repeated deliveries never duplicate it.
+ *
+ * @param {{ octokit: object, repository: object, pr: object }} input
+ * @returns {Promise<{action: "superseded"|"noop", reason?: string, from?: string, to?: string}>}
+ */
+export async function supersedePublishedReviewForPr({ octokit, repository, pr }) {
+  const owner = repository.owner?.login;
+  const repo = repository.name;
+  if (!owner || !repo || !pr?.number) {
+    return { action: "noop", reason: "unusable_input" };
+  }
+
+  // Latest PUBLISHED review only; unpublished/stale rows for the same PR are
+  // irrelevant (crashed runs, computed-not-submitted, etc.).
+  const { rows } = await db.query(
+    "SELECT id, commit_sha, github_review_id, check_run_id, integrity_state " +
+    "FROM ai_reviews " +
+    "WHERE repo_id = $1 AND pr_number = $2 " +
+    "  AND publication_state = 'published' AND github_review_id IS NOT NULL " +
+    "ORDER BY id DESC LIMIT 1",
+    [repository.id, pr.number]
+  );
+  const row = rows[0];
+  if (!row) return { action: "noop", reason: "no_published_review" };
+  if (row.integrity_state === "SUPERSEDED") return { action: "noop", reason: "already_superseded" };
+
+  // Authoritative head at processing time — not the event payload.
+  const { data: currentPr } = await octokit.request(
+    "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+    { owner, repo, pull_number: pr.number }
+  );
+  const currentHead = currentPr?.head?.sha ?? null;
+  if (!currentHead) return { action: "noop", reason: "head_unavailable" };
+  if (currentHead === row.commit_sha) return { action: "noop", reason: "head_matches_publication" };
+
+  // Exactly one visible notice, marker-anchored for idempotency.
+  const marker = "gitwire-pub-superseded:" + row.id + ":" + repository.id + ":" + pr.number + ":" + row.commit_sha;
+  let existing;
+  try {
+    existing = await findMarkerMatches(octokit, owner, repo, pr.number, marker);
+  } catch (lookupErr) {
+    // Fail closed: without a completed lookup we cannot prove the notice is
+    // absent, so do not post a potential duplicate. The next delivery
+    // retries.
+    logger.warn({ err: lookupErr.message || lookupErr, pr: pr.number }, "Supersession notice lookup failed — deferring");
+    return { action: "noop", reason: "notice_lookup_failed" };
+  }
+  if (existing.length > 0) {
+    await db.query(
+      "UPDATE ai_reviews SET integrity_state = 'SUPERSEDED', terminal_reason = 'head_superseded_post_publication' " +
+      "WHERE id = $1 AND integrity_state <> 'SUPERSEDED'",
+      [row.id]
+    );
+    return { action: "noop", reason: "notice_already_present" };
+  }
+
+  await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+    owner, repo, pull_number: pr.number, event: "COMMENT",
+    body:
+      "## \\u26A0\\uFE0F GitWire review superseded\\n" +
+      "The AI review below addressed head `" + row.commit_sha.slice(0, 12) + "\\u2026`; the PR head is now `" + currentHead.slice(0, 12) + "\\u2026`. " +
+      "The earlier review is retained as evidence but no longer describes the current code. No new AI review was auto-triggered.\\n" +
+      "<!-- " + marker + " -->",
+  });
+
+  await db.query(
+    "UPDATE ai_reviews SET integrity_state = 'SUPERSEDED', terminal_reason = 'head_superseded_post_publication' " +
+    "WHERE id = $1 AND integrity_state <> 'SUPERSEDED'",
+    [row.id]
+  );
+
+  if (row.check_run_id) {
+    await finaliseCheckRun(octokit, owner, repo, row.check_run_id, "neutral", {
+      title:   "\\u26A0\\uFE0F AI Review \\u2014 superseded (head moved)",
+      summary: "This review addressed head " + row.commit_sha.slice(0, 12) + "\\u2026; the PR has advanced to " + currentHead.slice(0, 12) + "\\u2026. " +
+               "Retained as evidence; no new review was auto-triggered.",
+      text:    "",
+    });
+  }
+
+  logger.info(
+    { repo: repository.full_name, pr: pr.number, reviewId: row.id, from: row.commit_sha.slice(0, 12), to: currentHead.slice(0, 12) },
+    "Published review superseded after synchronize"
+  );
+  return { action: "superseded", from: row.commit_sha, to: currentHead };
+}
+
+/**
  * Terminate an invocation that lost the publication to a concurrent owner:
  * truthful neutral check, durable terminal reason, no GitHub mutation.
  */

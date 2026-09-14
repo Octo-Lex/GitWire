@@ -52,6 +52,7 @@ jest.unstable_mockModule("../../src/services/checkRunFinalizer.js", () => ({
 
 jest.unstable_mockModule("../../src/services/aiReviewService.js", () => ({
   reviewPR: mockReviewPR,
+  supersedePublishedReviewForPr: jest.fn().mockResolvedValue({ action: "noop", reason: "no_published_review" }),
 }));
 
 jest.unstable_mockModule("../../src/services/idempotencyService.js", () => ({

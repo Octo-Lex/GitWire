@@ -6,6 +6,7 @@ import { createWorker, createQueue } from "../lib/queue.js";
 import { getInstallationClient }     from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { reviewPR }      from "../services/aiReviewService.js";
+import { supersedePublishedReviewForPr } from "../services/aiReviewService.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
@@ -241,6 +242,20 @@ export function startPhase4Worker() {
         const yesterday = new Date();
         yesterday.setUTCDate(yesterday.getUTCDate() - 1);
         await exportNightly(yesterday);
+        break;
+      }
+
+      case "supersede-review": {
+        // FR-02: mark a published review for an older head as superseded.
+        // Truthfulness only — no AI review is enqueued.
+        const { pr, repository, installation } = job.data;
+        if (!pr || !repository || !installation) return;
+        const octokit = wrapOctokit(await getInstallationClient(installation.id));
+        const result = await supersedePublishedReviewForPr({ octokit, repository, pr });
+        logger.info(
+          { pr: pr.number, repo: repository.full_name, action: result.action, reason: result.reason ?? null },
+          "Phase4: review supersession check"
+        );
         break;
       }
 
