@@ -576,3 +576,54 @@ describe("PC-01 final amendment: primary-inference retry ownership", () => {
     expect(mockReviewPR).not.toHaveBeenCalled();
   });
 });
+
+// ── PC-01 final amendment: producer-independent retry ────────────────────────
+// Manual /gitwire-run jobs own no check run. The retryability decision on a
+// repeated BullMQ attempt must therefore not depend on checkRunId: transient
+// provider failures re-run reviewPR; permanent outcomes are a clean no-op.
+describe("PC-01 final amendment: retry without an owned check run", () => {
+  const manualJobData = {
+    pr: { number: 16, head: { sha: "abc123" }, base: { ref: "main" }, user: { login: "contributor" }, id: 7777 },
+    repository: { id: 999, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+    installation: { id: 11111 },
+    checkRunId: null,
+  };
+
+  it("no-check job + persisted token_count_failed: attempt 2 invokes reviewPR", async () => {
+    mockCheckAndMark.mockResolvedValueOnce(true);
+    const countErr = new Error("Token count failed (transport): boom");
+    countErr.gitwireErrorCode = "E_TOKEN_COUNT_FAILED";
+    countErr.gitwireRejectionClass = "transport";
+    mockReviewPR.mockRejectedValueOnce(countErr);
+    await expect(processReviewJob(manualJobData)).rejects.toMatchObject({ gitwireErrorCode: "E_TOKEN_COUNT_FAILED" });
+
+    mockCheckAndMark.mockResolvedValueOnce(false);                 // marker exists
+    mockIsRetryableReviewFailure.mockResolvedValueOnce(true);      // token_count_failed
+    mockReviewPR.mockResolvedValueOnce({ verdict: "approved", blocked: false, findings: [] });
+    await processReviewJob(manualJobData, { attemptsMade: 1, attemptsStarted: 1 });
+    expect(mockReviewPR).toHaveBeenCalledTimes(2);
+  });
+
+  it("no-check job + persisted provider_failed: attempt 2 invokes reviewPR", async () => {
+    mockCheckAndMark.mockResolvedValueOnce(true);
+    const providerErr = new Error("Service unavailable");
+    providerErr.gitwireErrorCode = "E_REVIEW_PROVIDER_TRANSIENT";
+    providerErr.gitwireRejectionClass = "transport";
+    mockReviewPR.mockRejectedValueOnce(providerErr);
+    await expect(processReviewJob(manualJobData)).rejects.toMatchObject({ gitwireErrorCode: "E_REVIEW_PROVIDER_TRANSIENT" });
+
+    mockCheckAndMark.mockResolvedValueOnce(false);
+    mockIsRetryableReviewFailure.mockResolvedValueOnce(true);      // provider_failed
+    mockReviewPR.mockResolvedValueOnce({ verdict: "approved", blocked: false, findings: [] });
+    await processReviewJob(manualJobData, { attemptsMade: 1, attemptsStarted: 1 });
+    expect(mockReviewPR).toHaveBeenCalledTimes(2);
+  });
+
+  it("no-check job + permanent outcome: attempt 2 is a clean no-op (no re-run, no check side effects)", async () => {
+    mockCheckAndMark.mockResolvedValue(false);
+    mockIsRetryableReviewFailure.mockResolvedValue(false);         // permanent / success
+    await processReviewJob(manualJobData, { attemptsMade: 1, attemptsStarted: 1 });
+    expect(mockReviewPR).not.toHaveBeenCalled();
+    expect(mockFinalizeGitwireCheck).not.toHaveBeenCalled();
+  });
+});

@@ -139,17 +139,18 @@ export function startPhase4Worker() {
           }
           // ── Idempotency: distinguish fresh duplicate from repeated attempt ─
           if (!(await checkAndMark("ai_review", "pr-" + pr.number + "-" + (pr.head?.sha || "unknown")))) {
-            if (isRepeatedAttempt && ownedCheckRunId &&
+            // PC-01 v2.1: the marker records processing, not success, so a
+            // repeated BullMQ attempt consults the persisted review outcome.
+            // The retryability decision is PRODUCER-INDEPENDENT — manual
+            // /gitwire-run jobs own no check run, and BullMQ must remain the
+            // sole retry layer for transient provider failures regardless of
+            // check ownership. Deterministic failures and successes fall
+            // through to the check-state / no-op handling below.
+            if (isRepeatedAttempt &&
                 await isRetryableReviewFailure(repository.id, pr.number, pr.head?.sha || "unknown")) {
-              // PC-01 v2.1 amendment: the marker records processing, not
-              // success. A repeated attempt whose prior attempt failed with
-              // a retryable reason (transient token-count failure) must
-              // actually re-run the review instead of honoring the marker.
-              // Deterministic failures ('input_budget_exceeded') and
-              // successes fall through to the check-state logic below.
               logger.info(
                 { pr: pr.number, attemptsMade: job.attemptsMade, attemptsStarted: job.attemptsStarted },
-                "AI review repeated attempt after retryable token-count failure — re-running review"
+                "AI review repeated attempt after retryable provider failure — re-running review"
               );
               // fall through to the review path below
             } else if (isRepeatedAttempt && ownedCheckRunId) {
@@ -188,6 +189,16 @@ export function startPhase4Worker() {
                   ? "Prior AI review evaluation was interrupted (check status: " + checkStatus + ")"
                   : "Prior AI review evaluation was interrupted (check state unavailable)"
               ));
+              return;
+            } else if (isRepeatedAttempt) {
+              // Repeated attempt owning no check run (manual /gitwire-run
+              // producer) with no retryable failure: the prior attempt's
+              // persisted outcome stands. There is nothing to inspect,
+              // finalize, or present — a clean no-op with no side effects.
+              logger.info(
+                { pr: pr.number, attemptsMade: job.attemptsMade, attemptsStarted: job.attemptsStarted },
+                "AI review repeated attempt (no owned check, no retryable failure) — no-op"
+              );
               return;
             } else {
               // Fresh duplicate with its own checkRunId: finalize neutral.

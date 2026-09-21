@@ -748,6 +748,12 @@ describe('PC-01 v2.1: model-context admission', () => {
     mockQuery.mockReset();
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await expect(isRetryableReviewFailure(1, 2, 'abc')).resolves.toBe(false);
+
+    // DB lookup failure fails closed: without the persisted outcome we
+    // cannot prove retryability, so the marker keeps its dedupe meaning
+    mockQuery.mockReset();
+    mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+    await expect(isRetryableReviewFailure(1, 2, 'abc')).resolves.toBe(false);
   });
 
   test('transient PRIMARY inference failures rethrow as E_REVIEW_PROVIDER_TRANSIENT and persist provider_failed', async () => {
