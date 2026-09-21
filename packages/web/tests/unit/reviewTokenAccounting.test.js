@@ -210,3 +210,38 @@ describe('countInputTokens — shared deadline contract (PC-01 v2.1 final amendm
     expect(countOptions).toEqual([{}]);
   });
 });
+
+describe('countInputTokens — SDK-local retries disabled under the deadline', () => {
+  beforeEach(() => { mockCountTokens.mockReset(); countOptions.length = 0; });
+
+  test('deadline-bound calls carry both the shrinking timeout and maxRetries: 0', async () => {
+    mockCountTokens.mockResolvedValue({ input_tokens: 1 });
+    const deadline = Date.now() + 400;
+    await countInputTokens({ model: 'm', userPrompt: 'x', deadline });
+    expect(countOptions).toHaveLength(1);
+    expect(countOptions[0].timeout).toBeGreaterThan(0);
+    expect(countOptions[0].timeout).toBeLessThanOrEqual(400);
+    expect(countOptions[0].maxRetries).toBe(0);
+  });
+
+  test('sequential deadline-bound calls all carry maxRetries: 0 with shrinking timeouts', async () => {
+    mockCountTokens.mockImplementation(async () => {
+      await new Promise((res) => setTimeout(res, 100));
+      return { input_tokens: 1 };
+    });
+    const deadline = Date.now() + 450;
+    await countInputTokens({ model: 'm', userPrompt: 'a', deadline });
+    await countInputTokens({ model: 'm', userPrompt: 'b', deadline });
+    await countInputTokens({ model: 'm', userPrompt: 'c', deadline });
+    expect(countOptions).toHaveLength(3);
+    for (const opts of countOptions) expect(opts.maxRetries).toBe(0);
+    expect(countOptions[1].timeout).toBeLessThanOrEqual(countOptions[0].timeout);
+    expect(countOptions[2].timeout).toBeLessThanOrEqual(countOptions[1].timeout);
+  });
+
+  test('without a deadline the call keeps SDK defaults (no timeout, no retry override)', async () => {
+    mockCountTokens.mockResolvedValueOnce({ input_tokens: 3 });
+    await countInputTokens({ model: 'm', userPrompt: 'x' });
+    expect(countOptions).toEqual([{}]);
+  });
+});

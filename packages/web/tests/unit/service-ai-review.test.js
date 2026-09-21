@@ -143,7 +143,7 @@ await jest.unstable_mockModule('../../src/services/reviewHeartbeat.js', () => ({
   withHeartbeat: jest.fn().mockImplementation(async (fn) => fn()),
 }));
 
-const { reviewPR } = await import('../../src/services/aiReviewService.js');
+const { reviewPR, isRetryableReviewFailure } = await import('../../src/services/aiReviewService.js');
 // Same mocked instance reviewPR resolves through (module is mocked above).
 const { withHeartbeat } = await import('../../src/services/reviewHeartbeat.js');
 
@@ -575,6 +575,7 @@ describe('PC-01 v2.1: model-context admission', () => {
   test('count failure fails the review visibly and never sends inference', async () => {
     const countErr = new Error('Token count failed (transport): boom');
     countErr.gitwireErrorCode = 'E_TOKEN_COUNT_FAILED';
+    countErr.gitwireRejectionClass = 'transport';
     countInputTokens.mockRejectedValueOnce(countErr);
     const oct = setupAdmissionReview(['src/a.js']);
     await expect(reviewPR({
@@ -664,6 +665,7 @@ describe('PC-01 v2.1: model-context admission', () => {
     expect(lastCreateRequestOptions).toBeTruthy();
     expect(lastCreateRequestOptions.timeout).toBeGreaterThan(0);
     expect(lastCreateRequestOptions.timeout).toBeLessThanOrEqual(600000);
+    expect(lastCreateRequestOptions.maxRetries).toBe(0);
     const [, hbOpts] = withHeartbeat.mock.calls[0];
     expect(hbOpts.timeoutMs).toBeGreaterThan(0);
     expect(hbOpts.timeoutMs).toBeLessThanOrEqual(600000);
@@ -690,5 +692,60 @@ describe('PC-01 v2.1: model-context admission', () => {
       repository: REPO, octokit: oct,
     })).rejects.toMatchObject({ gitwireErrorCode: 'E_REVIEW_DEADLINE_EXCEEDED', gitwireRejectionClass: 'timeout' });
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  test('count-failure rejection class decides the persisted terminal reason', async () => {
+    const cases = [
+      ['timeout', 'token_count_failed'],
+      ['transport', 'token_count_failed'],
+      ['rate_limit', 'token_count_failed'],
+      ['auth_entitlement', 'token_count_permanent'],
+      ['quota', 'token_count_permanent'],
+      ['other', 'token_count_permanent'],
+    ];
+    for (const [rejectionClass, expectedReason] of cases) {
+      mockQuery.mockReset();
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, ignore_patterns: [] }] })
+        .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+        .mockImplementation((sql) => (String(sql).includes('publication_claimed_at = NOW()') ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+      const countErr = new Error('Token count failed (' + rejectionClass + '): simulated');
+      countErr.gitwireErrorCode = 'E_TOKEN_COUNT_FAILED';
+      countErr.gitwireRejectionClass = rejectionClass;
+      countInputTokens.mockReset();
+      countInputTokens.mockRejectedValueOnce(countErr);
+      const oct = mockOctokit({
+        'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/a.js', status: 'modified', additions: 1, deletions: 0, patch: '+a' }] },
+        'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      });
+      await expect(reviewPR({
+        pr: { number: 50, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+        repository: REPO, octokit: oct,
+      })).rejects.toMatchObject({ gitwireErrorCode: 'E_TOKEN_COUNT_FAILED' });
+      const updateCall = mockQuery.mock.calls.find((c) => String(c[0]).includes('terminal_reason = $2'));
+      expect(updateCall).toBeTruthy();
+      expect([rejectionClass, updateCall[1][1]]).toEqual([rejectionClass, expectedReason]);
+    }
+  });
+
+  test('isRetryableReviewFailure re-enters reviewPR only for token_count_failed', async () => {
+    const reasons = [
+      ['token_count_failed', true],
+      ['token_count_permanent', false],
+      ['input_budget_exceeded', false],
+      ['deadline_exceeded', false],
+      ['error', false],
+    ];
+    for (const [reason, expected] of reasons) {
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce({ rows: [{ terminal_reason: reason }] });
+      await expect(isRetryableReviewFailure(1, 2, 'abc'))
+        .resolves.toBe(expected);
+    }
+    // no persisted row at all — fail closed onto the marker semantics
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await expect(isRetryableReviewFailure(1, 2, 'abc')).resolves.toBe(false);
   });
 });

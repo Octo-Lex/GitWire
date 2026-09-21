@@ -158,7 +158,13 @@ export async function countInputTokens({ model, system, userPrompt, deadline }) 
       logger.error({ model, deadline }, "Token count refused — review deadline already expired");
       throw expired;
     }
+    // The SDK retries connection failures, 408/409/429, and 5xx twice by
+    // default, with the timeout applying PER ATTEMPT — SDK-managed retries
+    // could therefore run past the deadline without GitWire regaining
+    // control. Under the PC-01 deadline the SDK owns no retries (maxRetries
+    // 0); BullMQ's bounded attempts are the only recovery layer.
     requestOptions.timeout = remaining;
+    requestOptions.maxRetries = 0;
   }
   try {
     const res = await anthropic.messages.countTokens(

@@ -1004,7 +1004,11 @@ async function runStructuredReview(request, opts) {
     expired.gitwireRejectionClass = "timeout";
     throw expired;
   }
-  const requestOptions = remaining !== undefined ? { timeout: remaining } : {};
+  // SDK-local retries are disabled under the deadline (they retry per
+  // attempt with the timeout applying each time, which could outrun the
+  // deadline without GitWire regaining control); BullMQ's bounded attempts
+  // are the only recovery layer for this path.
+  const requestOptions = remaining !== undefined ? { timeout: remaining, maxRetries: 0 } : {};
   try {
     const message = await anthropic.messages.create(
       {
@@ -1506,15 +1510,24 @@ export function shouldRunDefense(mode, triggers, findings, challenges, missedRis
 
 /**
  * Terminal reasons for which a repeated BullMQ attempt should actually
- * re-run the review. Token-counting failures are transient provider
- * conditions (timeout/transport/rate-limit classed by the accounting layer);
- * a retry can succeed. Deterministic enforcement failures
- * ('input_budget_exceeded') and everything else must NOT re-run.
+ * re-run the review. Only TRANSIENT token-counting failures retry:
+ * timeout, transport, and rate-limit classed conditions a later
+ * exponential-backoff attempt can plausibly repair. Permanent classes
+ * (auth_entitlement, quota, other) persist as 'token_count_permanent'
+ * and never re-enter reviewPR — the queue's remaining attempts cannot
+ * repair them. Deterministic enforcement failures
+ * ('input_budget_exceeded') and deadline exhaustion
+ * ('deadline_exceeded') also never re-run.
  */
+const RETRYABLE_COUNT_FAILURE_CLASSES = new Set(["timeout", "transport", "rate_limit"]);
 const RETRYABLE_REVIEW_FAILURE_REASONS = new Set(["token_count_failed"]);
 
 function reviewErrorTerminalReason(err) {
-  if (err?.gitwireErrorCode === "E_TOKEN_COUNT_FAILED") return "token_count_failed";
+  if (err?.gitwireErrorCode === "E_TOKEN_COUNT_FAILED") {
+    return RETRYABLE_COUNT_FAILURE_CLASSES.has(err.gitwireRejectionClass)
+      ? "token_count_failed"
+      : "token_count_permanent";
+  }
   if (err?.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED") return "input_budget_exceeded";
   if (err?.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED") return "deadline_exceeded";
   return "error";

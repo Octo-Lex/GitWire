@@ -496,3 +496,49 @@ describe("PC-01 final amendment: head-sha key consistency", () => {
     expect(mockIsRetryableReviewFailure).toHaveBeenCalledWith(999, 16, "abc123");
   });
 });
+
+describe("PC-01 final amendment: class-aware retry eligibility", () => {
+  const classJobData = {
+    pr: { number: 16, head: { sha: "abc123" }, base: { ref: "main" }, user: { login: "contributor" }, id: 7777 },
+    repository: { id: 999, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+    installation: { id: 11111 },
+    checkRunId: 5000,
+  };
+  const transient = ["timeout", "transport", "rate_limit"];
+  for (const cls of transient) {
+    it(cls + " count failure: attempt 2 re-runs reviewPR", async () => {
+      mockCheckAndMark.mockResolvedValueOnce(true);
+      const countErr = new Error("Token count failed (" + cls + "): simulated");
+      countErr.gitwireErrorCode = "E_TOKEN_COUNT_FAILED";
+      countErr.gitwireRejectionClass = cls;
+      mockReviewPR.mockRejectedValueOnce(countErr);
+      await expect(processReviewJob(classJobData)).rejects.toMatchObject({ gitwireErrorCode: "E_TOKEN_COUNT_FAILED" });
+
+      mockCheckAndMark.mockResolvedValueOnce(false);
+      mockIsRetryableReviewFailure.mockResolvedValueOnce(true); // persisted reason: token_count_failed
+      mockReviewPR.mockResolvedValueOnce({ verdict: "approved", blocked: false, findings: [] });
+      await processReviewJob(classJobData, { attemptsMade: 1, attemptsStarted: 1 });
+      expect(mockReviewPR).toHaveBeenCalledTimes(2);
+    });
+  }
+
+  it("permanent classes never re-enter reviewPR on attempt 2", async () => {
+    for (const cls of ["auth_entitlement", "quota", "other"]) {
+      jest.clearAllMocks();
+      mockGetConfigForRepo.mockResolvedValue({});
+      mockIsPillarEnabled.mockReturnValue(true);
+      mockShouldTrigger.mockReturnValue(true);
+      mockIsWaived.mockResolvedValue(null);
+      mockIsDryRun.mockReturnValue(false);
+      mockCheckAndMark.mockResolvedValue(false);
+      mockFinalizeGitwireCheck.mockResolvedValue(true);
+      mockGetInstallationClient.mockResolvedValue({ request: jest.fn().mockResolvedValue({ data: { status: "completed" } }) });
+      mockAdoptWorker.mockResolvedValue({ context: { principalId: "p1" } });
+      // persisted reason for these classes is token_count_permanent
+      mockIsRetryableReviewFailure.mockResolvedValue(false);
+      await processReviewJob(classJobData, { attemptsMade: 1, attemptsStarted: 1 });
+      expect(mockReviewPR).not.toHaveBeenCalled();
+      expect(mockIsRetryableReviewFailure).toHaveBeenCalledWith(999, 16, "abc123");
+    }
+  });
+});
