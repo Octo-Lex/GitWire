@@ -34,6 +34,8 @@ const mockIsWaived = jest.fn();
 const mockGetInstallationClient = jest.fn();
 const mockWrapOctokit = jest.fn((c) => c);
 const mockIsRetryableReviewFailure = jest.fn();
+const mockGetRetryOutcome = jest.fn();
+const mockClearRetryOutcome = jest.fn();
 const mockAdoptWorker = jest.fn();
 const mockWorkerPrincipalId = jest.fn(() => "p1");
 
@@ -46,8 +48,8 @@ jest.unstable_mockModule("../../src/lib/queue.js", () => ({
 
 jest.unstable_mockModule("../../src/services/checkRunFinalizer.js", () => ({
   finalizeGitwireCheck: mockFinalizeGitwireCheck,
-  getRetryOutcome: jest.fn().mockResolvedValue(null),
-  clearRetryOutcome: jest.fn().mockResolvedValue(undefined),
+  getRetryOutcome: mockGetRetryOutcome,
+  clearRetryOutcome: mockClearRetryOutcome,
   replayCheckConclusion: jest.fn().mockResolvedValue(true),
 }));
 
@@ -142,6 +144,8 @@ beforeEach(() => {
   mockGetInstallationClient.mockResolvedValue({ request: jest.fn() });
   mockAdoptWorker.mockResolvedValue({ context: { principalId: "p1" } });
   mockIsRetryableReviewFailure.mockResolvedValue(false);
+  mockGetRetryOutcome.mockResolvedValue(null);
+  mockClearRetryOutcome.mockResolvedValue(undefined);
 });
 
 // Helper: invoke the worker's processor for an ai-review job
@@ -623,6 +627,57 @@ describe("PC-01 final amendment: retry without an owned check run", () => {
     mockCheckAndMark.mockResolvedValue(false);
     mockIsRetryableReviewFailure.mockResolvedValue(false);         // permanent / success
     await processReviewJob(manualJobData, { attemptsMade: 1, attemptsStarted: 1 });
+    expect(mockReviewPR).not.toHaveBeenCalled();
+    expect(mockFinalizeGitwireCheck).not.toHaveBeenCalled();
+  });
+});
+
+// ── PC-01 final amendment: stored-replay cannot consume the retry ────────────
+// A replayed failure conclusion is presentation work, not the review outcome.
+// On a repeated attempt whose persisted failure is retryable, the replay must
+// fall through so reviewPR reruns and its result finalizes the owned check.
+describe("PC-01 final amendment: replay-before-retry", () => {
+  const rpJobData = {
+    pr: { number: 16, head: { sha: "abc123" }, base: { ref: "main" }, user: { login: "contributor" }, id: 7777 },
+    repository: { id: 999, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+    installation: { id: 11111 },
+    checkRunId: 5000,
+  };
+  const storedOutcome = { conclusion: "failure", title: "❌ AI review delivery style failure", summary: "stored for replay" };
+
+  it("transient failure + failed failure-PATCH → attempt 2 replays stored outcome, then reruns reviewPR which finalizes the owned check", async () => {
+    // Attempt 1: review fails transiently; the failure-finalization PATCH
+    // itself fails, so the outcome is stored for replay and the job throws.
+    mockCheckAndMark.mockResolvedValueOnce(true);
+    const transient = new Error("Service unavailable");
+    transient.gitwireErrorCode = "E_REVIEW_PROVIDER_TRANSIENT";
+    transient.gitwireRejectionClass = "transport";
+    mockReviewPR.mockRejectedValueOnce(transient);
+    mockFinalizeGitwireCheck.mockResolvedValueOnce(false); // failure PATCH fails → stored
+    await expect(processReviewJob(rpJobData)).rejects.toThrow(/finalization PATCH failed/);
+
+    // Attempt 2: stored outcome replays successfully; the persisted reason is
+    // retryable → fall through → reviewPR reruns → its result finalizes.
+    mockGetRetryOutcome.mockResolvedValueOnce(storedOutcome);
+    mockIsRetryableReviewFailure.mockResolvedValue(true);   // sticky: replay branch AND marker branch
+    mockCheckAndMark.mockResolvedValueOnce(false);          // marker exists from attempt 1
+    mockReviewPR.mockResolvedValueOnce({ verdict: "approved", blocked: false, findings: [] });
+    await processReviewJob(rpJobData, { attemptsMade: 1, attemptsStarted: 1 });
+
+    expect(mockReviewPR).toHaveBeenCalledTimes(2);
+    expect(mockClearRetryOutcome).toHaveBeenCalled();
+    const successCalls = mockFinalizeGitwireCheck.mock.calls.filter(([a]) => a.reviewResult && !a.errorContext);
+    expect(successCalls.length).toBe(1);
+    expect(successCalls[0][0].checkRunId).toBe(5000);
+    expect(successCalls[0][0].reviewResult.verdict).toBe("approved");
+  });
+
+  it("replayed outcome + non-retryable persisted reason terminates without rerunning reviewPR", async () => {
+    mockGetRetryOutcome.mockResolvedValueOnce(storedOutcome);
+    mockIsRetryableReviewFailure.mockResolvedValue(false);  // permanent / success
+    await processReviewJob(rpJobData, { attemptsMade: 1, attemptsStarted: 1 });
+
+    expect(mockClearRetryOutcome).toHaveBeenCalled();
     expect(mockReviewPR).not.toHaveBeenCalled();
     expect(mockFinalizeGitwireCheck).not.toHaveBeenCalled();
   });

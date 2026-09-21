@@ -98,14 +98,28 @@ export function startPhase4Worker() {
               });
               if (patched) {
                 await clearRetryOutcome(repository.id, pr.number, pr.head.sha, ownedCheckRunId);
-                checkFinalized = true;
-                logger.info({ pr: pr.number }, "Stored check finalization replayed successfully");
-                return;
+                // PC-01 v2.1: a replayed failure conclusion is presentation
+                // work, not the review outcome. On a repeated attempt whose
+                // persisted review failure is retryable (token_count_failed /
+                // provider_failed), the replay must NOT terminate the job:
+                // reviewPR reruns, and its eventual result or failure
+                // finalizes this owned check normally. Only non-retryable
+                // outcomes keep the replay as terminal.
+                const replayedOutcomeRetryable = isRepeatedAttempt &&
+                  await isRetryableReviewFailure(repository.id, pr.number, pr.head?.sha || "unknown");
+                if (!replayedOutcomeRetryable) {
+                  checkFinalized = true;
+                  logger.info({ pr: pr.number }, "Stored check finalization replayed successfully");
+                  return;
+                }
+                logger.info({ pr: pr.number }, "Stored check finalization replayed — retryable review failure, rerunning review");
+                // fall through WITHOUT checkFinalized so the rerun finalizes
+              } else {
+                // Replay PATCH failed again — set sentinel and throw for retry.
+                // Do NOT enter finalizeOwnFailure (the stored outcome is correct).
+                patchRetryPending = true;
+                throw new Error("GitWire check finalization PATCH failed on retry — will retry again");
               }
-              // Replay PATCH failed again — set sentinel and throw for retry.
-              // Do NOT enter finalizeOwnFailure (the stored outcome is correct).
-              patchRetryPending = true;
-              throw new Error("GitWire check finalization PATCH failed on retry — will retry again");
             }
           }
 
