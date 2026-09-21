@@ -295,13 +295,28 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       repoName: repository.full_name,
     };
 
-    // ── 5b. Model-context admission (PC-01 v2.1) ─────────────────────────────
-    // Count the EXACT complete request via the provider's count_tokens. If it
-    // fits the frozen 958,016-input-token ceiling, send the whole PR. On
-    // overflow the allocation is deterministic in existing file order and the
-    // omitted files are marked bundle_truncated. A count failure fails the
-    // review visibly — evidence is never admitted by estimate.
-    const admission = await admitPrimaryReviewEvidence({ bundleParts, changedFiles, opts: reviewOpts });
+    // ── 5b/6 provider work shares ONE deadline (PC-01 v2.1 final amendment) ─
+    // Token admission and the primary inference call may not serially
+    // consume more than the configured review deadline (max_duration_seconds,
+    // default 600 s). The deadline is absolute: every provider call below is
+    // bounded by the REMAINING slice, which only shrinks — a chain of
+    // count_tokens calls can never reset the budget per call, and inference
+    // cannot begin once the deadline has expired.
+    const maxDurationMs = cfg.max_duration_seconds
+      ? cfg.max_duration_seconds * 1000
+      : DEFAULT_MAX_DURATION_MS;
+    const providerDeadline = Date.now() + maxDurationMs;
+
+    const admission = await admitPrimaryReviewEvidence({
+      bundleParts, changedFiles, opts: reviewOpts, deadline: providerDeadline,
+    });
+
+    if (providerDeadline - Date.now() <= 0) {
+      const deadlineErr = new Error("Review deadline expired during token admission — refusing inference");
+      deadlineErr.gitwireErrorCode = "E_REVIEW_DEADLINE_EXCEEDED";
+      deadlineErr.gitwireRejectionClass = "timeout";
+      throw deadlineErr;
+    }
 
     // Aggregate-budget truncation downgrades affected files from full to
     // partial; incomplete evidence must reach the publication decision, not
@@ -315,15 +330,15 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     );
 
     // ── 6. Run structured review with heartbeat ──────────────────────────────
-    const maxDurationMs = cfg.max_duration_seconds
-      ? cfg.max_duration_seconds * 1000
-      : DEFAULT_MAX_DURATION_MS;
-
+    // withHeartbeat races but does not cancel the losing operation, so the
+    // real bound is the per-request provider timeout set inside
+    // runStructuredReview from the same shared deadline; the heartbeat is
+    // the reporting/backstop layer on top.
     const { rawText, tokensUsed } = await withHeartbeat(
       function () {
-        return runStructuredReview(admission.request, { model: reviewOpts.model });
+        return runStructuredReview(admission.request, { model: reviewOpts.model, deadline: providerDeadline });
       },
-      { label: "claude review", timeoutMs: maxDurationMs }
+      { label: "claude review", timeoutMs: Math.max(1, providerDeadline - Date.now()) }
     );
 
     // ── 7. Extract JSON with cascade ─────────────────────────────────────────
@@ -826,7 +841,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       err.gitwireErrorCode === "E_HEAD_CONFIRMATION" ||
       err.gitwireErrorCode === "E_PUBLICATION_STATE" ||
       err.gitwireErrorCode === "E_TOKEN_COUNT_FAILED" ||
-      err.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED"
+      err.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED" ||
+      err.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED"
     )) {
       throw err;
     }
@@ -908,12 +924,12 @@ function buildReviewRequest(bundle, changedFiles, opts) {
  * allocation is conservative by construction and the final re-count is the
  * authoritative gate. Exported as the replay/diagnostic seam (PC-01).
  */
-export async function admitPrimaryReviewEvidence({ bundleParts, changedFiles, opts }) {
+export async function admitPrimaryReviewEvidence({ bundleParts, changedFiles, opts, deadline }) {
   const model = opts.model || DEFAULT_MODEL;
 
   const complete = buildReviewRequest(bundleParts.bundle, changedFiles, opts);
   const requestedTokens = await countInputTokens({
-    model, system: complete.system, userPrompt: complete.userPrompt,
+    model, system: complete.system, userPrompt: complete.userPrompt, deadline,
   });
 
   if (requestedTokens <= MAX_PRIMARY_INPUT_TOKENS) {
@@ -932,16 +948,16 @@ export async function admitPrimaryReviewEvidence({ bundleParts, changedFiles, op
   }
 
   // Overflow: count the zero-evidence skeleton, then admit whole sections
-  // while the remaining budget allows.
+  // while the remaining budget allows. Every count is deadline-bounded.
   const skeleton = bundleParts.reassemble(0);
   const skeletonRequest = buildReviewRequest(skeleton.bundle, changedFiles, opts);
   const skeletonTokens = await countInputTokens({
-    model, system: skeletonRequest.system, userPrompt: skeletonRequest.userPrompt,
+    model, system: skeletonRequest.system, userPrompt: skeletonRequest.userPrompt, deadline,
   });
   let remaining = MAX_PRIMARY_INPUT_TOKENS - skeletonTokens;
   let admittedFiles = 0;
   for (const section of bundleParts.fileSections) {
-    const sectionTokens = await countInputTokens({ model, userPrompt: section.text });
+    const sectionTokens = await countInputTokens({ model, userPrompt: section.text, deadline });
     if (sectionTokens > remaining) break;
     remaining -= sectionTokens;
     admittedFiles++;
@@ -950,7 +966,7 @@ export async function admitPrimaryReviewEvidence({ bundleParts, changedFiles, op
   const allocated = bundleParts.reassemble(admittedFiles);
   const allocatedRequest = buildReviewRequest(allocated.bundle, changedFiles, opts);
   const finalTokens = await countInputTokens({
-    model, system: allocatedRequest.system, userPrompt: allocatedRequest.userPrompt,
+    model, system: allocatedRequest.system, userPrompt: allocatedRequest.userPrompt, deadline,
   });
   if (finalTokens > MAX_PRIMARY_INPUT_TOKENS) {
     const budgetErr = new Error(
@@ -977,13 +993,28 @@ export async function admitPrimaryReviewEvidence({ bundleParts, changedFiles, op
 }
 
 async function runStructuredReview(request, opts) {
+  // Shared-deadline gate: inference may not BEGIN after the review deadline
+  // expired, and when it begins it is bounded by the remaining slice via the
+  // per-request provider timeout (withHeartbeat races but does not cancel,
+  // so this per-request bound is the hard one).
+  const remaining = opts.deadline !== undefined ? opts.deadline - Date.now() : undefined;
+  if (remaining !== undefined && remaining <= 0) {
+    const expired = new Error("Review deadline expired before inference — refusing to start the model call");
+    expired.gitwireErrorCode = "E_REVIEW_DEADLINE_EXCEEDED";
+    expired.gitwireRejectionClass = "timeout";
+    throw expired;
+  }
+  const requestOptions = remaining !== undefined ? { timeout: remaining } : {};
   try {
-    const message = await anthropic.messages.create({
-      model:      opts.model || DEFAULT_MODEL,
-      max_tokens: 32768,
-      system:     request.system,
-      messages:   [{ role: "user", content: request.userPrompt }],
-    });
+    const message = await anthropic.messages.create(
+      {
+        model:      opts.model || DEFAULT_MODEL,
+        max_tokens: 32768,
+        system:     request.system,
+        messages:   [{ role: "user", content: request.userPrompt }],
+      },
+      requestOptions
+    );
 
     var text = "";
     if (Array.isArray(message.content)) {
@@ -1485,6 +1516,7 @@ const RETRYABLE_REVIEW_FAILURE_REASONS = new Set(["token_count_failed"]);
 function reviewErrorTerminalReason(err) {
   if (err?.gitwireErrorCode === "E_TOKEN_COUNT_FAILED") return "token_count_failed";
   if (err?.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED") return "input_budget_exceeded";
+  if (err?.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED") return "deadline_exceeded";
   return "error";
 }
 

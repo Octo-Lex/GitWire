@@ -56,13 +56,15 @@ await jest.unstable_mockModule('../../src/services/pipelineEvents.js', () => ({
 const mockCreate = jest.fn();
 const anthropicCtorOptions = [];
 let lastCreateCtorOptions = null;
+let lastCreateRequestOptions = null;
 await jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
   default: class {
     constructor(options) {
       anthropicCtorOptions.push(options);
       this.messages = {
-        create: (request) => {
+        create: (request, requestOptions) => {
           lastCreateCtorOptions = options;
+          lastCreateRequestOptions = requestOptions;
           return mockCreate(request);
         },
       };
@@ -351,7 +353,10 @@ describe('aiReviewService (bundle-driven v2)', () => {
       });
       expect(r).toBeTruthy();
       expect(withHeartbeat).toHaveBeenCalledTimes(1);
-      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 600000 });
+      const [, hbOpts600] = withHeartbeat.mock.calls[0];
+      expect(hbOpts600.label).toBe('claude review');
+      expect(hbOpts600.timeoutMs).toBeGreaterThan(595000);
+      expect(hbOpts600.timeoutMs).toBeLessThanOrEqual(600000);
     });
 
     test('config row omitting max_duration_seconds falls back to the 600 s default', async () => {
@@ -362,7 +367,10 @@ describe('aiReviewService (bundle-driven v2)', () => {
         octokit: oct,
       });
       expect(r).toBeTruthy();
-      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 600000 });
+      const [, hbOptsDef] = withHeartbeat.mock.calls[0];
+      expect(hbOptsDef.label).toBe('claude review');
+      expect(hbOptsDef.timeoutMs).toBeGreaterThan(595000);
+      expect(hbOptsDef.timeoutMs).toBeLessThanOrEqual(600000);
     });
 
     test('explicit operator-set duration is honored (resolution is row-driven, not hardcoded)', async () => {
@@ -372,7 +380,10 @@ describe('aiReviewService (bundle-driven v2)', () => {
         repository: REPO,
         octokit: oct,
       });
-      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 300000 });
+      const [, hbOpts300] = withHeartbeat.mock.calls[0];
+      expect(hbOpts300.label).toBe('claude review');
+      expect(hbOpts300.timeoutMs).toBeGreaterThan(295000);
+      expect(hbOpts300.timeoutMs).toBeLessThanOrEqual(300000);
     });
   });
 
@@ -639,5 +650,45 @@ describe('PC-01 v2.1: model-context admission', () => {
       expect(rec.coverage).toBe('partial');
       expect(rec.reason).toBe('bundle_truncated');
     }
+  });
+
+  test('admission and inference share one deadline — inference receives only the remainder', async () => {
+    const oct = setupAdmissionReview(['src/a.js']);
+    const t0 = Date.now();
+    const r = await reviewPR({ pr: { number: 48, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+    expect(r).toBeTruthy();
+    const counted = countInputTokens.mock.calls[0][0];
+    expect(counted.deadline).toBeGreaterThan(t0 + 595000);
+    // deadline = now + maxDuration is captured after t0, so allow capture slack
+    expect(counted.deadline).toBeLessThanOrEqual(t0 + 605000);
+    expect(lastCreateRequestOptions).toBeTruthy();
+    expect(lastCreateRequestOptions.timeout).toBeGreaterThan(0);
+    expect(lastCreateRequestOptions.timeout).toBeLessThanOrEqual(600000);
+    const [, hbOpts] = withHeartbeat.mock.calls[0];
+    expect(hbOpts.timeoutMs).toBeGreaterThan(0);
+    expect(hbOpts.timeoutMs).toBeLessThanOrEqual(600000);
+  });
+
+  test('deadline expiration during token counting prevents inference (shared-deadline gate)', async () => {
+    mockQuery.mockReset();
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, max_duration_seconds: 0.05, ignore_patterns: [] }] })
+      .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+      .mockImplementation((sql) => (String(sql).includes('publication_claimed_at = NOW()') ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+    countInputTokens.mockImplementation(async () => {
+      await new Promise((res) => setTimeout(res, 80));   // outlives the 50 ms deadline
+      return 1000;
+    });
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '{}' }], usage: { input_tokens: 1, output_tokens: 1 } });
+    const oct = mockOctokit({
+      'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/a.js', status: 'modified', additions: 1, deletions: 0, patch: '+a' }] },
+      'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+    });
+    await expect(reviewPR({
+      pr: { number: 49, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+      repository: REPO, octokit: oct,
+    })).rejects.toMatchObject({ gitwireErrorCode: 'E_REVIEW_DEADLINE_EXCEEDED', gitwireRejectionClass: 'timeout' });
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 });

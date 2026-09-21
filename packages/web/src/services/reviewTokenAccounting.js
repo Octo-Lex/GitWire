@@ -123,27 +123,52 @@ export function isPromptTooLongRejection(err) {
  * the provider's count_tokens endpoint, using the same model string the
  * send will use. No local fallback exists by design.
  *
+ * Deadline contract (PC-01 v2.1 final amendment): when `deadline` (an
+ * absolute epoch-ms timestamp) is provided, every count is bounded by the
+ * REMAINING time to that deadline — the per-request provider timeout equals
+ * the remaining slice, which only shrinks across sequential calls, so a
+ * chain of counts can never reset the budget per call. A count attempted at
+ * or past the deadline fails as a timeout-classed E_TOKEN_COUNT_FAILED
+ * before any provider request is made.
+ *
  * @param {object} opts
  * @param {string} opts.model      - exact model the send will use
  * @param {string} [opts.system]   - system prompt (counted: preflight-verified)
  * @param {string} opts.userPrompt - complete user message content
+ * @param {number} [opts.deadline] - absolute epoch-ms deadline for provider work
  * @returns {Promise<number>} the exact input token count, or **Infinity**
  *   when the provider's counter itself rejects the prompt as over the
  *   model's context limit — a definitive "larger than the admission
  *   ceiling" answer that callers must route into deterministic allocation,
  *   never into a failure.
  * @throws Error with gitwireErrorCode E_TOKEN_COUNT_FAILED for every other
- *   failure (transport, timeout, rate limit, quota, auth, malformed). The
- *   caller must fail visibly and never proceed to inference on an estimate.
+ *   failure (transport, timeout, rate limit, quota, auth, malformed, or a
+ *   passed deadline). The caller must fail visibly and never proceed to
+ *   inference on an estimate.
  */
-export async function countInputTokens({ model, system, userPrompt }) {
+export async function countInputTokens({ model, system, userPrompt, deadline }) {
   const started = Date.now();
+  const requestOptions = {};
+  if (deadline !== undefined) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      const expired = new Error("Token count aborted: review deadline expired before this count could run");
+      expired.gitwireErrorCode = "E_TOKEN_COUNT_FAILED";
+      expired.gitwireRejectionClass = "timeout";
+      logger.error({ model, deadline }, "Token count refused — review deadline already expired");
+      throw expired;
+    }
+    requestOptions.timeout = remaining;
+  }
   try {
-    const res = await anthropic.messages.countTokens({
-      model,
-      ...(system ? { system } : {}),
-      messages: [{ role: "user", content: userPrompt }],
-    });
+    const res = await anthropic.messages.countTokens(
+      {
+        model,
+        ...(system ? { system } : {}),
+        messages: [{ role: "user", content: userPrompt }],
+      },
+      requestOptions
+    );
     const tokens = res?.input_tokens;
     if (!Number.isFinite(tokens) || tokens < 0) {
       throw new Error("count_tokens returned a non-numeric count: " + JSON.stringify(res));

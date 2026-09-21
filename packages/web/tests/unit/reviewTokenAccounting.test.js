@@ -5,11 +5,12 @@
 import { jest } from '@jest/globals';
 
 const mockCountTokens = jest.fn();
+const countOptions = [];
 
 await jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
   default: class {
     constructor() {
-      this.messages = { countTokens: (body) => mockCountTokens(body) };
+      this.messages = { countTokens: (body, opts) => { countOptions.push(opts); return mockCountTokens(body, opts); } };
     }
   },
 }));
@@ -54,7 +55,7 @@ describe('countInputTokens', () => {
       model: 'claude-sonnet-4-20250514',
       system: 'SYS',
       messages: [{ role: 'user', content: 'BODY' }],
-    });
+    }, {});
   });
 
   test('omits system when absent', async () => {
@@ -171,5 +172,41 @@ describe('countInputTokens — over-limit semantics (PC-01 v2.1 amendment)', () 
     expect(isPromptTooLongRejection(mk(400, 1210, 'max_tokens illegal'))).toBe(false);
     expect(isPromptTooLongRejection(mk(429, 1261, 'x'))).toBe(false);
     expect(isPromptTooLongRejection(null)).toBe(false);
+  });
+});
+
+describe('countInputTokens — shared deadline contract (PC-01 v2.1 final amendment)', () => {
+  beforeEach(() => { mockCountTokens.mockReset(); countOptions.length = 0; });
+
+  test('sequential counts share one deadline — per-call timeouts only shrink, never reset', async () => {
+    mockCountTokens.mockImplementation(async () => {
+      await new Promise((res) => setTimeout(res, 120));
+      return { input_tokens: 1 };
+    });
+    const deadline = Date.now() + 500;
+    for (let i = 0; i < 3; i++) {
+      await countInputTokens({ model: 'm', userPrompt: 'x' + i, deadline });
+    }
+    expect(countOptions).toHaveLength(3);
+    for (const opts of countOptions) {
+      expect(opts.timeout).toBeGreaterThan(0);
+      expect(opts.timeout).toBeLessThanOrEqual(500);
+    }
+    // monotone non-increasing: the third call sees ~500 - 2*120 = 260 or less
+    expect(countOptions[1].timeout).toBeLessThanOrEqual(countOptions[0].timeout);
+    expect(countOptions[2].timeout).toBeLessThanOrEqual(countOptions[1].timeout);
+    expect(countOptions[2].timeout).toBeLessThanOrEqual(270);
+  });
+
+  test('a count attempted at a passed deadline fails as timeout before any provider call', async () => {
+    await expect(countInputTokens({ model: 'm', userPrompt: 'x', deadline: Date.now() - 1 }))
+      .rejects.toMatchObject({ gitwireErrorCode: 'E_TOKEN_COUNT_FAILED', gitwireRejectionClass: 'timeout' });
+    expect(mockCountTokens).not.toHaveBeenCalled();
+  });
+
+  test('without a deadline the provider call carries no per-request timeout (constructor default)', async () => {
+    mockCountTokens.mockResolvedValueOnce({ input_tokens: 7 });
+    await countInputTokens({ model: 'm', userPrompt: 'x' });
+    expect(countOptions).toEqual([{}]);
   });
 });

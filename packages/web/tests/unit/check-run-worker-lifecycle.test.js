@@ -449,6 +449,7 @@ describe("PC-01 amendment: token-count retry lifecycle", () => {
     mockCheckAndMark.mockResolvedValueOnce(true);
     const countErr = new Error("Token count failed (timeout): provider slow");
     countErr.gitwireErrorCode = "E_TOKEN_COUNT_FAILED";
+    countErr.gitwireRejectionClass = "timeout";
     mockReviewPR.mockRejectedValueOnce(countErr);
     await expect(processReviewJob(retryJobData)).rejects.toMatchObject({ gitwireErrorCode: "E_TOKEN_COUNT_FAILED" });
     // owned check received FAILURE finalization on the error path
@@ -478,5 +479,20 @@ describe("PC-01 amendment: token-count retry lifecycle", () => {
     expect(mockReviewPR).not.toHaveBeenCalled();
     // No failure/neutral finalization: the completed check is left untouched
     expect(mockFinalizeGitwireCheck).not.toHaveBeenCalled();
+  });
+});
+
+describe("PC-01 final amendment: head-sha key consistency", () => {
+  it("marker and retry lookup derive the key from the same head SHA expression", async () => {
+    mockCheckAndMark.mockResolvedValue(false);
+    const job = {
+      pr: { number: 16, head: { sha: "abc123" }, base: { ref: "main" }, user: { login: "contributor" } },
+      repository: { id: 999, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+      installation: { id: 11111 },
+      checkRunId: 5000,
+    };
+    await processReviewJob(job, { attemptsMade: 1, attemptsStarted: 1 });
+    expect(mockCheckAndMark).toHaveBeenCalledWith("ai_review", "pr-16-abc123");
+    expect(mockIsRetryableReviewFailure).toHaveBeenCalledWith(999, 16, "abc123");
   });
 });

@@ -140,7 +140,7 @@ export function startPhase4Worker() {
           // ── Idempotency: distinguish fresh duplicate from repeated attempt ─
           if (!(await checkAndMark("ai_review", "pr-" + pr.number + "-" + (pr.head?.sha || "unknown")))) {
             if (isRepeatedAttempt && ownedCheckRunId &&
-                await isRetryableReviewFailure(repository.id, pr.number, pr.head.sha)) {
+                await isRetryableReviewFailure(repository.id, pr.number, pr.head?.sha || "unknown")) {
               // PC-01 v2.1 amendment: the marker records processing, not
               // success. A repeated attempt whose prior attempt failed with
               // a retryable reason (transient token-count failure) must
