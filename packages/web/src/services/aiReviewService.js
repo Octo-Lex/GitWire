@@ -14,7 +14,8 @@
 //   3. Persist review record (advisory receipt columns) + recover any
 //      interrupted publication before doing work
 //   4. Fetch ALL changed-file pages; account for every file (coverage)
-//   5. Build review bundle (context-enriched) with truncation metadata
+//   5. Build review bundle (complete evidence) + exact token admission
+//      against the model-context envelope (PC-01 v2.1)
 //   6. Single-pass structured review via Claude with schema enforcement
 //   7. Extract JSON with cascade (handles fenced, JSONL, nested formats)
 //   8. Validate schema + scope-filter findings
@@ -38,6 +39,7 @@ import {
   reportToLegacy,
 } from "@gitwire/rules";
 import { buildReviewBundle } from "./reviewBundleService.js";
+import { countInputTokens, classifyProviderRejection, MAX_PRIMARY_INPUT_TOKENS } from "./reviewTokenAccounting.js";
 import { validateReview } from "./reviewValidator.js";
 import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
@@ -277,19 +279,39 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       return null;
     }
 
-    // ── 5. Build review bundle ────────────────────────────────────────────────
-    const { bundle, changedFiles, coverageAdjustments } = await buildReviewBundle({
+    // ── 5. Build review bundle (complete evidence) ──────────────────────────
+    const bundleParts = await buildReviewBundle({
       files, pr, repository,
     });
+    const changedFiles = bundleParts.changedFiles;
 
-    // Bundle-stage truncation (per-file patch, aggregate budget) downgrades
-    // affected files from full to partial; incomplete evidence must reach the
-    // publication decision, not just the prompt budget.
-    const finalCoverage = finalizeCoverage(coverage, coverageAdjustments);
+    const reviewOpts = {
+      model: cfg.model || DEFAULT_MODEL,
+      includeSecurity: cfg.check_security !== false,
+      includeArchitecture: cfg.check_architecture !== false || cfg.check_cost_leaks !== false,
+      prTitle: pr.title || "",
+      prAuthor: "@" + (pr.user?.login || "unknown"),
+      prBranch: (pr.base?.ref || "main") + " ← " + (pr.head?.ref || "unknown"),
+      repoName: repository.full_name,
+    };
+
+    // ── 5b. Model-context admission (PC-01 v2.1) ─────────────────────────────
+    // Count the EXACT complete request via the provider's count_tokens. If it
+    // fits the frozen 958,016-input-token ceiling, send the whole PR. On
+    // overflow the allocation is deterministic in existing file order and the
+    // omitted files are marked bundle_truncated. A count failure fails the
+    // review visibly — evidence is never admitted by estimate.
+    const admission = await admitPrimaryReviewEvidence({ bundleParts, changedFiles, opts: reviewOpts });
+
+    // Aggregate-budget truncation downgrades affected files from full to
+    // partial; incomplete evidence must reach the publication decision, not
+    // just the prompt budget.
+    const finalCoverage = finalizeCoverage(coverage, admission.coverageAdjustments);
 
     logger.info(
-      { repo: repository.full_name, pr: pr.number, bundleChars: bundle.length, files: changedFiles.length },
-      "AI review: bundle built"
+      { repo: repository.full_name, pr: pr.number, bundleChars: admission.bundleChars,
+        files: changedFiles.length, inputTokens: admission.requestedTokens, allocated: admission.allocated },
+      "AI review: bundle built and admitted"
     );
 
     // ── 6. Run structured review with heartbeat ──────────────────────────────
@@ -299,15 +321,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 
     const { rawText, tokensUsed } = await withHeartbeat(
       function () {
-        return runStructuredReview(bundle, changedFiles, {
-          model: cfg.model || DEFAULT_MODEL,
-          includeSecurity: cfg.check_security !== false,
-          includeArchitecture: cfg.check_architecture !== false || cfg.check_cost_leaks !== false,
-          prTitle: pr.title || "",
-          prAuthor: "@" + (pr.user?.login || "unknown"),
-          prBranch: (pr.base?.ref || "main") + " ← " + (pr.head?.ref || "unknown"),
-          repoName: repository.full_name,
-        });
+        return runStructuredReview(admission.request, { model: reviewOpts.model });
       },
       { label: "claude review", timeoutMs: maxDurationMs }
     );
@@ -803,10 +817,17 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       [err.message.slice(0, 500), durationMs, reviewRow.id]
     );
 
-    // Head-confirmation and publication-state failures are receipted and
-    // neutralized above; rethrow so the worker visibly fails rather than
-    // reporting a completed null.
-    if (err && (err.gitwireErrorCode === "E_HEAD_CONFIRMATION" || err.gitwireErrorCode === "E_PUBLICATION_STATE")) {
+    // Head-confirmation, publication-state, token-accounting, and
+    // budget-enforcement failures are receipted and neutralized above;
+    // rethrow so the worker visibly fails rather than reporting a completed
+    // null. Token counts never fall back to an estimate, so a counting
+    // failure must retry rather than send unmeasured evidence.
+    if (err && (
+      err.gitwireErrorCode === "E_HEAD_CONFIRMATION" ||
+      err.gitwireErrorCode === "E_PUBLICATION_STATE" ||
+      err.gitwireErrorCode === "E_TOKEN_COUNT_FAILED" ||
+      err.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED"
+    )) {
       throw err;
     }
 
@@ -842,29 +863,27 @@ async function fetchChangedFiles(octokit, owner, repo, pr) {
 // Structured review via Claude (single-pass with schema enforcement)
 // ════════════════════════════════════════════════════════════════════════════
 
-async function runStructuredReview(bundle, changedFiles, opts) {
-  var systemPrompt = buildReviewSystemPrompt({
+/**
+ * Build the exact primary-review request (system prompt + framed user
+ * message) for a bundle. Shared by token admission (which must count the
+ * exact bytes the send will use) and runStructuredReview itself.
+ */
+function buildReviewRequest(bundle, changedFiles, opts) {
+  const system = buildReviewSystemPrompt({
     changedFiles: changedFiles,
     includeSecurity: opts.includeSecurity,
     includeArchitecture: opts.includeArchitecture,
   });
 
-  // Build a rich user prompt with PR metadata for context
   // The bundle already contains structured sections (metadata, diff, files, repo context)
   // but the framing prompt helps the model understand intent
-  var prTitle = opts.prTitle || "";
-  var prAuthor = opts.prAuthor || "";
-  var prBranch = opts.prBranch || "";
-  var repoName = opts.repoName || "";
-  var fileCount = changedFiles.length;
-
-  var headerLines = [
-    "You are reviewing a pull request for " + repoName + ".",
+  const headerLines = [
+    "You are reviewing a pull request for " + opts.repoName + ".",
     "",
-    "PR: " + prTitle,
-    "Author: " + prAuthor,
-    "Branch: " + prBranch,
-    "Changed files: " + fileCount,
+    "PR: " + opts.prTitle,
+    "Author: " + opts.prAuthor,
+    "Branch: " + opts.prBranch,
+    "Changed files: " + changedFiles.length,
     "",
     "Focus on correctness, security, and regressions.",
     "Prioritize concrete issues visible in the diff.",
@@ -874,14 +893,96 @@ async function runStructuredReview(bundle, changedFiles, opts) {
     "",
   ];
 
-  var userPrompt = headerLines.join("\n") + bundle;
+  return { system, userPrompt: headerLines.join("\n") + bundle };
+}
 
+/**
+ * PC-01 v2.1 model-context admission. The complete request is counted with
+ * the provider's exact count_tokens endpoint; if it fits
+ * MAX_PRIMARY_INPUT_TOKENS the whole PR is sent. Overflow allocates
+ * deterministically in existing file order (whole sections while budget
+ * remains; the crossing file and everything after are omitted and marked
+ * bundle_truncated), and the rebuilt request is re-counted and required to
+ * fit before inference. Standalone section counts slightly overstate each
+ * section's in-bundle marginal cost (per-call message envelope), so the
+ * allocation is conservative by construction and the final re-count is the
+ * authoritative gate. Exported as the replay/diagnostic seam (PC-01).
+ */
+export async function admitPrimaryReviewEvidence({ bundleParts, changedFiles, opts }) {
+  const model = opts.model || DEFAULT_MODEL;
+
+  const complete = buildReviewRequest(bundleParts.bundle, changedFiles, opts);
+  const requestedTokens = await countInputTokens({
+    model, system: complete.system, userPrompt: complete.userPrompt,
+  });
+
+  if (requestedTokens <= MAX_PRIMARY_INPUT_TOKENS) {
+    logger.info(
+      { requestedTokens, ceiling: MAX_PRIMARY_INPUT_TOKENS, allocated: false },
+      "AI review: token admission — complete evidence fits the model context envelope"
+    );
+    return {
+      request: complete,
+      bundle: bundleParts.bundle,
+      bundleChars: bundleParts.bundle.length,
+      coverageAdjustments: bundleParts.coverageAdjustments ?? [],
+      requestedTokens,
+      allocated: false,
+    };
+  }
+
+  // Overflow: count the zero-evidence skeleton, then admit whole sections
+  // while the remaining budget allows.
+  const skeleton = bundleParts.reassemble(0);
+  const skeletonRequest = buildReviewRequest(skeleton.bundle, changedFiles, opts);
+  const skeletonTokens = await countInputTokens({
+    model, system: skeletonRequest.system, userPrompt: skeletonRequest.userPrompt,
+  });
+  let remaining = MAX_PRIMARY_INPUT_TOKENS - skeletonTokens;
+  let admittedFiles = 0;
+  for (const section of bundleParts.fileSections) {
+    const sectionTokens = await countInputTokens({ model, userPrompt: section.text });
+    if (sectionTokens > remaining) break;
+    remaining -= sectionTokens;
+    admittedFiles++;
+  }
+
+  const allocated = bundleParts.reassemble(admittedFiles);
+  const allocatedRequest = buildReviewRequest(allocated.bundle, changedFiles, opts);
+  const finalTokens = await countInputTokens({
+    model, system: allocatedRequest.system, userPrompt: allocatedRequest.userPrompt,
+  });
+  if (finalTokens > MAX_PRIMARY_INPUT_TOKENS) {
+    const budgetErr = new Error(
+      "Review input budget enforcement failed after allocation: " + finalTokens +
+      " > " + MAX_PRIMARY_INPUT_TOKENS + " input tokens"
+    );
+    budgetErr.gitwireErrorCode = "E_INPUT_BUDGET_EXCEEDED";
+    throw budgetErr;
+  }
+
+  logger.info(
+    { requestedTokens, skeletonTokens, admittedFiles, totalFiles: bundleParts.fileSections.length,
+      finalTokens, ceiling: MAX_PRIMARY_INPUT_TOKENS, allocated: true },
+    "AI review: token admission — allocated deterministically within the model context envelope"
+  );
+  return {
+    request: allocatedRequest,
+    bundle: allocated.bundle,
+    bundleChars: allocated.bundle.length,
+    coverageAdjustments: allocated.coverageAdjustments,
+    requestedTokens: finalTokens,
+    allocated: true,
+  };
+}
+
+async function runStructuredReview(request, opts) {
   try {
     const message = await anthropic.messages.create({
       model:      opts.model || DEFAULT_MODEL,
       max_tokens: 32768,
-      system:     systemPrompt,
-      messages:   [{ role: "user", content: userPrompt }],
+      system:     request.system,
+      messages:   [{ role: "user", content: request.userPrompt }],
     });
 
     var text = "";
@@ -899,7 +1000,12 @@ async function runStructuredReview(bundle, changedFiles, opts) {
 
     return { rawText: text.trim(), tokensUsed: tokens };
   } catch (err) {
-    logger.warn({ err: err.message }, "AI review: Claude call failed");
+    // PC-01 v2.1: classify every provider failure into the frozen seven-way
+    // taxonomy (context_limit / timeout / rate_limit / quota /
+    // auth_entitlement / transport / other) so acceptance telemetry can tell
+    // a real context-window rejection from quota or transport trouble.
+    err.gitwireRejectionClass = classifyProviderRejection(err);
+    logger.warn({ err: err.message, rejectionClass: err.gitwireRejectionClass }, "AI review: Claude call failed");
     throw err;
   }
 }

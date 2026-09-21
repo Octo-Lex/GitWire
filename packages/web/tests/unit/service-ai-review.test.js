@@ -80,6 +80,13 @@ await jest.unstable_mockModule('../../config/index.js', () => ({
 }));
 
 // Mock reviewBundleService — returns a minimal bundle
+// PC-01 v2.1: mock token accounting — count always fits, classify passthrough
+await jest.unstable_mockModule('../../src/services/reviewTokenAccounting.js', () => ({
+  countInputTokens: jest.fn().mockResolvedValue(1000),
+  classifyProviderRejection: jest.fn((e) => e?.gitwireRejectionClass || 'other'),
+  MAX_PRIMARY_INPUT_TOKENS: 958016,
+}));
+
 await jest.unstable_mockModule('../../src/services/reviewBundleService.js', () => ({
   buildReviewBundle: jest.fn().mockResolvedValue({
     bundle: "## PR Metadata\nTest PR\n## Changes\n```diff\n+hello\n```",
@@ -436,5 +443,152 @@ describe('aiReviewService (bundle-driven v2)', () => {
       expect(lastCreateCtorOptions.baseURL).toBe('http://test');
       expect(anthropicCtorOptions).toContain(lastCreateCtorOptions);
     });
+  });
+});
+
+// ── PC-01 v2.1: model-context admission ──────────────────────────────────────
+// Exact token accounting gates the primary request: if the PR fits the
+// 958,016-input-token envelope it is sent whole; overflow allocates
+// deterministically in file order and marks the omitted files
+// bundle_truncated. A count failure never falls back to an estimate.
+const { countInputTokens } = await import('../../src/services/reviewTokenAccounting.js');
+const { buildReviewBundle } = await import('../../src/services/reviewBundleService.js');
+
+describe('PC-01 v2.1: model-context admission', () => {
+  beforeEach(() => {
+    countInputTokens.mockReset();
+    countInputTokens.mockResolvedValue(1000);
+    buildReviewBundle.mockClear();
+    mockQuery.mockReset();
+    mockCreate.mockReset();
+  });
+
+  function setupAdmissionReview(files) {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [] }] })
+      .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+      .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text', text: JSON.stringify({
+        findings: [],
+        overall_correctness: "patch is correct",
+        overall_explanation: "The patch looks clean.",
+        overall_confidence: 0.95,
+      }) }],
+      usage: { input_tokens: 100, output_tokens: 50 },
+    });
+
+    const data = files.map((f) => ({ filename: f, status: 'modified', additions: 5, deletions: 0, patch: '+patch-for-' + f }));
+    return mockOctokit({
+      'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'abc123' } } },
+      'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 200 } },
+    });
+  }
+
+  // Bundle-parts override mirroring the real builder's structural contract
+  // (sections + deterministic reassemble), for overflow-path tests.
+  function admissionParts(paths) {
+    const sections = paths.map((p) => ({ path: p, text: '#### ' + p + '\n```diff\n+patch-for-' + p + '\n```' }));
+    const meta = '## PR Metadata\nTest\n## Changes\n\n### File Summary\n' + paths.map((p) => '  modified ' + p).join('\n') + '\n\n### Diffs';
+    const context = '\n## Repository Context\n\n## Active Configuration\nAI Review enabled: yes';
+    const assemble = (n, note) => meta + '\n' + sections.slice(0, n).map((s) => s.text).join('\n') + (note ? '\n' + note : '') + context;
+    const reassemble = (n) => {
+      const clamped = Math.max(0, Math.min(n, sections.length));
+      const omitted = sections.length - clamped;
+      const adj = sections.slice(clamped).map((s) => ({ path: s.path, coverage: 'partial', reason: 'bundle_truncated' }));
+      const note = omitted > 0 ? '(review input token budget reached — ' + omitted + ' remaining changed-file diff' + (omitted !== 1 ? 's' : '') + ' omitted)' : null;
+      return { bundle: assemble(clamped, note), coverageAdjustments: adj };
+    };
+    return {
+      bundle: assemble(sections.length), changedFiles: paths, totalChars: 100,
+      coverageAdjustments: [], fileSections: sections, reassemble,
+    };
+  }
+
+  test('the counted request is byte-identical to the sent request (fits path)', async () => {
+    const oct = setupAdmissionReview(['src/a.js']);
+    const r = await reviewPR({
+      pr: { number: 41, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 'feat: a', user: { login: 'dev' }, body: '' },
+      repository: REPO, octokit: oct,
+    });
+    expect(r).toBeTruthy();
+    expect(countInputTokens).toHaveBeenCalledTimes(1);
+    const counted = countInputTokens.mock.calls[0][0];
+    const sent = mockCreate.mock.calls[0][0];
+    expect(sent.system).toBe(counted.system);
+    expect(sent.messages[0].content).toBe(counted.userPrompt);
+    expect(counted.model).toBe('claude-sonnet-4-20250514');
+  });
+
+  test('exactly 958,016 input tokens fits — whole PR, single count', async () => {
+    countInputTokens.mockResolvedValueOnce(958016);
+    const oct = setupAdmissionReview(['src/a.js']);
+    const r = await reviewPR({ pr: { number: 42, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+    expect(r).toBeTruthy();
+    expect(countInputTokens).toHaveBeenCalledTimes(1);
+    expect(r.coverage.approvalEvidenceComplete).toBe(true);
+  });
+
+  test('958,017 allocates deterministically: crossing + later files bundle_truncated', async () => {
+    buildReviewBundle.mockResolvedValueOnce(admissionParts(['f0.js', 'f1.js', 'f2.js']));
+    countInputTokens
+      .mockResolvedValueOnce(958017)  // complete request — one token over the ceiling
+      .mockResolvedValueOnce(1000)    // zero-evidence skeleton
+      .mockResolvedValueOnce(400000)  // f0 — admitted
+      .mockResolvedValueOnce(400000)  // f1 — admitted (157,016 remain)
+      .mockResolvedValueOnce(400000)  // f2 — crossing: exceeds remaining
+      .mockResolvedValueOnce(800500); // rebuilt final — verified under the ceiling
+    const oct = setupAdmissionReview(['f0.js', 'f1.js', 'f2.js']);
+    const r = await reviewPR({ pr: { number: 43, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+
+    expect(r).toBeTruthy();
+    // six counts: complete, skeleton, three section counts, final verification
+    expect(countInputTokens).toHaveBeenCalledTimes(6);
+    // the sent request is the REBUILT one: f0/f1 evidence present, f2's patch absent
+    const sent = mockCreate.mock.calls[0][0];
+    expect(sent.messages[0].content).toContain('+patch-for-f0.js');
+    expect(sent.messages[0].content).toContain('+patch-for-f1.js');
+    expect(sent.messages[0].content).not.toContain('+patch-for-f2.js');
+    expect(sent.messages[0].content).toContain('review input token budget reached');
+    // coverage truthfully reports only f2 as incomplete
+    const f2 = r.coverage.files.find((f) => f.path === 'f2.js');
+    expect(f2.coverage).toBe('partial');
+    expect(f2.reason).toBe('bundle_truncated');
+    expect(r.coverage.approvalEvidenceComplete).toBe(false);
+  });
+
+  test('count failure fails the review visibly and never sends inference', async () => {
+    const countErr = new Error('Token count failed (transport): boom');
+    countErr.gitwireErrorCode = 'E_TOKEN_COUNT_FAILED';
+    countInputTokens.mockRejectedValueOnce(countErr);
+    const oct = setupAdmissionReview(['src/a.js']);
+    await expect(reviewPR({
+      pr: { number: 44, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+      repository: REPO, octokit: oct,
+    })).rejects.toMatchObject({ gitwireErrorCode: 'E_TOKEN_COUNT_FAILED' });
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  test('post-allocation enforcement failure refuses inference', async () => {
+    // Both sections fit the per-section estimate, but the authoritative
+    // final re-count exceeds the ceiling: the request must never be sent.
+    buildReviewBundle.mockResolvedValueOnce(admissionParts(['f0.js', 'f1.js']));
+    countInputTokens
+      .mockResolvedValueOnce(958017)  // over ceiling
+      .mockResolvedValueOnce(1000)    // skeleton
+      .mockResolvedValueOnce(400000)  // f0 — admitted
+      .mockResolvedValueOnce(400000)  // f1 — admitted
+      .mockResolvedValueOnce(999999); // rebuilt final — still over: refuse
+    const oct = setupAdmissionReview(['f0.js', 'f1.js']);
+    await expect(reviewPR({
+      pr: { number: 45, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+      repository: REPO, octokit: oct,
+    })).rejects.toMatchObject({ gitwireErrorCode: 'E_INPUT_BUDGET_EXCEEDED' });
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(countInputTokens).toHaveBeenCalledTimes(5);
   });
 });

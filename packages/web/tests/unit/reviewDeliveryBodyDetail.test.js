@@ -53,6 +53,13 @@ await jest.unstable_mockModule("../../config/index.js", () => ({
     ai: { model: "test-model" },
   },
 }));
+// PC-01 v2.1: mock token accounting — count always fits, classify passthrough
+await jest.unstable_mockModule("../../src/services/reviewTokenAccounting.js", () => ({
+  countInputTokens: jest.fn().mockResolvedValue(1000),
+  classifyProviderRejection: jest.fn((e) => e?.gitwireRejectionClass || "other"),
+  MAX_PRIMARY_INPUT_TOKENS: 958016,
+}));
+
 await jest.unstable_mockModule("../../src/services/reviewBundleService.js", () => ({
   buildReviewBundle: jest.fn().mockResolvedValue({ bundle: "## PR Metadata\nTest PR", changedFiles: ["src/app.js"], totalChars: 50 }),
 }));

@@ -1,0 +1,143 @@
+// src/services/reviewTokenAccounting.js
+// PC-01 v2.1: exact token accounting for the primary review request.
+//
+// The production route (Z.AI Anthropic-compatible endpoint at
+// ANTHROPIC_BASE_URL) exposes POST /v1/messages/count_tokens, proven EXACT
+// against billed input_tokens at small, realistic, and near-envelope scale
+// (preflight 2026-09-21: 17 = 17; 4,068 = 4,068; exact again at 958,682).
+// It is the ONLY admission mechanism. There is deliberately no
+// character-based fallback: GitWire must never guess its way into an
+// oversized model request.
+//
+// Frozen input ceiling (PC-01 v2.1 DECISION gate, 2026-09-21):
+//     1,000,000-token operating context contract
+//   -    32,768-token output reserve (max_tokens stays 32,768)
+//   -     9,216-token safety reserve (count/send drift; keeps the worst
+//            constructible input below the empirically accepted 958,682)
+//   =   958,016 input tokens for the COMPLETE primary review request
+// (measured contract: 958,682 input accepted; 1,273,523 rejected pre-execution
+// with "prompt is too long"; max output 131,072).
+
+import Anthropic from "@anthropic-ai/sdk";
+import https from "node:https";
+import { config } from "../../config/index.js";
+import { logger } from "../lib/logger.js";
+
+const anthropic = new Anthropic({
+  apiKey:  config.anthropic.apiKey,
+  baseURL: config.anthropic.baseURL,
+  timeout: 600000,
+  // RT-01: pin to IPv4. The provider resolver returns mixed A/AAAA records
+  // and the app container has no IPv6 route; the SDK's default address
+  // selection persistently fails fresh connections while family-4 succeeds.
+  httpAgent: new https.Agent({ keepAlive: true, family: 4 }),
+});
+
+const OPERATING_CONTEXT_TOKENS = 1000000;
+const OUTPUT_RESERVE_TOKENS   = 32768;
+const SAFETY_RESERVE_TOKENS   = 9216;
+
+/**
+ * Hard input ceiling for the complete primary review request (system prompt
+ * plus user message). Derived once, frozen: evidence capacity per review is
+ * this constant minus that review's measured non-evidence tokens.
+ */
+export const MAX_PRIMARY_INPUT_TOKENS =
+  OPERATING_CONTEXT_TOKENS - OUTPUT_RESERVE_TOKENS - SAFETY_RESERVE_TOKENS; // 958016
+
+/** The seven frozen provider-rejection classes (PC-01 v2.1 recommendation 9). */
+export const REJECTION_CLASSES = [
+  "context_limit", "timeout", "rate_limit", "quota",
+  "auth_entitlement", "transport", "other",
+];
+
+/**
+ * Classify a provider/transport failure into the seven-way taxonomy.
+ *
+ * Mapping (deterministic, first match wins):
+ *   context_limit   400 with gateway code 1261 ("prompt is too long") or
+ *                   code 1210 (max_tokens outside the model's legal range) —
+ *                   the two pre-execution contract validations measured in
+ *                   the 2026-09-21 preflight.
+ *   quota           429 whose message names credits/quota/plan limits
+ *                   (Coding-Plan window exhaustion).
+ *   rate_limit      any other 429.
+ *   auth_entitlement 401/403.
+ *   timeout         SDK APIConnectionTimeoutError, ETIMEDOUT/ECONNABORTED,
+ *                   HTTP 408, or a message naming a timeout.
+ *   transport       SDK APIConnectionError, connection-level socket/DNS
+ *                   errors, and 5xx/529 server states.
+ *   other           everything else.
+ *
+ * @param {Error} err
+ * @returns {string} one of REJECTION_CLASSES
+ */
+export function classifyProviderRejection(err) {
+  if (!err) return "other";
+  const status = typeof err.status === "number" ? err.status : null;
+  const msg = String(err.message || "");
+  const gwCode = err?.error?.error?.code;
+
+  if (status === 400 && (gwCode === 1261 || gwCode === 1210 || /prompt is too long/i.test(msg))) {
+    return "context_limit";
+  }
+  if (status === 429) {
+    return /credit|quota|insufficient|balance|plan/i.test(msg) ? "quota" : "rate_limit";
+  }
+  if (status === 401 || status === 403) return "auth_entitlement";
+  if (
+    err.name === "APIConnectionTimeoutError" ||
+    err.code === "ETIMEDOUT" || err.code === "ECONNABORTED" ||
+    status === 408 || /timeout|timed out/i.test(msg)
+  ) {
+    return "timeout";
+  }
+  if (
+    err.name === "APIConnectionError" ||
+    ["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EPIPE", "EHOSTUNREACH"].includes(err.code) ||
+    (status !== null && (status === 529 || status >= 500))
+  ) {
+    return "transport";
+  }
+  return "other";
+}
+
+/**
+ * Count the EXACT input tokens of a prospective primary review request via
+ * the provider's count_tokens endpoint, using the same model string the
+ * send will use. No local fallback exists by design.
+ *
+ * @param {object} opts
+ * @param {string} opts.model      - exact model the send will use
+ * @param {string} [opts.system]   - system prompt (counted: preflight-verified)
+ * @param {string} opts.userPrompt - complete user message content
+ * @returns {Promise<number>} exact input token count
+ * @throws Error with gitwireErrorCode E_TOKEN_COUNT_FAILED — the caller must
+ *   fail visibly and never proceed to inference on an estimated count.
+ */
+export async function countInputTokens({ model, system, userPrompt }) {
+  const started = Date.now();
+  try {
+    const res = await anthropic.messages.countTokens({
+      model,
+      ...(system ? { system } : {}),
+      messages: [{ role: "user", content: userPrompt }],
+    });
+    const tokens = res?.input_tokens;
+    if (!Number.isFinite(tokens) || tokens < 0) {
+      throw new Error("count_tokens returned a non-numeric count: " + JSON.stringify(res));
+    }
+    logger.debug({ model, tokens, ms: Date.now() - started }, "Token count ok");
+    return tokens;
+  } catch (err) {
+    const rejectionClass = classifyProviderRejection(err);
+    const wrapped = new Error("Token count failed (" + rejectionClass + "): " + err.message);
+    wrapped.gitwireErrorCode = "E_TOKEN_COUNT_FAILED";
+    wrapped.gitwireRejectionClass = rejectionClass;
+    logger.error(
+      { err: err.message, rejectionClass, ms: Date.now() - started },
+      "Token count failed — refusing to admit evidence by estimate"
+    );
+    throw wrapped;
+  }
+}
