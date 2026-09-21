@@ -62,6 +62,13 @@ await jest.unstable_mockModule('../../config/index.js', () => ({
 // The bundle is mocked to isolate acquisition/coverage; truncation adjustments
 // are covered by reviewBundleCoverage.test.js against the real service.
 const mockBundle = jest.fn();
+// PC-01 v2.1: mock token accounting — count always fits, classify passthrough
+await jest.unstable_mockModule('../../src/services/reviewTokenAccounting.js', () => ({
+  countInputTokens: jest.fn().mockResolvedValue(1000),
+  classifyProviderRejection: jest.fn((e) => e?.gitwireRejectionClass || 'other'),
+  MAX_PRIMARY_INPUT_TOKENS: 958016,
+}));
+
 await jest.unstable_mockModule('../../src/services/reviewBundleService.js', () => ({
   buildReviewBundle: mockBundle,
 }));

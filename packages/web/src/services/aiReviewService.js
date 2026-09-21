@@ -14,7 +14,8 @@
 //   3. Persist review record (advisory receipt columns) + recover any
 //      interrupted publication before doing work
 //   4. Fetch ALL changed-file pages; account for every file (coverage)
-//   5. Build review bundle (context-enriched) with truncation metadata
+//   5. Build review bundle (complete evidence) + exact token admission
+//      against the model-context envelope (PC-01 v2.1)
 //   6. Single-pass structured review via Claude with schema enforcement
 //   7. Extract JSON with cascade (handles fenced, JSONL, nested formats)
 //   8. Validate schema + scope-filter findings
@@ -38,6 +39,7 @@ import {
   reportToLegacy,
 } from "@gitwire/rules";
 import { buildReviewBundle } from "./reviewBundleService.js";
+import { countInputTokens, classifyProviderRejection, MAX_PRIMARY_INPUT_TOKENS } from "./reviewTokenAccounting.js";
 import { validateReview } from "./reviewValidator.js";
 import { withHeartbeat } from "./reviewHeartbeat.js";
 import { runAdversarialChallenge, refineFindings } from "./adversarialReview.js";
@@ -277,39 +279,66 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       return null;
     }
 
-    // ── 5. Build review bundle ────────────────────────────────────────────────
-    const { bundle, changedFiles, coverageAdjustments } = await buildReviewBundle({
+    // ── 5. Build review bundle (complete evidence) ──────────────────────────
+    const bundleParts = await buildReviewBundle({
       files, pr, repository,
     });
+    const changedFiles = bundleParts.changedFiles;
 
-    // Bundle-stage truncation (per-file patch, aggregate budget) downgrades
-    // affected files from full to partial; incomplete evidence must reach the
-    // publication decision, not just the prompt budget.
-    const finalCoverage = finalizeCoverage(coverage, coverageAdjustments);
+    const reviewOpts = {
+      model: cfg.model || DEFAULT_MODEL,
+      includeSecurity: cfg.check_security !== false,
+      includeArchitecture: cfg.check_architecture !== false || cfg.check_cost_leaks !== false,
+      prTitle: pr.title || "",
+      prAuthor: "@" + (pr.user?.login || "unknown"),
+      prBranch: (pr.base?.ref || "main") + " ← " + (pr.head?.ref || "unknown"),
+      repoName: repository.full_name,
+    };
 
-    logger.info(
-      { repo: repository.full_name, pr: pr.number, bundleChars: bundle.length, files: changedFiles.length },
-      "AI review: bundle built"
-    );
-
-    // ── 6. Run structured review with heartbeat ──────────────────────────────
+    // ── 5b/6 provider work shares ONE deadline (PC-01 v2.1 final amendment) ─
+    // Token admission and the primary inference call may not serially
+    // consume more than the configured review deadline (max_duration_seconds,
+    // default 600 s). The deadline is absolute: every provider call below is
+    // bounded by the REMAINING slice, which only shrinks — a chain of
+    // count_tokens calls can never reset the budget per call, and inference
+    // cannot begin once the deadline has expired.
     const maxDurationMs = cfg.max_duration_seconds
       ? cfg.max_duration_seconds * 1000
       : DEFAULT_MAX_DURATION_MS;
+    const providerDeadline = Date.now() + maxDurationMs;
 
+    const admission = await admitPrimaryReviewEvidence({
+      bundleParts, changedFiles, opts: reviewOpts, deadline: providerDeadline,
+    });
+
+    if (providerDeadline - Date.now() <= 0) {
+      const deadlineErr = new Error("Review deadline expired during token admission — refusing inference");
+      deadlineErr.gitwireErrorCode = "E_REVIEW_DEADLINE_EXCEEDED";
+      deadlineErr.gitwireRejectionClass = "timeout";
+      throw deadlineErr;
+    }
+
+    // Aggregate-budget truncation downgrades affected files from full to
+    // partial; incomplete evidence must reach the publication decision, not
+    // just the prompt budget.
+    const finalCoverage = finalizeCoverage(coverage, admission.coverageAdjustments);
+
+    logger.info(
+      { repo: repository.full_name, pr: pr.number, bundleChars: admission.bundleChars,
+        files: changedFiles.length, inputTokens: admission.requestedTokens, allocated: admission.allocated },
+      "AI review: bundle built and admitted"
+    );
+
+    // ── 6. Run structured review with heartbeat ──────────────────────────────
+    // withHeartbeat races but does not cancel the losing operation, so the
+    // real bound is the per-request provider timeout set inside
+    // runStructuredReview from the same shared deadline; the heartbeat is
+    // the reporting/backstop layer on top.
     const { rawText, tokensUsed } = await withHeartbeat(
       function () {
-        return runStructuredReview(bundle, changedFiles, {
-          model: cfg.model || DEFAULT_MODEL,
-          includeSecurity: cfg.check_security !== false,
-          includeArchitecture: cfg.check_architecture !== false || cfg.check_cost_leaks !== false,
-          prTitle: pr.title || "",
-          prAuthor: "@" + (pr.user?.login || "unknown"),
-          prBranch: (pr.base?.ref || "main") + " ← " + (pr.head?.ref || "unknown"),
-          repoName: repository.full_name,
-        });
+        return runStructuredReview(admission.request, { model: reviewOpts.model, deadline: providerDeadline });
       },
-      { label: "claude review", timeoutMs: maxDurationMs }
+      { label: "claude review", timeoutMs: Math.max(1, providerDeadline - Date.now()) }
     );
 
     // ── 7. Extract JSON with cascade ─────────────────────────────────────────
@@ -798,15 +827,24 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 
     await db.query(
       "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
-      "terminal_reason = 'error', " +
-      "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
-      [err.message.slice(0, 500), durationMs, reviewRow.id]
+      "terminal_reason = $2, " +
+      "completed_at = NOW(), duration_ms = $3 WHERE id = $4",
+      [err.message.slice(0, 500), reviewErrorTerminalReason(err), durationMs, reviewRow.id]
     );
 
-    // Head-confirmation and publication-state failures are receipted and
-    // neutralized above; rethrow so the worker visibly fails rather than
-    // reporting a completed null.
-    if (err && (err.gitwireErrorCode === "E_HEAD_CONFIRMATION" || err.gitwireErrorCode === "E_PUBLICATION_STATE")) {
+    // Head-confirmation, publication-state, token-accounting, and
+    // budget-enforcement failures are receipted and neutralized above;
+    // rethrow so the worker visibly fails rather than reporting a completed
+    // null. Token counts never fall back to an estimate, so a counting
+    // failure must retry rather than send unmeasured evidence.
+    if (err && (
+      err.gitwireErrorCode === "E_HEAD_CONFIRMATION" ||
+      err.gitwireErrorCode === "E_PUBLICATION_STATE" ||
+      err.gitwireErrorCode === "E_TOKEN_COUNT_FAILED" ||
+      err.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED" ||
+      err.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED" ||
+      err.gitwireErrorCode === "E_REVIEW_PROVIDER_TRANSIENT"
+    )) {
       throw err;
     }
 
@@ -842,29 +880,27 @@ async function fetchChangedFiles(octokit, owner, repo, pr) {
 // Structured review via Claude (single-pass with schema enforcement)
 // ════════════════════════════════════════════════════════════════════════════
 
-async function runStructuredReview(bundle, changedFiles, opts) {
-  var systemPrompt = buildReviewSystemPrompt({
+/**
+ * Build the exact primary-review request (system prompt + framed user
+ * message) for a bundle. Shared by token admission (which must count the
+ * exact bytes the send will use) and runStructuredReview itself.
+ */
+function buildReviewRequest(bundle, changedFiles, opts) {
+  const system = buildReviewSystemPrompt({
     changedFiles: changedFiles,
     includeSecurity: opts.includeSecurity,
     includeArchitecture: opts.includeArchitecture,
   });
 
-  // Build a rich user prompt with PR metadata for context
   // The bundle already contains structured sections (metadata, diff, files, repo context)
   // but the framing prompt helps the model understand intent
-  var prTitle = opts.prTitle || "";
-  var prAuthor = opts.prAuthor || "";
-  var prBranch = opts.prBranch || "";
-  var repoName = opts.repoName || "";
-  var fileCount = changedFiles.length;
-
-  var headerLines = [
-    "You are reviewing a pull request for " + repoName + ".",
+  const headerLines = [
+    "You are reviewing a pull request for " + opts.repoName + ".",
     "",
-    "PR: " + prTitle,
-    "Author: " + prAuthor,
-    "Branch: " + prBranch,
-    "Changed files: " + fileCount,
+    "PR: " + opts.prTitle,
+    "Author: " + opts.prAuthor,
+    "Branch: " + opts.prBranch,
+    "Changed files: " + changedFiles.length,
     "",
     "Focus on correctness, security, and regressions.",
     "Prioritize concrete issues visible in the diff.",
@@ -874,15 +910,116 @@ async function runStructuredReview(bundle, changedFiles, opts) {
     "",
   ];
 
-  var userPrompt = headerLines.join("\n") + bundle;
+  return { system, userPrompt: headerLines.join("\n") + bundle };
+}
 
+/**
+ * PC-01 v2.1 model-context admission. The complete request is counted with
+ * the provider's exact count_tokens endpoint; if it fits
+ * MAX_PRIMARY_INPUT_TOKENS the whole PR is sent. Overflow allocates
+ * deterministically in existing file order (whole sections while budget
+ * remains; the crossing file and everything after are omitted and marked
+ * bundle_truncated), and the rebuilt request is re-counted and required to
+ * fit before inference. Standalone section counts slightly overstate each
+ * section's in-bundle marginal cost (per-call message envelope), so the
+ * allocation is conservative by construction and the final re-count is the
+ * authoritative gate. Exported as the replay/diagnostic seam (PC-01).
+ */
+export async function admitPrimaryReviewEvidence({ bundleParts, changedFiles, opts, deadline }) {
+  const model = opts.model || DEFAULT_MODEL;
+
+  const complete = buildReviewRequest(bundleParts.bundle, changedFiles, opts);
+  const requestedTokens = await countInputTokens({
+    model, system: complete.system, userPrompt: complete.userPrompt, deadline,
+  });
+
+  if (requestedTokens <= MAX_PRIMARY_INPUT_TOKENS) {
+    logger.info(
+      { requestedTokens, ceiling: MAX_PRIMARY_INPUT_TOKENS, allocated: false },
+      "AI review: token admission — complete evidence fits the model context envelope"
+    );
+    return {
+      request: complete,
+      bundle: bundleParts.bundle,
+      bundleChars: bundleParts.bundle.length,
+      coverageAdjustments: bundleParts.coverageAdjustments ?? [],
+      requestedTokens,
+      allocated: false,
+    };
+  }
+
+  // Overflow: count the zero-evidence skeleton, then admit whole sections
+  // while the remaining budget allows. Every count is deadline-bounded.
+  const skeleton = bundleParts.reassemble(0);
+  const skeletonRequest = buildReviewRequest(skeleton.bundle, changedFiles, opts);
+  const skeletonTokens = await countInputTokens({
+    model, system: skeletonRequest.system, userPrompt: skeletonRequest.userPrompt, deadline,
+  });
+  let remaining = MAX_PRIMARY_INPUT_TOKENS - skeletonTokens;
+  let admittedFiles = 0;
+  for (const section of bundleParts.fileSections) {
+    const sectionTokens = await countInputTokens({ model, userPrompt: section.text, deadline });
+    if (sectionTokens > remaining) break;
+    remaining -= sectionTokens;
+    admittedFiles++;
+  }
+
+  const allocated = bundleParts.reassemble(admittedFiles);
+  const allocatedRequest = buildReviewRequest(allocated.bundle, changedFiles, opts);
+  const finalTokens = await countInputTokens({
+    model, system: allocatedRequest.system, userPrompt: allocatedRequest.userPrompt, deadline,
+  });
+  if (finalTokens > MAX_PRIMARY_INPUT_TOKENS) {
+    const budgetErr = new Error(
+      "Review input budget enforcement failed after allocation: " + finalTokens +
+      " > " + MAX_PRIMARY_INPUT_TOKENS + " input tokens"
+    );
+    budgetErr.gitwireErrorCode = "E_INPUT_BUDGET_EXCEEDED";
+    throw budgetErr;
+  }
+
+  logger.info(
+    { requestedTokens, skeletonTokens, admittedFiles, totalFiles: bundleParts.fileSections.length,
+      finalTokens, ceiling: MAX_PRIMARY_INPUT_TOKENS, allocated: true },
+    "AI review: token admission — allocated deterministically within the model context envelope"
+  );
+  return {
+    request: allocatedRequest,
+    bundle: allocated.bundle,
+    bundleChars: allocated.bundle.length,
+    coverageAdjustments: allocated.coverageAdjustments,
+    requestedTokens: finalTokens,
+    allocated: true,
+  };
+}
+
+async function runStructuredReview(request, opts) {
+  // Shared-deadline gate: inference may not BEGIN after the review deadline
+  // expired, and when it begins it is bounded by the remaining slice via the
+  // per-request provider timeout (withHeartbeat races but does not cancel,
+  // so this per-request bound is the hard one).
+  const remaining = opts.deadline !== undefined ? opts.deadline - Date.now() : undefined;
+  if (remaining !== undefined && remaining <= 0) {
+    const expired = new Error("Review deadline expired before inference — refusing to start the model call");
+    expired.gitwireErrorCode = "E_REVIEW_DEADLINE_EXCEEDED";
+    expired.gitwireRejectionClass = "timeout";
+    throw expired;
+  }
+  // SDK-local retries are disabled under the deadline (they retry per
+  // attempt with the timeout applying each time, which could outrun the
+  // deadline without GitWire regaining control); BullMQ's bounded attempts
+  // are the only recovery layer for this path.
+  const requestOptions = remaining !== undefined ? { timeout: remaining, maxRetries: 0 } : {};
   try {
-    const message = await anthropic.messages.create({
-      model:      opts.model || DEFAULT_MODEL,
-      max_tokens: 32768,
-      system:     systemPrompt,
-      messages:   [{ role: "user", content: userPrompt }],
-    });
+    const message = await anthropic.messages.create(
+      {
+        model:      opts.model || DEFAULT_MODEL,
+        max_tokens: 32768,
+        system:     request.system,
+        messages:   [{ role: "user", content: request.userPrompt }],
+      },
+      requestOptions
+    );
 
     var text = "";
     if (Array.isArray(message.content)) {
@@ -899,7 +1036,18 @@ async function runStructuredReview(bundle, changedFiles, opts) {
 
     return { rawText: text.trim(), tokensUsed: tokens };
   } catch (err) {
-    logger.warn({ err: err.message }, "AI review: Claude call failed");
+    // PC-01 v2.1: classify every provider failure into the frozen seven-way
+    // taxonomy (context_limit / timeout / rate_limit / quota /
+    // auth_entitlement / transport / other). SDK retries are disabled under
+    // the deadline, so a TRANSIENT primary-call failure (timeout/transport/
+    // rate_limit — including 409 and 5xx) is tagged
+    // E_REVIEW_PROVIDER_TRANSIENT and rethrown for BullMQ, which is the sole
+    // retry layer. Permanent classes stay on the pre-PC-01 null-return path.
+    err.gitwireRejectionClass = classifyProviderRejection(err);
+    if (TRANSIENT_PROVIDER_FAILURE_CLASSES.has(err.gitwireRejectionClass)) {
+      err.gitwireErrorCode = "E_REVIEW_PROVIDER_TRANSIENT";
+    }
+    logger.warn({ err: err.message, rejectionClass: err.gitwireRejectionClass }, "AI review: Claude call failed");
     throw err;
   }
 }
@@ -1361,6 +1509,64 @@ export function shouldRunDefense(mode, triggers, findings, challenges, missedRis
   }
 
   return { run: false, reason: "no_triggers_matched" };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Retryability of failed review attempts (PC-01 v2.1 amendment)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Terminal reasons for which a repeated BullMQ attempt should actually
+ * re-run the review. Only TRANSIENT token-counting failures retry:
+ * timeout, transport, and rate-limit classed conditions a later
+ * exponential-backoff attempt can plausibly repair. Permanent classes
+ * (auth_entitlement, quota, other) persist as 'token_count_permanent'
+ * and never re-enter reviewPR — the queue's remaining attempts cannot
+ * repair them. Deterministic enforcement failures
+ * ('input_budget_exceeded') and deadline exhaustion
+ * ('deadline_exceeded') also never re-run.
+ */
+const TRANSIENT_PROVIDER_FAILURE_CLASSES = new Set(["timeout", "transport", "rate_limit"]);
+const RETRYABLE_REVIEW_FAILURE_REASONS = new Set(["token_count_failed", "provider_failed"]);
+
+function reviewErrorTerminalReason(err) {
+  if (err?.gitwireErrorCode === "E_TOKEN_COUNT_FAILED") {
+    return TRANSIENT_PROVIDER_FAILURE_CLASSES.has(err.gitwireRejectionClass)
+      ? "token_count_failed"
+      : "token_count_permanent";
+  }
+  if (err?.gitwireErrorCode === "E_REVIEW_PROVIDER_TRANSIENT") return "provider_failed";
+  if (err?.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED") return "input_budget_exceeded";
+  if (err?.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED") return "deadline_exceeded";
+  return "error";
+}
+
+/**
+ * True when the latest persisted attempt for (repo, PR, head) failed with a
+ * retryable reason. The worker consults this on a repeated BullMQ attempt
+ * whose checkAndMark marker already exists: the marker records processing,
+ * not success, so the persisted outcome decides whether the review re-runs.
+ *
+ * @param {number} repoId
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @returns {Promise<boolean>}
+ */
+export async function isRetryableReviewFailure(repoId, prNumber, headSha) {
+  try {
+    const { rows } = await db.query(
+      "SELECT terminal_reason FROM ai_reviews " +
+      "WHERE repo_id = $1 AND pr_number = $2 AND commit_sha = $3 " +
+      "ORDER BY id DESC LIMIT 1",
+      [repoId, prNumber, headSha]
+    );
+    return RETRYABLE_REVIEW_FAILURE_REASONS.has(rows[0]?.terminal_reason ?? "");
+  } catch (err) {
+    // Fail closed: without the persisted outcome we cannot prove the prior
+    // attempt failed retryably, so the marker keeps its dedupe meaning.
+    logger.warn({ err: err.message, repoId, prNumber }, "Retryable-failure lookup failed — honoring idempotency marker");
+    return false;
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -7,6 +7,7 @@ import { getInstallationClient }     from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { reviewPR }      from "../services/aiReviewService.js";
 import { supersedePublishedReviewForPr } from "../services/aiReviewService.js";
+import { isRetryableReviewFailure } from "../services/aiReviewService.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
@@ -97,14 +98,28 @@ export function startPhase4Worker() {
               });
               if (patched) {
                 await clearRetryOutcome(repository.id, pr.number, pr.head.sha, ownedCheckRunId);
-                checkFinalized = true;
-                logger.info({ pr: pr.number }, "Stored check finalization replayed successfully");
-                return;
+                // PC-01 v2.1: a replayed failure conclusion is presentation
+                // work, not the review outcome. On a repeated attempt whose
+                // persisted review failure is retryable (token_count_failed /
+                // provider_failed), the replay must NOT terminate the job:
+                // reviewPR reruns, and its eventual result or failure
+                // finalizes this owned check normally. Only non-retryable
+                // outcomes keep the replay as terminal.
+                const replayedOutcomeRetryable = isRepeatedAttempt &&
+                  await isRetryableReviewFailure(repository.id, pr.number, pr.head?.sha || "unknown");
+                if (!replayedOutcomeRetryable) {
+                  checkFinalized = true;
+                  logger.info({ pr: pr.number }, "Stored check finalization replayed successfully");
+                  return;
+                }
+                logger.info({ pr: pr.number }, "Stored check finalization replayed — retryable review failure, rerunning review");
+                // fall through WITHOUT checkFinalized so the rerun finalizes
+              } else {
+                // Replay PATCH failed again — set sentinel and throw for retry.
+                // Do NOT enter finalizeOwnFailure (the stored outcome is correct).
+                patchRetryPending = true;
+                throw new Error("GitWire check finalization PATCH failed on retry — will retry again");
               }
-              // Replay PATCH failed again — set sentinel and throw for retry.
-              // Do NOT enter finalizeOwnFailure (the stored outcome is correct).
-              patchRetryPending = true;
-              throw new Error("GitWire check finalization PATCH failed on retry — will retry again");
             }
           }
 
@@ -138,7 +153,21 @@ export function startPhase4Worker() {
           }
           // ── Idempotency: distinguish fresh duplicate from repeated attempt ─
           if (!(await checkAndMark("ai_review", "pr-" + pr.number + "-" + (pr.head?.sha || "unknown")))) {
-            if (isRepeatedAttempt && ownedCheckRunId) {
+            // PC-01 v2.1: the marker records processing, not success, so a
+            // repeated BullMQ attempt consults the persisted review outcome.
+            // The retryability decision is PRODUCER-INDEPENDENT — manual
+            // /gitwire-run jobs own no check run, and BullMQ must remain the
+            // sole retry layer for transient provider failures regardless of
+            // check ownership. Deterministic failures and successes fall
+            // through to the check-state / no-op handling below.
+            if (isRepeatedAttempt &&
+                await isRetryableReviewFailure(repository.id, pr.number, pr.head?.sha || "unknown")) {
+              logger.info(
+                { pr: pr.number, attemptsMade: job.attemptsMade, attemptsStarted: job.attemptsStarted },
+                "AI review repeated attempt after retryable provider failure — re-running review"
+              );
+              // fall through to the review path below
+            } else if (isRepeatedAttempt && ownedCheckRunId) {
               // Repeated processing with no stored retry outcome. The prior
               // attempt may have died after checkAndMark but before completing.
               // Check the actual GitHub check state to decide:
@@ -175,11 +204,22 @@ export function startPhase4Worker() {
                   : "Prior AI review evaluation was interrupted (check state unavailable)"
               ));
               return;
+            } else if (isRepeatedAttempt) {
+              // Repeated attempt owning no check run (manual /gitwire-run
+              // producer) with no retryable failure: the prior attempt's
+              // persisted outcome stands. There is nothing to inspect,
+              // finalize, or present — a clean no-op with no side effects.
+              logger.info(
+                { pr: pr.number, attemptsMade: job.attemptsMade, attemptsStarted: job.attemptsStarted },
+                "AI review repeated attempt (no owned check, no retryable failure) — no-op"
+              );
+              return;
+            } else {
+              // Fresh duplicate with its own checkRunId: finalize neutral.
+              logger.info({ pr: pr.number }, "AI review fresh duplicate — finalizing this job's check as suppressed");
+              await finalizeOwn(null, { force: true });
+              return;
             }
-            // Fresh duplicate with its own checkRunId: finalize neutral.
-            logger.info({ pr: pr.number }, "AI review fresh duplicate — finalizing this job's check as suppressed");
-            await finalizeOwn(null, { force: true });
-            return;
           }
           if (isDryRun(repoConfig)) {
             logger.info({ repo: repository.full_name, pr: pr.number }, "DRY RUN: would run AI review");
@@ -253,9 +293,53 @@ export function startPhase4Worker() {
         const octokit = wrapOctokit(await getInstallationClient(installation.id));
         const result = await supersedePublishedReviewForPr({ octokit, repository, pr });
         logger.info(
-          { pr: pr.number, repo: repository.full_name, action: result.action, reason: result.reason ?? null },
+          { repo: repository.full_name, pr: pr.number, action: result.action, reason: result.reason ?? null },
           "Phase4: review supersession check"
         );
+        break;
+      }
+
+      case "ai-review-manual": {
+        // PC-01 v2.1: dashboard-triggered on-demand review. No idempotency
+        // marker — repeated explicit triggers for the same PR/SHA are
+        // legitimate separate requested runs — and no fabricated check run.
+        // BullMQ owns bounded retries: transient provider classes rethrow;
+        // deterministic and permanent failures are terminal.
+        const { pr, repository, installation } = job.data;
+        if (!pr || !repository || !installation) return;
+        const octokit = wrapOctokit(await getInstallationClient(installation.id));
+
+        const manualAdoption = await adoptWorker({
+          workerId: "worker:phase4",
+          permission: "ai_review:create",
+          resourceType: "repository",
+          installationId: installation.id,
+          jobData: { payload: job.data },
+          legacyActor: pr.user?.login,
+        });
+
+        try {
+          const result = await reviewPR({
+            pr,
+            repository: { ...repository, id: repository.id },
+            octokit,
+            principalId: workerPrincipalId(manualAdoption.context),
+            surfaceId: "audit_trail:ai_decision",
+          });
+          logger.info(
+            { repo: repository.full_name, pr: pr.number, verdict: result?.verdict ?? "skipped" },
+            "Manual AI review complete"
+          );
+        } catch (err) {
+          const deterministic = err?.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED" ||
+                                err?.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED";
+          const transientClass = ["timeout", "transport", "rate_limit"].includes(err?.gitwireRejectionClass);
+          if (!deterministic && transientClass) throw err;  // BullMQ retries
+          logger.error(
+            { err: err.message, pr: pr.number, rejectionClass: err?.gitwireRejectionClass ?? "none" },
+            "Manual AI review failed terminally"
+          );
+        }
         break;
       }
 

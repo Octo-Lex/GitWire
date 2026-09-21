@@ -1,7 +1,9 @@
 // tests/unit/reviewBundleCoverage.test.js
-// The real bundle service reports its own truncation as coverage adjustments
-// (frozen v1.2 WP-2 mechanisms 5 and 6: per-file patch truncation and
-// aggregate bundle truncation).
+// PC-01 v2.1: the bundle service assembles COMPLETE evidence and never
+// truncates on its own. Aggregate token admission lives in the review
+// execution layer (aiReviewService + reviewTokenAccounting); this service
+// reports allocation outcomes via reassemble()'s bundle_truncated
+// adjustments (frozen v1.2 WP-2 mechanism 6 semantics, carried forward).
 
 import { jest } from '@jest/globals';
 
@@ -23,14 +25,18 @@ await jest.unstable_mockModule('../../src/services/configService.js', () => ({
 }));
 
 const { buildReviewBundle } = await import('../../src/services/reviewBundleService.js');
+// Pure module — no mocks needed; chained in the integration cases below.
+const { buildFileCoverage } = await import('../../src/services/reviewCoverageService.js');
 
 const PR = { number: 1, title: 't', user: { login: 'dev' }, base: { ref: 'main' }, head: { ref: 'x' }, body: '' };
 const REPO = { id: 1, full_name: 'o/r' };
 
+// Production files reach the builder in buildFileCoverage-normalized shape
+// (added/removed) — raw GitHub files carry additions/deletions.
 function bigFile(name, chars, additions = 1) {
   return {
     filename: name, status: 'modified',
-    additions, deletions: 0,
+    added: additions, removed: 0,
     patch: '+' + 'x'.repeat(chars),
     sha: 's',
   };
@@ -41,51 +47,134 @@ beforeEach(() => {
   mockQuery.mockResolvedValue({ rows: [] });
 });
 
-describe('buildReviewBundle — truncation adjustments', () => {
-  test('12k default: 5k patch stays full, 13k patch truncates at 12,000', async () => {
-    // Gate C intervention regression (was: 4k default truncated a 5k patch —
-    // see the immutable pre-intervention proof on the study branch).
+describe('buildReviewBundle — complete evidence assembly (PC-01 v2.1)', () => {
+  test('no per-file cap: a 13k patch survives whole (12k rule removed)', async () => {
     const result = await buildReviewBundle({
       files: [bigFile('a.js', 100), bigFile('mid.js', 5000), bigFile('big.js', 13000)],
       pr: PR, repository: REPO,
     });
 
-    expect(result.coverageAdjustments).toEqual([
-      { path: 'big.js', coverage: 'partial', reason: 'patch_truncated' },
-    ]);
-    // the 5k file is NO LONGER truncated at the 12k default: it is absent
-    // from the adjustments (exact equality above) and its full patch survives
-    expect(result.bundle).toContain('x'.repeat(5000));
-    // the 13k patch ('+' + 13k x's) slices to '+' + 11,999 x's + marker
-    expect(result.bundle).toContain('x'.repeat(11999) + '\n... (truncated)');
-    expect(result.bundle).not.toContain('x'.repeat(12000));
+    expect(result.coverageAdjustments).toEqual([]);
+    expect(result.bundle).toContain('x'.repeat(13000));
+    expect(result.bundle).not.toContain('... (truncated)');
     expect(result.bundle).toContain('a.js');
   });
 
-  test('aggregate budget rebuild reports dropped and sliced files as bundle_truncated', async () => {
-    // Enough patch volume to blow the 180K-char bundle budget in the rebuild
-    // branch: metadata + context stay, diffs are rebuilt within budget and the
-    // tail files fall out.
+  test('no aggregate char cap: bundles beyond 180k chars assemble whole', async () => {
     const files = [];
     for (let i = 0; i < 60; i++) files.push(bigFile('f' + i + '.js', 5000));
-
     const result = await buildReviewBundle({ files, pr: PR, repository: REPO });
 
-    const truncated = result.coverageAdjustments.filter((a) => a.reason === 'bundle_truncated');
-    expect(truncated.length).toBeGreaterThan(0);
-    expect(result.totalChars).toBeLessThanOrEqual(181000);
-    // every adjustment path is a real file
-    for (const adj of result.coverageAdjustments) {
-      expect(files.some((f) => f.filename === adj.path)).toBe(true);
-      expect(adj.coverage).toBe('partial');
-    }
+    expect(result.totalChars).toBeGreaterThan(180000);
+    expect(result.coverageAdjustments).toEqual([]);
+    expect(result.bundle).toContain('x'.repeat(5000));
   });
 
-  test('no truncation produces no adjustments', async () => {
+  test('a single large file may exceed every legacy ceiling at once', async () => {
     const result = await buildReviewBundle({
-      files: [bigFile('a.js', 100)],
+      files: [bigFile('huge.js', 250000)],
       pr: PR, repository: REPO,
     });
+    expect(result.bundle).toContain('x'.repeat(250000));
     expect(result.coverageAdjustments).toEqual([]);
+  });
+
+  test('binary files keep the no-diff placeholder and produce no adjustments', async () => {
+    const result = await buildReviewBundle({
+      files: [{ filename: 'bin.dat', status: 'added', additions: 0, deletions: 0, patch: null, sha: 's' }],
+      pr: PR, repository: REPO,
+    });
+    expect(result.bundle).toContain('(no diff available — binary or large file)');
+    expect(result.coverageAdjustments).toEqual([]);
+    // the section is still addressable for allocation accounting
+    expect(result.fileSections).toHaveLength(1);
+    expect(result.fileSections[0].path).toBe('bin.dat');
+  });
+
+  test('fileSections preserve existing file order and per-file text', async () => {
+    const files = [bigFile('z.js', 10), bigFile('a.js', 20), bigFile('m.js', 30)];
+    const result = await buildReviewBundle({ files, pr: PR, repository: REPO });
+    expect(result.fileSections.map((s) => s.path)).toEqual(['z.js', 'a.js', 'm.js']);
+    for (const s of result.fileSections) {
+      expect(s.text).toContain('#### ' + s.path);
+      expect(s.text).toContain('```diff');
+    }
+  });
+});
+
+describe('reassemble — deterministic aggregate allocation output', () => {
+  test('reassemble(n) keeps the first n sections, marks the rest bundle_truncated', async () => {
+    const files = [bigFile('f0.js', 100), bigFile('f1.js', 100), bigFile('f2.js', 100), bigFile('f3.js', 100)];
+    const result = await buildReviewBundle({ files, pr: PR, repository: REPO });
+
+    const partial = result.reassemble(2);
+    expect(partial.coverageAdjustments).toEqual([
+      { path: 'f2.js', coverage: 'partial', reason: 'bundle_truncated' },
+      { path: 'f3.js', coverage: 'partial', reason: 'bundle_truncated' },
+    ]);
+    // admitted sections present, omitted absent
+    expect(partial.bundle).toContain('#### f0.js');
+    expect(partial.bundle).toContain('#### f1.js');
+    expect(partial.bundle).not.toContain('#### f2.js');
+    expect(partial.bundle).not.toContain('#### f3.js');
+    // metadata and repository/config context survive
+    expect(partial.bundle).toContain('## PR Metadata');
+    expect(partial.bundle).toContain('### File Summary');
+    expect(partial.bundle).toContain('## Repository Context');
+    expect(partial.bundle).toContain('## Active Configuration');
+    // file summary still lists every changed file (scope visibility)
+    expect(partial.bundle).toContain('f3.js');
+    // deterministic truncation note
+    expect(partial.bundle).toContain('(review input token budget reached — 2 remaining changed-file diffs omitted)');
+  });
+
+  test('reassemble(all) reproduces the complete bundle byte-for-byte', async () => {
+    const files = [bigFile('f0.js', 100), bigFile('f1.js', 30000)];
+    const result = await buildReviewBundle({ files, pr: PR, repository: REPO });
+    expect(result.reassemble(files.length).bundle).toBe(result.bundle);
+    expect(result.reassemble(files.length).coverageAdjustments).toEqual([]);
+  });
+
+  test('reassemble(0) keeps metadata/context and marks every file bundle_truncated', async () => {
+    const files = [bigFile('f0.js', 100), bigFile('f1.js', 100)];
+    const result = await buildReviewBundle({ files, pr: PR, repository: REPO });
+    const skeleton = result.reassemble(0);
+    expect(skeleton.coverageAdjustments).toHaveLength(2);
+    expect(skeleton.bundle).not.toContain('```diff');
+    expect(skeleton.bundle).toContain('## Repository Context');
+  });
+
+  test('clamping: out-of-range counts are safe', async () => {
+    const files = [bigFile('f0.js', 100)];
+    const result = await buildReviewBundle({ files, pr: PR, repository: REPO });
+    expect(result.reassemble(99).coverageAdjustments).toEqual([]);
+    expect(result.reassemble(-1).coverageAdjustments).toEqual([
+      { path: 'f0.js', coverage: 'partial', reason: 'bundle_truncated' },
+    ]);
+  });
+});
+
+describe('integration — buildFileCoverage output renders real diff statistics', () => {
+  // PC-01 v2.1 amendment blocker 3: the builder consumes the normalized
+  // admitted shape (added/removed). Raw GitHub files carry
+  // additions/deletions; skipping the coverage step must never be able to
+  // produce "+undefined -undefined" in a production chain.
+  test('raw GitHub files through buildFileCoverage render +N -M, never undefined', async () => {
+    const prFiles = [
+      { filename: 'src/a.js', status: 'modified', additions: 3, deletions: 2, patch: '+a\n-b', sha: 's1' },
+      { filename: 'src/b.js', status: 'added', additions: 500, deletions: 0, patch: '+' + 'b'.repeat(12000), sha: 's2' },
+      { filename: 'src/c.js', status: 'removed', additions: 0, deletions: 41, patch: '-c', sha: 's3' },
+    ];
+    const { files } = buildFileCoverage({ prFiles, cfg: {}, headSha: 'sha' });
+    expect(files).toHaveLength(3);
+
+    const result = await buildReviewBundle({ files, pr: PR, repository: REPO });
+    expect(result.bundle).toContain('#### src/a.js (+3 -2)');
+    expect(result.bundle).toContain('#### src/b.js (+500 -0)');
+    expect(result.bundle).toContain('#### src/c.js (+0 -41)');
+    // summary lines carry the same real numbers (padEnd-spaced status column)
+    expect(result.bundle).toContain('src/a.js (+3 -2)');
+    expect(result.bundle).toContain('src/c.js (+0 -41)');
+    expect(result.bundle).not.toContain('undefined');
   });
 });

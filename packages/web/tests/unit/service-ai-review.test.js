@@ -56,13 +56,15 @@ await jest.unstable_mockModule('../../src/services/pipelineEvents.js', () => ({
 const mockCreate = jest.fn();
 const anthropicCtorOptions = [];
 let lastCreateCtorOptions = null;
+let lastCreateRequestOptions = null;
 await jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
   default: class {
     constructor(options) {
       anthropicCtorOptions.push(options);
       this.messages = {
-        create: (request) => {
+        create: (request, requestOptions) => {
           lastCreateCtorOptions = options;
+          lastCreateRequestOptions = requestOptions;
           return mockCreate(request);
         },
       };
@@ -80,6 +82,13 @@ await jest.unstable_mockModule('../../config/index.js', () => ({
 }));
 
 // Mock reviewBundleService — returns a minimal bundle
+// PC-01 v2.1: mock token accounting — count always fits, classify passthrough
+await jest.unstable_mockModule('../../src/services/reviewTokenAccounting.js', () => ({
+  countInputTokens: jest.fn().mockResolvedValue(1000),
+  classifyProviderRejection: jest.fn((e) => e?.gitwireRejectionClass || 'other'),
+  MAX_PRIMARY_INPUT_TOKENS: 958016,
+}));
+
 await jest.unstable_mockModule('../../src/services/reviewBundleService.js', () => ({
   buildReviewBundle: jest.fn().mockResolvedValue({
     bundle: "## PR Metadata\nTest PR\n## Changes\n```diff\n+hello\n```",
@@ -134,7 +143,7 @@ await jest.unstable_mockModule('../../src/services/reviewHeartbeat.js', () => ({
   withHeartbeat: jest.fn().mockImplementation(async (fn) => fn()),
 }));
 
-const { reviewPR } = await import('../../src/services/aiReviewService.js');
+const { reviewPR, isRetryableReviewFailure } = await import('../../src/services/aiReviewService.js');
 // Same mocked instance reviewPR resolves through (module is mocked above).
 const { withHeartbeat } = await import('../../src/services/reviewHeartbeat.js');
 
@@ -344,7 +353,10 @@ describe('aiReviewService (bundle-driven v2)', () => {
       });
       expect(r).toBeTruthy();
       expect(withHeartbeat).toHaveBeenCalledTimes(1);
-      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 600000 });
+      const [, hbOpts600] = withHeartbeat.mock.calls[0];
+      expect(hbOpts600.label).toBe('claude review');
+      expect(hbOpts600.timeoutMs).toBeGreaterThan(595000);
+      expect(hbOpts600.timeoutMs).toBeLessThanOrEqual(600000);
     });
 
     test('config row omitting max_duration_seconds falls back to the 600 s default', async () => {
@@ -355,7 +367,10 @@ describe('aiReviewService (bundle-driven v2)', () => {
         octokit: oct,
       });
       expect(r).toBeTruthy();
-      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 600000 });
+      const [, hbOptsDef] = withHeartbeat.mock.calls[0];
+      expect(hbOptsDef.label).toBe('claude review');
+      expect(hbOptsDef.timeoutMs).toBeGreaterThan(595000);
+      expect(hbOptsDef.timeoutMs).toBeLessThanOrEqual(600000);
     });
 
     test('explicit operator-set duration is honored (resolution is row-driven, not hardcoded)', async () => {
@@ -365,7 +380,10 @@ describe('aiReviewService (bundle-driven v2)', () => {
         repository: REPO,
         octokit: oct,
       });
-      expect(withHeartbeat).toHaveBeenCalledWith(expect.any(Function), { label: 'claude review', timeoutMs: 300000 });
+      const [, hbOpts300] = withHeartbeat.mock.calls[0];
+      expect(hbOpts300.label).toBe('claude review');
+      expect(hbOpts300.timeoutMs).toBeGreaterThan(295000);
+      expect(hbOpts300.timeoutMs).toBeLessThanOrEqual(300000);
     });
   });
 
@@ -436,5 +454,372 @@ describe('aiReviewService (bundle-driven v2)', () => {
       expect(lastCreateCtorOptions.baseURL).toBe('http://test');
       expect(anthropicCtorOptions).toContain(lastCreateCtorOptions);
     });
+  });
+});
+
+// ── PC-01 v2.1: model-context admission ──────────────────────────────────────
+// Exact token accounting gates the primary request: if the PR fits the
+// 958,016-input-token envelope it is sent whole; overflow allocates
+// deterministically in file order and marks the omitted files
+// bundle_truncated. A count failure never falls back to an estimate.
+const { countInputTokens } = await import('../../src/services/reviewTokenAccounting.js');
+const { buildReviewBundle } = await import('../../src/services/reviewBundleService.js');
+
+describe('PC-01 v2.1: model-context admission', () => {
+  beforeEach(() => {
+    countInputTokens.mockReset();
+    countInputTokens.mockResolvedValue(1000);
+    buildReviewBundle.mockClear();
+    mockQuery.mockReset();
+    mockCreate.mockReset();
+  });
+
+  function setupAdmissionReview(files) {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, block_on_verdict: ['request_changes'], min_confidence_to_block: 'medium', max_files_to_review: 30, max_lines_to_review: 2000, ignore_patterns: [] }] })
+      .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+      .mockImplementation((sql) => (String(sql).includes("publication_claimed_at = NOW()") ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+
+    mockCreate.mockResolvedValueOnce({
+      content: [{ type: 'text', text: JSON.stringify({
+        findings: [],
+        overall_correctness: "patch is correct",
+        overall_explanation: "The patch looks clean.",
+        overall_confidence: 0.95,
+      }) }],
+      usage: { input_tokens: 100, output_tokens: 50 },
+    });
+
+    const data = files.map((f) => ({ filename: f, status: 'modified', additions: 5, deletions: 0, patch: '+patch-for-' + f }));
+    return mockOctokit({
+      'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}': { data: { head: { sha: 'abc123' } } },
+      'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      'POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews': { data: { id: 200 } },
+    });
+  }
+
+  // Bundle-parts override mirroring the real builder's structural contract
+  // (sections + deterministic reassemble), for overflow-path tests.
+  function admissionParts(paths) {
+    const sections = paths.map((p) => ({ path: p, text: '#### ' + p + '\n```diff\n+patch-for-' + p + '\n```' }));
+    const meta = '## PR Metadata\nTest\n## Changes\n\n### File Summary\n' + paths.map((p) => '  modified ' + p).join('\n') + '\n\n### Diffs';
+    const context = '\n## Repository Context\n\n## Active Configuration\nAI Review enabled: yes';
+    const assemble = (n, note) => meta + '\n' + sections.slice(0, n).map((s) => s.text).join('\n') + (note ? '\n' + note : '') + context;
+    const reassemble = (n) => {
+      const clamped = Math.max(0, Math.min(n, sections.length));
+      const omitted = sections.length - clamped;
+      const adj = sections.slice(clamped).map((s) => ({ path: s.path, coverage: 'partial', reason: 'bundle_truncated' }));
+      const note = omitted > 0 ? '(review input token budget reached — ' + omitted + ' remaining changed-file diff' + (omitted !== 1 ? 's' : '') + ' omitted)' : null;
+      return { bundle: assemble(clamped, note), coverageAdjustments: adj };
+    };
+    return {
+      bundle: assemble(sections.length), changedFiles: paths, totalChars: 100,
+      coverageAdjustments: [], fileSections: sections, reassemble,
+    };
+  }
+
+  test('the counted request is byte-identical to the sent request (fits path)', async () => {
+    const oct = setupAdmissionReview(['src/a.js']);
+    const r = await reviewPR({
+      pr: { number: 41, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 'feat: a', user: { login: 'dev' }, body: '' },
+      repository: REPO, octokit: oct,
+    });
+    expect(r).toBeTruthy();
+    expect(countInputTokens).toHaveBeenCalledTimes(1);
+    const counted = countInputTokens.mock.calls[0][0];
+    const sent = mockCreate.mock.calls[0][0];
+    expect(sent.system).toBe(counted.system);
+    expect(sent.messages[0].content).toBe(counted.userPrompt);
+    expect(counted.model).toBe('claude-sonnet-4-20250514');
+  });
+
+  test('exactly 958,016 input tokens fits — whole PR, single count', async () => {
+    countInputTokens.mockResolvedValueOnce(958016);
+    const oct = setupAdmissionReview(['src/a.js']);
+    const r = await reviewPR({ pr: { number: 42, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+    expect(r).toBeTruthy();
+    expect(countInputTokens).toHaveBeenCalledTimes(1);
+    expect(r.coverage.approvalEvidenceComplete).toBe(true);
+  });
+
+  test('958,017 allocates deterministically: crossing + later files bundle_truncated', async () => {
+    buildReviewBundle.mockResolvedValueOnce(admissionParts(['f0.js', 'f1.js', 'f2.js']));
+    countInputTokens
+      .mockResolvedValueOnce(958017)  // complete request — one token over the ceiling
+      .mockResolvedValueOnce(1000)    // zero-evidence skeleton
+      .mockResolvedValueOnce(400000)  // f0 — admitted
+      .mockResolvedValueOnce(400000)  // f1 — admitted (157,016 remain)
+      .mockResolvedValueOnce(400000)  // f2 — crossing: exceeds remaining
+      .mockResolvedValueOnce(800500); // rebuilt final — verified under the ceiling
+    const oct = setupAdmissionReview(['f0.js', 'f1.js', 'f2.js']);
+    const r = await reviewPR({ pr: { number: 43, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+
+    expect(r).toBeTruthy();
+    // six counts: complete, skeleton, three section counts, final verification
+    expect(countInputTokens).toHaveBeenCalledTimes(6);
+    // the sent request is the REBUILT one: f0/f1 evidence present, f2's patch absent
+    const sent = mockCreate.mock.calls[0][0];
+    expect(sent.messages[0].content).toContain('+patch-for-f0.js');
+    expect(sent.messages[0].content).toContain('+patch-for-f1.js');
+    expect(sent.messages[0].content).not.toContain('+patch-for-f2.js');
+    expect(sent.messages[0].content).toContain('review input token budget reached');
+    // coverage truthfully reports only f2 as incomplete
+    const f2 = r.coverage.files.find((f) => f.path === 'f2.js');
+    expect(f2.coverage).toBe('partial');
+    expect(f2.reason).toBe('bundle_truncated');
+    expect(r.coverage.approvalEvidenceComplete).toBe(false);
+  });
+
+  test('count failure fails the review visibly and never sends inference', async () => {
+    const countErr = new Error('Token count failed (transport): boom');
+    countErr.gitwireErrorCode = 'E_TOKEN_COUNT_FAILED';
+    countErr.gitwireRejectionClass = 'transport';
+    countInputTokens.mockRejectedValueOnce(countErr);
+    const oct = setupAdmissionReview(['src/a.js']);
+    await expect(reviewPR({
+      pr: { number: 44, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+      repository: REPO, octokit: oct,
+    })).rejects.toMatchObject({ gitwireErrorCode: 'E_TOKEN_COUNT_FAILED' });
+    expect(mockCreate).not.toHaveBeenCalled();
+    // the persisted error receipt names the retryable class so a repeated
+    // BullMQ attempt can decide to re-run (worker retry lifecycle)
+    const updateCall = mockQuery.mock.calls.find((c) => String(c[0]).includes('terminal_reason = $2'));
+    expect(updateCall).toBeTruthy();
+    expect(updateCall[1][1]).toBe('token_count_failed');
+  });
+
+  test('post-allocation enforcement failure refuses inference', async () => {
+    // Both sections fit the per-section estimate, but the authoritative
+    // final re-count exceeds the ceiling: the request must never be sent.
+    buildReviewBundle.mockResolvedValueOnce(admissionParts(['f0.js', 'f1.js']));
+    countInputTokens
+      .mockResolvedValueOnce(958017)  // over ceiling
+      .mockResolvedValueOnce(1000)    // skeleton
+      .mockResolvedValueOnce(400000)  // f0 — admitted
+      .mockResolvedValueOnce(400000)  // f1 — admitted
+      .mockResolvedValueOnce(999999); // rebuilt final — still over: refuse
+    const oct = setupAdmissionReview(['f0.js', 'f1.js']);
+    await expect(reviewPR({
+      pr: { number: 45, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+      repository: REPO, octokit: oct,
+    })).rejects.toMatchObject({ gitwireErrorCode: 'E_INPUT_BUDGET_EXCEEDED' });
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(countInputTokens).toHaveBeenCalledTimes(5);
+  });
+
+  test('complete request over the counter limit (Infinity) still reaches allocation', async () => {
+    buildReviewBundle.mockResolvedValueOnce(admissionParts(['f0.js', 'f1.js']));
+    countInputTokens
+      .mockResolvedValueOnce(Infinity)   // counter rejects the whole PR: definitely over
+      .mockResolvedValueOnce(1000)       // zero-evidence skeleton
+      .mockResolvedValueOnce(400000)     // f0 — admitted (557,016 remain)
+      .mockResolvedValueOnce(600000)     // f1 — crossing: exceeds remaining
+      .mockResolvedValueOnce(400500);    // rebuilt final — verified under the ceiling
+    const oct = setupAdmissionReview(['f0.js', 'f1.js']);
+    const r = await reviewPR({ pr: { number: 46, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+
+    expect(r).toBeTruthy();
+    expect(countInputTokens).toHaveBeenCalledTimes(5);
+    const sent = mockCreate.mock.calls[0][0];
+    expect(sent.messages[0].content).toContain('+patch-for-f0.js');
+    expect(sent.messages[0].content).not.toContain('+patch-for-f1.js');
+    const f1 = r.coverage.files.find((f) => f.path === 'f1.js');
+    expect(f1.coverage).toBe('partial');
+    expect(f1.reason).toBe('bundle_truncated');
+  });
+
+  test('a single section over the counter limit is the crossing file', async () => {
+    buildReviewBundle.mockResolvedValueOnce(admissionParts(['f0.js', 'f1.js', 'f2.js']));
+    countInputTokens
+      .mockResolvedValueOnce(Infinity)  // whole PR over the counter limit
+      .mockResolvedValueOnce(1000)      // skeleton
+      .mockResolvedValueOnce(500)       // f0 — admitted
+      .mockResolvedValueOnce(Infinity)  // f1 — the counter cannot even count it: crossing
+      .mockResolvedValueOnce(1600);     // rebuilt final — verified
+    const oct = setupAdmissionReview(['f0.js', 'f1.js', 'f2.js']);
+    const r = await reviewPR({ pr: { number: 47, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+
+    expect(r).toBeTruthy();
+    const sent = mockCreate.mock.calls[0][0];
+    expect(sent.messages[0].content).toContain('+patch-for-f0.js');
+    expect(sent.messages[0].content).not.toContain('+patch-for-f1.js');
+    expect(sent.messages[0].content).not.toContain('+patch-for-f2.js');
+    for (const p of ['f1.js', 'f2.js']) {
+      const rec = r.coverage.files.find((f) => f.path === p);
+      expect(rec.coverage).toBe('partial');
+      expect(rec.reason).toBe('bundle_truncated');
+    }
+  });
+
+  test('admission and inference share one deadline — inference receives only the remainder', async () => {
+    const oct = setupAdmissionReview(['src/a.js']);
+    const t0 = Date.now();
+    const r = await reviewPR({ pr: { number: 48, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+    expect(r).toBeTruthy();
+    const counted = countInputTokens.mock.calls[0][0];
+    expect(counted.deadline).toBeGreaterThan(t0 + 595000);
+    // deadline = now + maxDuration is captured after t0, so allow capture slack
+    expect(counted.deadline).toBeLessThanOrEqual(t0 + 605000);
+    expect(lastCreateRequestOptions).toBeTruthy();
+    expect(lastCreateRequestOptions.timeout).toBeGreaterThan(0);
+    expect(lastCreateRequestOptions.timeout).toBeLessThanOrEqual(600000);
+    expect(lastCreateRequestOptions.maxRetries).toBe(0);
+    const [, hbOpts] = withHeartbeat.mock.calls[0];
+    expect(hbOpts.timeoutMs).toBeGreaterThan(0);
+    expect(hbOpts.timeoutMs).toBeLessThanOrEqual(600000);
+  });
+
+  test('deadline expiration during token counting prevents inference (shared-deadline gate)', async () => {
+    mockQuery.mockReset();
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, max_duration_seconds: 0.05, ignore_patterns: [] }] })
+      .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+      .mockImplementation((sql) => (String(sql).includes('publication_claimed_at = NOW()') ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+    countInputTokens.mockImplementation(async () => {
+      await new Promise((res) => setTimeout(res, 80));   // outlives the 50 ms deadline
+      return 1000;
+    });
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: '{}' }], usage: { input_tokens: 1, output_tokens: 1 } });
+    const oct = mockOctokit({
+      'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/a.js', status: 'modified', additions: 1, deletions: 0, patch: '+a' }] },
+      'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+    });
+    await expect(reviewPR({
+      pr: { number: 49, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+      repository: REPO, octokit: oct,
+    })).rejects.toMatchObject({ gitwireErrorCode: 'E_REVIEW_DEADLINE_EXCEEDED', gitwireRejectionClass: 'timeout' });
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  test('count-failure rejection class decides the persisted terminal reason', async () => {
+    const cases = [
+      ['timeout', 'token_count_failed'],
+      ['transport', 'token_count_failed'],
+      ['rate_limit', 'token_count_failed'],
+      ['auth_entitlement', 'token_count_permanent'],
+      ['quota', 'token_count_permanent'],
+      ['other', 'token_count_permanent'],
+    ];
+    for (const [rejectionClass, expectedReason] of cases) {
+      mockQuery.mockReset();
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, ignore_patterns: [] }] })
+        .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+        .mockImplementation((sql) => (String(sql).includes('publication_claimed_at = NOW()') ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+      const countErr = new Error('Token count failed (' + rejectionClass + '): simulated');
+      countErr.gitwireErrorCode = 'E_TOKEN_COUNT_FAILED';
+      countErr.gitwireRejectionClass = rejectionClass;
+      countInputTokens.mockReset();
+      countInputTokens.mockRejectedValueOnce(countErr);
+      const oct = mockOctokit({
+        'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/a.js', status: 'modified', additions: 1, deletions: 0, patch: '+a' }] },
+        'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      });
+      await expect(reviewPR({
+        pr: { number: 50, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+        repository: REPO, octokit: oct,
+      })).rejects.toMatchObject({ gitwireErrorCode: 'E_TOKEN_COUNT_FAILED' });
+      const updateCall = mockQuery.mock.calls.find((c) => String(c[0]).includes('terminal_reason = $2'));
+      expect(updateCall).toBeTruthy();
+      expect([rejectionClass, updateCall[1][1]]).toEqual([rejectionClass, expectedReason]);
+    }
+  });
+
+  test('isRetryableReviewFailure re-enters reviewPR only for token_count_failed', async () => {
+    const reasons = [
+      ['token_count_failed', true],
+      ['provider_failed', true],
+      ['token_count_permanent', false],
+      ['input_budget_exceeded', false],
+      ['deadline_exceeded', false],
+      ['error', false],
+    ];
+    for (const [reason, expected] of reasons) {
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce({ rows: [{ terminal_reason: reason }] });
+      await expect(isRetryableReviewFailure(1, 2, 'abc'))
+        .resolves.toBe(expected);
+    }
+    // no persisted row at all — fail closed onto the marker semantics
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await expect(isRetryableReviewFailure(1, 2, 'abc')).resolves.toBe(false);
+
+    // DB lookup failure fails closed: without the persisted outcome we
+    // cannot prove retryability, so the marker keeps its dedupe meaning
+    mockQuery.mockReset();
+    mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+    await expect(isRetryableReviewFailure(1, 2, 'abc')).resolves.toBe(false);
+  });
+
+  test('transient PRIMARY inference failures rethrow as E_REVIEW_PROVIDER_TRANSIENT and persist provider_failed', async () => {
+    const cases = [
+      [408, null, 'Request timeout', 'timeout'],
+      [503, null, 'Service unavailable', 'transport'],
+      [409, null, 'Conflict', 'transport'],
+      [429, null, 'Too many requests', 'rate_limit'],
+    ];
+    for (const [status, code, message, expectedClass] of cases) {
+      mockQuery.mockReset();
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, ignore_patterns: [] }] })
+        .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+        .mockImplementation((sql) => (String(sql).includes('publication_claimed_at = NOW()') ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+      const oct = mockOctokit({
+        'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/a.js', status: 'modified', additions: 1, deletions: 0, patch: '+a' }] },
+        'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      });
+      const providerErr = new Error(message);
+      providerErr.status = status;
+      providerErr.gitwireRejectionClass = expectedClass; // status→class mapping pinned separately against the real classifier
+      if (code) providerErr.error = { error: { code } };
+      mockCreate.mockReset();
+      mockCreate.mockRejectedValueOnce(providerErr);
+      await expect(reviewPR({
+        pr: { number: 51, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+        repository: REPO, octokit: oct,
+      })).rejects.toMatchObject({ gitwireErrorCode: 'E_REVIEW_PROVIDER_TRANSIENT', gitwireRejectionClass: expectedClass });
+      const updateCall = mockQuery.mock.calls.find((c) => String(c[0]).includes('terminal_reason = $2'));
+      expect([status, updateCall ? updateCall[1][1] : null]).toEqual([status, 'provider_failed']);
+    }
+  });
+
+  test('permanent PRIMARY inference failures stay on the null-return path with generic error reason', async () => {
+    const cases = [
+      [401, null, 'invalid x-api-key', 'auth_entitlement'],
+      [429, null, 'Coding Plan credit window exhausted', 'quota'],
+      [400, 1261, '[1261][prompt is too long]', 'context_limit'],
+      [418, null, "I'm a teapot", 'other'],
+    ];
+    for (const [status, code, message, expectedClass] of cases) {
+      mockQuery.mockReset();
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, ignore_patterns: [] }] })
+        .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+        .mockImplementation((sql) => (String(sql).includes('publication_claimed_at = NOW()') ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+      const oct = mockOctokit({
+        'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/a.js', status: 'modified', additions: 1, deletions: 0, patch: '+a' }] },
+        'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      });
+      const providerErr = new Error(message);
+      providerErr.status = status;
+      providerErr.gitwireRejectionClass = expectedClass; // mapping pinned separately; these classes must stay non-retryable
+      if (code) providerErr.error = { error: { code } };
+      mockCreate.mockReset();
+      mockCreate.mockRejectedValueOnce(providerErr);
+      const r = await reviewPR({
+        pr: { number: 52, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+        repository: REPO, octokit: oct,
+      });
+      expect(r).toBeNull();
+      const updateCall = mockQuery.mock.calls.find((c) => String(c[0]).includes('terminal_reason = $2'));
+      expect([status, updateCall ? updateCall[1][1] : null]).toEqual([status, 'error']);
+    }
   });
 });

@@ -25,7 +25,7 @@ import { db }     from "../lib/db.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
-import { reviewPR }      from "../services/aiReviewService.js";
+import { phase4Queue } from "../lib/queue.js";
 import { generateReport, verifyChain, exportNightly } from "../services/auditTrailService.js";
 import { logger } from "../lib/logger.js";
 
@@ -237,11 +237,16 @@ phase4Router.post("/review/trigger/:owner/:repo/:pr", async (req, res, next) => 
       { owner: ctx.repo.owner, repo: ctx.repo.name, pull_number: prNumber }
     );
 
-    reviewPR({
+    // PC-01 v2.1: on-demand reviews run on the Phase 4 queue so BullMQ owns
+    // bounded retries for transient provider failures (the SDK performs none
+    // under the deadline contract). The manual job carries no idempotency
+    // marker: repeated explicit triggers for the same PR/SHA are legitimate
+    // separate requested runs, never automatic-PR duplicates.
+    await phase4Queue.add("ai-review-manual", {
       pr,
       repository: { ...ctx.repo, id: ctx.repo.github_id, owner: { login: ctx.repo.owner } },
-      octokit:    ctx.octokit,
-    }).catch(err => logger.error({ err }, "Review trigger failed"));
+      installation: { id: ctx.repo.installation_id },
+    }, { priority: 1 });
   } catch (err) { next(err); }
 });
 

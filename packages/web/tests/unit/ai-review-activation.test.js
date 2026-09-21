@@ -42,6 +42,13 @@ await jest.unstable_mockModule("../../src/services/configService.js", () => ({
 }));
 
 // Mock the Anthropic SDK so we don't need an API key
+// PC-01 v2.1: mock token accounting — count always fits, classify passthrough
+await jest.unstable_mockModule("../../src/services/reviewTokenAccounting.js", () => ({
+  countInputTokens: jest.fn().mockResolvedValue(1000),
+  classifyProviderRejection: jest.fn((e) => e?.gitwireRejectionClass || "other"),
+  MAX_PRIMARY_INPUT_TOKENS: 958016,
+}));
+
 await jest.unstable_mockModule("@anthropic-ai/sdk", () => ({
   default: jest.fn().mockImplementation(() => ({ messages: { create: jest.fn() } })),
 }));
