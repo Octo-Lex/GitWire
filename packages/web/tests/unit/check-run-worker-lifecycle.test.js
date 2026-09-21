@@ -542,3 +542,37 @@ describe("PC-01 final amendment: class-aware retry eligibility", () => {
     }
   });
 });
+
+describe("PC-01 final amendment: primary-inference retry ownership", () => {
+  const priJobData = {
+    pr: { number: 16, head: { sha: "abc123" }, base: { ref: "main" }, user: { login: "contributor" }, id: 7777 },
+    repository: { id: 999, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+    installation: { id: 11111 },
+    checkRunId: 5000,
+  };
+
+  it("primary provider transient: attempt 2 re-runs reviewPR (provider_failed)", async () => {
+    mockCheckAndMark.mockResolvedValueOnce(true);
+    const transient = new Error("Service unavailable");
+    transient.gitwireErrorCode = "E_REVIEW_PROVIDER_TRANSIENT";
+    transient.gitwireRejectionClass = "transport";
+    mockReviewPR.mockRejectedValueOnce(transient);
+    await expect(processReviewJob(priJobData)).rejects.toMatchObject({ gitwireErrorCode: "E_REVIEW_PROVIDER_TRANSIENT" });
+
+    mockCheckAndMark.mockResolvedValueOnce(false);
+    mockIsRetryableReviewFailure.mockResolvedValueOnce(true); // persisted reason: provider_failed
+    mockReviewPR.mockResolvedValueOnce({ verdict: "approved", blocked: false, findings: [] });
+    await processReviewJob(priJobData, { attemptsMade: 1, attemptsStarted: 1 });
+    expect(mockReviewPR).toHaveBeenCalledTimes(2);
+  });
+
+  it("primary provider permanent (auth): attempt 2 does NOT re-run reviewPR", async () => {
+    mockCheckAndMark.mockResolvedValue(false);
+    mockIsRetryableReviewFailure.mockResolvedValue(false); // generic 'error' reason
+    mockGetInstallationClient.mockResolvedValue({
+      request: jest.fn().mockResolvedValue({ data: { status: "completed" } }),
+    });
+    await processReviewJob(priJobData, { attemptsMade: 1, attemptsStarted: 1 });
+    expect(mockReviewPR).not.toHaveBeenCalled();
+  });
+});

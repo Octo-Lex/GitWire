@@ -66,7 +66,9 @@ export const REJECTION_CLASSES = [
  *   timeout         SDK APIConnectionTimeoutError, ETIMEDOUT/ECONNABORTED,
  *                   HTTP 408, or a message naming a timeout.
  *   transport       SDK APIConnectionError, connection-level socket/DNS
- *                   errors, and 5xx/529 server states.
+ *                   errors, HTTP 409 (SDK-retryable conflict condition the
+ *                   SDK itself treats as transient), and 5xx/529 server
+ *                   states.
  *   other           everything else.
  *
  * @param {Error} err
@@ -95,6 +97,7 @@ export function classifyProviderRejection(err) {
   if (
     err.name === "APIConnectionError" ||
     ["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EPIPE", "EHOSTUNREACH"].includes(err.code) ||
+    status === 409 ||
     (status !== null && (status === 529 || status >= 500))
   ) {
     return "transport";

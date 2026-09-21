@@ -842,7 +842,8 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       err.gitwireErrorCode === "E_PUBLICATION_STATE" ||
       err.gitwireErrorCode === "E_TOKEN_COUNT_FAILED" ||
       err.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED" ||
-      err.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED"
+      err.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED" ||
+      err.gitwireErrorCode === "E_REVIEW_PROVIDER_TRANSIENT"
     )) {
       throw err;
     }
@@ -1037,9 +1038,15 @@ async function runStructuredReview(request, opts) {
   } catch (err) {
     // PC-01 v2.1: classify every provider failure into the frozen seven-way
     // taxonomy (context_limit / timeout / rate_limit / quota /
-    // auth_entitlement / transport / other) so acceptance telemetry can tell
-    // a real context-window rejection from quota or transport trouble.
+    // auth_entitlement / transport / other). SDK retries are disabled under
+    // the deadline, so a TRANSIENT primary-call failure (timeout/transport/
+    // rate_limit — including 409 and 5xx) is tagged
+    // E_REVIEW_PROVIDER_TRANSIENT and rethrown for BullMQ, which is the sole
+    // retry layer. Permanent classes stay on the pre-PC-01 null-return path.
     err.gitwireRejectionClass = classifyProviderRejection(err);
+    if (TRANSIENT_PROVIDER_FAILURE_CLASSES.has(err.gitwireRejectionClass)) {
+      err.gitwireErrorCode = "E_REVIEW_PROVIDER_TRANSIENT";
+    }
     logger.warn({ err: err.message, rejectionClass: err.gitwireRejectionClass }, "AI review: Claude call failed");
     throw err;
   }
@@ -1519,15 +1526,16 @@ export function shouldRunDefense(mode, triggers, findings, challenges, missedRis
  * ('input_budget_exceeded') and deadline exhaustion
  * ('deadline_exceeded') also never re-run.
  */
-const RETRYABLE_COUNT_FAILURE_CLASSES = new Set(["timeout", "transport", "rate_limit"]);
-const RETRYABLE_REVIEW_FAILURE_REASONS = new Set(["token_count_failed"]);
+const TRANSIENT_PROVIDER_FAILURE_CLASSES = new Set(["timeout", "transport", "rate_limit"]);
+const RETRYABLE_REVIEW_FAILURE_REASONS = new Set(["token_count_failed", "provider_failed"]);
 
 function reviewErrorTerminalReason(err) {
   if (err?.gitwireErrorCode === "E_TOKEN_COUNT_FAILED") {
-    return RETRYABLE_COUNT_FAILURE_CLASSES.has(err.gitwireRejectionClass)
+    return TRANSIENT_PROVIDER_FAILURE_CLASSES.has(err.gitwireRejectionClass)
       ? "token_count_failed"
       : "token_count_permanent";
   }
+  if (err?.gitwireErrorCode === "E_REVIEW_PROVIDER_TRANSIENT") return "provider_failed";
   if (err?.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED") return "input_budget_exceeded";
   if (err?.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED") return "deadline_exceeded";
   return "error";

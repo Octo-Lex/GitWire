@@ -732,6 +732,7 @@ describe('PC-01 v2.1: model-context admission', () => {
   test('isRetryableReviewFailure re-enters reviewPR only for token_count_failed', async () => {
     const reasons = [
       ['token_count_failed', true],
+      ['provider_failed', true],
       ['token_count_permanent', false],
       ['input_budget_exceeded', false],
       ['deadline_exceeded', false],
@@ -747,5 +748,72 @@ describe('PC-01 v2.1: model-context admission', () => {
     mockQuery.mockReset();
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await expect(isRetryableReviewFailure(1, 2, 'abc')).resolves.toBe(false);
+  });
+
+  test('transient PRIMARY inference failures rethrow as E_REVIEW_PROVIDER_TRANSIENT and persist provider_failed', async () => {
+    const cases = [
+      [408, null, 'Request timeout', 'timeout'],
+      [503, null, 'Service unavailable', 'transport'],
+      [409, null, 'Conflict', 'transport'],
+      [429, null, 'Too many requests', 'rate_limit'],
+    ];
+    for (const [status, code, message, expectedClass] of cases) {
+      mockQuery.mockReset();
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, ignore_patterns: [] }] })
+        .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+        .mockImplementation((sql) => (String(sql).includes('publication_claimed_at = NOW()') ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+      const oct = mockOctokit({
+        'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/a.js', status: 'modified', additions: 1, deletions: 0, patch: '+a' }] },
+        'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      });
+      const providerErr = new Error(message);
+      providerErr.status = status;
+      providerErr.gitwireRejectionClass = expectedClass; // status→class mapping pinned separately against the real classifier
+      if (code) providerErr.error = { error: { code } };
+      mockCreate.mockReset();
+      mockCreate.mockRejectedValueOnce(providerErr);
+      await expect(reviewPR({
+        pr: { number: 51, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+        repository: REPO, octokit: oct,
+      })).rejects.toMatchObject({ gitwireErrorCode: 'E_REVIEW_PROVIDER_TRANSIENT', gitwireRejectionClass: expectedClass });
+      const updateCall = mockQuery.mock.calls.find((c) => String(c[0]).includes('terminal_reason = $2'));
+      expect([status, updateCall ? updateCall[1][1] : null]).toEqual([status, 'provider_failed']);
+    }
+  });
+
+  test('permanent PRIMARY inference failures stay on the null-return path with generic error reason', async () => {
+    const cases = [
+      [401, null, 'invalid x-api-key', 'auth_entitlement'],
+      [429, null, 'Coding Plan credit window exhausted', 'quota'],
+      [400, 1261, '[1261][prompt is too long]', 'context_limit'],
+      [418, null, "I'm a teapot", 'other'],
+    ];
+    for (const [status, code, message, expectedClass] of cases) {
+      mockQuery.mockReset();
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, enabled: true, check_security: true, check_architecture: true, ignore_patterns: [] }] })
+        .mockResolvedValueOnce({ rows: [{ id: 100 }] })
+        .mockImplementation((sql) => (String(sql).includes('publication_claimed_at = NOW()') ? { rows: [{ id: 100 }] } : Promise.resolve({ rows: [] })));
+      const oct = mockOctokit({
+        'POST /repos/{owner}/{repo}/check-runs': { data: { id: 10 } },
+        'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': { data: [{ filename: 'src/a.js', status: 'modified', additions: 1, deletions: 0, patch: '+a' }] },
+        'PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}': { data: {} },
+      });
+      const providerErr = new Error(message);
+      providerErr.status = status;
+      providerErr.gitwireRejectionClass = expectedClass; // mapping pinned separately; these classes must stay non-retryable
+      if (code) providerErr.error = { error: { code } };
+      mockCreate.mockReset();
+      mockCreate.mockRejectedValueOnce(providerErr);
+      const r = await reviewPR({
+        pr: { number: 52, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' },
+        repository: REPO, octokit: oct,
+      });
+      expect(r).toBeNull();
+      const updateCall = mockQuery.mock.calls.find((c) => String(c[0]).includes('terminal_reason = $2'));
+      expect([status, updateCall ? updateCall[1][1] : null]).toEqual([status, 'error']);
+    }
   });
 });

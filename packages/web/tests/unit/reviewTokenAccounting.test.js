@@ -117,13 +117,15 @@ describe('classifyProviderRejection — seven-way taxonomy', () => {
     expect(classifyProviderRejection(gwError(408, null, 'request timeout'))).toBe('timeout');
     expect(classifyProviderRejection(new Error('Request body timed out'))).toBe('timeout');
   });
-  test('transport: SDK connection error, socket/DNS codes, 5xx and 529', () => {
+  test('transport: SDK connection error, socket/DNS codes, 409, 5xx and 529', () => {
     const c1 = new Error('Connection error.'); c1.name = 'APIConnectionError';
     expect(classifyProviderRejection(c1)).toBe('transport');
     const c2 = new Error('reset'); c2.code = 'ECONNRESET';
     expect(classifyProviderRejection(c2)).toBe('transport');
     expect(classifyProviderRejection(gwError(503, null, 'upstream'))).toBe('transport');
     expect(classifyProviderRejection(gwError(529, null, 'overloaded'))).toBe('transport');
+    // 409 is SDK-retryable per the SDK's own retry policy — transient, and NOT rate_limit
+    expect(classifyProviderRejection(gwError(409, null, 'Conflict'))).toBe('transport');
   });
   test('other: everything else, including null', () => {
     expect(classifyProviderRejection(gwError(418, null, "I'm a teapot"))).toBe('other');
@@ -243,5 +245,17 @@ describe('countInputTokens — SDK-local retries disabled under the deadline', (
     mockCountTokens.mockResolvedValueOnce({ input_tokens: 3 });
     await countInputTokens({ model: 'm', userPrompt: 'x' });
     expect(countOptions).toEqual([{}]);
+  });
+});
+
+describe('countInputTokens — 409 is a transient transport count failure', () => {
+  beforeEach(() => mockCountTokens.mockReset());
+
+  test('a 409 count failure wraps as transient transport (retryable via token_count_failed)', async () => {
+    const conflict = new Error('Conflict');
+    conflict.status = 409;
+    mockCountTokens.mockRejectedValueOnce(conflict);
+    await expect(countInputTokens({ model: 'm', userPrompt: 'x' }))
+      .rejects.toMatchObject({ gitwireErrorCode: 'E_TOKEN_COUNT_FAILED', gitwireRejectionClass: 'transport' });
   });
 });
