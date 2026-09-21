@@ -103,6 +103,22 @@ export function classifyProviderRejection(err) {
 }
 
 /**
+ * True when the provider rejected the request as exceeding the MODEL's
+ * context limit — gateway code 1261 / "prompt is too long" (preflight
+ * 2026-09-21: a count of 1,273,523 tokens was rejected pre-execution while
+ * 958,682 was accepted). This is a definitive over-limit answer, not an
+ * error: it means "definitely larger than the admission ceiling".
+ * Gateway code 1210 (illegal max_tokens) is deliberately NOT included — it
+ * concerns the output parameter, which count requests never send.
+ */
+export function isPromptTooLongRejection(err) {
+  if (!err) return false;
+  const status = typeof err.status === "number" ? err.status : null;
+  if (status !== 400) return false;
+  return err?.error?.error?.code === 1261 || /prompt is too long/i.test(String(err.message || ""));
+}
+
+/**
  * Count the EXACT input tokens of a prospective primary review request via
  * the provider's count_tokens endpoint, using the same model string the
  * send will use. No local fallback exists by design.
@@ -111,9 +127,14 @@ export function classifyProviderRejection(err) {
  * @param {string} opts.model      - exact model the send will use
  * @param {string} [opts.system]   - system prompt (counted: preflight-verified)
  * @param {string} opts.userPrompt - complete user message content
- * @returns {Promise<number>} exact input token count
- * @throws Error with gitwireErrorCode E_TOKEN_COUNT_FAILED — the caller must
- *   fail visibly and never proceed to inference on an estimated count.
+ * @returns {Promise<number>} the exact input token count, or **Infinity**
+ *   when the provider's counter itself rejects the prompt as over the
+ *   model's context limit — a definitive "larger than the admission
+ *   ceiling" answer that callers must route into deterministic allocation,
+ *   never into a failure.
+ * @throws Error with gitwireErrorCode E_TOKEN_COUNT_FAILED for every other
+ *   failure (transport, timeout, rate limit, quota, auth, malformed). The
+ *   caller must fail visibly and never proceed to inference on an estimate.
  */
 export async function countInputTokens({ model, system, userPrompt }) {
   const started = Date.now();
@@ -130,6 +151,17 @@ export async function countInputTokens({ model, system, userPrompt }) {
     logger.debug({ model, tokens, ms: Date.now() - started }, "Token count ok");
     return tokens;
   } catch (err) {
+    // The counter rejecting the prompt as over the model context is a valid
+    // answer: the request is definitely over the admission ceiling. Return
+    // it as Infinity so allocation degrades truthfully (PC-01 v2.1
+    // amendment: oversized PRs must reach allocation, not fail the review).
+    if (isPromptTooLongRejection(err)) {
+      logger.info(
+        { model, ms: Date.now() - started },
+        "Token count over model context limit — treating as over the admission ceiling"
+      );
+      return Infinity;
+    }
     const rejectionClass = classifyProviderRejection(err);
     const wrapped = new Error("Token count failed (" + rejectionClass + "): " + err.message);
     wrapped.gitwireErrorCode = "E_TOKEN_COUNT_FAILED";

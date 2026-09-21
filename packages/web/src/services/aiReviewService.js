@@ -812,9 +812,9 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
 
     await db.query(
       "UPDATE ai_reviews SET verdict = 'error', summary = $1, " +
-      "terminal_reason = 'error', " +
-      "completed_at = NOW(), duration_ms = $2 WHERE id = $3",
-      [err.message.slice(0, 500), durationMs, reviewRow.id]
+      "terminal_reason = $2, " +
+      "completed_at = NOW(), duration_ms = $3 WHERE id = $4",
+      [err.message.slice(0, 500), reviewErrorTerminalReason(err), durationMs, reviewRow.id]
     );
 
     // Head-confirmation, publication-state, token-accounting, and
@@ -1467,6 +1467,53 @@ export function shouldRunDefense(mode, triggers, findings, challenges, missedRis
   }
 
   return { run: false, reason: "no_triggers_matched" };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Retryability of failed review attempts (PC-01 v2.1 amendment)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Terminal reasons for which a repeated BullMQ attempt should actually
+ * re-run the review. Token-counting failures are transient provider
+ * conditions (timeout/transport/rate-limit classed by the accounting layer);
+ * a retry can succeed. Deterministic enforcement failures
+ * ('input_budget_exceeded') and everything else must NOT re-run.
+ */
+const RETRYABLE_REVIEW_FAILURE_REASONS = new Set(["token_count_failed"]);
+
+function reviewErrorTerminalReason(err) {
+  if (err?.gitwireErrorCode === "E_TOKEN_COUNT_FAILED") return "token_count_failed";
+  if (err?.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED") return "input_budget_exceeded";
+  return "error";
+}
+
+/**
+ * True when the latest persisted attempt for (repo, PR, head) failed with a
+ * retryable reason. The worker consults this on a repeated BullMQ attempt
+ * whose checkAndMark marker already exists: the marker records processing,
+ * not success, so the persisted outcome decides whether the review re-runs.
+ *
+ * @param {number} repoId
+ * @param {number} prNumber
+ * @param {string} headSha
+ * @returns {Promise<boolean>}
+ */
+export async function isRetryableReviewFailure(repoId, prNumber, headSha) {
+  try {
+    const { rows } = await db.query(
+      "SELECT terminal_reason FROM ai_reviews " +
+      "WHERE repo_id = $1 AND pr_number = $2 AND commit_sha = $3 " +
+      "ORDER BY id DESC LIMIT 1",
+      [repoId, prNumber, headSha]
+    );
+    return RETRYABLE_REVIEW_FAILURE_REASONS.has(rows[0]?.terminal_reason ?? "");
+  } catch (err) {
+    // Fail closed: without the persisted outcome we cannot prove the prior
+    // attempt failed retryably, so the marker keeps its dedupe meaning.
+    logger.warn({ err: err.message, repoId, prNumber }, "Retryable-failure lookup failed — honoring idempotency marker");
+    return false;
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

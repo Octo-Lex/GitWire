@@ -33,6 +33,7 @@ const mockShouldTrigger = jest.fn();
 const mockIsWaived = jest.fn();
 const mockGetInstallationClient = jest.fn();
 const mockWrapOctokit = jest.fn((c) => c);
+const mockIsRetryableReviewFailure = jest.fn();
 const mockAdoptWorker = jest.fn();
 const mockWorkerPrincipalId = jest.fn(() => "p1");
 
@@ -53,6 +54,7 @@ jest.unstable_mockModule("../../src/services/checkRunFinalizer.js", () => ({
 jest.unstable_mockModule("../../src/services/aiReviewService.js", () => ({
   reviewPR: mockReviewPR,
   supersedePublishedReviewForPr: jest.fn().mockResolvedValue({ action: "noop", reason: "no_published_review" }),
+  isRetryableReviewFailure: mockIsRetryableReviewFailure,
 }));
 
 jest.unstable_mockModule("../../src/services/idempotencyService.js", () => ({
@@ -139,6 +141,7 @@ beforeEach(() => {
   mockFinalizeGitwireCheck.mockResolvedValue(true);
   mockGetInstallationClient.mockResolvedValue({ request: jest.fn() });
   mockAdoptWorker.mockResolvedValue({ context: { principalId: "p1" } });
+  mockIsRetryableReviewFailure.mockResolvedValue(false);
 });
 
 // Helper: invoke the worker's processor for an ai-review job
@@ -426,5 +429,54 @@ describe("Phase 4 worker check ownership lifecycle", () => {
     }));
     // reviewPR should NOT have been called
     expect(mockReviewPR).not.toHaveBeenCalled();
+  });
+});
+
+// ── PC-01 v2.1 amendment: transient token-count failures genuinely retry ────
+// The legacy checkAndMark marker records processing, not success: a repeated
+// BullMQ attempt whose marker exists must consult the persisted review
+// outcome. Retryable token-count failures re-run reviewPR; deterministic
+// failures keep the completed-check behavior.
+describe("PC-01 amendment: token-count retry lifecycle", () => {
+  const retryJobData = {
+    pr: { number: 16, head: { sha: "abc123" }, base: { ref: "main" }, user: { login: "contributor" }, id: 7777 },
+    repository: { id: 999, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+    installation: { id: 11111 },
+    checkRunId: 5000,
+  };
+  it("attempt 1 transient failure → attempt 2 actually re-runs reviewPR and succeeds", async () => {
+    // Attempt 1: marker fresh, review fails transiently (worker throws → BullMQ retry)
+    mockCheckAndMark.mockResolvedValueOnce(true);
+    const countErr = new Error("Token count failed (timeout): provider slow");
+    countErr.gitwireErrorCode = "E_TOKEN_COUNT_FAILED";
+    mockReviewPR.mockRejectedValueOnce(countErr);
+    await expect(processReviewJob(retryJobData)).rejects.toMatchObject({ gitwireErrorCode: "E_TOKEN_COUNT_FAILED" });
+    // owned check received FAILURE finalization on the error path
+    expect(mockFinalizeGitwireCheck.mock.calls.some(([a]) => a.errorContext)).toBe(true);
+
+    // Attempt 2 (same job, BullMQ retry): marker exists, prior failure retryable
+    mockCheckAndMark.mockResolvedValueOnce(false);
+    mockIsRetryableReviewFailure.mockResolvedValueOnce(true);
+    mockReviewPR.mockResolvedValueOnce({ verdict: "approved", blocked: false, findings: [] });
+    await processReviewJob(retryJobData, { attemptsMade: 1, attemptsStarted: 1 });
+
+    // THE property: reviewPR was invoked again and its result finalized
+    expect(mockReviewPR).toHaveBeenCalledTimes(2);
+    const successCalls = mockFinalizeGitwireCheck.mock.calls.filter(([a]) => a.reviewResult && !a.errorContext);
+    expect(successCalls.length).toBe(1);
+    expect(successCalls[0][0].reviewResult.verdict).toBe("approved");
+  });
+
+  it("attempt 2 after a deterministic budget failure does NOT re-run reviewPR", async () => {
+    mockCheckAndMark.mockResolvedValue(false);                 // marker exists
+    mockIsRetryableReviewFailure.mockResolvedValue(false);     // input_budget_exceeded / success
+    mockGetInstallationClient.mockResolvedValue({
+      request: jest.fn().mockResolvedValue({ data: { status: "completed" } }),
+    });
+    await processReviewJob(retryJobData, { attemptsMade: 1, attemptsStarted: 1 });
+
+    expect(mockReviewPR).not.toHaveBeenCalled();
+    // No failure/neutral finalization: the completed check is left untouched
+    expect(mockFinalizeGitwireCheck).not.toHaveBeenCalled();
   });
 });

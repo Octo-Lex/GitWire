@@ -85,14 +85,16 @@ export async function buildReviewBundle({ files, pr, repository, config }) {
   metaParts.push("");
   metaParts.push("### File Summary");
   for (const f of files) {
-    metaParts.push("  " + f.status.padEnd(10) + " " + f.filename + " (+" + f.additions + " -" + f.removed + ")");
+    metaParts.push("  " + f.status.padEnd(10) + " " + f.filename + " (+" + f.added + " -" + f.removed + ")");
   }
 
   metaParts.push("");
   metaParts.push("### Diffs");
 
   const fileSections = files.map(function (f) {
-    const header = "#### " + f.filename + " (+" + f.additions + " -" + f.removed + ")";
+    // Stats use the buildFileCoverage-normalized fields (added/removed) —
+    // raw GitHub files carry additions/deletions and would render +undefined.
+    const header = "#### " + f.filename + " (+" + f.added + " -" + f.removed + ")";
     const lines = f.patch
       ? ["", header, "```diff", f.patch, "```"]
       : ["", header, "(no diff available — binary or large file)"];

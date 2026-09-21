@@ -30,6 +30,7 @@ const {
   REJECTION_CLASSES,
   classifyProviderRejection,
   countInputTokens,
+  isPromptTooLongRejection,
 } = await import('../../src/services/reviewTokenAccounting.js');
 
 describe('MAX_PRIMARY_INPUT_TOKENS (frozen PC-01 v2.1 constant)', () => {
@@ -133,5 +134,42 @@ describe('classifyProviderRejection — seven-way taxonomy', () => {
       'context_limit', 'timeout', 'rate_limit', 'quota',
       'auth_entitlement', 'transport', 'other',
     ]);
+  });
+});
+
+describe('countInputTokens — over-limit semantics (PC-01 v2.1 amendment)', () => {
+  beforeEach(() => mockCountTokens.mockReset());
+
+  test('gateway 1261 prompt-too-long returns Infinity — definitively over, not an error', async () => {
+    const e = new Error('[1261][prompt is too long][req]');
+    e.status = 400;
+    e.error = { error: { code: 1261 } };
+    mockCountTokens.mockRejectedValueOnce(e);
+    await expect(countInputTokens({ model: 'm', userPrompt: 'x' })).resolves.toBe(Infinity);
+  });
+
+  test('message-text prompt-too-long (no gateway code) also returns Infinity', async () => {
+    const e = new Error('prompt is too long: 1200000 > 1000000');
+    e.status = 400;
+    mockCountTokens.mockRejectedValueOnce(e);
+    await expect(countInputTokens({ model: 'm', userPrompt: 'x' })).resolves.toBe(Infinity);
+  });
+
+  test('gateway 1210 (illegal max_tokens) is NOT over-limit for counting — throws', async () => {
+    const e = new Error('[1210][The max_tokens parameter is illegal]');
+    e.status = 400;
+    e.error = { error: { code: 1210 } };
+    mockCountTokens.mockRejectedValueOnce(e);
+    await expect(countInputTokens({ model: 'm', userPrompt: 'x' }))
+      .rejects.toMatchObject({ gitwireErrorCode: 'E_TOKEN_COUNT_FAILED' });
+  });
+
+  test('isPromptTooLongRejection: only 400 + (code 1261 or prompt-too-long text)', () => {
+    const mk = (status, code, msg) => { const e = new Error(msg); e.status = status; e.error = { error: { code } }; return e; };
+    expect(isPromptTooLongRejection(mk(400, 1261, 'x'))).toBe(true);
+    expect(isPromptTooLongRejection(mk(400, null, 'prompt is too long'))).toBe(true);
+    expect(isPromptTooLongRejection(mk(400, 1210, 'max_tokens illegal'))).toBe(false);
+    expect(isPromptTooLongRejection(mk(429, 1261, 'x'))).toBe(false);
+    expect(isPromptTooLongRejection(null)).toBe(false);
   });
 });

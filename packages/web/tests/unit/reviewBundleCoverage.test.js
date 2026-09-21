@@ -25,14 +25,18 @@ await jest.unstable_mockModule('../../src/services/configService.js', () => ({
 }));
 
 const { buildReviewBundle } = await import('../../src/services/reviewBundleService.js');
+// Pure module — no mocks needed; chained in the integration cases below.
+const { buildFileCoverage } = await import('../../src/services/reviewCoverageService.js');
 
 const PR = { number: 1, title: 't', user: { login: 'dev' }, base: { ref: 'main' }, head: { ref: 'x' }, body: '' };
 const REPO = { id: 1, full_name: 'o/r' };
 
+// Production files reach the builder in buildFileCoverage-normalized shape
+// (added/removed) — raw GitHub files carry additions/deletions.
 function bigFile(name, chars, additions = 1) {
   return {
     filename: name, status: 'modified',
-    additions, deletions: 0,
+    added: additions, removed: 0,
     patch: '+' + 'x'.repeat(chars),
     sha: 's',
   };
@@ -147,5 +151,30 @@ describe('reassemble — deterministic aggregate allocation output', () => {
     expect(result.reassemble(-1).coverageAdjustments).toEqual([
       { path: 'f0.js', coverage: 'partial', reason: 'bundle_truncated' },
     ]);
+  });
+});
+
+describe('integration — buildFileCoverage output renders real diff statistics', () => {
+  // PC-01 v2.1 amendment blocker 3: the builder consumes the normalized
+  // admitted shape (added/removed). Raw GitHub files carry
+  // additions/deletions; skipping the coverage step must never be able to
+  // produce "+undefined -undefined" in a production chain.
+  test('raw GitHub files through buildFileCoverage render +N -M, never undefined', async () => {
+    const prFiles = [
+      { filename: 'src/a.js', status: 'modified', additions: 3, deletions: 2, patch: '+a\n-b', sha: 's1' },
+      { filename: 'src/b.js', status: 'added', additions: 500, deletions: 0, patch: '+' + 'b'.repeat(12000), sha: 's2' },
+      { filename: 'src/c.js', status: 'removed', additions: 0, deletions: 41, patch: '-c', sha: 's3' },
+    ];
+    const { files } = buildFileCoverage({ prFiles, cfg: {}, headSha: 'sha' });
+    expect(files).toHaveLength(3);
+
+    const result = await buildReviewBundle({ files, pr: PR, repository: REPO });
+    expect(result.bundle).toContain('#### src/a.js (+3 -2)');
+    expect(result.bundle).toContain('#### src/b.js (+500 -0)');
+    expect(result.bundle).toContain('#### src/c.js (+0 -41)');
+    // summary lines carry the same real numbers (padEnd-spaced status column)
+    expect(result.bundle).toContain('src/a.js (+3 -2)');
+    expect(result.bundle).toContain('src/c.js (+0 -41)');
+    expect(result.bundle).not.toContain('undefined');
   });
 });

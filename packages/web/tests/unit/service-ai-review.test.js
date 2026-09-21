@@ -571,6 +571,11 @@ describe('PC-01 v2.1: model-context admission', () => {
       repository: REPO, octokit: oct,
     })).rejects.toMatchObject({ gitwireErrorCode: 'E_TOKEN_COUNT_FAILED' });
     expect(mockCreate).not.toHaveBeenCalled();
+    // the persisted error receipt names the retryable class so a repeated
+    // BullMQ attempt can decide to re-run (worker retry lifecycle)
+    const updateCall = mockQuery.mock.calls.find((c) => String(c[0]).includes('terminal_reason = $2'));
+    expect(updateCall).toBeTruthy();
+    expect(updateCall[1][1]).toBe('token_count_failed');
   });
 
   test('post-allocation enforcement failure refuses inference', async () => {
@@ -590,5 +595,49 @@ describe('PC-01 v2.1: model-context admission', () => {
     })).rejects.toMatchObject({ gitwireErrorCode: 'E_INPUT_BUDGET_EXCEEDED' });
     expect(mockCreate).not.toHaveBeenCalled();
     expect(countInputTokens).toHaveBeenCalledTimes(5);
+  });
+
+  test('complete request over the counter limit (Infinity) still reaches allocation', async () => {
+    buildReviewBundle.mockResolvedValueOnce(admissionParts(['f0.js', 'f1.js']));
+    countInputTokens
+      .mockResolvedValueOnce(Infinity)   // counter rejects the whole PR: definitely over
+      .mockResolvedValueOnce(1000)       // zero-evidence skeleton
+      .mockResolvedValueOnce(400000)     // f0 — admitted (557,016 remain)
+      .mockResolvedValueOnce(600000)     // f1 — crossing: exceeds remaining
+      .mockResolvedValueOnce(400500);    // rebuilt final — verified under the ceiling
+    const oct = setupAdmissionReview(['f0.js', 'f1.js']);
+    const r = await reviewPR({ pr: { number: 46, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+
+    expect(r).toBeTruthy();
+    expect(countInputTokens).toHaveBeenCalledTimes(5);
+    const sent = mockCreate.mock.calls[0][0];
+    expect(sent.messages[0].content).toContain('+patch-for-f0.js');
+    expect(sent.messages[0].content).not.toContain('+patch-for-f1.js');
+    const f1 = r.coverage.files.find((f) => f.path === 'f1.js');
+    expect(f1.coverage).toBe('partial');
+    expect(f1.reason).toBe('bundle_truncated');
+  });
+
+  test('a single section over the counter limit is the crossing file', async () => {
+    buildReviewBundle.mockResolvedValueOnce(admissionParts(['f0.js', 'f1.js', 'f2.js']));
+    countInputTokens
+      .mockResolvedValueOnce(Infinity)  // whole PR over the counter limit
+      .mockResolvedValueOnce(1000)      // skeleton
+      .mockResolvedValueOnce(500)       // f0 — admitted
+      .mockResolvedValueOnce(Infinity)  // f1 — the counter cannot even count it: crossing
+      .mockResolvedValueOnce(1600);     // rebuilt final — verified
+    const oct = setupAdmissionReview(['f0.js', 'f1.js', 'f2.js']);
+    const r = await reviewPR({ pr: { number: 47, head: { sha: 'abc123' }, base: { ref: 'main' }, title: 't', user: { login: 'dev' }, body: '' }, repository: REPO, octokit: oct });
+
+    expect(r).toBeTruthy();
+    const sent = mockCreate.mock.calls[0][0];
+    expect(sent.messages[0].content).toContain('+patch-for-f0.js');
+    expect(sent.messages[0].content).not.toContain('+patch-for-f1.js');
+    expect(sent.messages[0].content).not.toContain('+patch-for-f2.js');
+    for (const p of ['f1.js', 'f2.js']) {
+      const rec = r.coverage.files.find((f) => f.path === p);
+      expect(rec.coverage).toBe('partial');
+      expect(rec.reason).toBe('bundle_truncated');
+    }
   });
 });

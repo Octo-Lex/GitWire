@@ -7,6 +7,7 @@ import { getInstallationClient }     from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { reviewPR }      from "../services/aiReviewService.js";
 import { supersedePublishedReviewForPr } from "../services/aiReviewService.js";
+import { isRetryableReviewFailure } from "../services/aiReviewService.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
@@ -138,7 +139,20 @@ export function startPhase4Worker() {
           }
           // ── Idempotency: distinguish fresh duplicate from repeated attempt ─
           if (!(await checkAndMark("ai_review", "pr-" + pr.number + "-" + (pr.head?.sha || "unknown")))) {
-            if (isRepeatedAttempt && ownedCheckRunId) {
+            if (isRepeatedAttempt && ownedCheckRunId &&
+                await isRetryableReviewFailure(repository.id, pr.number, pr.head.sha)) {
+              // PC-01 v2.1 amendment: the marker records processing, not
+              // success. A repeated attempt whose prior attempt failed with
+              // a retryable reason (transient token-count failure) must
+              // actually re-run the review instead of honoring the marker.
+              // Deterministic failures ('input_budget_exceeded') and
+              // successes fall through to the check-state logic below.
+              logger.info(
+                { pr: pr.number, attemptsMade: job.attemptsMade, attemptsStarted: job.attemptsStarted },
+                "AI review repeated attempt after retryable token-count failure — re-running review"
+              );
+              // fall through to the review path below
+            } else if (isRepeatedAttempt && ownedCheckRunId) {
               // Repeated processing with no stored retry outcome. The prior
               // attempt may have died after checkAndMark but before completing.
               // Check the actual GitHub check state to decide:
@@ -175,11 +189,12 @@ export function startPhase4Worker() {
                   : "Prior AI review evaluation was interrupted (check state unavailable)"
               ));
               return;
+            } else {
+              // Fresh duplicate with its own checkRunId: finalize neutral.
+              logger.info({ pr: pr.number }, "AI review fresh duplicate — finalizing this job's check as suppressed");
+              await finalizeOwn(null, { force: true });
+              return;
             }
-            // Fresh duplicate with its own checkRunId: finalize neutral.
-            logger.info({ pr: pr.number }, "AI review fresh duplicate — finalizing this job's check as suppressed");
-            await finalizeOwn(null, { force: true });
-            return;
           }
           if (isDryRun(repoConfig)) {
             logger.info({ repo: repository.full_name, pr: pr.number }, "DRY RUN: would run AI review");
