@@ -149,14 +149,14 @@ beforeEach(() => {
 });
 
 // Helper: invoke the worker's processor for an ai-review job
-async function processReviewJob(jobData, jobOpts = {}) {
+async function processReviewJob(jobData, jobOpts = {}, jobName = "ai-review") {
   const { createWorker } = await import("../../src/lib/queue.js");
   startPhase4Worker();
   const processorArg = createWorker.mock.calls[createWorker.mock.calls.length - 1][1];
 
   // Build a minimal job object with BullMQ metadata
   const job = {
-    name: "ai-review",
+    name: jobName,
     data: jobData,
     attemptsMade: jobOpts.attemptsMade || 0,
     attemptsStarted: jobOpts.attemptsStarted || 0,
@@ -680,5 +680,68 @@ describe("PC-01 final amendment: replay-before-retry", () => {
     expect(mockClearRetryOutcome).toHaveBeenCalled();
     expect(mockReviewPR).not.toHaveBeenCalled();
     expect(mockFinalizeGitwireCheck).not.toHaveBeenCalled();
+  });
+});
+
+
+// ── PC-01 final amendment: dashboard manual-trigger jobs own BullMQ retries ──
+// The route enqueues ai-review-manual; the job has NO idempotency marker
+// (repeated explicit triggers are legitimate separate runs) and no fabricated
+// check run. Transient provider classes rethrow for BullMQ; deterministic and
+// permanent failures are terminal.
+describe("PC-01 final amendment: manual trigger jobs (PC-01 queue ownership)", () => {
+  const manualData = {
+    pr: { number: 16, head: { sha: "abc123" }, base: { ref: "main" }, user: { login: "contributor" }, id: 7777 },
+    repository: { id: 999, full_name: "org/repo", name: "repo", owner: { login: "org" } },
+    installation: { id: 11111 },
+  };
+
+  it("transient provider failure: job fails, attempt 2 re-invokes reviewPR, success resolves", async () => {
+    const transient = new Error("Service unavailable");
+    transient.gitwireErrorCode = "E_REVIEW_PROVIDER_TRANSIENT";
+    transient.gitwireRejectionClass = "transport";
+    mockReviewPR.mockRejectedValueOnce(transient);
+    await expect(processReviewJob(manualData, {}, "ai-review-manual"))
+      .rejects.toMatchObject({ gitwireErrorCode: "E_REVIEW_PROVIDER_TRANSIENT" });
+
+    mockReviewPR.mockResolvedValueOnce({ verdict: "approved", blocked: false, findings: [] });
+    await processReviewJob(manualData, { attemptsMade: 1, attemptsStarted: 1 }, "ai-review-manual");
+
+    expect(mockReviewPR).toHaveBeenCalledTimes(2);          // BullMQ retry actually re-ran
+    expect(mockCheckAndMark).not.toHaveBeenCalled();       // no idempotency marker
+    expect(mockFinalizeGitwireCheck).not.toHaveBeenCalled(); // no fabricated/owned check
+  });
+
+  it("transient count failure (timeout class) also rethrows for BullMQ", async () => {
+    const countErr = new Error("Token count failed (timeout): slow");
+    countErr.gitwireErrorCode = "E_TOKEN_COUNT_FAILED";
+    countErr.gitwireRejectionClass = "timeout";
+    mockReviewPR.mockRejectedValueOnce(countErr);
+    await expect(processReviewJob(manualData, {}, "ai-review-manual"))
+      .rejects.toMatchObject({ gitwireErrorCode: "E_TOKEN_COUNT_FAILED" });
+  });
+
+  it("permanent provider failure resolves (no BullMQ attempt 2) and is logged terminally", async () => {
+    const auth = new Error("invalid x-api-key");
+    auth.gitwireErrorCode = "E_REVIEW_PROVIDER_TRANSIENT";
+    auth.gitwireRejectionClass = "auth_entitlement";
+    mockReviewPR.mockRejectedValueOnce(auth);
+    await expect(processReviewJob(manualData, {}, "ai-review-manual")).resolves.toBeUndefined();
+    expect(mockReviewPR).toHaveBeenCalledTimes(1);
+  });
+
+  it("deterministic budget failure resolves without retry", async () => {
+    const budget = new Error("Review input budget enforcement failed after allocation");
+    budget.gitwireErrorCode = "E_INPUT_BUDGET_EXCEEDED";
+    mockReviewPR.mockRejectedValueOnce(budget);
+    await expect(processReviewJob(manualData, {}, "ai-review-manual")).resolves.toBeUndefined();
+  });
+
+  it("repeated explicit triggers are separate requested runs (no marker, reviewPR each time)", async () => {
+    mockReviewPR.mockResolvedValue({ verdict: "approved", blocked: false, findings: [] });
+    await processReviewJob(manualData, {}, "ai-review-manual");
+    await processReviewJob(manualData, {}, "ai-review-manual");
+    expect(mockReviewPR).toHaveBeenCalledTimes(2);
+    expect(mockCheckAndMark).not.toHaveBeenCalled();
   });
 });

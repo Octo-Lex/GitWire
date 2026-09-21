@@ -293,9 +293,53 @@ export function startPhase4Worker() {
         const octokit = wrapOctokit(await getInstallationClient(installation.id));
         const result = await supersedePublishedReviewForPr({ octokit, repository, pr });
         logger.info(
-          { pr: pr.number, repo: repository.full_name, action: result.action, reason: result.reason ?? null },
+          { repo: repository.full_name, pr: pr.number, action: result.action, reason: result.reason ?? null },
           "Phase4: review supersession check"
         );
+        break;
+      }
+
+      case "ai-review-manual": {
+        // PC-01 v2.1: dashboard-triggered on-demand review. No idempotency
+        // marker — repeated explicit triggers for the same PR/SHA are
+        // legitimate separate requested runs — and no fabricated check run.
+        // BullMQ owns bounded retries: transient provider classes rethrow;
+        // deterministic and permanent failures are terminal.
+        const { pr, repository, installation } = job.data;
+        if (!pr || !repository || !installation) return;
+        const octokit = wrapOctokit(await getInstallationClient(installation.id));
+
+        const manualAdoption = await adoptWorker({
+          workerId: "worker:phase4",
+          permission: "ai_review:create",
+          resourceType: "repository",
+          installationId: installation.id,
+          jobData: { payload: job.data },
+          legacyActor: pr.user?.login,
+        });
+
+        try {
+          const result = await reviewPR({
+            pr,
+            repository: { ...repository, id: repository.id },
+            octokit,
+            principalId: workerPrincipalId(manualAdoption.context),
+            surfaceId: "audit_trail:ai_decision",
+          });
+          logger.info(
+            { repo: repository.full_name, pr: pr.number, verdict: result?.verdict ?? "skipped" },
+            "Manual AI review complete"
+          );
+        } catch (err) {
+          const deterministic = err?.gitwireErrorCode === "E_INPUT_BUDGET_EXCEEDED" ||
+                                err?.gitwireErrorCode === "E_REVIEW_DEADLINE_EXCEEDED";
+          const transientClass = ["timeout", "transport", "rate_limit"].includes(err?.gitwireRejectionClass);
+          if (!deterministic && transientClass) throw err;  // BullMQ retries
+          logger.error(
+            { err: err.message, pr: pr.number, rejectionClass: err?.gitwireRejectionClass ?? "none" },
+            "Manual AI review failed terminally"
+          );
+        }
         break;
       }
 
