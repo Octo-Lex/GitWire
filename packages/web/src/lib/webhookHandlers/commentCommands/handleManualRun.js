@@ -116,11 +116,14 @@ async function handlePRManualRun(payload, parsed, pillar, issueNumber, installat
         // Clear the exact key the phase4 worker checks: pr-{number}-{head.sha}
         const reviewKey = "pr-" + issueNumber + "-" + fullPR.head.sha;
         await idem.clearIdempotencyKey("ai_review", reviewKey);
-        // Queue with the full PR object so head.sha, base.ref, changed_files, etc. are available
+        // Queue with the full PR object so head.sha, base.ref, changed_files, etc. are available.
+        // `origin` is presentation metadata: it lets the worker explain a
+        // published-row recovery to the requester instead of staying silent.
         await ctx.phase4Queue.add("ai-review", {
           pr: fullPR,
           repository: payload.repository,
           installation: payload.installation,
+          origin: "manual-run",
         }, { priority: 1 });
         dispatched.push("review");
       }
