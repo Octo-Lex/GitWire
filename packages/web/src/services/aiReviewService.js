@@ -885,7 +885,10 @@ async function fetchChangedFiles(octokit, owner, repo, pr) {
  * message) for a bundle. Shared by token admission (which must count the
  * exact bytes the send will use) and runStructuredReview itself.
  */
-function buildReviewRequest(bundle, changedFiles, opts) {
+// SC-01 P1: exported so the pure planner receives the SAME production
+// request builder (injected dependency) instead of re-implementing one —
+// no behavior change.
+export function buildReviewRequest(bundle, changedFiles, opts) {
   const system = buildReviewSystemPrompt({
     changedFiles: changedFiles,
     includeSecurity: opts.includeSecurity,
