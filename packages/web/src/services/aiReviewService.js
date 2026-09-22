@@ -156,6 +156,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     logger.info({ pr: pr.number, reviewId: reviewRow.github_review_id }, "AI review: recovered published invocation");
     return {
       verdict: reviewRow.verdict, recovered: true,
+      reviewId: reviewRow.github_review_id,  // presentation: link the recovered publication
       blocked: reviewRow.policy_blocked === true, findings: [],
       publication: {
         judgment: reviewRow.judgment,

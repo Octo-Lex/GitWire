@@ -248,6 +248,30 @@ export function startPhase4Worker() {
             surfaceId: "audit_trail:ai_decision",
           });
 
+          // Bounded UX correction (2026-09-22): a manual `/gitwire run review`
+          // that recovers an already-published review posts nothing by design,
+          // but the command ack promised results. Tell the requester what
+          // happened. Presentation only — recovery/queue/idempotency
+          // semantics are unchanged, and a failed notice never fails the job.
+          if (result?.recovered && job.data.origin === "manual-run") {
+            try {
+              await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+                owner: repository.owner.login,
+                repo: repository.name,
+                issue_number: pr.number,
+                body:
+                  "✅ **GitWire:** A review is already published for this head — no new review was posted. " +
+                  "Outcome: " + (result.publication?.publishedOutcome ?? result.verdict ?? "unknown") + "." +
+                  (result.reviewId
+                    ? "\nPublished review: https://github.com/" + repository.full_name + "/pull/" + pr.number +
+                      "#pullrequestreview-" + result.reviewId
+                    : ""),
+              });
+            } catch (noticeErr) {
+              logger.warn({ err: noticeErr.message, pr: pr.number }, "Failed to post already-published notice — non-fatal");
+            }
+          }
+
           await finalizeOwn(result);
 
           await emitWorkerEvent("review_completed", {

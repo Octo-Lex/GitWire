@@ -266,6 +266,7 @@ describe("PR /gitwire run review", () => {
           number: 16,
           head: expect.objectContaining({ sha: "abc123def456" }),
         }),
+        origin: "manual-run",
       }),
       { priority: 1 },
     );
