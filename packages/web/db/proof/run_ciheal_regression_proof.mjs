@@ -348,10 +348,15 @@ async function main() {
     // The sender is an attacker-controlled field. The adoption context must
     // win: principalId comes from the installation principal, never sender.
     const { ciHealQueue } = await import(pathToFileURL(join(REPO_ROOT, "packages/web/src/lib/queue.js")).href);
+    const { buildCIHealJobFromWebhook, enqueueCIHealJob } = await import(
+      pathToFileURL(join(REPO_ROOT, "packages/web/src/services/ciHealJobService.js")).href
+    );
     const payload = {
+      action: "completed",
       workflow_run: {
         id: RUN_ID,
         name: "CI",
+        status: "completed",
         head_branch: "main",
         head_sha: "abc123",
         conclusion: "failure",
@@ -387,7 +392,13 @@ async function main() {
       if (err && err.name === "ReferenceError") referenceErrorSeen = true;
     });
 
-    const job = await ciHealQueue.add("heal-run", { payload });
+    const receivedAt = Date.now();
+    const healJob = buildCIHealJobFromWebhook({
+      payload,
+      deliveryId: "ciheal-regression-proof",
+      receivedAt,
+    });
+    const job = await enqueueCIHealJob(ciHealQueue, healJob);
 
     // Wait for the job to reach a terminal state (completed/failed).
     let jobState = null;

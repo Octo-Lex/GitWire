@@ -198,7 +198,12 @@ ciRouter.post("/:runId/heal", async (req, res, next) => {
     }
 
     const stored = resolution.run;
-    const octokit = wrapOctokit(await getInstallationClient(stored.installation_id));
+    // Eligibility is an authority boundary: evaluate the live GitHub run state,
+    // not the shared 15-second GET cache used for ordinary read paths.
+    const octokit = wrapOctokit(
+      await getInstallationClient(stored.installation_id),
+      { skipCache: true },
+    );
 
     let workflowRun;
     try {
