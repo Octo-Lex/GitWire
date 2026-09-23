@@ -3,6 +3,7 @@
 // GET /api/ci/:owner/:repo       — runs for a specific repo
 // GET /api/ci/stats              — pass rate, heal rate, failure breakdown
 // POST /api/ci/:runId/retry      — manually trigger a re-run
+// POST /api/ci/:runId/heal       — manually request healing (GitWire CI row id or GitHub run id)
 
 import { Router } from "express";
 import { db } from "../lib/db.js";
@@ -10,6 +11,8 @@ import { ciHealQueue } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
+import { buildCIHealJobFromManualRun, enqueueCIHealJob } from "../services/ciHealJobService.js";
+import { resolveStoredCIRunIdentifier } from "../services/ciRunResolver.js";
 
 export const ciRouter = Router();
 ciRouter.use(paginationMiddleware);
@@ -172,31 +175,91 @@ ciRouter.post("/:runId/retry", async (req, res, next) => {
   }
 });
 
-
-// ── POST /api/ci/:runId/heal — trigger CI heal for a run ────────────────────
+// ── POST /api/ci/:runId/heal — trigger CI heal for a run ─────────────────────
+// D0-01 compatibility contract:
+// - `runId` may be the GitWire ci_runs.id or GitHub workflow run id.
+// - repository + installation identity are always resolved from GitWire DB.
+// - any legacy `installation_id` query parameter is ignored as authority.
+// - the current workflow_run is re-read from GitHub before queueing.
 ciRouter.post("/:runId/heal", async (req, res, next) => {
   try {
-    const { rows } = await db.query(
-      `SELECT cr.id, cr.github_run_id, r.owner, r.name, r.github_id as repo_github_id
-       FROM ci_runs cr
-       JOIN repositories r ON r.github_id = cr.repo_id
-       WHERE cr.id = $1`,
-      [req.params.runId]
+    const resolution = await resolveStoredCIRunIdentifier(req.params.runId);
+    if (resolution.status === "invalid") {
+      return res.status(400).json({ error: "runId must be numeric" });
+    }
+    if (resolution.status === "not_found") {
+      return res.status(404).json({ error: "Run not found" });
+    }
+    if (resolution.status === "ambiguous") {
+      return res.status(409).json({
+        error: "Ambiguous run identifier",
+        detail: "Use a run identifier that resolves to exactly one stored CI run.",
+      });
+    }
+
+    const stored = resolution.run;
+    // Eligibility is an authority boundary: evaluate the live GitHub run state,
+    // not the shared 15-second GET cache used for ordinary read paths.
+    const octokit = wrapOctokit(
+      await getInstallationClient(stored.installation_id),
+      { skipCache: true },
     );
 
-    if (!rows.length) return res.status(404).json({ error: "Run not found" });
+    let workflowRun;
+    try {
+      const { data } = await octokit.request("GET /repos/{owner}/{repo}/actions/runs/{run_id}", {
+        owner: stored.owner,
+        repo: stored.name,
+        run_id: stored.github_run_id,
+      });
+      workflowRun = data;
+    } catch (err) {
+      if (err?.status === 404) {
+        return res.status(409).json({
+          error: "Workflow run is no longer available from GitHub",
+          github_run_id: stored.github_run_id,
+        });
+      }
+      throw err;
+    }
 
-    const run = rows[0];
-    const job = await ciHealQueue.add("heal-run", {
-      runId: run.github_run_id,
-      repoId: run.repo_github_id,
-      owner: run.owner,
-      repo: run.name,
-      repository: { full_name: run.owner + "/" + run.name, id: run.repo_github_id },
-      manual_trigger: true,
+    if (workflowRun.status !== "completed") {
+      return res.status(409).json({
+        error: "Workflow run is not completed",
+        github_run_id: stored.github_run_id,
+        status: workflowRun.status,
+      });
+    }
+    if (workflowRun.conclusion !== "failure") {
+      return res.status(409).json({
+        error: "Only failed workflow runs can be healed",
+        github_run_id: stored.github_run_id,
+        conclusion: workflowRun.conclusion,
+      });
+    }
+
+    const healJob = buildCIHealJobFromManualRun({
+      workflowRun,
+      repository: {
+        id: stored.repo_github_id,
+        full_name: stored.full_name,
+        name: stored.name,
+        owner: { login: stored.owner },
+      },
+      installationId: stored.installation_id,
+      triggerKind: "manual_api",
     });
 
-    res.json({ status: "queued", run_id: run.github_run_id, job_id: job.id });
+    const job = await enqueueCIHealJob(ciHealQueue, healJob, { priority: 1 });
+
+    res.status(202).json({
+      status: "queued",
+      ci_run_id: stored.ci_run_id,
+      github_run_id: stored.github_run_id,
+      // Compatibility alias for existing clients.
+      run_id: stored.github_run_id,
+      job_id: job.id,
+    });
   } catch (err) {
     next(err);
   }

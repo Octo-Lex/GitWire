@@ -4,19 +4,43 @@
 // all completions → merge queue + rollback eval + test ingestion.
 
 import { ciEvidenceQueue } from "../../lib/queue.js";
+import {
+  InvalidCIHealJobError,
+  buildCIHealJobFromWebhook,
+  enqueueCIHealJob,
+} from "../../services/ciHealJobService.js";
 
 export async function handleWorkflowRun(payload, deliveryId, ctx) {
   if (payload.action !== "completed") return;
 
-  const jobData = { eventName: "workflow_run", payload, deliveryId, receivedAt: Date.now() };
+  const receivedAt = Date.now();
+  const jobData = { eventName: "workflow_run", payload, deliveryId, receivedAt };
 
-  // Failed CI → heal queue
+  // Failed CI → heal queue. D0-01: a malformed heal-specific contract must not
+  // suppress independent workflow_run consumers (evidence, merge/rollback,
+  // flakiness ingestion). Queue/infrastructure failures still propagate so the
+  // webhook delivery remains retryable rather than silently losing heal work.
   if (payload.workflow_run?.conclusion === "failure") {
-    await ctx.ciHealQueue.add("heal-run", jobData, { priority: 1 });
-    ctx.logger.info(
-      { runId: payload.workflow_run?.id, repo: payload.repository?.full_name },
-      "Failed CI run queued for healing"
-    );
+    try {
+      const healJob = buildCIHealJobFromWebhook({ payload, deliveryId, receivedAt });
+      await enqueueCIHealJob(ctx.ciHealQueue, healJob, { priority: 1 });
+      ctx.logger.info(
+        { runId: payload.workflow_run?.id, repo: payload.repository?.full_name },
+        "Failed CI run queued for healing"
+      );
+    } catch (err) {
+      if (!(err instanceof InvalidCIHealJobError)) throw err;
+      ctx.logger.warn(
+        {
+          code: err.code,
+          issues: err.issues,
+          runId: payload.workflow_run?.id,
+          repo: payload.repository?.full_name,
+          deliveryId,
+        },
+        "CI heal dispatch rejected invalid workflow_run contract"
+      );
+    }
 
     // v0.19: queue trusted CI evidence collection for repair proposals
     // Non-blocking: enqueues a dedicated job so the webhook handler returns

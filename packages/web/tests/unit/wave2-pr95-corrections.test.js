@@ -115,10 +115,18 @@ describe("PR #95 review corrections", () => {
 
   it("resolves a CI run to its trusted repository resource", async () => {
     mockQuery.mockResolvedValueOnce({
-      rows: [{ github_id: "99002", installation_id: "99001", owner: "octo", name: "repo" }],
+      rows: [{
+        ci_run_id: "42",
+        github_run_id: "30123456789",
+        repo_github_id: "99002",
+        installation_id: "99001",
+        owner: "octo",
+        name: "repo",
+        full_name: "octo/repo",
+      }],
     });
 
-    const resource = await resolveResource("repository", { runId: "ci-run-1" });
+    const resource = await resolveResource("repository", { runId: "30123456789" });
 
     expect(resource).toEqual({
       type: "repository",
@@ -128,7 +136,8 @@ describe("PR #95 review corrections", () => {
       repository: "repo",
     });
     expect(mockQuery.mock.calls[0][0]).toContain("FROM ci_runs cr");
-    expect(mockQuery.mock.calls[0][1]).toEqual(["ci-run-1"]);
+    expect(mockQuery.mock.calls[0][0]).toContain("cr.id = $1::bigint OR cr.github_run_id = $1::bigint");
+    expect(mockQuery.mock.calls[0][1]).toEqual(["30123456789"]);
   });
 
   it("resolves repository sync to its trusted installation resource", async () => {
