@@ -1,4 +1,5 @@
-// D0-02 — issue-fix GitHub reads must bypass shared GET caching.
+// D0-02 — issue-fix GitHub reads must bypass shared GET caching and use the
+// runtime's numeric installation-id contract only after safe-range validation.
 
 import { beforeEach, describe, expect, it, jest } from "@jest/globals";
 
@@ -23,9 +24,9 @@ beforeEach(() => {
   mockWrapOctokit.mockReturnValue({ request: jest.fn() });
 });
 
-describe("issue-fix GitHub cache boundary", () => {
-  it("constructs the entire issue-fix client with skipCache=true", async () => {
-    await initFixContext({
+describe("issue-fix GitHub runtime boundary", () => {
+  it("uses a safe numeric installation id and skipCache=true", async () => {
+    const ctx = await initFixContext({
       repository: {
         github_id: "99",
         installation_id: "77",
@@ -38,7 +39,25 @@ describe("issue-fix GitHub cache boundary", () => {
       triggeredBy: "api",
     });
 
-    expect(mockGetInstallationClient).toHaveBeenCalledWith("77");
+    expect(mockGetInstallationClient).toHaveBeenCalledWith(77);
     expect(mockWrapOctokit).toHaveBeenCalledWith(expect.any(Object), { skipCache: true });
+    expect(ctx.installationId).toBe(77);
+  });
+
+  it("fails before configuration or GitHub access when installation id is unsafe", async () => {
+    await expect(initFixContext({
+      repository: {
+        github_id: "99",
+        installation_id: "9007199254740992",
+        full_name: "octo/repo",
+        owner: "octo",
+        name: "repo",
+      },
+      issueNumber: 42,
+      triggeredBy: "api",
+    })).rejects.toThrow("cannot be represented safely");
+
+    expect(mockGetConfigForRepo).not.toHaveBeenCalled();
+    expect(mockGetInstallationClient).not.toHaveBeenCalled();
   });
 });

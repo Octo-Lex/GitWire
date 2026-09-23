@@ -1,5 +1,5 @@
 // src/workers/issueFix/generate.js
-// Stage 4: Score relevant files + AI Pass 2 to generate full-file fixes.
+// Stage 4: Score exact-snapshot files + AI Pass 2 to generate full-file fixes.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../../../config/index.js";
@@ -11,13 +11,27 @@ const anthropic = new Anthropic({
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
 });
 
-/** Returns array of fix objects, or null if pipeline should stop. */
+/** Returns generated fix objects + their exact-head originals, or null. */
 export async function generateFixes(ctx, analysis) {
   const { octokit, owner, repoName, repoId, issueNumber, branchName, repo } = ctx;
   const { issue, tree, baseSha } = ctx._scope;
 
-  const scoredFiles = scoreFiles(analysis.relevant_files || [], issue, tree);
-  const topFiles = scoredFiles.slice(0, 5).map((f) => f.path);
+  // The model's analysis may hallucinate file paths. Generation may only read
+  // paths proven to exist in the immutable tree captured by validateScope().
+  const treeSet = new Set(Array.isArray(tree) ? tree : []);
+  const relevantFiles = Array.isArray(analysis.relevant_files)
+    ? analysis.relevant_files.filter((path) => typeof path === "string" && treeSet.has(path))
+    : [];
+  const droppedFiles = Array.isArray(analysis.relevant_files)
+    ? analysis.relevant_files.filter((path) => typeof path !== "string" || !treeSet.has(path))
+    : [];
+
+  if (droppedFiles.length) {
+    logger.warn({ repo, issueNumber, droppedFiles }, "Ignoring analysis file paths absent from reviewed repository snapshot");
+  }
+
+  const scoredFiles = scoreFiles(relevantFiles, issue);
+  const topFiles = scoredFiles.slice(0, 5).map((file) => file.path);
   logger.info({ repo, issueNumber, topFiles, scored: scoredFiles.length, baseSha }, "File scoring complete");
 
   // Exact-head invariant: generation reads from the same immutable commit that
@@ -26,11 +40,11 @@ export async function generateFixes(ctx, analysis) {
 
   if (fileContents.length === 0) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed", analysis.complexity,
-      analysis.explanation, "Could not fetch any target file contents");
+      analysis.explanation, "Could not fetch any exact-head target file contents");
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "\u26A0\uFE0F **GitWire Fix - file fetch failed**\n\n" +
+      "⚠️ **GitWire Fix - file fetch failed**\n\n" +
       "**Assessment:** " + analysis.explanation + "\n\n" +
-      "AI identified relevant files but none could be fetched from the reviewed head.\n\n" +
+      "AI did not identify any usable target files in the reviewed repository snapshot. No code mutation was attempted.\n\n" +
       "_Files attempted: " + topFiles.join(", ") + "_"
     );
     return null;
@@ -41,10 +55,10 @@ export async function generateFixes(ctx, analysis) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed", analysis.complexity,
       analysis.explanation, "AI could not generate fixes");
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "\u26A0\uFE0F **GitWire Fix - no fixes generated**\n\n" +
+      "⚠️ **GitWire Fix - no fixes generated**\n\n" +
       "**Assessment:** " + analysis.explanation + "\n\n" +
       "AI analyzed the issue but couldn't produce a concrete fix.\n\n" +
-      "_Complexity: " + analysis.complexity + " \u00B7 A maintainer should review._"
+      "_Complexity: " + analysis.complexity + " · A maintainer should review._"
     );
     return null;
   }
@@ -52,11 +66,11 @@ export async function generateFixes(ctx, analysis) {
   return { fixes, fileContents };
 }
 
-function scoreFiles(files, issue, tree) {
+function scoreFiles(files, issue) {
   if (!files || !files.length) return [];
 
-  const titleWords = (issue.title || "").toLowerCase().split(/\W+/).filter((w) => w.length > 2);
-  const bodyWords = (issue.body || "").toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  const titleWords = (issue.title || "").toLowerCase().split(/\W+/).filter((word) => word.length > 2);
+  const bodyWords = (issue.body || "").toLowerCase().split(/\W+/).filter((word) => word.length > 2);
   const allKeywords = [...new Set([...titleWords, ...bodyWords])];
 
   return files.map((path) => {
@@ -65,9 +79,9 @@ function scoreFiles(files, issue, tree) {
     const baseName = fileName.split(".")[0] || "";
     const pathLower = path.toLowerCase();
 
-    for (const kw of allKeywords) {
-      if (baseName.includes(kw)) score += 10;
-      if (pathLower.includes(kw)) score += 5;
+    for (const keyword of allKeywords) {
+      if (baseName.includes(keyword)) score += 10;
+      if (pathLower.includes(keyword)) score += 5;
     }
 
     const depth = (path.match(/\//g) || []).length;
@@ -82,12 +96,12 @@ function scoreFiles(files, issue, tree) {
 }
 
 async function aiGenerateFullFile(issue, analysis, fileContents, repoFullName) {
-  var fence = "```";
-  var filesSection = fileContents.map((f) =>
-    "--- " + f.path + " ---\n" + fence + "\n" + f.content + "\n" + fence
+  const fence = "```";
+  const filesSection = fileContents.map((file) =>
+    "--- " + file.path + " ---\n" + fence + "\n" + file.content + "\n" + fence
   ).join("\n\n");
 
-  var prompt =
+  const prompt =
     "You are fixing a GitHub issue. Return the COMPLETE corrected files.\n\n" +
     "Repository: " + repoFullName + "\n" +
     "Issue #" + issue.number + ": " + issue.title + "\n\n" +
@@ -100,6 +114,7 @@ async function aiGenerateFullFile(issue, analysis, fileContents, repoFullName) {
     '  "commit_message": "fix(scope): brief description",\n' +
     '  "explanation": "one-line summary of what changed"}]\n\n' +
     "Rules:\n" +
+    "- Return only paths shown above\n" +
     "- Return the COMPLETE file content, not a diff or patch\n" +
     "- Make only the minimal change needed to fix the issue\n" +
     "- Preserve all existing code that doesn't need to change\n" +
@@ -118,7 +133,7 @@ async function aiGenerateFullFile(issue, analysis, fileContents, repoFullName) {
     const cleaned = stripCodeFences(raw);
     const fixes = extractJSON(cleaned);
     if (!Array.isArray(fixes)) return null;
-    return fixes.filter((f) => f.path && f.fixed_content);
+    return fixes;
   } catch (err) {
     logger.error({ err }, "AI full-file fix generation failed");
     return null;

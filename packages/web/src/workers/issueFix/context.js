@@ -30,6 +30,11 @@ export async function initFixContext({
     throw new Error("Issue-fix execution context is missing trusted repository binding");
   }
 
+  const installationId = Number(repository.installation_id);
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+    throw new Error("Issue-fix installation id cannot be represented safely by the current GitHub runtime");
+  }
+
   const repoConfig = await getConfigForRepo(repo);
   if (!isPillarEnabled("issue_fix", repoConfig)) {
     logger.info({ repo, issueNumber }, "Issue fix disabled for repo — skipping");
@@ -41,7 +46,7 @@ export async function initFixContext({
   // wrapper throughout so its tree, file and freshness evidence all refer to
   // live GitHub state or immutable refs, while rate-limit tracking is preserved.
   const octokit = wrapOctokit(
-    await getInstallationClient(repository.installation_id),
+    await getInstallationClient(installationId),
     { skipCache: true },
   );
   const branchName = "gitwire/fix-" + issueNumber;
@@ -52,7 +57,7 @@ export async function initFixContext({
     owner: repository.owner,
     repoName: repository.name,
     repoId: repository.github_id,
-    installationId: repository.installation_id,
+    installationId,
     issueNumber,
     triggeredBy,
     requestedByLogin,
