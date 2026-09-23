@@ -361,7 +361,7 @@ export async function submitFix(ctx, analysis, validated) {
       "The fix was generated but could not be submitted:\n> " + err.message + "\n\n" +
       "**Assessment:** " + (analysis.explanation || "") + "\n\n" +
       (partialBranchCleaned
-        ? "GitWire removed the partial branch and cleared the submission marker; a retry is safe.\n\n"
+        ? "GitWire removed the partial branch and requested release of the legacy submission marker. If an immediate retry is still deduplicated, wait for the marker to expire before retrying.\n\n"
         : (ownedBranchHeadSha && !prCreated
             ? "GitWire could not prove the partial branch was still exclusively owned; inspect `" + branchName + "` before retrying.\n\n"
             : "")) +

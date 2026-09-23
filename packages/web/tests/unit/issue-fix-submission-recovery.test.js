@@ -136,7 +136,7 @@ beforeEach(() => {
 });
 
 describe("issue-fix submission recovery", () => {
-  it("classifies a check/create race as a no-effect supersession and releases the marker", async () => {
+  it("classifies a check/create race as a no-effect supersession and requests marker release", async () => {
     let targetRefReads = 0;
     const request = jest.fn(async (route, params) => {
       if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
@@ -163,7 +163,7 @@ describe("issue-fix submission recovery", () => {
     expect(request.mock.calls.some(([route]) => route.startsWith("PATCH "))).toBe(false);
   });
 
-  it("deletes only the partial branch proven owned by this invocation and makes retry possible", async () => {
+  it("deletes only the partial branch proven owned by this invocation and reports marker cleanup as best-effort", async () => {
     let targetRefReads = 0;
     const request = jest.fn(async (route, params) => {
       if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
@@ -192,7 +192,11 @@ describe("issue-fix submission recovery", () => {
     expect(mockFail).toHaveBeenCalledWith("action-1", "transient write failure");
     expect(mockComment).toHaveBeenCalledWith(
       expect.anything(), "octo", "repo", 42,
-      expect.stringContaining("a retry is safe"),
+      expect.stringContaining("requested release of the legacy submission marker"),
+    );
+    expect(mockComment).toHaveBeenCalledWith(
+      expect.anything(), "octo", "repo", 42,
+      expect.stringContaining("If an immediate retry is still deduplicated"),
     );
   });
 
