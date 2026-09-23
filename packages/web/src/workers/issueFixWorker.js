@@ -6,8 +6,8 @@
 //   1. context.js     — config + trusted execution context
 //   2. scopeGuard.js  — label check, fetch issue + exact-head tree
 //   3. analyze.js     — AI pass 1, complexity gate
-//   4. generate.js    — file scoring, AI pass 2
-//   5. validate.js    — risk, confidence, scope, patches
+//   4. generate.js    — exact-tree file selection, AI pass 2
+//   5. validate.js    — deterministic candidate/risk/policy guards
 //   6. submit.js      — current-binding/head fence, branch, commit, PR, comment
 
 import { createWorker, QUEUES } from "../lib/queue.js";
@@ -24,25 +24,27 @@ export function startIssueFixWorker() {
   return createWorker(QUEUES.ISSUE_FIX, async (job) => {
     if (job.name !== "fix-issue") return;
 
-    // D0-02 consumer boundary: stale/direct legacy jobs that still carry a
-    // caller-selected installationId are invalid. Fail visibly rather than
-    // turning them into authority-bearing work.
+    // Consumer boundary: stale/direct legacy jobs carrying caller-selected
+    // installationId are invalid and fail visibly.
     const command = validateIssueFixJob(job.data);
 
-    // Re-resolve the stable repository id immediately before execution. This
-    // refreshes installation ownership after transfer/uninstall and prevents a
-    // queued snapshot from choosing execution authority.
+    // Re-resolve the stable repository id immediately before execution. The
+    // queued installation snapshot is a fence only; it is never used to open a
+    // GitHub client or authorize execution.
     const resolution = await resolveIssueFixRepositoryById(command.repository.github_id);
     if (resolution.status !== "resolved") {
       throw new Error(`Issue-fix repository unavailable at execution (${resolution.status})`);
     }
     const repository = resolution.repository;
 
-    if (repository.full_name !== command.repository.full_name) {
-      logger.info(
-        { repositoryId: repository.github_id, queuedName: command.repository.full_name, currentName: repository.full_name },
-        "Issue-fix repository renamed after enqueue — using current server-owned identity",
-      );
+    // A queued request must not silently follow a rename/transfer/reinstall into
+    // a different authority domain. The user/operator can retrigger against the
+    // current repository identity after the move.
+    if (
+      repository.full_name !== command.repository.full_name ||
+      String(repository.installation_id) !== String(command.repository.expected_installation_id)
+    ) {
+      throw new Error("Issue-fix repository binding changed after enqueue");
     }
 
     const adoption = await adoptWorker({

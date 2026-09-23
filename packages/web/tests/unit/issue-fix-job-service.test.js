@@ -19,7 +19,7 @@ const repository = {
 };
 
 describe("IssueFixJobV1", () => {
-  it("carries stable repository identity but never installation authority", () => {
+  it("carries a server-issued expected installation binding, never execution authority", () => {
     const job = buildIssueFixJob({
       repository,
       issueNumber: 42,
@@ -30,7 +30,11 @@ describe("IssueFixJobV1", () => {
 
     expect(job).toEqual({
       schema_version: ISSUE_FIX_JOB_SCHEMA_VERSION,
-      repository: { github_id: "9007199254740991", full_name: "octo/repo" },
+      repository: {
+        github_id: "9007199254740991",
+        full_name: "octo/repo",
+        expected_installation_id: "77",
+      },
       issue_number: 42,
       trigger: {
         kind: "api",
@@ -38,26 +42,40 @@ describe("IssueFixJobV1", () => {
         requested_by_principal_id: "principal-1",
       },
     });
-    expect(JSON.stringify(job)).not.toContain("installation");
+    expect(job).not.toHaveProperty("installationId");
   });
 
   it("rejects legacy caller-selected installation fields", () => {
     expect(() => validateIssueFixJob({
       schema_version: 1,
-      repository: { github_id: "42", full_name: "octo/repo" },
+      repository: { github_id: "42", full_name: "octo/repo", expected_installation_id: "77" },
       issue_number: 7,
       trigger: { kind: "api", requested_at: new Date(0).toISOString() },
       installationId: 123,
     })).toThrow(InvalidIssueFixJobError);
   });
 
-  it("fails closed above the current auth substrate safe-integer range", () => {
+  it("requires the server-issued expected installation fence", () => {
     expect(() => validateIssueFixJob({
       schema_version: 1,
-      repository: { github_id: "9007199254740992", full_name: "octo/repo" },
+      repository: { github_id: "42", full_name: "octo/repo" },
       issue_number: 7,
-      trigger: { kind: "comment_command", requested_at: new Date(0).toISOString() },
+      trigger: { kind: "api", requested_at: new Date(0).toISOString() },
     })).toThrow(InvalidIssueFixJobError);
+  });
+
+  it("fails closed above the current auth substrate safe-integer range", () => {
+    for (const repositoryField of [
+      { github_id: "9007199254740992", full_name: "octo/repo", expected_installation_id: "77" },
+      { github_id: "42", full_name: "octo/repo", expected_installation_id: "9007199254740992" },
+    ]) {
+      expect(() => validateIssueFixJob({
+        schema_version: 1,
+        repository: repositoryField,
+        issue_number: 7,
+        trigger: { kind: "comment_command", requested_at: new Date(0).toISOString() },
+      })).toThrow(InvalidIssueFixJobError);
+    }
   });
 
   it("validates issue numbers strictly", () => {

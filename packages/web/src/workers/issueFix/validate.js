@@ -111,7 +111,10 @@ export function validatePatchCandidates(fixes, originalFiles) {
 
 /** Returns validated fixes, or null if pipeline should stop. */
 export async function validateFixes(ctx, analysis, generated) {
-  const { octokit, owner, repoName, repoId, issueNumber, branchName, repoConfig, repo, principalId } = ctx;
+  const {
+    octokit, owner, repoName, repoId, issueNumber, branchName, repoConfig, repo,
+    principalId, requestedByPrincipalId, requestedByLogin, triggeredBy,
+  } = ctx;
   const fixes = Array.isArray(generated?.fixes) ? generated.fixes : [];
   const fileContents = Array.isArray(generated?.fileContents) ? generated.fileContents : [];
   const fixOpts = repoConfig.pillars?.issue_fix || {};
@@ -197,6 +200,9 @@ export async function validateFixes(ctx, analysis, generated) {
       base_sha: ctx._scope?.baseSha,
       principalId,
       surfaceId: "worker:issueFix",
+      trigger_kind: triggeredBy ?? null,
+      requested_by_principal_id: requestedByPrincipalId ?? null,
+      requested_by_login: requestedByLogin ?? null,
     },
     repoId,
     targetType: "issue",

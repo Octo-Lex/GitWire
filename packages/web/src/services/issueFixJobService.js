@@ -1,14 +1,16 @@
 // src/services/issueFixJobService.js
 // Canonical queue contract for Autonomous Contributor issue-fix work.
 //
-// D0-02 invariant: queue producers identify the target repository and issue;
-// they never select the GitHub App installation used to execute the work.
-// Installation/resource authority is re-resolved from PostgreSQL by the worker.
+// D0-02 invariant: callers identify the target repository and issue; they never
+// select the GitHub App installation used to execute the work. The command does
+// carry the server-resolved installation id as an EXPECTED BINDING FENCE so a
+// queued request cannot silently follow a repository transfer/reinstall. The
+// worker always re-resolves the current installation from PostgreSQL and never
+// uses this queued value as execution authority.
 //
 // Wave-2 auth infrastructure currently converts GitHub identifiers through
 // JavaScript Number. This contract therefore accepts only positive safe-integer
-// repository ids and fails closed above that range until W1 makes the auth
-// substrate bigint/string-safe end to end.
+// ids and fails closed above that range until W1 makes the substrate string-safe.
 
 import { z } from "zod";
 
@@ -32,6 +34,8 @@ const githubIdSchema = z.union([
 const repositoryTargetSchema = z.object({
   github_id: githubIdSchema,
   full_name: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
+  // Non-authoritative snapshot used only to detect binding drift after enqueue.
+  expected_installation_id: githubIdSchema,
 }).strict();
 
 const triggerSchema = z.object({
@@ -86,6 +90,7 @@ export function buildIssueFixJob({ repository, issueNumber, triggerKind, request
     repository: {
       github_id: repository.github_id,
       full_name: repository.full_name,
+      expected_installation_id: repository.installation_id,
     },
     issue_number: issueNumber,
     trigger: {

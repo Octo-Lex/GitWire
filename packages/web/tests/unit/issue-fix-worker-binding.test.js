@@ -1,4 +1,5 @@
-// D0-02 — worker must re-resolve repository/installation authority at consumption.
+// D0-02 — worker must re-resolve repository/installation authority at consumption
+// and reject any enqueue→execution binding drift.
 
 import { beforeEach, describe, expect, it, jest } from "@jest/globals";
 
@@ -29,34 +30,39 @@ jest.unstable_mockModule("../../src/services/issueFixTargetService.js", () => ({
 const { startIssueFixWorker } = await import("../../src/workers/issueFixWorker.js");
 
 let processor;
+const currentRepository = {
+  github_id: "99002",
+  installation_id: "222",
+  full_name: "octo/repo",
+  owner: "octo",
+  name: "repo",
+  default_branch: "main",
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockCreateWorker.mockImplementation((_name, fn) => { processor = fn; return { close: jest.fn() }; });
-  mockResolveById.mockResolvedValue({
-    status: "resolved",
-    repository: {
-      github_id: "99002",
-      installation_id: "222",
-      full_name: "octo/repo",
-      owner: "octo",
-      name: "repo",
-      default_branch: "main",
-    },
-  });
+  mockResolveById.mockResolvedValue({ status: "resolved", repository: currentRepository });
   mockAdoptWorker.mockResolvedValue({ context: { principalId: "system-principal" }, decision: { allowed: true } });
   mockWorkerPrincipalId.mockReturnValue("system-principal");
   mockProcessFixIssue.mockResolvedValue(undefined);
   startIssueFixWorker();
 });
 
-function validJob() {
+function validJob(overrides = {}) {
   return {
     name: "fix-issue",
     data: {
       schema_version: 1,
-      repository: { github_id: "99002", full_name: "octo/repo" },
+      repository: {
+        github_id: "99002",
+        full_name: "octo/repo",
+        expected_installation_id: "222",
+        ...(overrides.repository || {}),
+      },
       issue_number: 42,
       trigger: { kind: "api", requested_at: new Date(0).toISOString() },
+      ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== "repository")),
     },
   };
 }
@@ -91,5 +97,23 @@ describe("issue-fix worker authority binding", () => {
     await expect(processor(validJob())).rejects.toThrow("repository unavailable at execution");
     expect(mockAdoptWorker).not.toHaveBeenCalled();
     expect(mockProcessFixIssue).not.toHaveBeenCalled();
+  });
+
+  it("refuses to follow a repository rename/transfer after enqueue", async () => {
+    mockResolveById.mockResolvedValueOnce({
+      status: "resolved",
+      repository: { ...currentRepository, full_name: "new-owner/repo", owner: "new-owner" },
+    });
+    await expect(processor(validJob())).rejects.toThrow("repository binding changed after enqueue");
+    expect(mockAdoptWorker).not.toHaveBeenCalled();
+  });
+
+  it("refuses to inherit a new installation after enqueue", async () => {
+    mockResolveById.mockResolvedValueOnce({
+      status: "resolved",
+      repository: { ...currentRepository, installation_id: "333" },
+    });
+    await expect(processor(validJob())).rejects.toThrow("repository binding changed after enqueue");
+    expect(mockAdoptWorker).not.toHaveBeenCalled();
   });
 });
