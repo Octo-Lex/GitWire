@@ -16,8 +16,8 @@ function isSafeRepositoryPath(value) {
 
 function normalizePositiveInteger(value, fallback, hardMax) {
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > hardMax) return fallback;
-  return parsed;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, hardMax);
 }
 
 // Historical dashboard versions wrote confidence as 1/2/3 even though the

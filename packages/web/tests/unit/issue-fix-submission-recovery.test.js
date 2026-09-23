@@ -164,6 +164,34 @@ describe("issue-fix submission recovery", () => {
     expect(request.mock.calls.some(([route]) => route === "DELETE /repos/{owner}/{repo}/git/refs/{ref}")).toBe(false);
   });
 
+  it("posts visible no-effect feedback when a legacy submission marker deduplicates a retry", async () => {
+    mockCheckAndMark.mockResolvedValue(false);
+    const request = jest.fn(async (route, params) => {
+      if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}") return { data: liveIssue() };
+      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "main") {
+        return { data: { object: { sha: baseSha } } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "gitwire/fix-42") {
+        throw httpError(404, "not found");
+      }
+      throw new Error("unexpected route " + route);
+    });
+
+    await submitFix(makeCtx(request), analysis, validated);
+
+    expect(mockCancel).toHaveBeenCalledWith("action-1", "Duplicate issue-fix submission");
+    expect(mockComment).toHaveBeenCalledWith(
+      expect.anything(), "octo", "repo", 42,
+      expect.stringContaining("retry deferred"),
+    );
+    expect(mockComment).toHaveBeenCalledWith(
+      expect.anything(), "octo", "repo", 42,
+      expect.stringContaining("did not mutate GitHub"),
+    );
+    expect(request.mock.calls.some(([route]) => !route.startsWith("GET "))).toBe(false);
+  });
+
   it("preserves a partial branch after a write failure and keeps the legacy marker", async () => {
     const request = jest.fn(async (route, params) => {
       if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };

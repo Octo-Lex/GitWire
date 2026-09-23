@@ -101,4 +101,41 @@ describe("issue-fix maintainer label override", () => {
       expect.stringContaining("not eligible"),
     );
   });
+
+  it("keeps a prior live PR in rate-limit accounting after a dry-run status overwrite", async () => {
+    mockDbQuery.mockReset();
+    mockGetSettings.mockResolvedValue({
+      fix_allowed_labels: ["maintenance"],
+      fix_per_issue_limit: 1,
+      fix_daily_limit: 3,
+    });
+    mockDbQuery.mockImplementation(async (sql) => {
+      if (sql.includes("issue_number = $2")) {
+        return sql.includes("pr_number IS NOT NULL")
+          ? { rows: [{ status: "dry_run", pr_number: 88 }] }
+          : { rows: [] };
+      }
+      if (sql.includes("COUNT(*)")) return { rows: [{ cnt: 0 }] };
+      throw new Error("unexpected SQL " + sql);
+    });
+    const request = jest.fn();
+
+    const scope = await validateScope({
+      octokit: { request },
+      owner: "octo",
+      repoName: "repo",
+      repoId: "99",
+      issueNumber: 42,
+      branchName: "gitwire/fix-42",
+      repoConfig: { pillars: { issue_fix: { allowed_labels: ["maintenance"] } } },
+    });
+
+    expect(scope).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(mockDbQuery.mock.calls[0][0]).toContain("pr_number IS NOT NULL");
+    expect(mockComment).toHaveBeenCalledWith(
+      expect.anything(), "octo", "repo", 42,
+      expect.stringContaining("rate limited"),
+    );
+  });
 });

@@ -150,6 +150,31 @@ describe("validateFixes evidence semantics", () => {
     );
   });
 
+  it("clamps oversized max_file_changes to the safety ceiling instead of reverting to the tiny default", async () => {
+    const originals = [1, 2, 3, 4].map((n) => ({
+      path: `src/f${n}.js`,
+      content: `const v${n} = 1;\n`,
+      sha: `blob-${n}`,
+    }));
+    const fixes = originals.map((file, index) => ({
+      path: file.path,
+      fixed_content: `const v${index + 1} = 2;\n`,
+    }));
+
+    await validateFixes({
+      ...baseCtx,
+      repoConfig: { pillars: { issue_fix: { max_file_changes: 150 } } },
+    }, analysis, { fixes, fileContents: originals });
+
+    expect(mockPropose).toHaveBeenCalledTimes(1);
+    expect(mockApprove).toHaveBeenCalledTimes(1);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(mockComment).not.toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+      expect.stringContaining("Fix touches 4 files (max: 3)"),
+    );
+  });
+
   it("passes normalized high confidence to the rule comparison", async () => {
     mockGetMinFixConfidence.mockReturnValue(3);
     mockMeetsConfidence.mockImplementation((_actual, required) => required === "high");

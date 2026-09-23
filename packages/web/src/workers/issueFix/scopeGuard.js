@@ -129,10 +129,14 @@ async function checkRateLimit(repoId, issueNumber) {
   const dailyLimit = (settings && settings.fix_daily_limit) || 3;
   const perIssueLimit = (settings && settings.fix_per_issue_limit) || 1;
 
-  // dry_run is evidence of a non-effect simulation. It must not make the real
-  // issue-fix path ineligible when live mode is later enabled.
+  // dry_run is evidence of a non-effect simulation and normally does not count.
+  // However fix_attempts is one row per (repo, issue), and a later dry-run upsert
+  // deliberately preserves an existing pr_number. That PR number is durable
+  // evidence that a prior live submission occurred, so it must continue to count
+  // even if the row's presentation status was overwritten to dry_run.
   const { rows: existing } = await db.query(
-    "SELECT status FROM fix_attempts WHERE repo_id = $1 AND issue_number = $2 AND status NOT IN ('failed', 'rejected', 'superseded', 'dry_run')",
+    "SELECT status, pr_number FROM fix_attempts WHERE repo_id = $1 AND issue_number = $2 " +
+    "AND (status NOT IN ('failed', 'rejected', 'superseded', 'dry_run') OR pr_number IS NOT NULL)",
     [repoId, issueNumber]
   );
   if (existing.length >= perIssueLimit) {
@@ -145,7 +149,8 @@ async function checkRateLimit(repoId, issueNumber) {
   }
 
   const { rows: dailyRows } = await db.query(
-    "SELECT COUNT(*)::int AS cnt FROM fix_attempts WHERE repo_id = $1 AND created_at >= NOW() - INTERVAL '1 day' AND status <> 'dry_run'",
+    "SELECT COUNT(*)::int AS cnt FROM fix_attempts WHERE repo_id = $1 AND created_at >= NOW() - INTERVAL '1 day' " +
+    "AND (status <> 'dry_run' OR pr_number IS NOT NULL)",
     [repoId]
   );
   const dailyCount = dailyRows[0].cnt;
