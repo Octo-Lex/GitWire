@@ -136,7 +136,7 @@ describe("PR #95 review corrections", () => {
       repository: "repo",
     });
     expect(mockQuery.mock.calls[0][0]).toContain("FROM ci_runs cr");
-    expect(mockQuery.mock.calls[0][0]).toContain("cr.id::text = $1 OR cr.github_run_id::text = $1");
+    expect(mockQuery.mock.calls[0][0]).toContain("cr.id = $1::bigint OR cr.github_run_id = $1::bigint");
     expect(mockQuery.mock.calls[0][1]).toEqual(["30123456789"]);
   });
 

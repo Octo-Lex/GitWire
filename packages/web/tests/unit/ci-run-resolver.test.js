@@ -24,12 +24,14 @@ const storedRun = {
 };
 
 describe("stored CI-run identifier resolver", () => {
-  it("rejects non-numeric identifiers without querying trusted state", async () => {
-    await expect(resolveStoredCIRunIdentifier("not-a-run")).resolves.toEqual({ status: "invalid" });
+  it("rejects non-numeric, zero, and out-of-range identifiers without querying trusted state", async () => {
+    for (const value of ["not-a-run", "0", "9223372036854775808"]) {
+      await expect(resolveStoredCIRunIdentifier(value)).resolves.toEqual({ status: "invalid" });
+    }
     expect(mockQuery).not.toHaveBeenCalled();
   });
 
-  it("resolves one stored run using the shared internal-id or GitHub-id query", async () => {
+  it("resolves one stored run using indexable BIGINT predicates for either identifier namespace", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [storedRun] });
 
     const result = await resolveStoredCIRunIdentifier("30123456789");
@@ -37,10 +39,19 @@ describe("stored CI-run identifier resolver", () => {
     expect(result).toEqual({ status: "resolved", run: storedRun });
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const [sql, params] = mockQuery.mock.calls[0];
-    expect(sql).toContain("cr.id::text = $1 OR cr.github_run_id::text = $1");
-    expect(sql).toContain("ORDER BY CASE WHEN cr.id::text = $1 THEN 0 ELSE 1 END");
+    expect(sql).toContain("cr.id = $1::bigint OR cr.github_run_id = $1::bigint");
+    expect(sql).toContain("ORDER BY CASE WHEN cr.id = $1::bigint THEN 0 ELSE 1 END");
+    expect(sql).not.toContain("cr.id::text");
     expect(sql).toContain("LIMIT 2");
     expect(params).toEqual(["30123456789"]);
+  });
+
+  it("normalizes leading zeroes before the PostgreSQL BIGINT comparison", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [storedRun] });
+
+    await resolveStoredCIRunIdentifier("00042");
+
+    expect(mockQuery.mock.calls[0][1]).toEqual(["42"]);
   });
 
   it("returns not_found when neither identifier namespace matches", async () => {

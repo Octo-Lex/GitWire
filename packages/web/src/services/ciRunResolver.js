@@ -8,20 +8,37 @@
 
 import { db } from "../lib/db.js";
 
+const PG_BIGINT_MAX = 9223372036854775807n;
+
+function normalizePositiveBigintIdentifier(value) {
+  const raw = String(value ?? "");
+  if (!/^\d+$/.test(raw)) return null;
+
+  try {
+    const parsed = BigInt(raw);
+    if (parsed <= 0n || parsed > PG_BIGINT_MAX) return null;
+    // Canonical decimal representation also strips leading zeroes before the
+    // value is cast by PostgreSQL.
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resolve a numeric identifier as either GitWire ci_runs.id or GitHub
  * ci_runs.github_run_id.
  *
  * The result is deliberately explicit rather than throwing for ordinary lookup
  * outcomes so callers can preserve their own HTTP/authorization semantics:
- *   - invalid: identifier is not a decimal representation
+ *   - invalid: identifier is not a positive PostgreSQL BIGINT
  *   - not_found: no stored CI run matches
  *   - ambiguous: internal id and GitHub run id match different stored rows
  *   - resolved: exactly one trusted stored run + repository binding
  */
 export async function resolveStoredCIRunIdentifier(value) {
-  const identifier = String(value ?? "");
-  if (!/^\d+$/.test(identifier)) {
+  const identifier = normalizePositiveBigintIdentifier(value);
+  if (!identifier) {
     return { status: "invalid" };
   }
 
@@ -36,8 +53,8 @@ export async function resolveStoredCIRunIdentifier(value) {
        r.installation_id
      FROM ci_runs cr
      JOIN repositories r ON r.github_id = cr.repo_id
-     WHERE cr.id::text = $1 OR cr.github_run_id::text = $1
-     ORDER BY CASE WHEN cr.id::text = $1 THEN 0 ELSE 1 END
+     WHERE cr.id = $1::bigint OR cr.github_run_id = $1::bigint
+     ORDER BY CASE WHEN cr.id = $1::bigint THEN 0 ELSE 1 END
      LIMIT 2`,
     [identifier]
   );

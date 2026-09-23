@@ -9,6 +9,16 @@
 import { z } from "zod";
 
 export const CI_HEAL_JOB_SCHEMA_VERSION = 1;
+const PG_BIGINT_MAX = 9223372036854775807n;
+
+function isPositivePgBigintString(value) {
+  if (!/^[1-9]\d*$/.test(value)) return false;
+  try {
+    return BigInt(value) <= PG_BIGINT_MAX;
+  } catch {
+    return false;
+  }
+}
 
 // GitHub identifiers arrive as JSON numbers on webhook/API responses, while
 // PostgreSQL BIGINT/BIGSERIAL values are returned as decimal strings by node-pg
@@ -16,7 +26,7 @@ export const CI_HEAL_JOB_SCHEMA_VERSION = 1;
 // than coercing DB identifiers through Number().
 const githubIdSchema = z.union([
   z.number().int().positive().refine(Number.isSafeInteger, "must be a safe integer"),
-  z.string().regex(/^[1-9]\d*$/, "must be a positive decimal identifier"),
+  z.string().refine(isPositivePgBigintString, "must be a positive PostgreSQL BIGINT identifier"),
 ]);
 
 const triggerSchema = z.object({

@@ -112,6 +112,15 @@ describe("CI heal job contract", () => {
     })).toThrow(InvalidCIHealJobError);
   });
 
+  it("rejects decimal-string IDs outside PostgreSQL BIGINT range", () => {
+    expect(() => buildCIHealJobFromManualRun({
+      workflowRun: workflowRun(),
+      repository: repository({ id: "9223372036854775808" }),
+      installationId: "987654",
+      receivedAt: NOW,
+    })).toThrow(InvalidCIHealJobError);
+  });
+
   it("rejects a non-failed run instead of queueing work the healer must skip", () => {
     expect(() => buildCIHealJobFromManualRun({
       workflowRun: workflowRun({ conclusion: "success" }),
