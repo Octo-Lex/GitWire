@@ -14,21 +14,19 @@ import { logger } from "../../lib/logger.js";
 function dryRunGuard(octokit, dryRun) {
   if (!dryRun) return octokit;
 
-  // Mechanical dry-run boundary for this capability. Earlier issue-fix stages
-  // may post eligibility/failure comments; guarding the shared client prevents
-  // those paths (and any future non-read request) from mutating GitHub while
-  // still permitting exact-head evidence reads.
-  return new Proxy(octokit, {
-    get(target, prop) {
-      if (prop !== "request") return Reflect.get(target, prop, target);
-      return async (route, params) => {
-        const match = /^\s*(GET|HEAD)\s+/i.exec(String(route ?? ""));
-        if (match) return target.request(route, params);
-        logger.info({ route }, "DRY RUN: blocked issue-fix GitHub mutation");
-        return { data: { dry_run: true } };
-      };
-    },
-  });
+  // Mechanical dry-run boundary for this capability. Expose only the explicit
+  // request(method + route) surface so every permitted read is classifiable as
+  // GET/HEAD. Alternate Octokit call surfaces (rest.*, graphql, paginate, etc.)
+  // are deliberately absent: future code cannot silently bypass this guard by
+  // switching client styles.
+  const request = async (route, params) => {
+    const match = /^\s*(GET|HEAD)\s+/i.exec(String(route ?? ""));
+    if (match) return octokit.request(route, params);
+    logger.info({ route }, "DRY RUN: blocked issue-fix GitHub mutation");
+    return { data: { dry_run: true } };
+  };
+
+  return Object.freeze({ request });
 }
 
 /**

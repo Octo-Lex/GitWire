@@ -161,10 +161,10 @@ describe("issue-fix submission recovery", () => {
     expect(mockFail).not.toHaveBeenCalled();
     expect(request.mock.calls.some(([route]) => route === "PUT /repos/{owner}/{repo}/contents/{path}")).toBe(false);
     expect(request.mock.calls.some(([route]) => route.startsWith("PATCH "))).toBe(false);
+    expect(request.mock.calls.some(([route]) => route === "DELETE /repos/{owner}/{repo}/git/refs/{ref}")).toBe(false);
   });
 
-  it("deletes only the partial branch proven owned by this invocation and reports marker cleanup as best-effort", async () => {
-    let targetRefReads = 0;
+  it("preserves a partial branch after a write failure and keeps the legacy marker", async () => {
     const request = jest.fn(async (route, params) => {
       if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
       if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}") return { data: liveIssue() };
@@ -172,46 +172,7 @@ describe("issue-fix submission recovery", () => {
         return { data: { object: { sha: baseSha } } };
       }
       if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "gitwire/fix-42") {
-        targetRefReads++;
-        if (targetRefReads === 1) throw httpError(404, "not found");
-        return { data: { object: { sha: baseSha } } };
-      }
-      if (route === "POST /repos/{owner}/{repo}/git/refs") return { data: {} };
-      if (route === "PUT /repos/{owner}/{repo}/contents/{path}") throw new Error("transient write failure");
-      if (route === "DELETE /repos/{owner}/{repo}/git/refs/{ref}") return { data: {} };
-      throw new Error("unexpected route " + route);
-    });
-
-    await submitFix(makeCtx(request), analysis, validated);
-
-    expect(request).toHaveBeenCalledWith(
-      "DELETE /repos/{owner}/{repo}/git/refs/{ref}",
-      { owner: "octo", repo: "repo", ref: "heads/gitwire/fix-42" },
-    );
-    expect(mockClearIdempotencyKey).toHaveBeenCalledWith("issue_fix", "repo-99:issue-42");
-    expect(mockFail).toHaveBeenCalledWith("action-1", "transient write failure");
-    expect(mockComment).toHaveBeenCalledWith(
-      expect.anything(), "octo", "repo", 42,
-      expect.stringContaining("requested release of the legacy submission marker"),
-    );
-    expect(mockComment).toHaveBeenCalledWith(
-      expect.anything(), "octo", "repo", 42,
-      expect.stringContaining("If an immediate retry is still deduplicated"),
-    );
-  });
-
-  it("preserves a partial branch when its head changed after GitWire created it", async () => {
-    let targetRefReads = 0;
-    const request = jest.fn(async (route, params) => {
-      if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
-      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}") return { data: liveIssue() };
-      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "main") {
-        return { data: { object: { sha: baseSha } } };
-      }
-      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "gitwire/fix-42") {
-        targetRefReads++;
-        if (targetRefReads === 1) throw httpError(404, "not found");
-        return { data: { object: { sha: "cccccccccccccccccccccccccccccccccccccccc" } } };
+        throw httpError(404, "not found");
       }
       if (route === "POST /repos/{owner}/{repo}/git/refs") return { data: {} };
       if (route === "PUT /repos/{owner}/{repo}/contents/{path}") throw new Error("transient write failure");
@@ -225,7 +186,50 @@ describe("issue-fix submission recovery", () => {
     expect(mockFail).toHaveBeenCalledWith("action-1", "transient write failure");
     expect(mockComment).toHaveBeenCalledWith(
       expect.anything(), "octo", "repo", 42,
-      expect.stringContaining("could not prove the partial branch was still exclusively owned"),
+      expect.stringContaining("preserved any issue-fix branch created during this attempt"),
+    );
+    expect(mockComment).toHaveBeenCalledWith(
+      expect.anything(), "octo", "repo", 42,
+      expect.stringContaining("did not automatically clear the legacy submission marker"),
+    );
+  });
+
+  it("never deletes the branch when PR creation may have succeeded but its response is lost", async () => {
+    const request = jest.fn(async (route, params) => {
+      if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}") return { data: liveIssue() };
+      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "main") {
+        return { data: { object: { sha: baseSha } } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "gitwire/fix-42") {
+        throw httpError(404, "not found");
+      }
+      if (route === "POST /repos/{owner}/{repo}/git/refs") return { data: {} };
+      if (route === "PUT /repos/{owner}/{repo}/contents/{path}") {
+        return { data: { commit: { sha: "dddddddddddddddddddddddddddddddddddddddd" } } };
+      }
+      if (route === "POST /repos/{owner}/{repo}/pulls") {
+        throw new Error("socket reset after GitHub may have created the PR");
+      }
+      throw new Error("unexpected route " + route);
+    });
+
+    await submitFix(makeCtx(request), analysis, validated);
+
+    expect(request).toHaveBeenCalledWith(
+      "POST /repos/{owner}/{repo}/pulls",
+      expect.objectContaining({ head: "gitwire/fix-42", base: "main" }),
+    );
+    expect(request.mock.calls.some(([route]) => route === "DELETE /repos/{owner}/{repo}/git/refs/{ref}")).toBe(false);
+    expect(mockClearIdempotencyKey).not.toHaveBeenCalled();
+    expect(mockFail).toHaveBeenCalledWith("action-1", "socket reset after GitHub may have created the PR");
+    expect(mockComment).toHaveBeenCalledWith(
+      expect.anything(), "octo", "repo", 42,
+      expect.stringContaining("a PR or concurrent actor may already depend on the branch"),
+    );
+    expect(mockComment).toHaveBeenCalledWith(
+      expect.anything(), "octo", "repo", 42,
+      expect.stringContaining("any matching PR before manual cleanup or retry"),
     );
   });
 });

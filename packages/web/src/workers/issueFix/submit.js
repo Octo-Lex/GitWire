@@ -42,37 +42,6 @@ async function clearSubmissionMarker(idempotencyKey) {
   }
 }
 
-async function cleanupOwnedBranch({ octokit, owner, repoName, branchName, ownedHeadSha, repo, issueNumber }) {
-  if (!ownedHeadSha) return false;
-  try {
-    const { data: currentBranch } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/{branch}", {
-      owner,
-      repo: repoName,
-      branch: branchName,
-    });
-    const currentSha = currentBranch?.object?.sha;
-    if (currentSha !== ownedHeadSha) {
-      logger.warn(
-        { repo, issueNumber, branchName, ownedHeadSha, currentSha },
-        "Skipping issue-fix branch cleanup because branch head no longer matches GitWire-owned head"
-      );
-      return false;
-    }
-
-    await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
-      owner,
-      repo: repoName,
-      ref: "heads/" + branchName,
-    });
-    logger.info({ repo, issueNumber, branchName, ownedHeadSha }, "Removed partial GitWire-owned issue-fix branch after failure");
-    return true;
-  } catch (err) {
-    if (err?.status === 404) return true;
-    logger.warn({ err: err.message || err, repo, issueNumber, branchName }, "Failed to clean up partial issue-fix branch");
-    return false;
-  }
-}
-
 /** Creates the branch, commits fixes, opens PR. */
 export async function submitFix(ctx, analysis, validated) {
   const { octokit, owner, repoName, repoId, issueNumber, branchName, repo, repository } = ctx;
@@ -81,8 +50,6 @@ export async function submitFix(ctx, analysis, validated) {
   const defaultBranch = ctx._scope?.defaultBranch;
   const issueSnapshot = ctx._scope?.issueSnapshot;
   let idempotencyKey = null;
-  let ownedBranchHeadSha = null;
-  let prCreated = false;
 
   try {
     if (!baseSha || !defaultBranch || !issueSnapshot) {
@@ -215,7 +182,6 @@ export async function submitFix(ctx, analysis, validated) {
         ref: "refs/heads/" + branchName,
         sha: baseSha,
       });
-      ownedBranchHeadSha = baseSha;
     } catch (refErr) {
       if (refErr?.status === 422) {
         try {
@@ -254,7 +220,7 @@ export async function submitFix(ctx, analysis, validated) {
       }
 
       const fixedB64 = Buffer.from(fix.fixed_content).toString("base64");
-      const { data: writeResult } = await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
+      await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
         owner,
         repo: repoName,
         path: fix.path,
@@ -263,10 +229,6 @@ export async function submitFix(ctx, analysis, validated) {
         sha: origFile.sha,
         branch: branchName,
       });
-      // Contents writes return the commit that advanced the branch. Track the
-      // exact head owned by this invocation so cleanup never deletes later human
-      // or concurrent work.
-      if (writeResult?.commit?.sha) ownedBranchHeadSha = writeResult.commit.sha;
 
       logger.info({ path: fix.path, explanation: fix.explanation }, "Fix committed");
     }
@@ -286,9 +248,6 @@ export async function submitFix(ctx, analysis, validated) {
       head: branchName,
       base: defaultBranch,
     });
-    // From this point forward the branch is the base of an externally visible PR
-    // and must never be deleted by local recovery logic.
-    prCreated = true;
 
     logger.info({ repo, issueNumber, prNumber: pr.number, prUrl: pr.html_url, confidence, baseSha }, "Fix PR created");
 
@@ -333,38 +292,27 @@ export async function submitFix(ctx, analysis, validated) {
       analysis.complexity, analysis.explanation, null, pr.number);
 
   } catch (err) {
-    logger.error({ err, repo, issueNumber }, "Fix PR creation failed");
+    logger.error({ err, repo, issueNumber }, "Issue fix submission failed");
 
-    let partialBranchCleaned = false;
-    if (!prCreated && ownedBranchHeadSha) {
-      partialBranchCleaned = await cleanupOwnedBranch({
-        octokit,
-        owner,
-        repoName,
-        branchName,
-        ownedHeadSha: ownedBranchHeadSha,
-        repo,
-        issueNumber,
-      });
-      if (partialBranchCleaned) await clearSubmissionMarker(idempotencyKey);
-    }
-
+    // Do not automatically delete a branch after any submission-side failure.
+    // GitHub offers no atomic "delete this ref iff no PR/concurrent actor now
+    // depends on it" primitive. In particular, POST /pulls can succeed remotely
+    // while its response is lost locally. Preserving the ref is the only safe
+    // pre-Wave-3 behavior; reconciliation/operator cleanup must resolve ambiguity.
     try {
       await fail(fixAction.id, err.message);
     } catch (stateErr) {
       logger.warn({ err: stateErr.message || stateErr, actionId: fixAction.id }, "Failed to terminalize issue-fix action after submission error");
     }
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed",
-      analysis.complexity, analysis.explanation, "PR creation failed: " + err.message);
+      analysis.complexity, analysis.explanation, "Issue-fix submission failed: " + err.message);
     await postIssueComment(octokit, owner, repoName, issueNumber,
-      "\u274C **GitWire Fix - PR creation failed**\n\n" +
-      "The fix was generated but could not be submitted:\n> " + err.message + "\n\n" +
+      "\u274C **GitWire Fix - submission failed**\n\n" +
+      "The fix could not be fully submitted:\n> " + err.message + "\n\n" +
       "**Assessment:** " + (analysis.explanation || "") + "\n\n" +
-      (partialBranchCleaned
-        ? "GitWire removed the partial branch and requested release of the legacy submission marker. If an immediate retry is still deduplicated, wait for the marker to expire before retrying.\n\n"
-        : (ownedBranchHeadSha && !prCreated
-            ? "GitWire could not prove the partial branch was still exclusively owned; inspect `" + branchName + "` before retrying.\n\n"
-            : "")) +
+      (idempotencyKey
+        ? "GitWire preserved any issue-fix branch created during this attempt and did not automatically clear the legacy submission marker. Automatic ref deletion is unsafe after an ambiguous external effect because a PR or concurrent actor may already depend on the branch. Inspect `" + branchName + "` and any matching PR before manual cleanup or retry. A retry may remain deduplicated until the legacy marker expires.\n\n"
+        : "") +
       "_A maintainer may need to intervene._"
     );
   }

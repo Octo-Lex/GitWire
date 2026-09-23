@@ -68,7 +68,14 @@ describe("issue-fix GitHub runtime boundary", () => {
 
   it("mechanically blocks every non-read GitHub request in dry-run while allowing evidence reads", async () => {
     const rawRequest = jest.fn().mockResolvedValue({ data: { ok: true } });
-    mockWrapOctokit.mockReturnValue({ request: rawRequest });
+    const rawGraphql = jest.fn().mockResolvedValue({ mutation: true });
+    const rawRestMutation = jest.fn().mockResolvedValue({ data: { mutated: true } });
+    mockWrapOctokit.mockReturnValue({
+      request: rawRequest,
+      graphql: rawGraphql,
+      rest: { issues: { createComment: rawRestMutation } },
+      paginate: jest.fn(),
+    });
     mockIsDryRun.mockReturnValue(true);
 
     const ctx = await initFixContext({
@@ -85,8 +92,17 @@ describe("issue-fix GitHub runtime boundary", () => {
     await expect(ctx.octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {}))
       .resolves.toEqual({ data: { dry_run: true } });
 
+    // Dry-run intentionally exposes a narrow facade. Alternate Octokit call
+    // styles are absent rather than passed through to the live client.
+    expect(ctx.octokit.graphql).toBeUndefined();
+    expect(ctx.octokit.rest).toBeUndefined();
+    expect(ctx.octokit.paginate).toBeUndefined();
+    expect(Object.isFrozen(ctx.octokit)).toBe(true);
+
     expect(ctx.dryRun).toBe(true);
     expect(rawRequest).toHaveBeenCalledTimes(1);
     expect(rawRequest).toHaveBeenCalledWith("GET /repos/{owner}/{repo}", { owner: "octo", repo: "repo" });
+    expect(rawGraphql).not.toHaveBeenCalled();
+    expect(rawRestMutation).not.toHaveBeenCalled();
   });
 });
