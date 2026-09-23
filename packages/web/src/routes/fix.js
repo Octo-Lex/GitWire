@@ -9,40 +9,67 @@ import { Router } from "express";
 import { issueFixQueue } from "../lib/queue.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import {
+  buildIssueFixJob,
+  enqueueIssueFixJob,
+  parseIssueNumber,
+} from "../services/issueFixJobService.js";
+import { resolveIssueFixRepositoryByFullName } from "../services/issueFixTargetService.js";
 
 export const fixRouter = Router();
 
 // ── Trigger a fix attempt ────────────────────────────────────────────────
 fixRouter.post("/:owner/:repo/issues/:number", async (req, res) => {
-  const { owner, repo, number: issueNumber } = req.params;
-  const installationId = req.query.installation_id
-    ? parseInt(req.query.installation_id, 10)
-    : null;
-
-  if (!installationId) {
-    return res.status(400).json({ error: "installation_id query parameter required" });
+  const { owner, repo, number } = req.params;
+  const issueNumber = parseIssueNumber(number);
+  if (!issueNumber) {
+    return res.status(400).json({ error: "issue number must be a positive integer" });
   }
 
   const repoFullName = owner + "/" + repo;
 
   try {
-    const job = await issueFixQueue.add("fix-issue", {
-      repo: repoFullName,
-      issueNumber: parseInt(issueNumber, 10),
-      installationId: installationId,
-      triggeredBy: "api",
-    }, { priority: 1 });
+    // D0-02: callers identify only the target repository. The GitHub App
+    // installation is resolved from current server-owned state and is never
+    // accepted from query/body data as execution authority.
+    const resolution = await resolveIssueFixRepositoryByFullName(repoFullName);
+    if (resolution.status === "invalid") {
+      return res.status(400).json({ error: "Invalid repository name" });
+    }
+    if (resolution.status === "not_found") {
+      return res.status(404).json({ error: "Repo not found or installation inactive" });
+    }
+    if (resolution.status === "ambiguous") {
+      logger.error({ repo: repoFullName }, "Ambiguous active repository mapping — refusing issue fix");
+      return res.status(409).json({ error: "Ambiguous repository mapping" });
+    }
+
+    if (req.query.installation_id != null) {
+      logger.warn(
+        { repo: repoFullName },
+        "Ignoring legacy installation_id on issue-fix request; installation authority is server-owned",
+      );
+    }
+
+    const jobData = buildIssueFixJob({
+      repository: resolution.repository,
+      issueNumber,
+      triggerKind: "api",
+      requestedByPrincipalId: req.auth?.principalId ?? undefined,
+    });
+    const job = await enqueueIssueFixJob(issueFixQueue, jobData, { priority: 1 });
 
     logger.info({ repo: repoFullName, issueNumber, jobId: job.id }, "Fix attempt triggered via API");
 
     res.status(202).json({
       queued: true,
+      status: "queued",
       jobId: job.id,
       repo: repoFullName,
-      issueNumber: parseInt(issueNumber, 10),
+      issueNumber,
     });
   } catch (err) {
-    logger.error({ err }, "Failed to queue fix attempt");
+    logger.error({ err, repo: repoFullName, issueNumber }, "Failed to queue fix attempt");
     res.status(500).json({ error: "Failed to queue fix attempt" });
   }
 });

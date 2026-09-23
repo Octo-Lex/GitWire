@@ -11,21 +11,18 @@ const anthropic = new Anthropic({
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
 });
 
-/**
- * Returns array of fix objects, or null if pipeline should stop.
- * CC target: ~6
- */
+/** Returns array of fix objects, or null if pipeline should stop. */
 export async function generateFixes(ctx, analysis) {
-  const { octokit, owner, repoName, repoId, issueNumber, branchName, repoConfig, repo } = ctx;
-  const { issue, tree } = ctx._scope;
+  const { octokit, owner, repoName, repoId, issueNumber, branchName, repo } = ctx;
+  const { issue, tree, baseSha } = ctx._scope;
 
-  // Score and select top files
   const scoredFiles = scoreFiles(analysis.relevant_files || [], issue, tree);
   const topFiles = scoredFiles.slice(0, 5).map((f) => f.path);
-  logger.info({ repo, issueNumber, topFiles, scored: scoredFiles.length }, "File scoring complete");
+  logger.info({ repo, issueNumber, topFiles, scored: scoredFiles.length, baseSha }, "File scoring complete");
 
-  // Fetch file contents
-  const fileContents = await fetchFileContents(octokit, owner, repoName, topFiles);
+  // Exact-head invariant: generation reads from the same immutable commit that
+  // produced the file tree. It never silently follows a moving branch name.
+  const fileContents = await fetchFileContents(octokit, owner, repoName, topFiles, baseSha);
 
   if (fileContents.length === 0) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed", analysis.complexity,
@@ -33,13 +30,12 @@ export async function generateFixes(ctx, analysis) {
     await postIssueComment(octokit, owner, repoName, issueNumber,
       "\u26A0\uFE0F **GitWire Fix - file fetch failed**\n\n" +
       "**Assessment:** " + analysis.explanation + "\n\n" +
-      "AI identified relevant files but none could be fetched.\n\n" +
+      "AI identified relevant files but none could be fetched from the reviewed head.\n\n" +
       "_Files attempted: " + topFiles.join(", ") + "_"
     );
     return null;
   }
 
-  // AI Pass 2: Generate full-file fixes
   const fixes = await aiGenerateFullFile(issue, analysis, fileContents, repo);
   if (!fixes || !fixes.length) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed", analysis.complexity,
@@ -55,8 +51,6 @@ export async function generateFixes(ctx, analysis) {
 
   return { fixes, fileContents };
 }
-
-// ── File scoring ───────────────────────────────────────────────────────────
 
 function scoreFiles(files, issue, tree) {
   if (!files || !files.length) return [];
@@ -81,16 +75,11 @@ function scoreFiles(files, issue, tree) {
     if (depth === 1) score += 2;
 
     if (pathLower.endsWith(".py") || pathLower.endsWith(".js") || pathLower.endsWith(".ts")) score += 2;
-
-    if (pathLower.includes("test") && !pathLower.includes("test")) score -= 3;
-
     if (fileName === "__init__.py") score -= 5;
 
     return { path, score: Math.max(score, 0) };
   }).sort((a, b) => b.score - a.score);
 }
-
-// ── AI Pass 2 ─────────────────────────────────────────────────────────────
 
 async function aiGenerateFullFile(issue, analysis, fileContents, repoFullName) {
   var fence = "```";

@@ -1,26 +1,34 @@
 // src/workers/issueFix/context.js
-// Stage 1: Initialize fix context — config, rate limit, DB lookup.
+// Stage 1: Initialize fix context — config + server-resolved repository binding.
 //
-// NOTE: The issue_fix idempotency guard (checkAndMark) was previously here,
-// but it ran before pillar/scope/analysis/generation/validation stages. Any
-// pre-submission failure left the marker set, blocking retries until the
-// Redis key expired (1 hour) or was manually cleared. The guard now lives
-// in pipeline.js, immediately before submitFix(), so only a successful
-// submission path is guarded.
+// D0-02: repository/installation authority is resolved by issueFixWorker from
+// current server-owned state. This stage does not accept a client-selected
+// installation id or perform a second weaker lookup by repository name.
 
 import { getConfigForRepo } from "../../services/configService.js";
 import { isPillarEnabled } from "@gitwire/rules";
 import { getInstallationClient } from "../../lib/github.js";
 import { wrapOctokit } from "../../lib/githubWrapper.js";
-import { db } from "../../lib/db.js";
 import { logger } from "../../lib/logger.js";
 
 /**
  * Returns the fix context object, or null if the pipeline should stop.
  * CC target: ~6
  */
-export async function initFixContext({ repo, issueNumber, installationId, triggeredBy }) {
+export async function initFixContext({
+  repository,
+  issueNumber,
+  triggeredBy,
+  requestedByLogin = null,
+  requestedByPrincipalId = null,
+  principalId = null,
+}) {
+  const repo = repository?.full_name;
   logger.info({ repo, issueNumber, triggeredBy }, "Issue fix pipeline started");
+
+  if (!repository?.github_id || !repository?.installation_id || !repo) {
+    throw new Error("Issue-fix execution context is missing trusted repository binding");
+  }
 
   // ── Pillar config ────────────────────────────────────────────────────────
   const repoConfig = await getConfigForRepo(repo);
@@ -29,30 +37,22 @@ export async function initFixContext({ repo, issueNumber, installationId, trigge
     return null;
   }
 
-  // ── DB repo lookup ───────────────────────────────────────────────────────
-  const { rows: repoRows } = await db.query(
-    "SELECT github_id FROM repositories WHERE full_name = $1", [repo]
-  );
-  if (!repoRows.length) {
-    logger.error({ repo }, "Repo not found in DB");
-    return null;
-  }
-  const repoId = repoRows[0].github_id;
-
   // ── GitHub client ────────────────────────────────────────────────────────
-  const octokit = wrapOctokit(await getInstallationClient(installationId));
+  const octokit = wrapOctokit(await getInstallationClient(repository.installation_id));
   const branchName = "gitwire/fix-" + issueNumber;
-  const owner = repo.split("/")[0];
-  const repoName = repo.split("/")[1];
 
   return {
+    repository,
     repo,
-    owner,
-    repoName,
-    repoId,
+    owner: repository.owner,
+    repoName: repository.name,
+    repoId: repository.github_id,
+    installationId: repository.installation_id,
     issueNumber,
-    installationId,
     triggeredBy,
+    requestedByLogin,
+    requestedByPrincipalId,
+    principalId,
     branchName,
     octokit,
     repoConfig,

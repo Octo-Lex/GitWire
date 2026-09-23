@@ -1,56 +1,84 @@
 // src/workers/issueFix/submit.js
-// Stage 6: Create branch → commit fixes → open PR → post comments.
+// Stage 6: pre-effect authority/head fence → branch → commit fixes → open PR.
 
-import { getMinFixConfidence } from "@gitwire/rules";
-import { succeed, fail } from "../../services/actionStateMachine.js";
+import { succeed, fail, cancel } from "../../services/actionStateMachine.js";
 import { notifyIssueFix } from "../../services/telegramNotifyService.js";
 import { detectConvention, formatPRTitle, extractScope } from "../../services/conventionDetector.js";
+import {
+  resolveIssueFixRepositoryById,
+  sameIssueFixRepositoryBinding,
+} from "../../services/issueFixTargetService.js";
 import { logger } from "../../lib/logger.js";
 import { upsertFixAttempt, postIssueComment, truncate } from "./helpers.js";
 
-/**
- * Creates the branch, commits fixes, opens PR.
- * CC target: ~8
- */
+/** Creates the branch, commits fixes, opens PR. */
 export async function submitFix(ctx, analysis, validated) {
-  const { octokit, owner, repoName, repoId, issueNumber, branchName, repoConfig, repo } = ctx;
-  const { fixes, fileContents, preConfidence, fixAction } = validated;
+  const { octokit, owner, repoName, repoId, issueNumber, branchName, repo, repository } = ctx;
+  const { fixes, fileContents, fixAction } = validated;
+  const baseSha = ctx._scope?.baseSha;
+  const defaultBranch = ctx._scope?.defaultBranch;
 
   try {
-    const { data: repoInfo } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo: repoName });
-    const defaultBranch = repoInfo.default_branch;
+    if (!baseSha || !defaultBranch) {
+      throw new Error("Exact-head issue-fix snapshot is missing");
+    }
 
-    const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/{branch}", {
+    // D0-02 authority freshness: a queued/long-running fix may outlive a repo
+    // transfer, uninstall, rename, or soft-delete. Re-resolve immediately before
+    // the first GitHub mutation; stale authority is terminalized, not inherited.
+    const currentResolution = await resolveIssueFixRepositoryById(repoId);
+    const currentRepository = currentResolution.status === "resolved" ? currentResolution.repository : null;
+    if (!sameIssueFixRepositoryBinding(repository, currentRepository)
+        || currentRepository?.default_branch !== defaultBranch) {
+      await cancel(fixAction.id, "Repository binding changed before issue-fix submission");
+      await upsertFixAttempt(repoId, issueNumber, branchName, "superseded",
+        analysis.complexity, analysis.explanation, "Repository binding changed before submission");
+      logger.warn(
+        { repo, issueNumber, expected: repository, current: currentRepository, resolution: currentResolution.status },
+        "Issue fix superseded because repository authority changed",
+      );
+      return;
+    }
+
+    // Exact-head fence: generation read files from baseSha. Never apply that
+    // diagnosis/patch to a newer default-branch head.
+    const { data: currentRef } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/{branch}", {
       owner, repo: repoName, branch: defaultBranch,
     });
+    const currentHeadSha = currentRef.object?.sha;
+    if (!currentHeadSha || currentHeadSha !== baseSha) {
+      await cancel(fixAction.id, "Default branch advanced before issue-fix submission");
+      await upsertFixAttempt(repoId, issueNumber, branchName, "superseded",
+        analysis.complexity, analysis.explanation,
+        "Default branch advanced from " + baseSha + " to " + (currentHeadSha || "unknown"));
+      logger.info({ repo, issueNumber, baseSha, currentHeadSha }, "Issue fix superseded by newer repository head");
+      return;
+    }
 
-    // Create or force-update branch
+    // Create or force-update the GitWire branch from the exact reviewed head.
     try {
       await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
         owner, repo: repoName,
         ref: "refs/heads/" + branchName,
-        sha: ref.object.sha,
+        sha: baseSha,
       });
     } catch (refErr) {
       if (refErr.status === 422) {
         await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
           owner, repo: repoName,
           ref: "heads/" + branchName,
-          sha: ref.object.sha,
+          sha: baseSha,
           force: true,
         });
-        logger.info({ branch: branchName }, "Force-updated existing branch");
+        logger.info({ branch: branchName, baseSha }, "Force-updated existing issue-fix branch to reviewed head");
       } else {
         throw refErr;
       }
     }
 
-    // Commit fixes
     for (const fix of fixes) {
       const origFile = fileContents.find((f) => f.path === fix.path);
-      if (!origFile) {
-        throw new Error("Original content not found for " + fix.path);
-      }
+      if (!origFile) throw new Error("Original content not found for " + fix.path);
 
       if (fix.fixed_content === origFile.content) {
         logger.warn({ path: fix.path }, "AI returned identical content — skipping");
@@ -70,15 +98,12 @@ export async function submitFix(ctx, analysis, validated) {
       logger.info({ path: fix.path, explanation: fix.explanation }, "Fix committed");
     }
 
-    // Calibrate confidence
     const confidence = calibrateConfidence(analysis, fileContents.length, fixes.length);
-
-    // Detect repo commit convention and format PR title accordingly
     const convention = await detectConvention(octokit, owner, repoName);
     const mainFile = fixes[0]?.path || "";
     const scope = extractScope(mainFile);
     var prTitle = formatPRTitle(convention, "fix", scope, truncate(ctx._scope.issue.title, 60), issueNumber);
-    var prBody = buildPRBodyFullFile(ctx._scope.issue, analysis, fixes, issueNumber, confidence);
+    var prBody = buildPRBodyFullFile(ctx._scope.issue, analysis, fixes, issueNumber, confidence, baseSha);
 
     const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
       owner, repo: repoName,
@@ -88,12 +113,15 @@ export async function submitFix(ctx, analysis, validated) {
       base: defaultBranch,
     });
 
-    logger.info({ repo, issueNumber, prNumber: pr.number, prUrl: pr.html_url, confidence }, "Fix PR created");
+    logger.info({ repo, issueNumber, prNumber: pr.number, prUrl: pr.html_url, confidence, baseSha }, "Fix PR created");
 
-    // Mark action as succeeded
-    await succeed(fixAction.id, { pr_number: pr.number, pr_url: pr.html_url, branch: branchName });
+    await succeed(fixAction.id, {
+      pr_number: pr.number,
+      pr_url: pr.html_url,
+      branch: branchName,
+      base_sha: baseSha,
+    });
 
-    // Notify Telegram subscribers (non-blocking but caught)
     notifyIssueFix(repo, {
       issue_number: issueNumber,
       status: "fix_pr_created",
@@ -101,33 +129,37 @@ export async function submitFix(ctx, analysis, validated) {
       logger.warn({ err: err.message, repo }, "Telegram issue-fix notification failed (non-fatal)");
     });
 
-    // Add labels to PR
     try {
       await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
         owner, repo: repoName, issue_number: pr.number,
         labels: ["gitwire-fix", analysis.complexity || "unknown-complexity"],
       });
-    } catch (_) { /* non-critical */ }
+    } catch (err) {
+      logger.warn({ err: err.message || err, repo, prNumber: pr.number }, "Failed to label issue-fix PR (non-fatal)");
+    }
 
-    // Comment on issue linking to PR
     await postIssueComment(octokit, owner, repoName, issueNumber,
       "\u{1F527} **GitWire Fix - PR submitted**\n\n" +
       "**PR:** [#" + pr.number + "](" + pr.html_url + ")\n" +
       "**Complexity:** " + (analysis.complexity || "unknown") + "\n" +
       "**Confidence:** " + confidence + "\n" +
+      "**Reviewed head:** `" + baseSha.slice(0, 12) + "`\n" +
       "**Changes:** " + fixes.length + " file" + (fixes.length > 1 ? "s" : "") + "\n\n" +
       "**Assessment:** " + (analysis.explanation || "") + "\n\n" +
-      (confidence === "low" ? "\u26A0\uFE0F Low confidence \u2014 please review carefully.\n\n" : "") +
+      (confidence === "low" ? "\u26A0\uFE0F Low confidence — please review carefully.\n\n" : "") +
       "_Please review before merging._"
     );
 
-    // Record success
     await upsertFixAttempt(repoId, issueNumber, branchName, "submitted",
       analysis.complexity, analysis.explanation, null, pr.number);
 
   } catch (err) {
     logger.error({ err, repo, issueNumber }, "Fix PR creation failed");
-    await fail(fixAction.id, err.message).catch(() => {});
+    try {
+      await fail(fixAction.id, err.message);
+    } catch (stateErr) {
+      logger.warn({ err: stateErr.message || stateErr, actionId: fixAction.id }, "Failed to terminalize issue-fix action after submission error");
+    }
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed",
       analysis.complexity, analysis.explanation, "PR creation failed: " + err.message);
     await postIssueComment(octokit, owner, repoName, issueNumber,
@@ -139,25 +171,17 @@ export async function submitFix(ctx, analysis, validated) {
   }
 }
 
-// ── Confidence calibration ────────────────────────────────────────────────
-
 function calibrateConfidence(analysis, filesFetched, fixesGenerated) {
   let confidence = "high";
-
   if (analysis.complexity === "moderate") confidence = "medium";
   if (analysis.complexity === "complex") confidence = "low";
-
   const targetFiles = analysis.relevant_files?.length || 0;
   if (filesFetched < targetFiles) confidence = "low";
-
   if (fixesGenerated === 0) confidence = "low";
-
   return confidence;
 }
 
-// ── Build PR body ──────────────────────────────────────────────────────────
-
-function buildPRBodyFullFile(issue, analysis, fixes, issueNumber, confidence) {
+function buildPRBodyFullFile(issue, analysis, fixes, issueNumber, confidence, baseSha) {
   var lines = [
     "## \u{1F527} GitWire Autonomous Fix",
     "",
@@ -165,6 +189,7 @@ function buildPRBodyFullFile(issue, analysis, fixes, issueNumber, confidence) {
     "",
     "**Complexity:** " + (analysis.complexity || "unknown"),
     "**Confidence:** " + (confidence || "unknown"),
+    "**Reviewed head:** `" + baseSha + "`",
     "**Strategy:** " + (analysis.fix_strategy || ""),
     "",
     "### Assessment",
@@ -182,9 +207,7 @@ function buildPRBodyFullFile(issue, analysis, fixes, issueNumber, confidence) {
   lines.push("---");
   lines.push("*This PR was automatically generated by [GitWire](https://gitwire.erlab.uk).*");
   lines.push("*Review carefully before merging. Triggered by `/gitwire fix`.*");
-  if (confidence === "low") {
-    lines.push("*\u26A0\uFE0F Low confidence fix \u2014 please verify all changes are correct.*");
-  }
+  if (confidence === "low") lines.push("*\u26A0\uFE0F Low confidence fix — please verify all changes are correct.*");
 
   return lines.join("\n");
 }

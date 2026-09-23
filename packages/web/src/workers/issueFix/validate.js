@@ -6,18 +6,14 @@ import { propose, approve, execute, cancel } from "../../services/actionStateMac
 import { logger } from "../../lib/logger.js";
 import { upsertFixAttempt, postIssueComment } from "./helpers.js";
 
-/**
- * Returns validated fixes, or null if pipeline should stop.
- * CC target: ~8
- */
+/** Returns validated fixes, or null if pipeline should stop. */
 export async function validateFixes(ctx, analysis, generated) {
-  const { octokit, owner, repoName, repoId, issueNumber, branchName, repoConfig, repo } = ctx;
+  const { octokit, owner, repoName, repoId, issueNumber, branchName, repoConfig, repo, principalId } = ctx;
   const { fixes, fileContents } = generated;
   const fixOpts = repoConfig.pillars?.issue_fix || {};
   const maxFileChanges = fixOpts.max_file_changes || 3;
   const minConfidence = getMinFixConfidence(repoConfig);
 
-  // ── Confidence pre-check ────────────────────────────────────────────────
   var preConfidence = analysis.complexity === "trivial" ? "high" : analysis.complexity === "simple" ? "medium" : "low";
   if (!meetsConfidence(preConfidence, minConfidence)) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
@@ -31,7 +27,6 @@ export async function validateFixes(ctx, analysis, generated) {
     return null;
   }
 
-  // ── Risk scoring ────────────────────────────────────────────────────────
   var risk = scoreFixRisk(analysis, fixes, fileContents);
   logger.info({ repo, issueNumber, riskScore: risk.score, riskLevel: risk.level, reasons: risk.reasons }, "Fix risk assessment");
 
@@ -47,19 +42,17 @@ export async function validateFixes(ctx, analysis, generated) {
     return null;
   }
 
-  // ── Scope: max file changes ────────────────────────────────────────────
   if (fixes.length > maxFileChanges) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
       analysis.explanation, "Too many files changed: " + fixes.length + " > " + maxFileChanges);
     await postIssueComment(octokit, owner, repoName, issueNumber,
       "\u{1F6AB} **GitWire Fix - scope guard**\n\n" +
       "Fix touches " + fixes.length + " files (max: " + maxFileChanges + ").\n\n" +
-      "_Reduce scope or adjust `issue_fix.max_file_changes` in `.gitwire.yml`._"
+      "_Reduce scope or adjust `issue_fix.max_file_changes` in settings._"
     );
     return null;
   }
 
-  // ── Scope: blocked paths ────────────────────────────────────────────────
   const blockedFixes = fixes.filter((f) => isFixPathBlocked(f.path, repoConfig));
   if (blockedFixes.length > 0) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
@@ -72,7 +65,6 @@ export async function validateFixes(ctx, analysis, generated) {
     return null;
   }
 
-  // ── Patch validation ────────────────────────────────────────────────────
   const validationResult = validatePatches(fixes, fileContents);
   if (!validationResult.valid) {
     logger.warn({ repo, issueNumber, reasons: validationResult.reasons }, "Patch validation failed");
@@ -88,18 +80,26 @@ export async function validateFixes(ctx, analysis, generated) {
     return null;
   }
 
-  // ── Action state machine: propose + approve ─────────────────────────────
   const fixAction = await propose({
     repoFullName: repo,
     pillar: "issue_fix",
     actionType: "create-fix-pr",
     source: "ai_fix",
-    evidence: { issue_number: issueNumber, fixes: fixes.length, complexity: analysis.complexity, confidence: preConfidence },
+    evidence: {
+      issue_number: issueNumber,
+      fixes: fixes.length,
+      complexity: analysis.complexity,
+      confidence: preConfidence,
+      base_sha: ctx._scope?.baseSha,
+      principalId,
+      surfaceId: "worker:issueFix",
+    },
     repoId: repoId,
-    targetType: "pr",
+    targetType: "issue",
+    targetNumber: issueNumber,
+    actionKey: "issue-fix:" + issueNumber,
   });
 
-  // Dry-run check
   if (isDryRun(repoConfig)) {
     await cancel(fixAction.id, "Dry-run mode");
     logger.info({ repo, issueNumber, fixes: fixes.length, complexity: analysis.complexity }, "DRY RUN: would create fix PR");
@@ -114,8 +114,6 @@ export async function validateFixes(ctx, analysis, generated) {
   return { fixes, fileContents, preConfidence, fixAction };
 }
 
-// ── Patch validation logic ─────────────────────────────────────────────────
-
 function validatePatches(fixes, originalFiles) {
   const reasons = [];
 
@@ -127,7 +125,7 @@ function validatePatches(fixes, originalFiles) {
     }
 
     if (fix.fixed_content === orig.content) {
-      reasons.push(fix.path + ": AI returned identical content \u2014 no fix applied");
+      reasons.push(fix.path + ": AI returned identical content — no fix applied");
       continue;
     }
 
@@ -137,11 +135,11 @@ function validatePatches(fixes, originalFiles) {
     const ratio = origLines > 0 ? delta / origLines : 0;
 
     if (ratio > 0.6 && origLines > 10) {
-      reasons.push(fix.path + ": too many lines changed (" + delta + "/" + origLines + " = " + Math.round(ratio * 100) + "%) \u2014 possible destructive replacement");
+      reasons.push(fix.path + ": too many lines changed (" + delta + "/" + origLines + " = " + Math.round(ratio * 100) + "%) — possible destructive replacement");
     }
 
     if (fixLines < origLines * 0.7 && origLines > 5) {
-      reasons.push(fix.path + ": file shrank significantly (" + origLines + " \u2192 " + fixLines + " lines) \u2014 likely missing content");
+      reasons.push(fix.path + ": file shrank significantly (" + origLines + " → " + fixLines + " lines) — likely missing content");
     }
 
     if (fix.fixed_content.trim().length === 0) {
@@ -156,9 +154,7 @@ function validatePatches(fixes, originalFiles) {
         const tripleCount = (line.match(/"""/g) || []).length + (line.match(/'''/g) || []).length;
         if (tripleCount % 2 === 1) inTriple = !inTriple;
       }
-      if (inTriple) {
-        reasons.push(fix.path + ": unclosed triple-quote string detected");
-      }
+      if (inTriple) reasons.push(fix.path + ": unclosed triple-quote string detected");
     }
     if (ext === "json") {
       try { JSON.parse(fix.fixed_content); } catch (_) {
@@ -175,9 +171,7 @@ function validatePatches(fixes, originalFiles) {
     return true;
   });
 
-  if (validFixes.length === 0) {
-    reasons.push("No valid fixes remaining after validation");
-  }
+  if (validFixes.length === 0) reasons.push("No valid fixes remaining after validation");
 
   return {
     valid: validFixes.length > 0 && reasons.filter((r) => r.includes("destructive") || r.includes("shrank") || r.includes("empty") || r.includes("No valid")).length === 0,

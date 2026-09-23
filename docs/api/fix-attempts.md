@@ -1,54 +1,56 @@
 # Fix Attempts API
 
-Autonomous contributor fix attempt management.
+Autonomous Contributor fix-attempt management.
 
 ## Trigger Fix
 
-```
+```http
 POST /api/fix/:owner/:repo/issues/:number
 ```
 
-Trigger an autonomous fix for a specific issue.
+Queues an autonomous fix request for a specific issue.
 
 ```bash
 curl -X POST https://gitwire.yourdomain.com/api/fix/owner/repo/issues/42 \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
-**Response:**
+The caller identifies only the repository and issue. **Do not supply a GitHub App installation id.** GitWire resolves the active repository and installation from server-owned state before enqueueing, then re-resolves the current binding when the worker consumes the job.
+
+A legacy `installation_id` query parameter, if present during compatibility cutover, is ignored and cannot select execution authority.
+
+**202 response:**
 
 ```json
 {
-  "message": "Fix attempt queued for issue #42",
-  "status": "pending"
+  "queued": true,
+  "status": "queued",
+  "jobId": "123",
+  "repo": "owner/repo",
+  "issueNumber": 42
 }
 ```
+
+`202` means the command was accepted by the queue. It does not mean a patch or PR was produced.
+
+Before mutating GitHub, Autonomous Contributor verifies that the repository/installation binding is still current and that the default branch still points to the exact commit from which the candidate fix was generated. A moved head or changed repository binding supersedes the attempt rather than applying stale work.
 
 ## Get Fix Status
 
-```
+```http
 GET /api/fix/:owner/:repo/issues/:number
 ```
 
-Returns the current fix attempt status for an issue.
-
-```json
-{
-  "issue_number": 42,
-  "status": "submitted",
-  "pr_number": 15,
-  "branch_name": "gitwire/fix-42",
-  "complexity": "simple",
-  "explanation": "Added null check before accessing user.name property"
-}
-```
+Returns stored fix-attempt state for an issue.
 
 ## List Fix Attempts
 
-```
+```http
 GET /api/fix/:owner/:repo/attempts
 ```
 
-All fix attempts for a repository. Supports pagination.
+Returns stored fix-attempt rows for a repository, newest first, up to the requested limit (maximum 100).
+
+> Current storage is unique on `(repo_id, issue_number)` and updates that row across retries; this endpoint should not be interpreted as immutable attempt history.
 
 → [Heal History API](/api/heal-history)

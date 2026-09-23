@@ -1,5 +1,5 @@
 // src/workers/issueFix/scopeGuard.js
-// Stage 2: Validate scope — check qualifying labels, fetch issue + tree.
+// Stage 2: Validate scope — check qualifying labels, fetch issue + exact-head tree.
 
 import { isFixLabelAllowed } from "@gitwire/rules";
 import { maintainerService } from "../../services/maintainerService.js";
@@ -13,13 +13,13 @@ const DEFAULT_ALLOWED_LABELS = [
 ];
 
 /**
- * Returns the scope object (issue + tree), or null if pipeline should stop.
- * CC target: ~4
+ * Returns the scope object (issue + exact repository snapshot), or null if the
+ * pipeline should stop. The snapshot SHA is carried through generation and is
+ * re-checked immediately before external mutation.
  */
 export async function validateScope(ctx) {
   const { octokit, owner, repoName, repoId, issueNumber, repoConfig, repo } = ctx;
 
-  // ── Rate limit check ─────────────────────────────────────────────────────
   const rateLimit = await checkRateLimit(repoId, issueNumber, repo, repoConfig);
   if (!rateLimit.allowed) {
     await postIssueComment(octokit, owner, repoName, issueNumber,
@@ -29,12 +29,10 @@ export async function validateScope(ctx) {
     return null;
   }
 
-  // ── Fetch issue from GitHub ──────────────────────────────────────────────
   const { data: issue } = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
-    owner: owner, repo: repoName, issue_number: issueNumber,
+    owner, repo: repoName, issue_number: issueNumber,
   });
 
-  // ── Scope guard: qualifying labels ───────────────────────────────────────
   const settings = await maintainerService.getSettings(repoId);
   const allowedLabels = (settings && settings.fix_allowed_labels) || repoConfig.pillars?.issue_fix?.allowed_labels || DEFAULT_ALLOWED_LABELS;
   const issueLabels = issue.labels.map((l) => typeof l === "string" ? l : l.name).map((l) => l.toLowerCase());
@@ -52,16 +50,28 @@ export async function validateScope(ctx) {
     return null;
   }
 
-  // ── Record attempt ───────────────────────────────────────────────────────
   await upsertFixAttempt(repoId, issueNumber, ctx.branchName, "analyzing");
 
-  // ── Fetch repo file tree ─────────────────────────────────────────────────
-  const tree = await fetchTree(octokit, owner, repoName);
+  const snapshot = await fetchRepositorySnapshot(octokit, owner, repoName);
+  if (!snapshot) {
+    await upsertFixAttempt(repoId, issueNumber, ctx.branchName, "failed", null, null,
+      "Could not establish exact repository head for fix generation");
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "\u26A0\uFE0F **GitWire Fix - repository snapshot unavailable**\n\n" +
+      "GitWire could not establish an exact repository head for this fix. No code mutation was attempted.\n\n" +
+      "_Retry when the repository is available._"
+    );
+    return null;
+  }
 
-  return { issue, tree, settings };
+  return {
+    issue,
+    tree: snapshot.files,
+    settings,
+    baseSha: snapshot.baseSha,
+    defaultBranch: snapshot.defaultBranch,
+  };
 }
-
-// ── Rate limiting ──────────────────────────────────────────────────────────
 
 async function checkRateLimit(repoId, issueNumber, repoFullName, repoConfig) {
   const settings = await maintainerService.getSettings(repoId);
@@ -97,13 +107,18 @@ async function checkRateLimit(repoId, issueNumber, repoFullName, repoConfig) {
   return { allowed: true };
 }
 
-// ── Fetch repo file tree ──────────────────────────────────────────────────
-
-async function fetchTree(octokit, owner, repo) {
+async function fetchRepositorySnapshot(octokit, owner, repo) {
   try {
     const { data: repoInfo } = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+    const defaultBranch = repoInfo.default_branch;
+    const { data: ref } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/{branch}", {
+      owner, repo, branch: defaultBranch,
+    });
+    const baseSha = ref.object?.sha;
+    if (!baseSha) throw new Error("Default branch head SHA unavailable");
+
     const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
-      owner, repo, tree_sha: repoInfo.default_branch, recursive: 1,
+      owner, repo, tree_sha: baseSha, recursive: 1,
     });
     const allFiles = tree.tree.filter((t) => t.type === "blob").map((t) => t.path);
 
@@ -132,9 +147,13 @@ async function fetchTree(octokit, owner, repo) {
       return !srcExts.has(ext);
     });
 
-    return [...coreSource, ...vendorSource, ...otherFiles].slice(0, 500);
+    return {
+      baseSha,
+      defaultBranch,
+      files: [...coreSource, ...vendorSource, ...otherFiles].slice(0, 500),
+    };
   } catch (err) {
-    logger.error({ err, owner, repo }, "Failed to fetch tree");
-    return [];
+    logger.error({ err, owner, repo }, "Failed to establish issue-fix repository snapshot");
+    return null;
   }
 }
