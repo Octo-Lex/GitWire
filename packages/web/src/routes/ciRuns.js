@@ -12,6 +12,7 @@ import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { paginationMiddleware } from "../middleware/pagination.js";
 import { buildCIHealJobFromManualRun, enqueueCIHealJob } from "../services/ciHealJobService.js";
+import { resolveStoredCIRunIdentifier } from "../services/ciRunResolver.js";
 
 export const ciRouter = Router();
 ciRouter.use(paginationMiddleware);
@@ -182,40 +183,21 @@ ciRouter.post("/:runId/retry", async (req, res, next) => {
 // - the current workflow_run is re-read from GitHub before queueing.
 ciRouter.post("/:runId/heal", async (req, res, next) => {
   try {
-    const runId = String(req.params.runId || "");
-    if (!/^\d+$/.test(runId)) {
+    const resolution = await resolveStoredCIRunIdentifier(req.params.runId);
+    if (resolution.status === "invalid") {
       return res.status(400).json({ error: "runId must be numeric" });
     }
-
-    const { rows } = await db.query(
-      `SELECT
-         cr.id AS ci_run_id,
-         cr.github_run_id,
-         r.github_id AS repo_github_id,
-         r.owner,
-         r.name,
-         r.full_name,
-         r.installation_id
-       FROM ci_runs cr
-       JOIN repositories r ON r.github_id = cr.repo_id
-       WHERE cr.id::text = $1 OR cr.github_run_id::text = $1
-       ORDER BY CASE WHEN cr.id::text = $1 THEN 0 ELSE 1 END
-       LIMIT 2`,
-      [runId]
-    );
-
-    if (!rows.length) return res.status(404).json({ error: "Run not found" });
-
-    // Extremely unlikely, but do not silently select the wrong run if an
-    // internal row id collides with another row's GitHub workflow-run id.
-    if (rows.length > 1 && rows[0].ci_run_id !== rows[1].ci_run_id) {
+    if (resolution.status === "not_found") {
+      return res.status(404).json({ error: "Run not found" });
+    }
+    if (resolution.status === "ambiguous") {
       return res.status(409).json({
         error: "Ambiguous run identifier",
         detail: "Use a run identifier that resolves to exactly one stored CI run.",
       });
     }
 
-    const stored = rows[0];
+    const stored = resolution.run;
     const octokit = wrapOctokit(await getInstallationClient(stored.installation_id));
 
     let workflowRun;

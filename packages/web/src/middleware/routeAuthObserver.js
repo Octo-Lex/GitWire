@@ -19,6 +19,7 @@
 import { authorize } from "../services/auth/authorize.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
+import { resolveStoredCIRunIdentifier } from "../services/ciRunResolver.js";
 
 // Route pattern → declaration mapping. Built lazily on first request.
 let _routeMap = null;
@@ -64,17 +65,6 @@ async function lookupRepositoryByName(owner, repo) {
   return rows[0] ?? null;
 }
 
-async function lookupRepositoryByRunId(runId) {
-  const { rows } = await db.query(
-    `SELECT r.github_id, r.installation_id, r.owner, r.name
-       FROM ci_runs cr
-       JOIN repositories r ON r.github_id = cr.repo_id
-      WHERE cr.id = $1`,
-    [runId]
-  );
-  return rows[0] ?? null;
-}
-
 /**
  * Resolve the trusted resource for a matched route surface.
  * Request body/query identity fields are never accepted as authority.
@@ -85,7 +75,19 @@ export async function resolveResource(resourceType, params) {
     if (params.owner && params.repo) {
       row = await lookupRepositoryByName(params.owner, params.repo);
     } else if (params.runId) {
-      row = await lookupRepositoryByRunId(params.runId);
+      // D0-01: authorization and the CI-heal route MUST bind runId with the
+      // same internal-id/GitHub-id/ambiguity semantics. Unresolved or
+      // ambiguous identifiers intentionally remain an unknown resource so the
+      // authorization engine fails closed when enforcement is enabled.
+      const resolution = await resolveStoredCIRunIdentifier(params.runId);
+      if (resolution.status === "resolved") {
+        row = {
+          github_id: resolution.run.repo_github_id,
+          installation_id: resolution.run.installation_id,
+          owner: resolution.run.owner,
+          name: resolution.run.name,
+        };
+      }
     }
 
     if (!row) {
