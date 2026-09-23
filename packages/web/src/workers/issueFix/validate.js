@@ -1,7 +1,6 @@
 // src/workers/issueFix/validate.js
-// Stage 5: deterministic patch-shape validation, risk/confidence/scope guards,
-// then managed-action proposal. No generated content reaches score/policy logic
-// until its repository-relative file identity and full-file payload are valid.
+// Stage 5: deterministic candidate validation + policy/risk guards, then the
+// managed-action proposal. Generated content is treated as untrusted input.
 
 import { isFixPathBlocked, isDryRun, meetsConfidence, getMinFixConfidence, scoreFixRisk } from "@gitwire/rules";
 import { propose, approve, execute, cancel } from "../../services/actionStateMachine.js";
@@ -10,19 +9,104 @@ import { upsertFixAttempt, postIssueComment } from "./helpers.js";
 
 function isSafeRepositoryPath(value) {
   if (typeof value !== "string" || !value.length) return false;
-  if (value.startsWith("/") || value.includes("\\")) return false;
+  if (value.startsWith("/") || value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) return false;
   const parts = value.split("/");
   return parts.every((part) => part.length > 0 && part !== "." && part !== "..");
 }
 
+function normalizePositiveInteger(value, fallback, hardMax) {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > hardMax) return fallback;
+  return parsed;
+}
+
+// Historical dashboard versions wrote confidence as 1/2/3 even though the
+// rules schema uses low/medium/high. Normalize both representations so a numeric
+// override cannot accidentally reduce the required confidence to zero.
+export function normalizeFixConfidence(value) {
+  if (value === "low" || value === "medium" || value === "high") return value;
+  if (value === 1 || value === "1") return "low";
+  if (value === 2 || value === "2") return "medium";
+  if (value === 3 || value === "3") return "high";
+  return "medium";
+}
+
+function lines(text) {
+  return text === "" ? [] : text.split("\n");
+}
+
 /**
- * Deterministically validate an AI-generated full-file candidate batch against
- * the exact files fetched from the reviewed commit.
- *
- * Any reason is fatal. Earlier behavior collected invalid-JSON/unclosed-string/
- * missing-original reasons but only treated a subset of reasons as blocking,
- * allowing malformed candidates to proceed when another file looked valid.
+ * Exact line insert/delete edit distance (Myers), bounded by limit + 1.
+ * Substituting one line counts as one deletion + one insertion, matching normal
+ * diff additions/deletions. The bounded search prevents large generated files
+ * from turning a configured safety limit into an unbounded CPU cost.
  */
+export function countLineEdits(originalText, fixedText, limit) {
+  const originalLines = lines(originalText);
+  const fixedLines = lines(fixedText);
+
+  let start = 0;
+  while (
+    start < originalLines.length &&
+    start < fixedLines.length &&
+    originalLines[start] === fixedLines[start]
+  ) {
+    start++;
+  }
+
+  let originalEnd = originalLines.length - 1;
+  let fixedEnd = fixedLines.length - 1;
+  while (
+    originalEnd >= start &&
+    fixedEnd >= start &&
+    originalLines[originalEnd] === fixedLines[fixedEnd]
+  ) {
+    originalEnd--;
+    fixedEnd--;
+  }
+
+  const original = originalLines.slice(start, originalEnd + 1);
+  const fixed = fixedLines.slice(start, fixedEnd + 1);
+  const n = original.length;
+  const m = fixed.length;
+  if (n === 0) return m;
+  if (m === 0) return n;
+
+  const maxDistance = n + m;
+  const searchLimit = Math.min(maxDistance, Math.max(0, limit) + 1);
+  let previous = new Map([[1, 0]]);
+
+  for (let distance = 0; distance <= searchLimit; distance++) {
+    const next = new Map();
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const down = previous.get(diagonal + 1);
+      const right = previous.get(diagonal - 1);
+      let x;
+
+      if (
+        diagonal === -distance ||
+        (diagonal !== distance && (right ?? Number.NEGATIVE_INFINITY) < (down ?? Number.NEGATIVE_INFINITY))
+      ) {
+        x = down ?? 0;
+      } else {
+        x = (right ?? 0) + 1;
+      }
+
+      let y = x - diagonal;
+      while (x < n && y < m && original[x] === fixed[y]) {
+        x++;
+        y++;
+      }
+      if (x >= n && y >= m) return distance;
+      next.set(diagonal, x);
+    }
+    previous = next;
+  }
+
+  return searchLimit + 1;
+}
+
+/** Validate an AI-generated batch against exact-head originals. Any reason is fatal. */
 export function validatePatchCandidates(fixes, originalFiles) {
   const reasons = [];
   const seenPaths = new Set();
@@ -44,12 +128,10 @@ export function validatePatchCandidates(fixes, originalFiles) {
       reasons.push(`Fix ${index + 1}: candidate must be an object`);
       continue;
     }
-
     if (!isSafeRepositoryPath(fix.path)) {
       reasons.push(`Fix ${index + 1}: invalid repository-relative path`);
       continue;
     }
-
     if (seenPaths.has(fix.path)) {
       reasons.push(`${fix.path}: duplicate generated path`);
       continue;
@@ -70,17 +152,15 @@ export function validatePatchCandidates(fixes, originalFiles) {
       reasons.push(`No exact-head original content for ${fix.path}`);
       continue;
     }
-
     if (fix.fixed_content === orig.content) {
       reasons.push(`${fix.path}: AI returned identical content — no fix applied`);
       continue;
     }
 
-    const origLines = orig.content.split("\n").length;
-    const fixLines = fix.fixed_content.split("\n").length;
+    const origLines = lines(orig.content).length;
+    const fixLines = lines(fix.fixed_content).length;
     const delta = Math.abs(fixLines - origLines);
     const ratio = origLines > 0 ? delta / origLines : 0;
-
     if (ratio > 0.6 && origLines > 10) {
       reasons.push(`${fix.path}: too many lines changed (${delta}/${origLines} = ${Math.round(ratio * 100)}%) — possible destructive replacement`);
     }
@@ -109,6 +189,29 @@ export function validatePatchCandidates(fixes, originalFiles) {
   return { valid: reasons.length === 0, reasons };
 }
 
+function validateConfiguredLineBudget(fixes, originalFiles, configuredLimit) {
+  const maxLineChanges = normalizePositiveInteger(configuredLimit, 200, 10000);
+  const originals = new Map(originalFiles.map((file) => [file.path, file]));
+  let total = 0;
+
+  for (const fix of fixes) {
+    const original = originals.get(fix.path);
+    const remaining = maxLineChanges - total;
+    const edits = countLineEdits(original.content, fix.fixed_content, remaining);
+    total += edits;
+    if (total > maxLineChanges) {
+      return {
+        valid: false,
+        maxLineChanges,
+        total,
+        reason: `Generated fix exceeds max_line_changes (${total} > ${maxLineChanges})`,
+      };
+    }
+  }
+
+  return { valid: true, maxLineChanges, total };
+}
+
 /** Returns validated fixes, or null if pipeline should stop. */
 export async function validateFixes(ctx, analysis, generated) {
   const {
@@ -118,8 +221,8 @@ export async function validateFixes(ctx, analysis, generated) {
   const fixes = Array.isArray(generated?.fixes) ? generated.fixes : [];
   const fileContents = Array.isArray(generated?.fileContents) ? generated.fileContents : [];
   const fixOpts = repoConfig.pillars?.issue_fix || {};
-  const maxFileChanges = fixOpts.max_file_changes || 3;
-  const minConfidence = getMinFixConfidence(repoConfig);
+  const maxFileChanges = normalizePositiveInteger(fixOpts.max_file_changes, 3, 100);
+  const minConfidence = normalizeFixConfidence(getMinFixConfidence(repoConfig));
 
   const validationResult = validatePatchCandidates(fixes, fileContents);
   if (!validationResult.valid) {
@@ -130,8 +233,31 @@ export async function validateFixes(ctx, analysis, generated) {
       "⚠️ **GitWire Fix - validation failed**\n\n" +
       "**Assessment:** " + analysis.explanation + "\n\n" +
       "Generated fixes did not pass deterministic validation:\n" +
-      validationResult.reasons.map((r) => "- " + r).join("\n") + "\n\n" +
+      validationResult.reasons.map((reason) => "- " + reason).join("\n") + "\n\n" +
       "_A maintainer should review manually._"
+    );
+    return null;
+  }
+
+  if (fixes.length > maxFileChanges) {
+    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
+      analysis.explanation, "Too many files changed: " + fixes.length + " > " + maxFileChanges);
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "🚫 **GitWire Fix - scope guard**\n\n" +
+      "Fix touches " + fixes.length + " files (max: " + maxFileChanges + ").\n\n" +
+      "_Reduce scope or adjust `issue_fix.max_file_changes` in settings._"
+    );
+    return null;
+  }
+
+  const lineBudget = validateConfiguredLineBudget(fixes, fileContents, fixOpts.max_line_changes);
+  if (!lineBudget.valid) {
+    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
+      analysis.explanation, lineBudget.reason);
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "🚫 **GitWire Fix - line-change guard**\n\n" +
+      lineBudget.reason + ".\n\n" +
+      "_Reduce scope or adjust `issue_fix.max_line_changes` in settings._"
     );
     return null;
   }
@@ -149,32 +275,6 @@ export async function validateFixes(ctx, analysis, generated) {
     return null;
   }
 
-  const risk = scoreFixRisk(analysis, fixes, fileContents);
-  logger.info({ repo, issueNumber, riskScore: risk.score, riskLevel: risk.level, reasons: risk.reasons }, "Fix risk assessment");
-
-  if (risk.level === "high") {
-    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
-      analysis.explanation, "High risk: " + risk.reasons.join("; "));
-    await postIssueComment(octokit, owner, repoName, issueNumber,
-      "🚫 **GitWire Fix - high risk**\n\n" +
-      "Risk score: **" + risk.score + "/100**\n" +
-      risk.reasons.map((r) => "- " + r).join("\n") + "\n\n" +
-      "_This fix is too risky for autonomous submission._"
-    );
-    return null;
-  }
-
-  if (fixes.length > maxFileChanges) {
-    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
-      analysis.explanation, "Too many files changed: " + fixes.length + " > " + maxFileChanges);
-    await postIssueComment(octokit, owner, repoName, issueNumber,
-      "🚫 **GitWire Fix - scope guard**\n\n" +
-      "Fix touches " + fixes.length + " files (max: " + maxFileChanges + ").\n\n" +
-      "_Reduce scope or adjust `issue_fix.max_file_changes` in settings._"
-    );
-    return null;
-  }
-
   const blockedFixes = fixes.filter((fix) => isFixPathBlocked(fix.path, repoConfig));
   if (blockedFixes.length > 0) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
@@ -187,6 +287,28 @@ export async function validateFixes(ctx, analysis, generated) {
     return null;
   }
 
+  const risk = scoreFixRisk(analysis, fixes, fileContents);
+  logger.info({
+    repo,
+    issueNumber,
+    riskScore: risk.score,
+    riskLevel: risk.level,
+    reasons: risk.reasons,
+    lineChanges: lineBudget.total,
+  }, "Fix risk assessment");
+
+  if (risk.level === "high") {
+    await upsertFixAttempt(repoId, issueNumber, branchName, "rejected", analysis.complexity,
+      analysis.explanation, "High risk: " + risk.reasons.join("; "));
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "🚫 **GitWire Fix - high risk**\n\n" +
+      "Risk score: **" + risk.score + "/100**\n" +
+      risk.reasons.map((reason) => "- " + reason).join("\n") + "\n\n" +
+      "_This fix is too risky for autonomous submission._"
+    );
+    return null;
+  }
+
   const fixAction = await propose({
     repoFullName: repo,
     pillar: "issue_fix",
@@ -195,6 +317,7 @@ export async function validateFixes(ctx, analysis, generated) {
     evidence: {
       issue_number: issueNumber,
       fixes: fixes.length,
+      line_changes: lineBudget.total,
       complexity: analysis.complexity,
       confidence: preConfidence,
       base_sha: ctx._scope?.baseSha,
@@ -212,7 +335,7 @@ export async function validateFixes(ctx, analysis, generated) {
 
   if (isDryRun(repoConfig)) {
     await cancel(fixAction.id, "Dry-run mode");
-    logger.info({ repo, issueNumber, fixes: fixes.length, complexity: analysis.complexity }, "DRY RUN: would create fix PR");
+    logger.info({ repo, issueNumber, fixes: fixes.length, lineChanges: lineBudget.total }, "DRY RUN: would create fix PR");
     await upsertFixAttempt(repoId, issueNumber, branchName, "dry_run",
       analysis.complexity, analysis.explanation, null, null);
     return null;
@@ -223,6 +346,7 @@ export async function validateFixes(ctx, analysis, generated) {
     min_confidence: minConfidence,
     scope_ok: true,
     base_sha: ctx._scope?.baseSha,
+    line_changes: lineBudget.total,
   });
   await execute(fixAction.id);
 

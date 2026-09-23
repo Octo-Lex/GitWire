@@ -1,4 +1,4 @@
-// D0-02 — deterministic issue-fix candidate validation and truthful dry-run evidence.
+// D0-02 — deterministic issue-fix candidate/policy validation and truthful dry-run evidence.
 
 import { beforeEach, describe, expect, it, jest } from "@jest/globals";
 
@@ -35,7 +35,12 @@ jest.unstable_mockModule("../../src/lib/logger.js", () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
-const { validatePatchCandidates, validateFixes } = await import("../../src/workers/issueFix/validate.js");
+const {
+  validatePatchCandidates,
+  validateFixes,
+  countLineEdits,
+  normalizeFixConfidence,
+} = await import("../../src/workers/issueFix/validate.js");
 
 const originalJs = { path: "src/a.js", content: "const a = 1;\n", sha: "blob-a" };
 const originalJson = { path: "config/a.json", content: "{\"ok\":true}\n", sha: "blob-json" };
@@ -66,6 +71,7 @@ describe("validatePatchCandidates", () => {
   it.each([
     [[{ path: "../secret", fixed_content: "x" }], [originalJs], "invalid repository-relative path"],
     [[{ path: "/etc/passwd", fixed_content: "x" }], [originalJs], "invalid repository-relative path"],
+    [[{ path: "src/a.js\u0000x", fixed_content: "x" }], [originalJs], "invalid repository-relative path"],
     [[{ path: "src/a.js", fixed_content: 123 }], [originalJs], "fixed_content must be a string"],
     [[{ path: "src/missing.js", fixed_content: "x" }], [originalJs], "No exact-head original content"],
     [[{ path: "src/a.js", fixed_content: originalJs.content }], [originalJs], "identical content"],
@@ -90,11 +96,31 @@ describe("validatePatchCandidates", () => {
   });
 });
 
+describe("line-change/confidence policy normalization", () => {
+  it("counts substitutions as one deletion plus one insertion", () => {
+    expect(countLineEdits("a\nb\nc", "a\nx\nc", 10)).toBe(2);
+    expect(countLineEdits("a\nb", "a\nb\nc", 10)).toBe(1);
+  });
+
+  it("bounds work and reports over-limit edits", () => {
+    expect(countLineEdits("a\nb\nc", "x\ny\nz", 1)).toBeGreaterThan(1);
+  });
+
+  it("normalizes legacy numeric confidence without weakening the gate", () => {
+    expect(normalizeFixConfidence(1)).toBe("low");
+    expect(normalizeFixConfidence(2)).toBe("medium");
+    expect(normalizeFixConfidence(3)).toBe("high");
+    expect(normalizeFixConfidence("3")).toBe("high");
+    expect(normalizeFixConfidence("garbage")).toBe("medium");
+  });
+});
+
 describe("validateFixes evidence semantics", () => {
-  const ctx = {
+  const baseCtx = {
     octokit: {}, owner: "octo", repoName: "repo", repoId: "99", issueNumber: 42,
     branchName: "gitwire/fix-42", repoConfig: { pillars: { issue_fix: {} } },
-    repo: "octo/repo", principalId: "principal-1", _scope: { baseSha: "abc1234" },
+    repo: "octo/repo", principalId: "principal-1", requestedByPrincipalId: "requester-1",
+    triggeredBy: "api", _scope: { baseSha: "abc1234" },
   };
   const analysis = { complexity: "trivial", explanation: "small fix" };
   const generated = {
@@ -103,7 +129,7 @@ describe("validateFixes evidence semantics", () => {
   };
 
   it("does not call risk scoring when deterministic candidate validation fails", async () => {
-    await validateFixes(ctx, analysis, {
+    await validateFixes(baseCtx, analysis, {
       fixes: [{ path: "config/a.json", fixed_content: "{not-json}" }],
       fileContents: [originalJson],
     });
@@ -111,9 +137,29 @@ describe("validateFixes evidence semantics", () => {
     expect(mockPropose).not.toHaveBeenCalled();
   });
 
+  it("enforces configured max_line_changes before proposal", async () => {
+    await validateFixes({
+      ...baseCtx,
+      repoConfig: { pillars: { issue_fix: { max_line_changes: 1 } } },
+    }, analysis, generated);
+
+    expect(mockPropose).not.toHaveBeenCalled();
+    expect(mockUpsert).toHaveBeenCalledWith(
+      "99", 42, "gitwire/fix-42", "rejected", "trivial", "small fix",
+      expect.stringContaining("max_line_changes"),
+    );
+  });
+
+  it("passes normalized high confidence to the rule comparison", async () => {
+    mockGetMinFixConfidence.mockReturnValue(3);
+    mockMeetsConfidence.mockImplementation((_actual, required) => required === "high");
+    await validateFixes(baseCtx, analysis, generated);
+    expect(mockMeetsConfidence).toHaveBeenCalledWith("high", "high");
+  });
+
   it("records dry_run rather than falsely claiming submitted", async () => {
     mockIsDryRun.mockReturnValue(true);
-    await expect(validateFixes(ctx, analysis, generated)).resolves.toBeNull();
+    await expect(validateFixes(baseCtx, analysis, generated)).resolves.toBeNull();
 
     expect(mockCancel).toHaveBeenCalledWith("action-1", "Dry-run mode");
     expect(mockUpsert).toHaveBeenCalledWith(
