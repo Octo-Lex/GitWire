@@ -706,7 +706,7 @@ jobs:
           docker network rm "$SMOKE_NET" 2>/dev/null || true
 
       - name: Upload release manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-release-manifest
           path: release-manifest.json
