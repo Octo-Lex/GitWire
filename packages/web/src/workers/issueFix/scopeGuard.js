@@ -14,8 +14,8 @@ const DEFAULT_ALLOWED_LABELS = [
 
 /**
  * Returns the scope object (issue + exact repository snapshot), or null if the
- * pipeline should stop. The snapshot SHA is carried through generation and is
- * re-checked immediately before external mutation.
+ * pipeline should stop. The snapshot commit SHA is carried through generation
+ * and re-checked immediately before external mutation.
  */
 export async function validateScope(ctx) {
   const { octokit, owner, repoName, repoId, issueNumber, repoConfig, repo } = ctx;
@@ -117,8 +117,16 @@ async function fetchRepositorySnapshot(octokit, owner, repo) {
     const baseSha = ref.object?.sha;
     if (!baseSha) throw new Error("Default branch head SHA unavailable");
 
+    // Git trees are addressed by tree SHA. Resolve the exact commit to its
+    // tree first rather than asking the tree endpoint to interpret a moving ref.
+    const { data: commit } = await octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+      owner, repo, commit_sha: baseSha,
+    });
+    const treeSha = commit.tree?.sha;
+    if (!treeSha) throw new Error("Default branch tree SHA unavailable");
+
     const { data: tree } = await octokit.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
-      owner, repo, tree_sha: baseSha, recursive: 1,
+      owner, repo, tree_sha: treeSha, recursive: 1,
     });
     const allFiles = tree.tree.filter((t) => t.type === "blob").map((t) => t.path);
 

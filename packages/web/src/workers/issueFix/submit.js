@@ -1,7 +1,8 @@
 // src/workers/issueFix/submit.js
-// Stage 6: pre-effect authority/head fence → branch → commit fixes → open PR.
+// Stage 6: pre-effect authority/head/idempotency fence → branch → commit fixes → open PR.
 
 import { succeed, fail, cancel } from "../../services/actionStateMachine.js";
+import { checkAndMark } from "../../services/idempotencyService.js";
 import { notifyIssueFix } from "../../services/telegramNotifyService.js";
 import { detectConvention, formatPRTitle, extractScope } from "../../services/conventionDetector.js";
 import {
@@ -52,6 +53,17 @@ export async function submitFix(ctx, analysis, validated) {
         analysis.complexity, analysis.explanation,
         "Default branch advanced from " + baseSha + " to " + (currentHeadSha || "unknown"));
       logger.info({ repo, issueNumber, baseSha, currentHeadSha }, "Issue fix superseded by newer repository head");
+      return;
+    }
+
+    // Legacy idempotency remains for this bounded change, but the marker is now
+    // resource-scoped and written only after all no-effect freshness fences.
+    // A superseded attempt therefore stays immediately retryable. Wave 3 will
+    // replace this primitive with durable command/effect idempotency.
+    const idempotencyKey = "repo-" + repoId + ":issue-" + issueNumber;
+    if (!(await checkAndMark("issue_fix", idempotencyKey))) {
+      await cancel(fixAction.id, "Duplicate issue-fix submission");
+      logger.info({ repo, issueNumber, idempotencyKey }, "Issue fix submission already marked — skipping duplicate");
       return;
     }
 

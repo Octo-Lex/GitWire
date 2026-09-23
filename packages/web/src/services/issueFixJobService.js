@@ -39,7 +39,7 @@ const triggerSchema = z.object({
 export const issueFixJobSchema = z.object({
   schema_version: z.literal(ISSUE_FIX_JOB_SCHEMA_VERSION),
   repository: repositoryTargetSchema,
-  issue_number: z.number().int().positive().safe(),
+  issue_number: z.number().int().positive().refine(Number.isSafeInteger, "must be a safe integer"),
   trigger: triggerSchema,
 }).strict();
 
