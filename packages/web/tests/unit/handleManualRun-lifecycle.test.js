@@ -10,7 +10,7 @@
 //     ai-review receives complete PR with head.sha.
 //   - Acknowledgment: one GitHub comment posted after dispatch;
 //     heal receives truthful unsupported feedback.
-//   - Issue fix path unchanged.
+//   - Issue fix: trusted repository resolution, scoped retry marker, canonical IssueFixJobV1 enqueue.
 
 import { jest } from "@jest/globals";
 
@@ -23,6 +23,7 @@ const mockIssueFixQueueAdd = jest.fn().mockResolvedValue({ id: "f1" });
 const mockOctokitRequest = jest.fn();
 const mockWrapOctokit = jest.fn((client) => client);
 const mockGetInstallationClient = jest.fn();
+const mockResolveIssueFixRepositoryByFullName = jest.fn();
 
 jest.unstable_mockModule("../../src/services/idempotencyService.js", () => ({
   buildTriageOperationKey: jest.fn(({ targetType, repoId, targetId, action }) =>
@@ -35,6 +36,10 @@ jest.unstable_mockModule("../../src/lib/commentRouter.js", () => ({
   buildCommandResponse: jest.fn(() => "▶️ **GitWire:** Re-evaluation triggered."),
   parseGitwireCommand: jest.fn(),
   resolveCommandAction: jest.fn(),
+}));
+
+jest.unstable_mockModule("../../src/services/issueFixTargetService.js", () => ({
+  resolveIssueFixRepositoryByFullName: mockResolveIssueFixRepositoryByFullName,
 }));
 
 // Mock aiReviewService so handleManualRun's preflight check works without
@@ -111,6 +116,17 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockGetInstallationClient.mockResolvedValue({ request: mockOctokitRequest });
   mockOctokitRequest.mockResolvedValue({ data: makeFullPR() });
+  mockResolveIssueFixRepositoryByFullName.mockResolvedValue({
+    status: "resolved",
+    repository: {
+      github_id: "999",
+      installation_id: "11111",
+      full_name: "org/repo",
+      owner: "org",
+      name: "repo",
+      default_branch: "main",
+    },
+  });
 });
 
 // ── Issue /gitwire run triage ────────────────────────────────────────────────
@@ -164,6 +180,8 @@ describe("Issue /gitwire run triage", () => {
     expect(mockClearTriageOperation).toHaveBeenCalledWith("triage", "repo:999:issue:555:manual-run");
 
     jest.clearAllMocks();
+    mockGetInstallationClient.mockResolvedValue({ request: mockOctokitRequest });
+    mockOctokitRequest.mockResolvedValue({ data: makeFullPR() });
 
     // Second run — same key cleared again
     await handleManualRun(payload, parsed, action, ctx);
@@ -321,21 +339,31 @@ describe("Acknowledgment", () => {
   });
 });
 
-// ── Issue fix path unchanged ─────────────────────────────────────────────────
+// ── Issue fix path ───────────────────────────────────────────────────────────
 
-describe("Issue fix path (unchanged)", () => {
-  it("still enqueues fix-issue with correct payload shape", async () => {
+describe("Issue fix trusted job contract", () => {
+  it("resolves server-owned binding, clears scoped retry marker, and enqueues IssueFixJobV1", async () => {
     const payload = makeIssuePayload();
     const parsed = { issueNumber: 42, authorLogin: "maintainer" };
     const action = { action: "manual_run", pillar: "fix" };
 
     await handleManualRun(payload, parsed, action, makeCtx());
 
+    expect(mockResolveIssueFixRepositoryByFullName).toHaveBeenCalledWith("org/repo");
+    expect(mockClearIdempotencyKey).toHaveBeenCalledWith("issue_fix", "repo-999:issue-42");
     expect(mockIssueFixQueueAdd).toHaveBeenCalledWith("fix-issue", {
-      repo: "org/repo",
-      issueNumber: 42,
-      installationId: 11111,
-      triggeredBy: "maintainer",
+      schema_version: 1,
+      repository: {
+        github_id: "999",
+        full_name: "org/repo",
+        expected_installation_id: "11111",
+      },
+      issue_number: 42,
+      trigger: {
+        kind: "comment_command",
+        requested_at: expect.any(String),
+        requested_by_login: "maintainer",
+      },
     }, { priority: 1 });
   });
 });
