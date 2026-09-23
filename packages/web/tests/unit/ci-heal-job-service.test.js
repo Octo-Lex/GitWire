@@ -91,6 +91,27 @@ describe("CI heal job contract", () => {
     expect(manual.trigger.kind).toBe("manual_api");
   });
 
+  it("accepts and preserves decimal-string IDs returned for PostgreSQL BIGINT columns", () => {
+    const manual = buildCIHealJobFromManualRun({
+      workflowRun: workflowRun(),
+      repository: repository({ id: "123456" }),
+      installationId: "987654",
+      receivedAt: NOW,
+    });
+
+    expect(manual.payload.repository.id).toBe("123456");
+    expect(manual.payload.installation.id).toBe("987654");
+  });
+
+  it("rejects unsafe numeric IDs instead of accepting precision-lost authority identifiers", () => {
+    expect(() => buildCIHealJobFromManualRun({
+      workflowRun: workflowRun(),
+      repository: repository({ id: Number.MAX_SAFE_INTEGER + 1 }),
+      installationId: 987654,
+      receivedAt: NOW,
+    })).toThrow(InvalidCIHealJobError);
+  });
+
   it("rejects a non-failed run instead of queueing work the healer must skip", () => {
     expect(() => buildCIHealJobFromManualRun({
       workflowRun: workflowRun({ conclusion: "success" }),

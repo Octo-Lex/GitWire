@@ -10,6 +10,15 @@ import { z } from "zod";
 
 export const CI_HEAL_JOB_SCHEMA_VERSION = 1;
 
+// GitHub identifiers arrive as JSON numbers on webhook/API responses, while
+// PostgreSQL BIGINT/BIGSERIAL values are returned as decimal strings by node-pg
+// unless a global type parser is installed. Preserve both losslessly rather
+// than coercing DB identifiers through Number().
+const githubIdSchema = z.union([
+  z.number().int().positive().refine(Number.isSafeInteger, "must be a safe integer"),
+  z.string().regex(/^[1-9]\d*$/, "must be a positive decimal identifier"),
+]);
+
 const triggerSchema = z.object({
   kind: z.enum(["webhook", "manual_api", "telegram"]),
   requested_at: z.string().min(1),
@@ -17,7 +26,7 @@ const triggerSchema = z.object({
 }).passthrough();
 
 const workflowRunSchema = z.object({
-  id: z.number().int().positive(),
+  id: githubIdSchema,
   status: z.literal("completed"),
   conclusion: z.literal("failure"),
   head_branch: z.string().min(1),
@@ -25,7 +34,7 @@ const workflowRunSchema = z.object({
 }).passthrough();
 
 const repositorySchema = z.object({
-  id: z.number().int().positive(),
+  id: githubIdSchema,
   full_name: z.string().min(3),
   name: z.string().min(1),
   owner: z.object({
@@ -34,7 +43,7 @@ const repositorySchema = z.object({
 }).passthrough();
 
 const installationSchema = z.object({
-  id: z.number().int().positive(),
+  id: githubIdSchema,
 }).passthrough();
 
 export const ciHealJobSchema = z.object({
