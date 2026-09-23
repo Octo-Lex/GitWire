@@ -29,6 +29,50 @@ async function supersedeFix({ ctx, analysis, fixAction, reason, detail, log = {}
   logger.info({ repo, issueNumber, ...log }, "Issue fix superseded before mutation");
 }
 
+async function clearSubmissionMarker(idempotencyKey) {
+  if (!idempotencyKey) return false;
+  try {
+    const { clearIdempotencyKey } = await import("../../services/idempotencyService.js");
+    if (typeof clearIdempotencyKey !== "function") return false;
+    await clearIdempotencyKey("issue_fix", idempotencyKey);
+    return true;
+  } catch (err) {
+    logger.warn({ err: err.message || err, idempotencyKey }, "Failed to clear issue-fix submission marker");
+    return false;
+  }
+}
+
+async function cleanupOwnedBranch({ octokit, owner, repoName, branchName, ownedHeadSha, repo, issueNumber }) {
+  if (!ownedHeadSha) return false;
+  try {
+    const { data: currentBranch } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/{branch}", {
+      owner,
+      repo: repoName,
+      branch: branchName,
+    });
+    const currentSha = currentBranch?.object?.sha;
+    if (currentSha !== ownedHeadSha) {
+      logger.warn(
+        { repo, issueNumber, branchName, ownedHeadSha, currentSha },
+        "Skipping issue-fix branch cleanup because branch head no longer matches GitWire-owned head"
+      );
+      return false;
+    }
+
+    await octokit.request("DELETE /repos/{owner}/{repo}/git/refs/{ref}", {
+      owner,
+      repo: repoName,
+      ref: "heads/" + branchName,
+    });
+    logger.info({ repo, issueNumber, branchName, ownedHeadSha }, "Removed partial GitWire-owned issue-fix branch after failure");
+    return true;
+  } catch (err) {
+    if (err?.status === 404) return true;
+    logger.warn({ err: err.message || err, repo, issueNumber, branchName }, "Failed to clean up partial issue-fix branch");
+    return false;
+  }
+}
+
 /** Creates the branch, commits fixes, opens PR. */
 export async function submitFix(ctx, analysis, validated) {
   const { octokit, owner, repoName, repoId, issueNumber, branchName, repo, repository } = ctx;
@@ -36,6 +80,9 @@ export async function submitFix(ctx, analysis, validated) {
   const baseSha = ctx._scope?.baseSha;
   const defaultBranch = ctx._scope?.defaultBranch;
   const issueSnapshot = ctx._scope?.issueSnapshot;
+  let idempotencyKey = null;
+  let ownedBranchHeadSha = null;
+  let prCreated = false;
 
   try {
     if (!baseSha || !defaultBranch || !issueSnapshot) {
@@ -101,8 +148,8 @@ export async function submitFix(ctx, analysis, validated) {
     }
 
     // The issue itself is part of the intent snapshot. Do not create a PR from a
-    // stale problem statement, a closed/reopened target, changed eligibility
-    // labels, or a pull request exposed through GitHub's Issues API.
+    // stale problem statement, changed eligibility labels, or a pull request
+    // exposed through GitHub's Issues API.
     const { data: liveIssue } = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
       owner,
       repo: repoName,
@@ -151,21 +198,51 @@ export async function submitFix(ctx, analysis, validated) {
     // Legacy idempotency remains for this bounded change, but the marker is
     // resource-scoped and written only after every no-effect freshness fence.
     // Wave 3 will replace it with durable command/effect idempotency.
-    const idempotencyKey = "repo-" + repoId + ":issue-" + issueNumber;
+    idempotencyKey = "repo-" + repoId + ":issue-" + issueNumber;
     if (!(await checkAndMark("issue_fix", idempotencyKey))) {
       await cancel(fixAction.id, "Duplicate issue-fix submission");
       logger.info({ repo, issueNumber, idempotencyKey }, "Issue fix submission already marked — skipping duplicate");
       return;
     }
 
-    // Branch creation is create-only. A 422 race/collision fails safely through
-    // the outer error path; GitWire never force-updates an unproven branch.
-    await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-      owner,
-      repo: repoName,
-      ref: "refs/heads/" + branchName,
-      sha: baseSha,
-    });
+    // Branch creation is create-only. If another actor wins the check/create
+    // race, confirm the ref now exists and convert the 422 into the same safe
+    // no-effect supersession used by the preflight collision fence.
+    try {
+      await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+        owner,
+        repo: repoName,
+        ref: "refs/heads/" + branchName,
+        sha: baseSha,
+      });
+      ownedBranchHeadSha = baseSha;
+    } catch (refErr) {
+      if (refErr?.status === 422) {
+        try {
+          const { data: racedBranch } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/{branch}", {
+            owner,
+            repo: repoName,
+            branch: branchName,
+          });
+          const racedBranchSha = racedBranch?.object?.sha;
+          if (racedBranchSha) {
+            await clearSubmissionMarker(idempotencyKey);
+            await supersedeFix({
+              ctx,
+              analysis,
+              fixAction,
+              reason: "Issue-fix branch appeared during submission",
+              detail: "Refusing to overwrite branch created during issue-fix submission race: " + branchName,
+              log: { branchName, racedBranchSha },
+            });
+            return;
+          }
+        } catch (confirmErr) {
+          if (confirmErr?.status !== 404) throw confirmErr;
+        }
+      }
+      throw refErr;
+    }
 
     for (const fix of fixes) {
       const origFile = fileContents.find((f) => f.path === fix.path);
@@ -177,7 +254,7 @@ export async function submitFix(ctx, analysis, validated) {
       }
 
       const fixedB64 = Buffer.from(fix.fixed_content).toString("base64");
-      await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
+      const { data: writeResult } = await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
         owner,
         repo: repoName,
         path: fix.path,
@@ -186,6 +263,10 @@ export async function submitFix(ctx, analysis, validated) {
         sha: origFile.sha,
         branch: branchName,
       });
+      // Contents writes return the commit that advanced the branch. Track the
+      // exact head owned by this invocation so cleanup never deletes later human
+      // or concurrent work.
+      if (writeResult?.commit?.sha) ownedBranchHeadSha = writeResult.commit.sha;
 
       logger.info({ path: fix.path, explanation: fix.explanation }, "Fix committed");
     }
@@ -205,6 +286,9 @@ export async function submitFix(ctx, analysis, validated) {
       head: branchName,
       base: defaultBranch,
     });
+    // From this point forward the branch is the base of an externally visible PR
+    // and must never be deleted by local recovery logic.
+    prCreated = true;
 
     logger.info({ repo, issueNumber, prNumber: pr.number, prUrl: pr.html_url, confidence, baseSha }, "Fix PR created");
 
@@ -250,6 +334,21 @@ export async function submitFix(ctx, analysis, validated) {
 
   } catch (err) {
     logger.error({ err, repo, issueNumber }, "Fix PR creation failed");
+
+    let partialBranchCleaned = false;
+    if (!prCreated && ownedBranchHeadSha) {
+      partialBranchCleaned = await cleanupOwnedBranch({
+        octokit,
+        owner,
+        repoName,
+        branchName,
+        ownedHeadSha: ownedBranchHeadSha,
+        repo,
+        issueNumber,
+      });
+      if (partialBranchCleaned) await clearSubmissionMarker(idempotencyKey);
+    }
+
     try {
       await fail(fixAction.id, err.message);
     } catch (stateErr) {
@@ -261,6 +360,11 @@ export async function submitFix(ctx, analysis, validated) {
       "\u274C **GitWire Fix - PR creation failed**\n\n" +
       "The fix was generated but could not be submitted:\n> " + err.message + "\n\n" +
       "**Assessment:** " + (analysis.explanation || "") + "\n\n" +
+      (partialBranchCleaned
+        ? "GitWire removed the partial branch and cleared the submission marker; a retry is safe.\n\n"
+        : (ownedBranchHeadSha && !prCreated
+            ? "GitWire could not prove the partial branch was still exclusively owned; inspect `" + branchName + "` before retrying.\n\n"
+            : "")) +
       "_A maintainer may need to intervene._"
     );
   }

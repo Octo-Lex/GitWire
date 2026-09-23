@@ -67,9 +67,26 @@ export async function validateScope(ctx) {
   }
 
   const settings = await maintainerService.getSettings(repoId);
-  const allowedLabels = repoConfig.pillars?.issue_fix?.allowed_labels || DEFAULT_ALLOWED_LABELS;
+  // Preserve the historical maintainer-settings override when present, and make
+  // it part of the actual eligibility decision rather than display-only state.
+  const configuredLabels = repoConfig.pillars?.issue_fix?.allowed_labels || DEFAULT_ALLOWED_LABELS;
+  const allowedLabels = Array.isArray(settings?.fix_allowed_labels)
+    ? settings.fix_allowed_labels
+    : configuredLabels;
+  const eligibilityConfig = allowedLabels === configuredLabels
+    ? repoConfig
+    : {
+        ...repoConfig,
+        pillars: {
+          ...(repoConfig.pillars || {}),
+          issue_fix: {
+            ...(repoConfig.pillars?.issue_fix || {}),
+            allowed_labels: allowedLabels,
+          },
+        },
+      };
   const issueLabels = issueSnapshot.labels;
-  const hasQualifying = issueLabels.some((label) => isFixLabelAllowed(label, repoConfig));
+  const hasQualifying = issueLabels.some((label) => isFixLabelAllowed(label, eligibilityConfig));
 
   if (!hasQualifying) {
     await upsertFixAttempt(repoId, issueNumber, ctx.branchName, "rejected", null, null,
