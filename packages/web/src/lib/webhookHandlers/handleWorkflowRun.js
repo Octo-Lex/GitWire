@@ -4,15 +4,19 @@
 // all completions → merge queue + rollback eval + test ingestion.
 
 import { ciEvidenceQueue } from "../../lib/queue.js";
+import { buildCIHealJobFromWebhook, enqueueCIHealJob } from "../../services/ciHealJobService.js";
 
 export async function handleWorkflowRun(payload, deliveryId, ctx) {
   if (payload.action !== "completed") return;
 
-  const jobData = { eventName: "workflow_run", payload, deliveryId, receivedAt: Date.now() };
+  const receivedAt = Date.now();
+  const jobData = { eventName: "workflow_run", payload, deliveryId, receivedAt };
 
-  // Failed CI → heal queue
+  // Failed CI → heal queue. D0-01: construct the same validated command used by
+  // manual/API triggers so the healer has one producer contract.
   if (payload.workflow_run?.conclusion === "failure") {
-    await ctx.ciHealQueue.add("heal-run", jobData, { priority: 1 });
+    const healJob = buildCIHealJobFromWebhook({ payload, deliveryId, receivedAt });
+    await enqueueCIHealJob(ctx.ciHealQueue, healJob, { priority: 1 });
     ctx.logger.info(
       { runId: payload.workflow_run?.id, repo: payload.repository?.full_name },
       "Failed CI run queued for healing"
