@@ -5,18 +5,24 @@
 // GitHub App installation used to execute the fix. The stable GitHub repository
 // id is carried through the queue only as a lookup key; workers re-resolve the
 // current active repository + installation binding immediately before use.
+//
+// Current Wave-2 auth helpers still convert GitHub installation/repository ids
+// through JavaScript Number. Until that substrate is made bigint/string-safe,
+// this service fails closed for ids above Number.MAX_SAFE_INTEGER rather than
+// claiming lossless authority binding that downstream code cannot preserve.
 
 import { db } from "../lib/db.js";
 
 const PG_BIGINT_MAX = 9223372036854775807n;
+const JS_SAFE_ID_MAX = BigInt(Number.MAX_SAFE_INTEGER);
 
-function normalizePositiveBigintIdentifier(value) {
+function normalizePositivePgBigint(value) {
   const raw = String(value ?? "");
   if (!/^\d+$/.test(raw)) return null;
   try {
     const parsed = BigInt(raw);
     if (parsed <= 0n || parsed > PG_BIGINT_MAX) return null;
-    return parsed.toString();
+    return parsed;
   } catch {
     return null;
   }
@@ -28,15 +34,28 @@ function normalizeFullName(value) {
   return fullName;
 }
 
-function toTarget(row) {
+function toRuntimeSafeTarget(row) {
+  const repositoryId = normalizePositivePgBigint(row?.github_id);
+  const installationId = normalizePositivePgBigint(row?.installation_id);
+  if (!repositoryId || !installationId) return null;
+  if (repositoryId > JS_SAFE_ID_MAX || installationId > JS_SAFE_ID_MAX) return null;
+
   return {
-    github_id: String(row.github_id),
-    installation_id: String(row.installation_id),
+    github_id: repositoryId.toString(),
+    installation_id: installationId.toString(),
     full_name: row.full_name,
     owner: row.owner,
     name: row.name,
     default_branch: row.default_branch,
   };
+}
+
+function classifyRows(rows) {
+  if (rows.length === 0) return { status: "not_found" };
+  if (rows.length > 1) return { status: "ambiguous" };
+  const repository = toRuntimeSafeTarget(rows[0]);
+  if (!repository) return { status: "unsupported_identifier" };
+  return { status: "resolved", repository };
 }
 
 const TARGET_SELECT = `SELECT
@@ -64,9 +83,7 @@ export async function resolveIssueFixRepositoryByFullName(value) {
     [fullName],
   );
 
-  if (rows.length === 0) return { status: "not_found" };
-  if (rows.length > 1) return { status: "ambiguous" };
-  return { status: "resolved", repository: toTarget(rows[0]) };
+  return classifyRows(rows);
 }
 
 /**
@@ -75,8 +92,10 @@ export async function resolveIssueFixRepositoryByFullName(value) {
  * installation binding cannot survive a repository transfer/uninstall.
  */
 export async function resolveIssueFixRepositoryById(value) {
-  const githubId = normalizePositiveBigintIdentifier(value);
-  if (!githubId) return { status: "invalid" };
+  const parsed = normalizePositivePgBigint(value);
+  if (!parsed) return { status: "invalid" };
+  if (parsed > JS_SAFE_ID_MAX) return { status: "unsupported_identifier" };
+  const githubId = parsed.toString();
 
   const { rows } = await db.query(
     `${TARGET_SELECT}
@@ -86,9 +105,7 @@ export async function resolveIssueFixRepositoryById(value) {
     [githubId],
   );
 
-  if (rows.length === 0) return { status: "not_found" };
-  if (rows.length > 1) return { status: "ambiguous" };
-  return { status: "resolved", repository: toTarget(rows[0]) };
+  return classifyRows(rows);
 }
 
 /** Verify that the authoritative repository binding has not drifted. */

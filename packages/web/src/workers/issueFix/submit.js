@@ -12,6 +12,21 @@ import {
 import { logger } from "../../lib/logger.js";
 import { upsertFixAttempt, postIssueComment, truncate } from "./helpers.js";
 
+async function supersedeFix({ ctx, analysis, fixAction, reason, detail, log = {} }) {
+  const { repoId, issueNumber, branchName, repo } = ctx;
+  await cancel(fixAction.id, reason);
+  await upsertFixAttempt(
+    repoId,
+    issueNumber,
+    branchName,
+    "superseded",
+    analysis.complexity,
+    analysis.explanation,
+    detail,
+  );
+  logger.info({ repo, issueNumber, ...log }, "Issue fix superseded before mutation");
+}
+
 /** Creates the branch, commits fixes, opens PR. */
 export async function submitFix(ctx, analysis, validated) {
   const { octokit, owner, repoName, repoId, issueNumber, branchName, repo, repository } = ctx;
@@ -24,42 +39,67 @@ export async function submitFix(ctx, analysis, validated) {
       throw new Error("Exact-head issue-fix snapshot is missing");
     }
 
-    // D0-02 authority freshness: a queued/long-running fix may outlive a repo
-    // transfer, uninstall, rename, or soft-delete. Re-resolve immediately before
-    // the first GitHub mutation; stale authority is terminalized, not inherited.
+    // A queued/long-running fix may outlive a transfer, uninstall, rename or
+    // soft-delete. Re-resolve server-owned state immediately before mutation.
     const currentResolution = await resolveIssueFixRepositoryById(repoId);
     const currentRepository = currentResolution.status === "resolved" ? currentResolution.repository : null;
-    if (!sameIssueFixRepositoryBinding(repository, currentRepository)
-        || currentRepository?.default_branch !== defaultBranch) {
-      await cancel(fixAction.id, "Repository binding changed before issue-fix submission");
-      await upsertFixAttempt(repoId, issueNumber, branchName, "superseded",
-        analysis.complexity, analysis.explanation, "Repository binding changed before submission");
-      logger.warn(
-        { repo, issueNumber, expected: repository, current: currentRepository, resolution: currentResolution.status },
-        "Issue fix superseded because repository authority changed",
-      );
+    if (!sameIssueFixRepositoryBinding(repository, currentRepository)) {
+      await supersedeFix({
+        ctx,
+        analysis,
+        fixAction,
+        reason: "Repository binding changed before issue-fix submission",
+        detail: "Repository binding changed before submission",
+        log: { expected: repository, current: currentRepository, resolution: currentResolution.status },
+      });
       return;
     }
 
-    // Exact-head fence: generation read files from baseSha. Never apply that
-    // diagnosis/patch to a newer default-branch head.
+    // DB default_branch is synchronized metadata, not publication authority.
+    // Read the live GitHub repository using the cache-bypassed client and make
+    // the current repository id/name/default branch part of the effect fence.
+    const { data: liveRepo } = await octokit.request("GET /repos/{owner}/{repo}", {
+      owner,
+      repo: repoName,
+    });
+    const liveRepoId = liveRepo?.id != null ? String(liveRepo.id) : null;
+    const liveFullName = liveRepo?.full_name;
+    const liveDefaultBranch = liveRepo?.default_branch;
+    if (liveRepoId !== String(repoId) || liveFullName !== repo || liveDefaultBranch !== defaultBranch) {
+      await supersedeFix({
+        ctx,
+        analysis,
+        fixAction,
+        reason: "Repository identity or default branch changed before issue-fix submission",
+        detail: "Live GitHub repository identity/default branch changed before submission",
+        log: { liveRepoId, liveFullName, liveDefaultBranch, expectedDefaultBranch: defaultBranch },
+      });
+      return;
+    }
+
+    // Generation read files from baseSha. Never apply that diagnosis/patch to a
+    // newer head. This GET is live because the issue-fix Octokit skips cache.
     const { data: currentRef } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/{branch}", {
-      owner, repo: repoName, branch: defaultBranch,
+      owner,
+      repo: repoName,
+      branch: defaultBranch,
     });
     const currentHeadSha = currentRef.object?.sha;
     if (!currentHeadSha || currentHeadSha !== baseSha) {
-      await cancel(fixAction.id, "Default branch advanced before issue-fix submission");
-      await upsertFixAttempt(repoId, issueNumber, branchName, "superseded",
-        analysis.complexity, analysis.explanation,
-        "Default branch advanced from " + baseSha + " to " + (currentHeadSha || "unknown"));
-      logger.info({ repo, issueNumber, baseSha, currentHeadSha }, "Issue fix superseded by newer repository head");
+      await supersedeFix({
+        ctx,
+        analysis,
+        fixAction,
+        reason: "Default branch advanced before issue-fix submission",
+        detail: "Default branch advanced from " + baseSha + " to " + (currentHeadSha || "unknown"),
+        log: { baseSha, currentHeadSha },
+      });
       return;
     }
 
-    // Legacy idempotency remains for this bounded change, but the marker is now
-    // resource-scoped and written only after all no-effect freshness fences.
-    // A superseded attempt therefore stays immediately retryable. Wave 3 will
-    // replace this primitive with durable command/effect idempotency.
+    // Legacy idempotency remains for this bounded change, but the marker is
+    // resource-scoped and written only after every no-effect freshness fence.
+    // Wave 3 will replace it with durable command/effect idempotency.
     const idempotencyKey = "repo-" + repoId + ":issue-" + issueNumber;
     if (!(await checkAndMark("issue_fix", idempotencyKey))) {
       await cancel(fixAction.id, "Duplicate issue-fix submission");
@@ -67,17 +107,18 @@ export async function submitFix(ctx, analysis, validated) {
       return;
     }
 
-    // Create or force-update the GitWire branch from the exact reviewed head.
     try {
       await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-        owner, repo: repoName,
+        owner,
+        repo: repoName,
         ref: "refs/heads/" + branchName,
         sha: baseSha,
       });
     } catch (refErr) {
       if (refErr.status === 422) {
         await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
-          owner, repo: repoName,
+          owner,
+          repo: repoName,
           ref: "heads/" + branchName,
           sha: baseSha,
           force: true,
@@ -99,7 +140,8 @@ export async function submitFix(ctx, analysis, validated) {
 
       const fixedB64 = Buffer.from(fix.fixed_content).toString("base64");
       await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
-        owner, repo: repoName,
+        owner,
+        repo: repoName,
         path: fix.path,
         message: fix.commit_message || ("fix: " + truncate(fix.explanation || fix.path, 72)),
         content: fixedB64,
@@ -118,7 +160,8 @@ export async function submitFix(ctx, analysis, validated) {
     var prBody = buildPRBodyFullFile(ctx._scope.issue, analysis, fixes, issueNumber, confidence, baseSha);
 
     const { data: pr } = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
-      owner, repo: repoName,
+      owner,
+      repo: repoName,
       title: prTitle,
       body: prBody,
       head: branchName,
@@ -143,7 +186,9 @@ export async function submitFix(ctx, analysis, validated) {
 
     try {
       await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/labels", {
-        owner, repo: repoName, issue_number: pr.number,
+        owner,
+        repo: repoName,
+        issue_number: pr.number,
         labels: ["gitwire-fix", analysis.complexity || "unknown-complexity"],
       });
     } catch (err) {

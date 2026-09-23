@@ -58,6 +58,10 @@ const validated = {
   fixAction: { id: "action-1" },
 };
 
+function liveRepo(overrides = {}) {
+  return { id: 99, full_name: "octo/repo", default_branch: "main", ...overrides };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockResolve.mockResolvedValue({ status: "resolved", repository });
@@ -80,17 +84,47 @@ describe("issue-fix pre-effect fences", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("supersedes a moved head without poisoning the submission marker", async () => {
-    const request = jest.fn().mockResolvedValueOnce({ data: { object: { sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } } });
+  it("uses live GitHub default-branch identity instead of synchronized DB metadata", async () => {
+    // Deliberately give the DB target stale default-branch metadata. It must not
+    // influence publication authority; live GitHub still says main/baseSha.
+    mockResolve.mockResolvedValueOnce({ status: "resolved", repository: { ...repository, default_branch: "stale-db-value" } });
+    mockSameBinding.mockReturnValue(true);
+    const request = jest.fn(async (route) => {
+      if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
+      if (route.startsWith("GET /repos/{owner}/{repo}/git/ref")) return { data: { object: { sha: baseSha } } };
+      if (route.startsWith("POST /repos/{owner}/{repo}/git/refs")) return { data: {} };
+      if (route.startsWith("PUT /repos/{owner}/{repo}/contents")) return { data: {} };
+      if (route.startsWith("POST /repos/{owner}/{repo}/pulls")) return { data: { number: 8, html_url: "https://example.test/pr/8" } };
+      if (route.startsWith("POST /repos/{owner}/{repo}/issues/{issue_number}/labels")) return { data: {} };
+      throw new Error("unexpected route " + route);
+    });
+
+    await submitFix(makeCtx({ request }), analysis, validated);
+    expect(mockSucceed).toHaveBeenCalled();
+  });
+
+  it("supersedes when live GitHub repository identity/default branch changed", async () => {
+    const request = jest.fn().mockResolvedValueOnce({ data: liveRepo({ default_branch: "trunk" }) });
     await submitFix(makeCtx({ request }), analysis, validated);
     expect(request).toHaveBeenCalledTimes(1);
+    expect(mockCancel).toHaveBeenCalledWith("action-1", expect.stringContaining("Repository identity or default branch changed"));
+    expect(mockCheckAndMark).not.toHaveBeenCalled();
+  });
+
+  it("supersedes a moved head without poisoning the submission marker", async () => {
+    const request = jest.fn()
+      .mockResolvedValueOnce({ data: liveRepo() })
+      .mockResolvedValueOnce({ data: { object: { sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } } });
+    await submitFix(makeCtx({ request }), analysis, validated);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(mockCancel).toHaveBeenCalledWith("action-1", expect.stringContaining("Default branch advanced"));
     expect(mockCheckAndMark).not.toHaveBeenCalled();
     expect(mockSucceed).not.toHaveBeenCalled();
   });
 
-  it("uses a repository-scoped marker only after the exact-head fence", async () => {
+  it("uses a repository-scoped marker only after live identity + exact-head fences", async () => {
     const request = jest.fn(async (route) => {
+      if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
       if (route.startsWith("GET /repos/{owner}/{repo}/git/ref")) return { data: { object: { sha: baseSha } } };
       if (route.startsWith("POST /repos/{owner}/{repo}/git/refs")) return { data: {} };
       if (route.startsWith("PUT /repos/{owner}/{repo}/contents")) return { data: {} };
@@ -109,9 +143,11 @@ describe("issue-fix pre-effect fences", () => {
 
   it("cancels the already-executing action when a duplicate marker exists", async () => {
     mockCheckAndMark.mockResolvedValue(false);
-    const request = jest.fn().mockResolvedValueOnce({ data: { object: { sha: baseSha } } });
+    const request = jest.fn()
+      .mockResolvedValueOnce({ data: liveRepo() })
+      .mockResolvedValueOnce({ data: { object: { sha: baseSha } } });
     await submitFix(makeCtx({ request }), analysis, validated);
     expect(mockCancel).toHaveBeenCalledWith("action-1", "Duplicate issue-fix submission");
-    expect(request).toHaveBeenCalledTimes(1); // head verification only
+    expect(request).toHaveBeenCalledTimes(2); // live repository + head verification only
   });
 });

@@ -43,6 +43,10 @@ fixRouter.post("/:owner/:repo/issues/:number", async (req, res) => {
       logger.error({ repo: repoFullName }, "Ambiguous active repository mapping — refusing issue fix");
       return res.status(409).json({ error: "Ambiguous repository mapping" });
     }
+    if (resolution.status === "unsupported_identifier") {
+      logger.error({ repo: repoFullName }, "Repository identifiers exceed current issue-fix auth runtime range");
+      return res.status(503).json({ error: "Repository identity cannot be represented safely by the current authorization runtime" });
+    }
 
     if (req.query.installation_id != null) {
       logger.warn(

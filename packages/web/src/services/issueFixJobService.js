@@ -4,16 +4,21 @@
 // D0-02 invariant: queue producers identify the target repository and issue;
 // they never select the GitHub App installation used to execute the work.
 // Installation/resource authority is re-resolved from PostgreSQL by the worker.
+//
+// Wave-2 auth infrastructure currently converts GitHub identifiers through
+// JavaScript Number. This contract therefore accepts only positive safe-integer
+// repository ids and fails closed above that range until W1 makes the auth
+// substrate bigint/string-safe end to end.
 
 import { z } from "zod";
 
 export const ISSUE_FIX_JOB_SCHEMA_VERSION = 1;
-const PG_BIGINT_MAX = 9223372036854775807n;
+const JS_SAFE_ID_MAX = BigInt(Number.MAX_SAFE_INTEGER);
 
-function isPositivePgBigintString(value) {
+function isPositiveSafeIdString(value) {
   if (!/^[1-9]\d*$/.test(value)) return false;
   try {
-    return BigInt(value) <= PG_BIGINT_MAX;
+    return BigInt(value) <= JS_SAFE_ID_MAX;
   } catch {
     return false;
   }
@@ -21,7 +26,7 @@ function isPositivePgBigintString(value) {
 
 const githubIdSchema = z.union([
   z.number().int().positive().refine(Number.isSafeInteger, "must be a safe integer"),
-  z.string().refine(isPositivePgBigintString, "must be a positive PostgreSQL BIGINT identifier"),
+  z.string().refine(isPositiveSafeIdString, "must be a positive safe-integer identifier"),
 ]);
 
 const repositoryTargetSchema = z.object({

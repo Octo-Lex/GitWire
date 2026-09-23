@@ -40,6 +40,14 @@ describe("issue-fix trusted target resolver", () => {
     await expect(resolveIssueFixRepositoryByFullName("octo/repo")).resolves.toEqual({ status: "ambiguous" });
   });
 
+  it("fails closed when DB ids cannot survive current Number-based auth infrastructure", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...row, github_id: "9007199254740992" }] });
+    await expect(resolveIssueFixRepositoryByFullName("octo/repo")).resolves.toEqual({ status: "unsupported_identifier" });
+
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...row, installation_id: "9007199254740992" }] });
+    await expect(resolveIssueFixRepositoryByFullName("octo/repo")).resolves.toEqual({ status: "unsupported_identifier" });
+  });
+
   it("re-resolves current installation by stable GitHub repository id", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ ...row, installation_id: "123456" }] });
     const resolved = await resolveIssueFixRepositoryById("99002");
@@ -49,9 +57,15 @@ describe("issue-fix trusted target resolver", () => {
     expect(params).toEqual(["99002"]);
   });
 
-  it("rejects invalid ids without querying", async () => {
-    for (const id of ["0", "-1", "abc", "9223372036854775808"]) {
-      await expect(resolveIssueFixRepositoryById(id)).resolves.toEqual({ status: "invalid" });
+  it("rejects invalid or unsafe ids without querying", async () => {
+    for (const [id, status] of [
+      ["0", "invalid"],
+      ["-1", "invalid"],
+      ["abc", "invalid"],
+      ["9223372036854775808", "invalid"],
+      ["9007199254740992", "unsupported_identifier"],
+    ]) {
+      await expect(resolveIssueFixRepositoryById(id)).resolves.toEqual({ status });
     }
     expect(mockQuery).not.toHaveBeenCalled();
   });

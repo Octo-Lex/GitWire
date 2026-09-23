@@ -30,15 +30,20 @@ export async function initFixContext({
     throw new Error("Issue-fix execution context is missing trusted repository binding");
   }
 
-  // ── Pillar config ────────────────────────────────────────────────────────
   const repoConfig = await getConfigForRepo(repo);
   if (!isPillarEnabled("issue_fix", repoConfig)) {
     logger.info({ repo, issueNumber }, "Issue fix disabled for repo — skipping");
     return null;
   }
 
-  // ── GitHub client ────────────────────────────────────────────────────────
-  const octokit = wrapOctokit(await getInstallationClient(repository.installation_id));
+  // Exact-head and pre-effect authority checks must never consume the shared
+  // GitHub GET cache. The issue-fix pipeline deliberately uses one cache-bypassed
+  // wrapper throughout so its tree, file and freshness evidence all refer to
+  // live GitHub state or immutable refs, while rate-limit tracking is preserved.
+  const octokit = wrapOctokit(
+    await getInstallationClient(repository.installation_id),
+    { skipCache: true },
+  );
   const branchName = "gitwire/fix-" + issueNumber;
 
   return {
