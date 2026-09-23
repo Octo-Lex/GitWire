@@ -62,6 +62,29 @@ function liveRepo(overrides = {}) {
   return { id: 99, full_name: "octo/repo", default_branch: "main", ...overrides };
 }
 
+function notFoundError() {
+  const err = new Error("Not Found");
+  err.status = 404;
+  return err;
+}
+
+function successfulSubmissionRequest() {
+  return jest.fn(async (route, params) => {
+    if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
+    if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}") {
+      if (params.branch === "main") return { data: { object: { sha: baseSha } } };
+      if (params.branch === "gitwire/fix-42") throw notFoundError();
+    }
+    if (route === "POST /repos/{owner}/{repo}/git/refs") return { data: {} };
+    if (route === "PUT /repos/{owner}/{repo}/contents/{path}") return { data: {} };
+    if (route === "POST /repos/{owner}/{repo}/pulls") {
+      return { data: { number: 8, html_url: "https://example.test/pr/8" } };
+    }
+    if (route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels") return { data: {} };
+    throw new Error("unexpected route " + route);
+  });
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockResolve.mockResolvedValue({ status: "resolved", repository });
@@ -89,15 +112,7 @@ describe("issue-fix pre-effect fences", () => {
     // influence publication authority; live GitHub still says main/baseSha.
     mockResolve.mockResolvedValueOnce({ status: "resolved", repository: { ...repository, default_branch: "stale-db-value" } });
     mockSameBinding.mockReturnValue(true);
-    const request = jest.fn(async (route) => {
-      if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
-      if (route.startsWith("GET /repos/{owner}/{repo}/git/ref")) return { data: { object: { sha: baseSha } } };
-      if (route.startsWith("POST /repos/{owner}/{repo}/git/refs")) return { data: {} };
-      if (route.startsWith("PUT /repos/{owner}/{repo}/contents")) return { data: {} };
-      if (route.startsWith("POST /repos/{owner}/{repo}/pulls")) return { data: { number: 8, html_url: "https://example.test/pr/8" } };
-      if (route.startsWith("POST /repos/{owner}/{repo}/issues/{issue_number}/labels")) return { data: {} };
-      throw new Error("unexpected route " + route);
-    });
+    const request = successfulSubmissionRequest();
 
     await submitFix(makeCtx({ request }), analysis, validated);
     expect(mockSucceed).toHaveBeenCalled();
@@ -122,16 +137,29 @@ describe("issue-fix pre-effect fences", () => {
     expect(mockSucceed).not.toHaveBeenCalled();
   });
 
-  it("uses a repository-scoped marker only after live identity + exact-head fences", async () => {
-    const request = jest.fn(async (route) => {
+  it("refuses to overwrite a pre-existing issue-fix branch before idempotency", async () => {
+    const request = jest.fn(async (route, params) => {
       if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
-      if (route.startsWith("GET /repos/{owner}/{repo}/git/ref")) return { data: { object: { sha: baseSha } } };
-      if (route.startsWith("POST /repos/{owner}/{repo}/git/refs")) return { data: {} };
-      if (route.startsWith("PUT /repos/{owner}/{repo}/contents")) return { data: {} };
-      if (route.startsWith("POST /repos/{owner}/{repo}/pulls")) return { data: { number: 8, html_url: "https://example.test/pr/8" } };
-      if (route.startsWith("POST /repos/{owner}/{repo}/issues/{issue_number}/labels")) return { data: {} };
+      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "main") {
+        return { data: { object: { sha: baseSha } } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "gitwire/fix-42") {
+        return { data: { object: { sha: "cccccccccccccccccccccccccccccccccccccccc" } } };
+      }
       throw new Error("unexpected route " + route);
     });
+
+    await submitFix(makeCtx({ request }), analysis, validated);
+
+    expect(mockCancel).toHaveBeenCalledWith("action-1", expect.stringContaining("branch already exists"));
+    expect(mockCheckAndMark).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls.some(([route]) => route.startsWith("PATCH "))).toBe(false);
+    expect(request.mock.calls.some(([route]) => route === "POST /repos/{owner}/{repo}/git/refs")).toBe(false);
+  });
+
+  it("uses a repository-scoped marker only after live identity + exact-head + branch-collision fences", async () => {
+    const request = successfulSubmissionRequest();
 
     await submitFix(makeCtx({ request }), analysis, validated);
 
@@ -143,11 +171,19 @@ describe("issue-fix pre-effect fences", () => {
 
   it("cancels the already-executing action when a duplicate marker exists", async () => {
     mockCheckAndMark.mockResolvedValue(false);
-    const request = jest.fn()
-      .mockResolvedValueOnce({ data: liveRepo() })
-      .mockResolvedValueOnce({ data: { object: { sha: baseSha } } });
+    const request = jest.fn(async (route, params) => {
+      if (route === "GET /repos/{owner}/{repo}") return { data: liveRepo() };
+      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "main") {
+        return { data: { object: { sha: baseSha } } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/git/ref/heads/{branch}" && params.branch === "gitwire/fix-42") {
+        throw notFoundError();
+      }
+      throw new Error("unexpected route " + route);
+    });
+
     await submitFix(makeCtx({ request }), analysis, validated);
     expect(mockCancel).toHaveBeenCalledWith("action-1", "Duplicate issue-fix submission");
-    expect(request).toHaveBeenCalledTimes(2); // live repository + head verification only
+    expect(request).toHaveBeenCalledTimes(3); // live repository + default head + target branch absence
   });
 });

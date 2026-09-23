@@ -97,6 +97,33 @@ export async function submitFix(ctx, analysis, validated) {
       return;
     }
 
+    // Never repurpose or force-update an existing branch. The deterministic
+    // issue-fix branch name can collide with prior GitWire work or human work;
+    // branch ownership is not proven by its name. Treat any existing ref as a
+    // no-effect supersession before idempotency is consumed.
+    let existingBranchSha = null;
+    try {
+      const { data: existingBranch } = await octokit.request("GET /repos/{owner}/{repo}/git/ref/heads/{branch}", {
+        owner,
+        repo: repoName,
+        branch: branchName,
+      });
+      existingBranchSha = existingBranch?.object?.sha || "unknown";
+    } catch (refErr) {
+      if (refErr?.status !== 404) throw refErr;
+    }
+    if (existingBranchSha) {
+      await supersedeFix({
+        ctx,
+        analysis,
+        fixAction,
+        reason: "Issue-fix branch already exists before submission",
+        detail: "Refusing to overwrite existing branch " + branchName,
+        log: { branchName, existingBranchSha },
+      });
+      return;
+    }
+
     // Legacy idempotency remains for this bounded change, but the marker is
     // resource-scoped and written only after every no-effect freshness fence.
     // Wave 3 will replace it with durable command/effect idempotency.
@@ -107,27 +134,14 @@ export async function submitFix(ctx, analysis, validated) {
       return;
     }
 
-    try {
-      await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
-        owner,
-        repo: repoName,
-        ref: "refs/heads/" + branchName,
-        sha: baseSha,
-      });
-    } catch (refErr) {
-      if (refErr.status === 422) {
-        await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
-          owner,
-          repo: repoName,
-          ref: "heads/" + branchName,
-          sha: baseSha,
-          force: true,
-        });
-        logger.info({ branch: branchName, baseSha }, "Force-updated existing issue-fix branch to reviewed head");
-      } else {
-        throw refErr;
-      }
-    }
+    // Branch creation is create-only. A 422 race/collision fails safely through
+    // the outer error path; GitWire never force-updates an unproven branch.
+    await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+      owner,
+      repo: repoName,
+      ref: "refs/heads/" + branchName,
+      sha: baseSha,
+    });
 
     for (const fix of fixes) {
       const origFile = fileContents.find((f) => f.path === fix.path);
