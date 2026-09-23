@@ -1,4 +1,4 @@
-// D0-02 — trusted repository/installation resolution for issue-fix work.
+// D0-02 — trusted repository/installation resolution and issue-target snapshots.
 
 import { beforeEach, describe, expect, it, jest } from "@jest/globals";
 
@@ -9,6 +9,8 @@ const {
   resolveIssueFixRepositoryByFullName,
   resolveIssueFixRepositoryById,
   sameIssueFixRepositoryBinding,
+  buildIssueFixIssueSnapshot,
+  sameIssueFixIssueSnapshot,
 } = await import("../../src/services/issueFixTargetService.js");
 
 beforeEach(() => mockQuery.mockReset());
@@ -20,6 +22,16 @@ const row = {
   owner: "octo",
   name: "repo",
   default_branch: "main",
+};
+
+const issue = {
+  id: 123456,
+  number: 42,
+  state: "open",
+  title: "Bug",
+  body: "Broken behavior",
+  labels: [{ name: "Bug" }, { name: "help wanted" }],
+  updated_at: "2026-09-23T20:00:00Z",
 };
 
 describe("issue-fix trusted target resolver", () => {
@@ -74,5 +86,49 @@ describe("issue-fix trusted target resolver", () => {
     expect(sameIssueFixRepositoryBinding(row, { ...row })).toBe(true);
     expect(sameIssueFixRepositoryBinding(row, { ...row, installation_id: "2" })).toBe(false);
     expect(sameIssueFixRepositoryBinding(row, { ...row, full_name: "new/repo" })).toBe(false);
+  });
+});
+
+describe("issue-fix issue intent snapshot", () => {
+  it("canonicalizes labels and retains updated_at as evidence", () => {
+    expect(buildIssueFixIssueSnapshot(issue)).toEqual({
+      github_id: "123456",
+      number: 42,
+      state: "open",
+      title: "Bug",
+      body: "Broken behavior",
+      labels: ["bug", "help wanted"],
+      is_pull_request: false,
+      updated_at: "2026-09-23T20:00:00Z",
+    });
+  });
+
+  it("ignores comment-only updated_at movement and label ordering/case", () => {
+    const expected = buildIssueFixIssueSnapshot(issue);
+    const current = buildIssueFixIssueSnapshot({
+      ...issue,
+      labels: [{ name: "HELP WANTED" }, { name: "bug" }],
+      updated_at: "2026-09-23T20:05:00Z",
+    });
+    expect(sameIssueFixIssueSnapshot(expected, current)).toBe(true);
+  });
+
+  it.each([
+    [{ title: "Different" }, "title"],
+    [{ body: "Changed requirements" }, "body"],
+    [{ state: "closed" }, "state"],
+    [{ labels: [{ name: "documentation" }] }, "labels"],
+    [{ pull_request: { url: "https://api.github.test/pr/42" } }, "pull request target"],
+    [{ id: 999999 }, "identity"],
+    [{ number: 43 }, "number"],
+  ])("detects %s drift", (overrides) => {
+    const expected = buildIssueFixIssueSnapshot(issue);
+    const current = buildIssueFixIssueSnapshot({ ...issue, ...overrides });
+    expect(sameIssueFixIssueSnapshot(expected, current)).toBe(false);
+  });
+
+  it("fails closed when the issue snapshot is structurally incomplete", () => {
+    expect(buildIssueFixIssueSnapshot({ number: 42, state: "open" })).toBeNull();
+    expect(sameIssueFixIssueSnapshot(buildIssueFixIssueSnapshot(issue), null)).toBe(false);
   });
 });

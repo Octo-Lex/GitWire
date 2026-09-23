@@ -1,5 +1,6 @@
 // src/services/issueFixTargetService.js
-// D0-02: server-owned repository/installation resolution for Autonomous Contributor.
+// D0-02: server-owned repository/installation resolution and issue-target
+// freshness evidence for Autonomous Contributor.
 //
 // Clients may identify a target repository by name. They may never select the
 // GitHub App installation used to execute the fix. The stable GitHub repository
@@ -32,6 +33,15 @@ function normalizeFullName(value) {
   const fullName = String(value ?? "").trim();
   if (!/^[^/\s]+\/[^/\s]+$/.test(fullName)) return null;
   return fullName;
+}
+
+function normalizeIssueLabels(labels) {
+  if (!Array.isArray(labels)) return [];
+  const names = labels
+    .map((label) => typeof label === "string" ? label : label?.name)
+    .filter((name) => typeof name === "string" && name.length > 0)
+    .map((name) => name.toLowerCase());
+  return [...new Set(names)].sort();
 }
 
 function toRuntimeSafeTarget(row) {
@@ -114,4 +124,50 @@ export function sameIssueFixRepositoryBinding(expected, current) {
   return String(expected.github_id) === String(current.github_id)
     && String(expected.installation_id) === String(current.installation_id)
     && expected.full_name === current.full_name;
+}
+
+/**
+ * Canonicalize only the issue fields that are relevant to autonomous-fix intent.
+ * `updated_at` is retained as evidence but is intentionally not an equality
+ * input: unrelated comments can advance it without changing the problem to fix.
+ */
+export function buildIssueFixIssueSnapshot(issue) {
+  if (!issue || typeof issue !== "object" || Array.isArray(issue)) return null;
+
+  const issueNumber = Number(issue.number);
+  if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) return null;
+
+  const githubId = issue.id == null ? null : String(issue.id);
+  if (!githubId) return null;
+
+  const state = typeof issue.state === "string" ? issue.state.toLowerCase() : null;
+  if (state !== "open" && state !== "closed") return null;
+
+  return Object.freeze({
+    github_id: githubId,
+    number: issueNumber,
+    state,
+    title: typeof issue.title === "string" ? issue.title : "",
+    body: typeof issue.body === "string" ? issue.body : "",
+    labels: Object.freeze(normalizeIssueLabels(issue.labels)),
+    is_pull_request: !!issue.pull_request,
+    updated_at: issue.updated_at == null ? null : String(issue.updated_at),
+  });
+}
+
+/**
+ * Compare the fields that define the problem statement and eligibility. This
+ * deliberately ignores `updated_at` so a new discussion comment alone does not
+ * invalidate a fix, while edits, relabeling, close/reopen, target replacement,
+ * or an Issues-API pull-request target do invalidate it.
+ */
+export function sameIssueFixIssueSnapshot(expected, current) {
+  if (!expected || !current) return false;
+  return expected.github_id === current.github_id
+    && expected.number === current.number
+    && expected.state === current.state
+    && expected.title === current.title
+    && expected.body === current.body
+    && expected.is_pull_request === current.is_pull_request
+    && JSON.stringify(expected.labels) === JSON.stringify(current.labels);
 }

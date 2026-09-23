@@ -6,10 +6,30 @@
 // installation id or perform a second weaker lookup by repository name.
 
 import { getConfigForRepo } from "../../services/configService.js";
-import { isPillarEnabled } from "@gitwire/rules";
+import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { getInstallationClient } from "../../lib/github.js";
 import { wrapOctokit } from "../../lib/githubWrapper.js";
 import { logger } from "../../lib/logger.js";
+
+function dryRunGuard(octokit, dryRun) {
+  if (!dryRun) return octokit;
+
+  // Mechanical dry-run boundary for this capability. Earlier issue-fix stages
+  // may post eligibility/failure comments; guarding the shared client prevents
+  // those paths (and any future non-read request) from mutating GitHub while
+  // still permitting exact-head evidence reads.
+  return new Proxy(octokit, {
+    get(target, prop) {
+      if (prop !== "request") return Reflect.get(target, prop, target);
+      return async (route, params) => {
+        const match = /^\s*(GET|HEAD)\s+/i.exec(String(route ?? ""));
+        if (match) return target.request(route, params);
+        logger.info({ route }, "DRY RUN: blocked issue-fix GitHub mutation");
+        return { data: { dry_run: true } };
+      };
+    },
+  });
+}
 
 /**
  * Returns the fix context object, or null if the pipeline should stop.
@@ -40,15 +60,17 @@ export async function initFixContext({
     logger.info({ repo, issueNumber }, "Issue fix disabled for repo — skipping");
     return null;
   }
+  const dryRun = isDryRun(repoConfig);
 
   // Exact-head and pre-effect authority checks must never consume the shared
   // GitHub GET cache. The issue-fix pipeline deliberately uses one cache-bypassed
   // wrapper throughout so its tree, file and freshness evidence all refer to
   // live GitHub state or immutable refs, while rate-limit tracking is preserved.
-  const octokit = wrapOctokit(
+  const wrappedOctokit = wrapOctokit(
     await getInstallationClient(installationId),
     { skipCache: true },
   );
+  const octokit = dryRunGuard(wrappedOctokit, dryRun);
   const branchName = "gitwire/fix-" + issueNumber;
 
   return {
@@ -66,5 +88,6 @@ export async function initFixContext({
     branchName,
     octokit,
     repoConfig,
+    dryRun,
   };
 }

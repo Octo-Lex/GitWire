@@ -3,6 +3,7 @@
 
 import { isFixLabelAllowed } from "@gitwire/rules";
 import { maintainerService } from "../../services/maintainerService.js";
+import { buildIssueFixIssueSnapshot } from "../../services/issueFixTargetService.js";
 import { logger } from "../../lib/logger.js";
 import { db } from "../../lib/db.js";
 import { upsertFixAttempt, postIssueComment } from "./helpers.js";
@@ -14,8 +15,8 @@ const DEFAULT_ALLOWED_LABELS = [
 
 /**
  * Returns the scope object (issue + exact repository snapshot), or null if the
- * pipeline should stop. The snapshot commit SHA is carried through generation
- * and re-checked immediately before external mutation.
+ * pipeline should stop. The snapshot commit SHA and canonical issue snapshot are
+ * carried through generation and re-checked immediately before external mutation.
  */
 export async function validateScope(ctx) {
   const { octokit, owner, repoName, repoId, issueNumber, repoConfig } = ctx;
@@ -32,10 +33,42 @@ export async function validateScope(ctx) {
   const { data: issue } = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
     owner, repo: repoName, issue_number: issueNumber,
   });
+  const issueSnapshot = buildIssueFixIssueSnapshot(issue);
+  if (!issueSnapshot) {
+    await upsertFixAttempt(repoId, issueNumber, ctx.branchName, "failed", null, null,
+      "Could not establish canonical issue target state");
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "⚠️ **GitWire Fix - issue target unavailable**\n\n" +
+      "GitWire could not establish a stable issue target. No code mutation was attempted."
+    );
+    return null;
+  }
+
+  // GitHub's Issues API also returns pull requests. Autonomous Contributor is
+  // intentionally issue-only: PR review/repair belongs to the review/repair path.
+  if (issueSnapshot.is_pull_request) {
+    await upsertFixAttempt(repoId, issueNumber, ctx.branchName, "rejected", null, null,
+      "Target is a pull request, not an issue");
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "🚫 **GitWire Fix - issue targets only**\n\n" +
+      "Autonomous Contributor does not create issue-fix PRs from an existing pull request."
+    );
+    return null;
+  }
+
+  if (issueSnapshot.state !== "open") {
+    await upsertFixAttempt(repoId, issueNumber, ctx.branchName, "rejected", null, null,
+      "Issue is not open");
+    await postIssueComment(octokit, owner, repoName, issueNumber,
+      "🚫 **GitWire Fix - issue is closed**\n\n" +
+      "Autonomous Contributor only fixes open issues. Reopen the issue before retrying."
+    );
+    return null;
+  }
 
   const settings = await maintainerService.getSettings(repoId);
-  const allowedLabels = (settings && settings.fix_allowed_labels) || repoConfig.pillars?.issue_fix?.allowed_labels || DEFAULT_ALLOWED_LABELS;
-  const issueLabels = issue.labels.map((label) => typeof label === "string" ? label : label.name).map((label) => label.toLowerCase());
+  const allowedLabels = repoConfig.pillars?.issue_fix?.allowed_labels || DEFAULT_ALLOWED_LABELS;
+  const issueLabels = issueSnapshot.labels;
   const hasQualifying = issueLabels.some((label) => isFixLabelAllowed(label, repoConfig));
 
   if (!hasQualifying) {
@@ -66,6 +99,7 @@ export async function validateScope(ctx) {
 
   return {
     issue,
+    issueSnapshot,
     tree: snapshot.files,
     settings,
     baseSha: snapshot.baseSha,

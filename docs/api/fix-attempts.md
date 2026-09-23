@@ -33,7 +33,11 @@ A legacy `installation_id` query parameter, if present during compatibility cuto
 
 `202` means the command was accepted by the queue. It does not mean a patch or PR was produced.
 
-Before mutating GitHub, Autonomous Contributor verifies that the repository/installation binding is still current and that the default branch still points to the exact commit from which the candidate fix was generated. A moved head or changed repository binding supersedes the attempt rather than applying stale work.
+Autonomous Contributor accepts only **open issue** targets. GitHub's Issues API also exposes pull requests by number; those targets are rejected rather than routed into issue-fix execution.
+
+Before mutating GitHub, Autonomous Contributor verifies that the repository/installation binding is still current, the default branch still points to the exact commit from which the candidate fix was generated, the issue's title/body/state/eligibility labels still match the analyzed intent, and the deterministic issue-fix branch does not already exist. Drift supersedes the attempt rather than applying stale work, and an existing branch is never force-reset based only on its name.
+
+When repository configuration enables dry-run mode, the issue-fix GitHub client permits evidence reads but mechanically suppresses all non-read GitHub requests. Dry-run attempts are recorded as `dry_run`; they do not create comments, branches, commits, labels, or pull requests and do not consume live fix-attempt limits.
 
 ## Get Fix Status
 
