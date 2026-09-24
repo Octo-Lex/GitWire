@@ -23,6 +23,11 @@ const base = {
   headSha: "abc123",
 };
 
+const currentAttempt = {
+  started_at: "2026-09-24T08:40:00.000Z",
+  completed_at: "2026-09-24T08:40:10.000Z",
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
 });
@@ -43,19 +48,26 @@ describe("normalizeReviewResultForPresentation", () => {
 
   it("preserves null when the durable review receipt is not an error", async () => {
     mockQuery.mockResolvedValueOnce({
-      rows: [{ verdict: null, summary: null, terminal_reason: null, publication_state: null }],
+      rows: [{
+        verdict: null,
+        summary: null,
+        terminal_reason: null,
+        publication_state: null,
+        ...currentAttempt,
+      }],
     });
     await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: null }))
       .resolves.toBeNull();
   });
 
-  it("converts a legacy null error receipt into a structured unavailable result", async () => {
+  it("converts a current-attempt legacy null error receipt into a structured unavailable result", async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{
         verdict: "error",
         summary: "Review timed out after 596.371s: claude review",
         terminal_reason: "error",
         publication_state: null,
+        ...currentAttempt,
       }],
     });
 
@@ -73,15 +85,50 @@ describe("normalizeReviewResultForPresentation", () => {
       expect.stringContaining("WHERE repo_id = $1 AND pr_number = $2 AND commit_sha = $3"),
       [123, 42, "abc123"]
     );
+    expect(mockQuery.mock.calls[0][0]).toContain("started_at");
+    expect(mockQuery.mock.calls[0][0]).toContain("completed_at");
   });
 
-  it("treats a terminally failed publication as unavailable even without verdict=error", async () => {
+  it("does not reuse a stale error receipt after a newer same-head attempt starts", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        verdict: "error",
+        summary: "Old timeout from a prior attempt",
+        terminal_reason: "error",
+        publication_state: null,
+        started_at: "2026-09-24T08:41:00.000Z",
+        completed_at: "2026-09-24T08:40:00.000Z",
+      }],
+    });
+
+    await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: null }))
+      .resolves.toBeNull();
+  });
+
+  it("does not reuse stale failed-publication state without a current completion", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        verdict: null,
+        summary: "Old publication failure",
+        terminal_reason: "ambiguous_publication",
+        publication_state: "failed",
+        started_at: "2026-09-24T08:41:00.000Z",
+        completed_at: null,
+      }],
+    });
+
+    await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: null }))
+      .resolves.toBeNull();
+  });
+
+  it("treats a current-attempt terminally failed publication as unavailable even without verdict=error", async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{
         verdict: null,
         summary: "A prior publication attempt failed.",
         terminal_reason: null,
         publication_state: "failed",
+        ...currentAttempt,
       }],
     });
 
@@ -93,13 +140,14 @@ describe("normalizeReviewResultForPresentation", () => {
     }));
   });
 
-  it("uses the durable terminal reason when a failed publication has no summary", async () => {
+  it("uses the durable terminal reason when a current failed publication has no summary", async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{
         verdict: null,
         summary: null,
         terminal_reason: "ambiguous_publication",
         publication_state: "failed",
+        ...currentAttempt,
       }],
     });
 
