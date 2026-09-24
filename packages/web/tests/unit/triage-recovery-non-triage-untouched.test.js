@@ -3,7 +3,7 @@
 // by the triage failure-recovery changes.
 //
 // Confirms:
-//   - ciHealWorker, phase4Worker, and issueFix/context.js still import and call
+//   - ciHealWorker, phase4Worker, and issueFix/submit.js still import and call
 //     the legacy checkAndMark (not the new lifecycle primitives).
 //   - The new lifecycle exports (beginOperation, completeOperation, abandonOperation)
 //     are ONLY imported by triageWorker.js.
@@ -31,8 +31,8 @@ describe("Non-triage checkAndMark callers remain untouched (case 12)", () => {
     expect(src).not.toMatch(/beginOperation|completeOperation|abandonOperation/);
   });
 
-  it("issueFix/context still uses legacy checkAndMark", () => {
-    const src = readSource("packages/web/src/workers/issueFix/context.js");
+  it("issueFix/submit still uses legacy checkAndMark", () => {
+    const src = readSource("packages/web/src/workers/issueFix/submit.js");
     expect(src).toMatch(/checkAndMark/);
     expect(src).not.toMatch(/beginOperation|completeOperation|abandonOperation/);
   });
@@ -41,7 +41,7 @@ describe("Non-triage checkAndMark callers remain untouched (case 12)", () => {
     const workers = [
       "packages/web/src/workers/ciHealWorker.js",
       "packages/web/src/workers/phase4Worker.js",
-      "packages/web/src/workers/issueFix/context.js",
+      "packages/web/src/workers/issueFix/submit.js",
     ];
     for (const w of workers) {
       const src = readSource(w);

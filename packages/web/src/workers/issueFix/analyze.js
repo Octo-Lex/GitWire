@@ -11,21 +11,56 @@ const anthropic = new Anthropic({
   ...(config.anthropic.baseURL ? { baseURL: config.anthropic.baseURL } : {}),
 });
 
+const COMPLEXITIES = new Set(["trivial", "simple", "moderate", "complex"]);
+
+function safeAnalysisPath(value) {
+  if (typeof value !== "string" || !value.length) return false;
+  if (value.startsWith("/") || value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) return false;
+  return value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..");
+}
+
+/**
+ * Treat AI analysis as untrusted structured input. Only a known complexity and
+ * a bounded set of repository-relative candidate paths may influence later risk
+ * scoring or file selection.
+ */
+export function normalizeIssueFixAnalysis(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!COMPLEXITIES.has(value.complexity)) return null;
+  if (!Array.isArray(value.relevant_files) || value.relevant_files.length < 1 || value.relevant_files.length > 10) {
+    return null;
+  }
+  if (!value.relevant_files.every(safeAnalysisPath)) return null;
+  if (typeof value.explanation !== "string" || !value.explanation.trim()) return null;
+  if (typeof value.fix_strategy !== "string" || !value.fix_strategy.trim()) return null;
+
+  const relevantFiles = [...new Set(value.relevant_files)];
+  if (relevantFiles.length < 1) return null;
+
+  return Object.freeze({
+    complexity: value.complexity,
+    relevant_files: Object.freeze(relevantFiles),
+    explanation: value.explanation.trim(),
+    fix_strategy: value.fix_strategy.trim(),
+  });
+}
+
 /**
  * Returns the analysis result, or null if pipeline should stop.
  * CC target: ~5
  */
 export async function analyzeIssue(ctx, scope) {
-  const { octokit, owner, repoName, repoId, issueNumber, branchName, repoConfig, repo } = ctx;
+  const { octokit, owner, repoName, repoId, issueNumber, branchName, repo } = ctx;
   const { issue, tree } = scope;
 
-  const analysis = await aiAnalyze(issue, tree, repo);
+  const rawAnalysis = await aiAnalyze(issue, tree, repo);
+  const analysis = normalizeIssueFixAnalysis(rawAnalysis);
   if (!analysis) {
     await upsertFixAttempt(repoId, issueNumber, branchName, "failed", null, null,
-      "AI analysis returned no result");
+      "AI analysis returned invalid or incomplete structured output");
     await postIssueComment(octokit, owner, repoName, issueNumber,
       "\u26A0\uFE0F **GitWire Fix - analysis failed**\n\n" +
-      "Could not analyze this issue. It may be too complex or unclear.\n\n" +
+      "Could not establish a valid bounded fix plan for this issue.\n\n" +
       "_A maintainer should review manually._"
     );
     return null;
@@ -41,7 +76,7 @@ export async function analyzeIssue(ctx, scope) {
       "\u26A0\uFE0F **GitWire Fix - too complex**\n\n" +
       "**Assessment:** " + analysis.explanation + "\n\n" +
       "This issue requires human judgment. A maintainer should tackle this.\n\n" +
-      "_Complexity: " + analysis.complexity + " \u00B7 Relevant files: " + (analysis.relevant_files || []).join(", ") + "_"
+      "_Complexity: " + analysis.complexity + " \u00B7 Relevant files: " + analysis.relevant_files.join(", ") + "_"
     );
     return null;
   }

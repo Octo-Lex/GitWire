@@ -8,6 +8,8 @@
 
 import { buildTriageOperationKey } from "../../../services/idempotencyService.js";
 import { buildCommandResponse } from "../../../lib/commentRouter.js";
+import { buildIssueFixJob, enqueueIssueFixJob } from "../../../services/issueFixJobService.js";
+import { resolveIssueFixRepositoryByFullName } from "../../../services/issueFixTargetService.js";
 
 export async function handleManualRun(payload, parsed, action, ctx) {
   const isPR = !!payload.issue?.pull_request;
@@ -44,21 +46,24 @@ export async function handleManualRun(payload, parsed, action, ctx) {
     dispatched = result.dispatched;
     blocked = result.blocked || [];
   } else {
-    dispatched = await handleIssueManualRun(payload, parsed, pillar, repoFullName, issueNumber, installationId, ctx, {
+    const result = await handleIssueManualRun(payload, parsed, pillar, repoFullName, issueNumber, ctx, {
       clearIdempotencyKey, clearTriageOperation,
     });
+    dispatched = result.dispatched;
+    blocked = result.blocked || [];
   }
 
   // Post GitHub-visible acknowledgment
   await postAcknowledgment(payload, parsed, action, dispatched, blocked, ctx);
 
-  ctx.logger.info({ command: "run", pillar, repo: repoFullName, issue: issueNumber, isPR, dispatched }, "/gitwire run processed");
+  ctx.logger.info({ command: "run", pillar, repo: repoFullName, issue: issueNumber, isPR, dispatched, blocked }, "/gitwire run processed");
 }
 
 // ── Issue manual run ─────────────────────────────────────────────────────────
 
-async function handleIssueManualRun(payload, parsed, pillar, repoFullName, issueNumber, installationId, ctx, idem) {
+async function handleIssueManualRun(payload, parsed, pillar, repoFullName, issueNumber, ctx, idem) {
   const dispatched = [];
+  const blocked = [];
 
   if (pillar === "all" || pillar === "triage") {
     // Normalize the payload so the worker builds the same lifecycle key we clear.
@@ -79,14 +84,30 @@ async function handleIssueManualRun(payload, parsed, pillar, repoFullName, issue
   }
 
   if (pillar === "all" || pillar === "fix") {
-    await idem.clearIdempotencyKey("issue_fix", "issue-" + issueNumber);
-    await ctx.issueFixQueue.add("fix-issue", {
-      repo: repoFullName, issueNumber, installationId, triggeredBy: parsed.authorLogin,
-    }, { priority: 1 });
-    dispatched.push("fix");
+    const resolution = await resolveIssueFixRepositoryByFullName(repoFullName);
+    if (resolution.status !== "resolved") {
+      blocked.push({ pillar: "fix", reason: "repository_binding_" + resolution.status });
+      ctx.logger.warn(
+        { repo: repoFullName, issue: issueNumber, resolution: resolution.status },
+        "/gitwire run fix: trusted repository binding unavailable — skipping issue fix"
+      );
+    } else {
+      const repository = resolution.repository;
+      // Match submitFix()'s resource-scoped legacy marker exactly. This clear is
+      // an explicit manual-retry control; it must not target the pre-D0-02 key.
+      await idem.clearIdempotencyKey("issue_fix", "repo-" + repository.github_id + ":issue-" + issueNumber);
+      const jobData = buildIssueFixJob({
+        repository,
+        issueNumber,
+        triggerKind: "comment_command",
+        requestedByLogin: parsed.authorLogin,
+      });
+      await enqueueIssueFixJob(ctx.issueFixQueue, jobData, { priority: 1 });
+      dispatched.push("fix");
+    }
   }
 
-  return dispatched;
+  return { dispatched, blocked };
 }
 
 // ── PR manual run ────────────────────────────────────────────────────────────
@@ -175,13 +196,15 @@ async function postAcknowledgment(payload, parsed, action, dispatched, blocked, 
       body = "ℹ️ **GitWire:** CI healing requires a failed workflow run event and cannot be manually triggered through this command.";
     } else if (dispatched.length === 0 && blocked.length > 0) {
       // Nothing dispatched, but we have a specific block reason.
-      // This is the /gitwire run review + not activated case.
       const reviewBlock = blocked.find(b => b.pillar === "review");
+      const fixBlock = blocked.find(b => b.pillar === "fix");
       if (reviewBlock && reviewBlock.reason === "not_activated") {
         body = "ℹ️ **GitWire:** AI Review is enabled by repository policy but has not been activated in GitWire. "
              + "Activate it in the [Intelligence dashboard](" + reviewBlock.activationUrl + ") to enable AI code reviews.";
       } else if (reviewBlock && reviewBlock.reason === "pillar_disabled") {
         body = "ℹ️ **GitWire:** AI Review is disabled by repository policy.";
+      } else if (fixBlock) {
+        body = "⚠️ **GitWire:** Autonomous Contributor was not triggered because the repository binding could not be resolved safely. Retry after repository/install state is synchronized.";
       } else {
         body = "⚠️ **GitWire:** No workers could be dispatched. The repository or PR data could not be resolved. Check that GitWire is properly configured.";
       }
@@ -193,13 +216,17 @@ async function postAcknowledgment(payload, parsed, action, dispatched, blocked, 
       if (dispatched.includes("heal-unsupported")) {
         body += "\n\nℹ️ CI healing requires a failed workflow run event and was not triggered.";
       }
-      // If some pillars were blocked, append a truthful note
+      // If some pillars were blocked, append a truthful note.
       const reviewBlock = blocked.find(b => b.pillar === "review");
+      const fixBlock = blocked.find(b => b.pillar === "fix");
       if (reviewBlock && reviewBlock.reason === "not_activated") {
         body += "\n\nℹ️ AI Review was not triggered — it is enabled by policy but not activated in GitWire. "
               + "Activate it in the [Intelligence dashboard](" + reviewBlock.activationUrl + ").";
       } else if (reviewBlock && reviewBlock.reason === "pillar_disabled") {
         body += "\n\nℹ️ AI Review was not triggered — it is disabled by repository policy.";
+      }
+      if (fixBlock) {
+        body += "\n\n⚠️ Autonomous Contributor was not triggered because the repository binding could not be resolved safely.";
       }
     }
 

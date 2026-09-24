@@ -40,9 +40,7 @@ export function stripCodeFences(raw) {
   return raw.replace(FENCE_RE, "").replace(FENCE_END_RE, "").trim();
 }
 
-/**
- * Robust JSON extraction — handles Claude prefixing JSON with text.
- */
+/** Robust JSON extraction — handles Claude prefixing JSON with text. */
 export function extractJSON(text) {
   try { return JSON.parse(text); } catch (_) {}
 
@@ -77,18 +75,20 @@ export function extractJSON(text) {
   return null;
 }
 
-export async function fetchFileContents(octokit, owner, repo, paths) {
+/** Fetch file contents from one exact repository ref/SHA when supplied. */
+export async function fetchFileContents(octokit, owner, repo, paths, ref = null) {
   const results = [];
   for (const p of paths.slice(0, 10)) {
     try {
       const { data } = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
         owner, repo, path: p,
+        ...(ref ? { ref } : {}),
       });
       const content = Buffer.from(data.content, "base64").toString("utf8");
       const sha = data.sha;
       results.push({ path: p, content, sha });
-    } catch (_) {
-      // Skip files we can't read
+    } catch (err) {
+      logger.warn({ err: err.message || err, owner, repo, path: p, ref }, "Issue-fix file fetch failed");
     }
   }
   return results;

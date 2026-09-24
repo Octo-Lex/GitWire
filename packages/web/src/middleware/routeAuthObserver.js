@@ -4,37 +4,26 @@
 //
 // Matches each incoming request against the protected-surface registry by
 // method + path pattern. For matched surfaces that are NOT already explicitly
-// adopted (req._wave2Observed), it:
-//   1. resolves the declared permission from the registry (NOT a generic token);
-//   2. resolves the declared resource from trusted server-side DB lookup;
-//   3. calls authorize() exactly once with the declared permission + resource;
-//   4. records one observe-only evidence row.
-//
-// Explicitly adopted routes (maintainer, config, rollouts) call observeAuthorize()
-// directly with richer context and set req._wave2Observed — this middleware skips
-// them to avoid duplicate evidence.
-//
-// Every protected GET, POST, PATCH, PUT, DELETE surface is classified.
+// adopted (req._wave2Observed), it resolves permission/resource from trusted
+// server-side state, calls authorize(), and records observe-only evidence.
 
 import { authorize } from "../services/auth/authorize.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { resolveStoredCIRunIdentifier } from "../services/ciRunResolver.js";
 
-// Route pattern → declaration mapping. Built lazily on first request.
 let _routeMap = null;
 let _initStarted = false;
 
 async function ensureRouteMap() {
   if (_routeMap) return _routeMap;
-  if (_initStarted) return _routeMap; // race guard (single-threaded JS)
+  if (_initStarted) return _routeMap;
   _initStarted = true;
 
   const mod = await import("../services/auth/declarations.js");
   mod.registerAllProtectedSurfaces();
   const { listProtectedSurfaces } = await import("../services/auth/protectedSurfaces.js");
 
-  // Build a lookup of route surfaces by (method, path-pattern).
   const surfaces = listProtectedSurfaces().filter((s) => s.kind === "route");
   _routeMap = surfaces.map((s) => {
     const parts = s.id.split(":");
@@ -59,26 +48,29 @@ async function ensureRouteMap() {
 
 async function lookupRepositoryByName(owner, repo) {
   const { rows } = await db.query(
-    "SELECT github_id, installation_id, owner, name FROM repositories WHERE full_name = $1",
+    `SELECT r.github_id, r.installation_id, r.owner, r.name
+       FROM repositories r
+       JOIN installations i
+         ON i.github_id = r.installation_id
+        AND i.deleted_at IS NULL
+      WHERE r.full_name = $1
+        AND r.deleted_at IS NULL
+      LIMIT 2`,
     [`${owner}/${repo}`]
   );
-  return rows[0] ?? null;
+  // Resource ambiguity must never be resolved by row order. This keeps route
+  // authorization aligned with the D0-02 issue-fix admission semantics and is
+  // also safer for every other owner/repo protected route.
+  return rows.length === 1 ? rows[0] : null;
 }
 
-/**
- * Resolve the trusted resource for a matched route surface.
- * Request body/query identity fields are never accepted as authority.
- */
+/** Resolve the trusted resource for a matched route surface. */
 export async function resolveResource(resourceType, params) {
   if (resourceType === "repository") {
     let row = null;
     if (params.owner && params.repo) {
       row = await lookupRepositoryByName(params.owner, params.repo);
     } else if (params.runId) {
-      // D0-01: authorization and the CI-heal route MUST bind runId with the
-      // same internal-id/GitHub-id/ambiguity semantics. Unresolved or
-      // ambiguous identifiers intentionally remain an unknown resource so the
-      // authorization engine fails closed when enforcement is enabled.
       const resolution = await resolveStoredCIRunIdentifier(params.runId);
       if (resolution.status === "resolved") {
         row = {
@@ -121,15 +113,11 @@ export async function resolveResource(resourceType, params) {
     return { type: "installation" };
   }
 
-  if (resourceType === "fleet") {
-    return { type: "fleet" };
-  }
+  if (resourceType === "fleet") return { type: "fleet" };
   if (resourceType === "policy_rollout_plan" && params.id) {
     return { type: "policy_rollout_plan", resourceId: params.id };
   }
-  if (resourceType === "policy_definition") {
-    return { type: "policy_definition" };
-  }
+  if (resourceType === "policy_definition") return { type: "policy_definition" };
   return { type: resourceType || "unknown" };
 }
 
@@ -139,7 +127,6 @@ export async function resolveResource(resourceType, params) {
  * a declaration and hasn't been explicitly observed. Does NOT block.
  */
 export async function routeAuthObserver(req, res, next) {
-  // Skip anonymous paths.
   if (
     !req.path.startsWith("/api") ||
     req.path.startsWith("/api/auth") ||
