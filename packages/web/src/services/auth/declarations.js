@@ -47,7 +47,7 @@ const ROUTE_SURFACES = [
   R("route:POST:/api/phase2/feedback", "repository:update", "installation", "body.installation_id or repo_filter -> installation", "feedback.rule.create"),
   R("route:PUT:/api/phase2/feedback/:id", "repository:update", "installation", "feedback rule id -> installation", "feedback.rule.update"),
   R("route:DELETE:/api/phase2/feedback/:id", "repository:update", "installation", "feedback rule id -> installation", "feedback.rule.delete"),
-  R("route:POST:/api/enforcement/policies", "repository:update", "installation", "body installation_id or repo_filter -> installation", "enforcement.policy.create"),
+  R("route:POST:/api/enforcement/policies", "repository:update", "installation", "body.installation_id or repo_filter -> installation", "enforcement.policy.create"),
   R("route:PUT:/api/enforcement/policies/:id", "repository:update", "installation", "policy id -> policy_definitions.installation_id", "enforcement.policy.update"),
   R("route:DELETE:/api/enforcement/policies/:id", "repository:update", "installation", "policy id -> policy_definitions.installation_id", "enforcement.policy.delete"),
   R("route:POST:/api/enforcement/violations/:id/suppress", "repository:update", "repository", "violation id -> enforcement_violations.repo_id", "enforcement.violation.suppress"),
