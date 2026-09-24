@@ -102,6 +102,8 @@ describe("D0-04 protected-surface completeness", () => {
       expect(declaration.principalSource).toBeTruthy();
       expect(declaration.authMethod).toBeTruthy();
       expect(declaration.observeHandling).toBe("record");
+      expect(declaration.resourceResolver).toBe(entry.resourceResolver);
+      expect(declaration.mutationIdentity).toBe(entry.mutationIdentity);
     }
   });
 
