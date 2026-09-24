@@ -28,6 +28,7 @@ export async function withHeartbeat(fn, opts) {
   const startTime = Date.now();
   let completed = false;
   let heartbeatTimer = null;
+  let timeoutTimer = null;
 
   // Start heartbeat
   heartbeatTimer = setInterval(function () {
@@ -36,22 +37,35 @@ export async function withHeartbeat(fn, opts) {
     logger.info({ label, elapsed: elapsed + "s" }, "review still running: " + label + " elapsed=" + elapsed + "s");
   }, intervalMs);
 
-  // Ensure cleanup
+  // Ensure cleanup. Clear both timers so a successfully completed review does
+  // not leave the timeout side of Promise.race alive until the full deadline.
   const cleanup = function () {
     completed = true;
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
     }
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = null;
+    }
   };
 
   try {
-    // Race between the operation and the timeout
+    // Race between the operation and the timeout. This timeout applies only
+    // after primary inference has started, so it follows the existing
+    // transient-provider timeout policy used by runStructuredReview(). It is
+    // deliberately distinct from E_REVIEW_DEADLINE_EXCEEDED, which means the
+    // shared review deadline expired before inference was allowed to start.
     const result = await Promise.race([
       fn(),
       new Promise(function (_, reject) {
-        setTimeout(function () {
-          reject(new Error("Review timed out after " + (timeoutMs / 1000) + "s: " + label));
+        timeoutTimer = setTimeout(function () {
+          const err = new Error("Review timed out after " + (timeoutMs / 1000) + "s: " + label);
+          err.name = "ReviewHeartbeatTimeoutError";
+          err.gitwireErrorCode = "E_REVIEW_PROVIDER_TRANSIENT";
+          err.gitwireRejectionClass = "timeout";
+          reject(err);
         }, timeoutMs);
       }),
     ]);
