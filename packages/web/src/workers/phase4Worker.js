@@ -8,6 +8,7 @@ import { wrapOctokit } from "../lib/githubWrapper.js";
 import { reviewPR }      from "../services/aiReviewService.js";
 import { supersedePublishedReviewForPr } from "../services/aiReviewService.js";
 import { isRetryableReviewFailure } from "../services/aiReviewService.js";
+import { normalizeReviewResultForPresentation } from "../services/reviewResultPresentation.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
@@ -247,6 +248,12 @@ export function startPhase4Worker() {
             principalId: ph4PrincipalId,
             surfaceId: "audit_trail:ai_decision",
           });
+          const presentationResult = await normalizeReviewResultForPresentation({
+            reviewResult: result,
+            repoId: repository.id,
+            prNumber: pr.number,
+            headSha: pr.head.sha,
+          });
 
           // Bounded UX correction (2026-09-22): a manual `/gitwire run review`
           // that recovers an already-published review posts nothing by design,
@@ -272,7 +279,7 @@ export function startPhase4Worker() {
             }
           }
 
-          await finalizeOwn(result);
+          await finalizeOwn(presentationResult);
 
           await emitWorkerEvent("review_completed", {
             repo: repository.full_name,
