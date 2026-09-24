@@ -7,6 +7,10 @@ import { propose, approve, execute, cancel } from "../../services/actionStateMac
 import { logger } from "../../lib/logger.js";
 import { upsertFixAttempt, postIssueComment } from "./helpers.js";
 
+const MAX_GENERATED_COMMIT_MESSAGE_LENGTH = 120;
+const MAX_GENERATED_EXPLANATION_LENGTH = 500;
+const GENERATED_METADATA_CONTROL_RE = /[\u0000-\u001f\u007f\u2028\u2029]/;
+
 function isSafeRepositoryPath(value) {
   if (typeof value !== "string" || !value.length) return false;
   if (value.startsWith("/") || value.includes("\\") || /[\u0000-\u001f\u007f]/.test(value)) return false;
@@ -18,6 +22,38 @@ function normalizePositiveInteger(value, fallback, hardMax) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) return fallback;
   return Math.min(parsed, hardMax);
+}
+
+function validateGeneratedMetadata(path, fix, reasons) {
+  if (fix.commit_message != null) {
+    if (typeof fix.commit_message !== "string") {
+      reasons.push(`${path}: commit_message must be a string`);
+    } else {
+      const trimmed = fix.commit_message.trim();
+      if (!trimmed) reasons.push(`${path}: commit_message must not be empty`);
+      if (trimmed.length > MAX_GENERATED_COMMIT_MESSAGE_LENGTH) {
+        reasons.push(`${path}: commit_message exceeds ${MAX_GENERATED_COMMIT_MESSAGE_LENGTH} characters`);
+      }
+      if (GENERATED_METADATA_CONTROL_RE.test(fix.commit_message)) {
+        reasons.push(`${path}: commit_message must be a single-line string without control characters`);
+      }
+    }
+  }
+
+  if (fix.explanation != null) {
+    if (typeof fix.explanation !== "string") {
+      reasons.push(`${path}: explanation must be a string`);
+    } else {
+      const trimmed = fix.explanation.trim();
+      if (!trimmed) reasons.push(`${path}: explanation must not be empty`);
+      if (trimmed.length > MAX_GENERATED_EXPLANATION_LENGTH) {
+        reasons.push(`${path}: explanation exceeds ${MAX_GENERATED_EXPLANATION_LENGTH} characters`);
+      }
+      if (GENERATED_METADATA_CONTROL_RE.test(fix.explanation)) {
+        reasons.push(`${path}: explanation must be a single-line string without control characters`);
+      }
+    }
+  }
 }
 
 // Historical dashboard versions wrote confidence as 1/2/3 even though the
@@ -146,6 +182,8 @@ export function validatePatchCandidates(fixes, originalFiles) {
       reasons.push(`${fix.path}: fixed file is empty`);
       continue;
     }
+
+    validateGeneratedMetadata(fix.path, fix, reasons);
 
     const orig = originals.get(fix.path);
     if (!orig || typeof orig.content !== "string" || typeof orig.sha !== "string" || !orig.sha) {
