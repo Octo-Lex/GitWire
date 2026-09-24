@@ -56,15 +56,22 @@ function protectedRouteModulesFromApp() {
   return modules;
 }
 
-function mutationRouteIdsForModule({ sourcePath, mountPath }) {
+function mutationRoutesForModule({ sourcePath, mountPath }) {
   const source = fs.readFileSync(path.join(WEB_ROOT, sourcePath), "utf8");
-  const ids = [];
+  const routes = [];
   const pattern = /\b(?:router|[A-Za-z0-9_]+Router)\.(post|put|patch|delete)\(\s*["']([^"']+)["']/g;
   let match;
   while ((match = pattern.exec(source)) !== null) {
-    ids.push(`route:${match[1].toUpperCase()}:${joinRoute(mountPath, normalizeSourceRoutePath(match[2]))}`);
+    routes.push({
+      surfaceId: `route:${match[1].toUpperCase()}:${joinRoute(mountPath, normalizeSourceRoutePath(match[2]))}`,
+      sourcePath,
+    });
   }
-  return ids;
+  return routes;
+}
+
+function discoveredMutationRoutes() {
+  return protectedRouteModulesFromApp().flatMap(mutationRoutesForModule);
 }
 
 beforeAll(() => registerAllProtectedSurfaces());
@@ -110,17 +117,26 @@ describe("D0-04 protected-surface completeness", () => {
   it("classifies every mutation-shaped route mounted behind the auth observer", () => {
     const consequential = new Set(expectedConsequentialSurfaceIds());
     const nonConsequential = new Set(NON_CONSEQUENTIAL_MUTATION_SURFACE_IDS);
-    const candidates = protectedRouteModulesFromApp().flatMap(mutationRouteIdsForModule);
+    const candidateIds = discoveredMutationRoutes().map((entry) => entry.surfaceId);
 
-    expect(candidates.length).toBeGreaterThan(0);
-    const unclassified = candidates.filter((id) => !consequential.has(id) && !nonConsequential.has(id));
+    expect(candidateIds.length).toBeGreaterThan(0);
+    const unclassified = candidateIds.filter((id) => !consequential.has(id) && !nonConsequential.has(id));
     expect(unclassified).toEqual([]);
   });
 
   it("does not allow stale exception entries", () => {
-    const candidates = new Set(protectedRouteModulesFromApp().flatMap(mutationRouteIdsForModule));
+    const candidateIds = new Set(discoveredMutationRoutes().map((entry) => entry.surfaceId));
     for (const id of NON_CONSEQUENTIAL_MUTATION_SURFACE_IDS) {
-      expect(candidates).toContain(id);
+      expect(candidateIds).toContain(id);
+    }
+  });
+
+  it("does not allow stale or relocated consequential route inventory entries", () => {
+    const sourceById = new Map(
+      discoveredMutationRoutes().map((entry) => [entry.surfaceId, entry.sourcePath]),
+    );
+    for (const entry of CONSEQUENTIAL_SURFACE_MANIFEST.filter((surface) => surface.kind === "route")) {
+      expect(sourceById.get(entry.surfaceId)).toBe(entry.sourcePath);
     }
   });
 
