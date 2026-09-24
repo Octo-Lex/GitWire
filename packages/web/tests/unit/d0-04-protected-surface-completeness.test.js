@@ -21,11 +21,12 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = path.resolve(TEST_DIR, "../..");
 const SRC_ROOT = path.join(WEB_ROOT, "src");
 
-function decodeRouteLiteral(raw) {
-  return raw
-    .replace(/\\\\/g, "\\")
-    .replace(/\\"/g, "\"")
-    .replace(/\\'/g, "'");
+function parseDoubleQuotedRouteLiteral(raw) {
+  return JSON.parse(`"${raw}"`);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function joinRoute(mountPath, routePath) {
@@ -48,17 +49,42 @@ function discoverMountedMutatingRoutes() {
   for (const match of appSource.matchAll(mountRe)) {
     const [, mountPath, routerName] = match;
     const fileName = imports.get(routerName);
-    if (fileName) mounted.push({ mountPath, fileName });
+    if (!fileName && /Router$/.test(routerName)) {
+      throw new Error(`Mounted route router ${routerName} is not mapped to a route-module import`);
+    }
+    if (fileName) mounted.push({ mountPath, fileName, routerName });
   }
 
   const discovered = [];
-  const routeRe = /\b[A-Za-z_$][\w$]*\.(post|put|patch|delete)\(\s*(["'])(.*?)\2/gms;
-  for (const { mountPath, fileName } of mounted) {
+  for (const { mountPath, fileName, routerName } of mounted) {
     const sourcePath = `src/routes/${fileName}`;
     const source = fs.readFileSync(path.join(SRC_ROOT, "routes", fileName), "utf8");
-    for (const match of source.matchAll(routeRe)) {
+    const escapedRouter = escapeRegExp(routerName);
+    const candidateRe = new RegExp(`\\b${escapedRouter}\\s*\\.\\s*(post|put|patch|delete)\\s*\\(`, "g");
+    const routeRe = new RegExp(
+      `\\b${escapedRouter}\\s*\\.\\s*(post|put|patch|delete)\\s*\\(\\s*"((?:\\\\.|[^"\\\\])*)"`,
+      "gms",
+    );
+    const candidateCount = [...source.matchAll(candidateRe)].length;
+    const matches = [...source.matchAll(routeRe)];
+    const chainedRouteRe = new RegExp(`\\b${escapedRouter}\\s*\\.\\s*route\\s*\\(`, "g");
+    const bracketMutationRe = new RegExp(`\\b${escapedRouter}\\s*\\[\\s*["'](?:post|put|patch|delete)["']\\s*\\]`, "g");
+
+    if (chainedRouteRe.test(source) || bracketMutationRe.test(source)) {
+      throw new Error(`Unsupported mounted-router mutation syntax in ${sourcePath}`);
+    }
+
+    // Fail closed if a mounted router introduces a mutating verb using syntax
+    // this scanner cannot classify (for example a non-literal route path).
+    if (matches.length !== candidateCount) {
+      throw new Error(
+        `Unsupported mutating-route syntax in ${sourcePath}: discovered ${candidateCount} candidates but parsed ${matches.length}`,
+      );
+    }
+
+    for (const match of matches) {
       const method = match[1].toUpperCase();
-      const routePath = decodeRouteLiteral(match[3]);
+      const routePath = parseDoubleQuotedRouteLiteral(match[2]);
       discovered.push({
         surfaceId: `route:${method}:${joinRoute(mountPath, routePath)}`,
         sourcePath,
