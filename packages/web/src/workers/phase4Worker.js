@@ -8,6 +8,7 @@ import { wrapOctokit } from "../lib/githubWrapper.js";
 import { reviewPR }      from "../services/aiReviewService.js";
 import { supersedePublishedReviewForPr } from "../services/aiReviewService.js";
 import { isRetryableReviewFailure } from "../services/aiReviewService.js";
+import { createReviewPresentationTracker, normalizeReviewResultForPresentation } from "../services/reviewResultPresentation.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
 import { exportNightly } from "../services/auditTrailService.js";
 import { getConfigForRepo } from "../services/configService.js";
@@ -238,14 +239,19 @@ export function startPhase4Worker() {
             legacyActor: pr.user?.login,
           });
           const ph4PrincipalId = workerPrincipalId(ph4Adoption.context);
+          const presentationTracker = createReviewPresentationTracker(octokit);
 
           const result = await reviewPR({
             pr,
             repository: { ...repository, id: repository.id },
-            octokit,
+            octokit: presentationTracker.octokit,
             commentFindings: reviewOpts.comment_findings !== false,
             principalId: ph4PrincipalId,
             surfaceId: "audit_trail:ai_decision",
+          });
+          const presentationResult = normalizeReviewResultForPresentation({
+            reviewResult: result,
+            invocation: presentationTracker.snapshot(),
           });
 
           // Bounded UX correction (2026-09-22): a manual `/gitwire run review`
@@ -272,7 +278,7 @@ export function startPhase4Worker() {
             }
           }
 
-          await finalizeOwn(result);
+          await finalizeOwn(presentationResult);
 
           await emitWorkerEvent("review_completed", {
             repo: repository.full_name,
