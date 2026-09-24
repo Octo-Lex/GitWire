@@ -31,8 +31,11 @@ function validateGeneratedMetadata(path, fix, reasons) {
     } else {
       const trimmed = fix.commit_message.trim();
       if (!trimmed) reasons.push(`${path}: commit_message must not be empty`);
-      if (trimmed.length > MAX_GENERATED_COMMIT_MESSAGE_LENGTH) {
+      if (fix.commit_message.length > MAX_GENERATED_COMMIT_MESSAGE_LENGTH) {
         reasons.push(`${path}: commit_message exceeds ${MAX_GENERATED_COMMIT_MESSAGE_LENGTH} characters`);
+      }
+      if (trimmed !== fix.commit_message) {
+        reasons.push(`${path}: commit_message must not contain leading or trailing whitespace`);
       }
       if (GENERATED_METADATA_CONTROL_RE.test(fix.commit_message)) {
         reasons.push(`${path}: commit_message must be a single-line string without control characters`);
@@ -46,8 +49,11 @@ function validateGeneratedMetadata(path, fix, reasons) {
     } else {
       const trimmed = fix.explanation.trim();
       if (!trimmed) reasons.push(`${path}: explanation must not be empty`);
-      if (trimmed.length > MAX_GENERATED_EXPLANATION_LENGTH) {
+      if (fix.explanation.length > MAX_GENERATED_EXPLANATION_LENGTH) {
         reasons.push(`${path}: explanation exceeds ${MAX_GENERATED_EXPLANATION_LENGTH} characters`);
+      }
+      if (trimmed !== fix.explanation) {
+        reasons.push(`${path}: explanation must not contain leading or trailing whitespace`);
       }
       if (GENERATED_METADATA_CONTROL_RE.test(fix.explanation)) {
         reasons.push(`${path}: explanation must be a single-line string without control characters`);

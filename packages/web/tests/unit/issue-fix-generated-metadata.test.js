@@ -89,4 +89,19 @@ describe("issue-fix generated metadata validation", () => {
       "src/a.js: explanation exceeds 500 characters",
     ]));
   });
+
+  it("rejects padding and measures the raw payload instead of only trimmed text", () => {
+    const result = validate({
+      commit_message: " ".repeat(121) + "x",
+      explanation: " " + "y".repeat(500),
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.reasons).toEqual(expect.arrayContaining([
+      "src/a.js: commit_message exceeds 120 characters",
+      "src/a.js: commit_message must not contain leading or trailing whitespace",
+      "src/a.js: explanation exceeds 500 characters",
+      "src/a.js: explanation must not contain leading or trailing whitespace",
+    ]));
+  });
 });
