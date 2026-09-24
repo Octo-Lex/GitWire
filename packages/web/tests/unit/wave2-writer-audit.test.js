@@ -28,7 +28,7 @@ const AUDIT = {
     // observeAdopt.js — auth layer; principal from req.auth
     { file: "services/auth/observeAdopt.js", line: 52, func: "observeAuthorize", principalIdExpr: "decision.principalId", contextSource: "req.auth", legacyActor: "legacyActor param", classification: "http_auth_context" },
     // customRulesService.js — worker context (webhook handler passes webhookPrincipalId)
-    { file: "services/customRulesService.js", line: 211, func: "evaluateAndExecuteCustomRules", principalIdExpr: "principalId param", contextSource: "webhook handler (webhookPrincipalId)", legacyActor: "data.actor", classification: "worker_auth_context" },
+    { file: "services/customRulesService.js", line: 236, func: "evaluateAndExecuteCustomRules", principalIdExpr: "principalId param", contextSource: "webhook handler (webhookPrincipalId)", legacyActor: "data.actor", classification: "worker_auth_context" },
     // ciHealWorker.js — 9 calls; worker adopted
     { file: "workers/ciHealWorker.js", line: 249, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 268, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker context", legacyActor: "gitwire[bot]", classification: "worker_auth_context" },
@@ -76,7 +76,7 @@ const AUDIT = {
   ],
 
   managed_actions: [
-    { file: "services/customRulesService.js", line: 237, func: "evaluateAndExecuteCustomRules", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "services/customRulesService.js", line: 506, func: "evaluateAndExecuteCustomRules", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 578, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 756, func: "ciHealWorker labelAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 783, func: "ciHealWorker revAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
