@@ -626,7 +626,7 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
     if (!claimedPublication.length) {
       const { rows: [currentRow] } = await db.query(
         "SELECT publication_state, github_review_id, verdict, published_outcome, " +
-        "judgment, integrity_state, policy_blocked FROM ai_reviews WHERE id = $1",
+        "judgment, integrity_state, policy_blocked, terminal_reason, summary FROM ai_reviews WHERE id = $1",
         [reviewRow.id]
       );
       const state = currentRow?.publication_state;
@@ -662,14 +662,24 @@ export async function reviewPR({ pr, repository, octokit, commentFindings = true
       }
 
       if (state === "failed") {
+        const reason = currentRow.terminal_reason || "publication_failed";
+        const error = currentRow.summary ||
+          "A prior publication attempt for this review head failed terminally; nothing was reposted.";
         if (checkRunId) {
           await finaliseCheckRun(octokit, owner, repo, checkRunId, "neutral", {
             title:   "\u26A0\uFE0F AI review publication previously failed",
-            summary: "A prior publication attempt for this review head failed terminally; nothing was reposted.",
+            summary: error,
             text:    "",
           });
         }
-        return null;
+        return {
+          unavailable: true,
+          verdict: "error",
+          blocked: false,
+          findings: [],
+          reason,
+          error,
+        };
       }
 
       const stateErr = new Error("Unknown publication state at claim boundary: '" + state + "' — refusing to publish");
