@@ -38,13 +38,14 @@ export async function normalizeReviewResultForPresentation({ reviewResult, repoI
     const unavailable = row.verdict === "error" || row.publication_state === "failed";
     if (!unavailable) return null;
 
+    const reason = row.terminal_reason || (row.publication_state === "failed" ? "publication_failed" : "review_error");
     return {
       unavailable: true,
       verdict: "error",
       blocked: false,
       findings: [],
-      reason: row.terminal_reason || (row.publication_state === "failed" ? "publication_failed" : "review_error"),
-      error: row.summary || "AI review could not be completed.",
+      reason,
+      error: row.summary || reason || "AI review could not be completed.",
     };
   } catch (err) {
     logger.warn(

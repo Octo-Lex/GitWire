@@ -93,6 +93,24 @@ describe("normalizeReviewResultForPresentation", () => {
     }));
   });
 
+  it("uses the durable terminal reason when a failed publication has no summary", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        verdict: null,
+        summary: null,
+        terminal_reason: "ambiguous_publication",
+        publication_state: "failed",
+      }],
+    });
+
+    const result = await normalizeReviewResultForPresentation({ ...base, reviewResult: null });
+    expect(result).toEqual(expect.objectContaining({
+      unavailable: true,
+      reason: "ambiguous_publication",
+      error: "ambiguous_publication",
+    }));
+  });
+
   it("reports unavailable when durable outcome lookup itself fails", async () => {
     mockQuery.mockRejectedValueOnce(new Error("database unavailable"));
 
