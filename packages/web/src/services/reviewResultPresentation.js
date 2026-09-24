@@ -1,86 +1,135 @@
 // src/services/reviewResultPresentation.js
 //
-// Maintainer-facing review presentation must not infer a benign skip from the
-// legacy `reviewPR()` null sentinel. Some terminal review failures predate the
-// structured-result contract and persist an error receipt before returning
-// null. Resolve that ambiguity from durable state at the worker boundary so
-// the top-level GitWire check reports what actually happened.
+// `ai_reviews` is unique per (repo, PR, head), so its mutable terminal fields
+// cannot identify which of two concurrent same-head invocations produced a
+// legacy `reviewPR()` null. Presentation therefore binds to the dedicated
+// `GitWire AI Review` check run created by THIS invocation. GitHub check-run
+// ids are immutable per invocation and the tracker observes only requests made
+// through the wrapped Octokit instance handed to that invocation.
 
-import { db } from "../lib/db.js";
-import { logger } from "../lib/logger.js";
+const REVIEW_CHECK_NAME = "GitWire AI Review";
+const BENIGN_NULL_TITLES = new Set([
+  "✅ No reviewable files changed",
+  "⚠️ AI review not run — no files admitted",
+]);
 
-function timestampMillis(value) {
-  if (!value) return null;
-  const millis = value instanceof Date ? value.getTime() : Date.parse(String(value));
-  return Number.isFinite(millis) ? millis : null;
+function unavailable(reason, error) {
+  return {
+    unavailable: true,
+    verdict: "error",
+    blocked: false,
+    findings: [],
+    reason,
+    error,
+  };
 }
 
 /**
- * ai_reviews is unique per (repo, PR, head), so repeated attempts reuse the
- * same row. The upsert refreshes started_at but intentionally preserves prior
- * terminal/publication state for recovery. A terminal field therefore belongs
- * to the current attempt only when completed_at is at or after that refreshed
- * started_at. Both timestamps are written by PostgreSQL, avoiding app/DB clock
- * comparisons.
+ * Wrap an Octokit client for one reviewPR invocation and capture the exact
+ * dedicated AI-review check it creates/finalizes. The wrapper deliberately
+ * does not share state across invocations.
+ *
+ * The caller keeps using the original client for unrelated worker effects;
+ * only reviewPR receives `tracker.octokit`.
  */
-function terminalReceiptBelongsToCurrentAttempt(row) {
-  const startedAt = timestampMillis(row?.started_at);
-  const completedAt = timestampMillis(row?.completed_at);
-  return startedAt !== null && completedAt !== null && completedAt >= startedAt;
+export function createReviewPresentationTracker(octokit) {
+  let creationAttempted = false;
+  let creationError = null;
+  let reviewCheckRunId = null;
+  let terminalPatch = null;
+
+  const trackedOctokit = Object.create(octokit);
+  trackedOctokit.request = async function trackedRequest(route, params = {}) {
+    const isCreate = route === "POST /repos/{owner}/{repo}/check-runs" &&
+      params?.name === REVIEW_CHECK_NAME;
+
+    if (isCreate) {
+      creationAttempted = true;
+      try {
+        const response = await octokit.request(route, params);
+        reviewCheckRunId = response?.data?.id ?? null;
+        if (reviewCheckRunId === null) {
+          creationError = "GitHub returned no check-run id for the AI review invocation.";
+        }
+        return response;
+      } catch (err) {
+        creationError = err?.message || "AI review check creation failed.";
+        throw err;
+      }
+    }
+
+    const isTrackedPatch = route === "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}" &&
+      reviewCheckRunId !== null &&
+      String(params?.check_run_id ?? "") === String(reviewCheckRunId);
+
+    if (isTrackedPatch) {
+      const response = await octokit.request(route, params);
+      if (params?.conclusion || params?.status === "completed") {
+        terminalPatch = {
+          conclusion: params?.conclusion ?? null,
+          title: params?.output?.title ?? "",
+          summary: params?.output?.summary ?? "",
+        };
+      }
+      return response;
+    }
+
+    return octokit.request(route, params);
+  };
+
+  return {
+    octokit: trackedOctokit,
+    snapshot() {
+      return {
+        creationAttempted,
+        creationError,
+        reviewCheckRunId,
+        terminalPatch: terminalPatch ? { ...terminalPatch } : null,
+      };
+    },
+  };
 }
 
 /**
- * Normalize a review service result for maintainer-facing presentation.
+ * Normalize a review service result for the top-level GitWire check.
  *
- * Non-null results are already explicit and pass through untouched. For a
- * legacy null result, inspect the exact (repo, PR, head) review receipt:
- *   - a current-attempt verdict=error or publication_state=failed -> unavailable
- *   - stale terminal fields from an older same-head attempt -> ignore
- *   - no row / non-error row -> preserve the legitimate null skip contract
- *   - receipt lookup failure -> unavailable, because the worker attempted the
- *     review and can no longer prove that null meant a benign skip
+ * Explicit reviewPR results are invocation-local and pass through untouched.
+ * For the remaining legacy null contract:
+ *   - no dedicated-check attempt means reviewPR skipped before starting
+ *     (currently bot-authored PR) and remains a benign null;
+ *   - a successfully terminalized dedicated check with one of the two
+ *     explicitly benign no-files titles remains a benign null;
+ *   - every other attempted-but-null outcome is unavailable, because the
+ *     caller cannot prove that the null meant a benign skip.
  *
- * @returns {Promise<object|null>}
+ * This fails safe if check creation/finalization cannot be verified and never
+ * infers invocation ownership from the shared ai_reviews row.
  */
-export async function normalizeReviewResultForPresentation({ reviewResult, repoId, prNumber, headSha }) {
+export function normalizeReviewResultForPresentation({ reviewResult, invocation }) {
   if (reviewResult !== null && reviewResult !== undefined) return reviewResult;
 
-  try {
-    const { rows } = await db.query(
-      "SELECT verdict, summary, terminal_reason, publication_state, started_at, completed_at " +
-      "FROM ai_reviews " +
-      "WHERE repo_id = $1 AND pr_number = $2 AND commit_sha = $3 " +
-      "ORDER BY id DESC LIMIT 1",
-      [repoId, prNumber, headSha]
-    );
-    const row = rows[0];
-    if (!row) return null;
+  const state = invocation || {};
+  if (!state.creationAttempted) return null;
 
-    const unavailable = terminalReceiptBelongsToCurrentAttempt(row) &&
-      (row.verdict === "error" || row.publication_state === "failed");
-    if (!unavailable) return null;
-
-    const reason = row.terminal_reason || (row.publication_state === "failed" ? "publication_failed" : "review_error");
-    return {
-      unavailable: true,
-      verdict: "error",
-      blocked: false,
-      findings: [],
-      reason,
-      error: row.summary || reason || "AI review could not be completed.",
-    };
-  } catch (err) {
-    logger.warn(
-      { err: err.message, repoId, prNumber, headSha },
-      "AI review presentation receipt lookup failed — reporting unavailable"
+  if (state.reviewCheckRunId === null || state.reviewCheckRunId === undefined) {
+    return unavailable(
+      "review_check_unavailable",
+      state.creationError || "AI review outcome could not be bound to an invocation-specific check run."
     );
-    return {
-      unavailable: true,
-      verdict: "error",
-      blocked: false,
-      findings: [],
-      reason: "outcome_lookup_failed",
-      error: "AI review outcome could not be verified from durable review state.",
-    };
   }
+
+  if (!state.terminalPatch) {
+    return unavailable(
+      "review_outcome_unverified",
+      "AI review returned no result and its invocation-specific check did not reach a verified terminal state."
+    );
+  }
+
+  if (BENIGN_NULL_TITLES.has(state.terminalPatch.title)) return null;
+
+  return unavailable(
+    "review_unavailable",
+    state.terminalPatch.summary || state.terminalPatch.title ||
+      "AI review could not be completed."
+  );
 }

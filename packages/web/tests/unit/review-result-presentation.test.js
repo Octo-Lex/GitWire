@@ -1,176 +1,195 @@
 // tests/unit/review-result-presentation.test.js
 
-import { beforeEach, describe, expect, it, jest } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 
-const mockQuery = jest.fn();
-const mockWarn = jest.fn();
+const {
+  createReviewPresentationTracker,
+  normalizeReviewResultForPresentation,
+} = await import("../../src/services/reviewResultPresentation.js");
 
-await jest.unstable_mockModule("../../src/lib/db.js", () => ({
-  db: { query: mockQuery },
-}));
+function fakeOctokit() {
+  let nextId = 100;
+  const calls = [];
+  return {
+    calls,
+    async request(route, params = {}) {
+      calls.push({ route, params });
+      if (route === "POST /repos/{owner}/{repo}/check-runs") {
+        return { data: { id: nextId++ } };
+      }
+      return { data: {} };
+    },
+  };
+}
 
-await jest.unstable_mockModule("../../src/lib/logger.js", () => ({
-  logger: { warn: mockWarn, info: jest.fn(), debug: jest.fn(), error: jest.fn() },
-}));
+function createReviewCheck(tracker) {
+  return tracker.octokit.request(
+    "POST /repos/{owner}/{repo}/check-runs",
+    { owner: "o", repo: "r", name: "GitWire AI Review", head_sha: "abc123" }
+  );
+}
 
-const { normalizeReviewResultForPresentation } = await import(
-  "../../src/services/reviewResultPresentation.js"
-);
+function finishReviewCheck(tracker, checkRunId, { conclusion = "neutral", title, summary }) {
+  return tracker.octokit.request(
+    "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}",
+    {
+      owner: "o",
+      repo: "r",
+      check_run_id: checkRunId,
+      status: "completed",
+      conclusion,
+      output: { title, summary },
+    }
+  );
+}
 
-const base = {
-  repoId: 123,
-  prNumber: 42,
-  headSha: "abc123",
-};
-
-const currentAttempt = {
-  started_at: "2026-09-24T08:40:00.000Z",
-  completed_at: "2026-09-24T08:40:10.000Z",
-};
-
-beforeEach(() => {
-  jest.clearAllMocks();
-});
-
-describe("normalizeReviewResultForPresentation", () => {
-  it("passes explicit review results through without consulting durable state", async () => {
+describe("review result presentation", () => {
+  it("passes explicit review results through without consulting invocation state", () => {
     const result = { verdict: "approved", blocked: false, findings: [] };
-    await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: result }))
-      .resolves.toBe(result);
-    expect(mockQuery).not.toHaveBeenCalled();
+    expect(normalizeReviewResultForPresentation({ reviewResult: result, invocation: null }))
+      .toBe(result);
   });
 
-  it("preserves a legitimate null skip when no review receipt exists", async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [] });
-    await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: null }))
-      .resolves.toBeNull();
+  it("preserves a null skip when reviewPR returned before attempting its dedicated check", () => {
+    const tracker = createReviewPresentationTracker(fakeOctokit());
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: tracker.snapshot(),
+    })).toBeNull();
   });
 
-  it("preserves null when the durable review receipt is not an error", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{
-        verdict: null,
-        summary: null,
-        terminal_reason: null,
-        publication_state: null,
-        ...currentAttempt,
-      }],
-    });
-    await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: null }))
-      .resolves.toBeNull();
-  });
+  it("fails safe when the invocation-specific review check could not be created", async () => {
+    const octokit = {
+      request: jest.fn(async () => { throw new Error("GitHub unavailable"); }),
+    };
+    const tracker = createReviewPresentationTracker(octokit);
 
-  it("converts a current-attempt legacy null error receipt into a structured unavailable result", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{
-        verdict: "error",
-        summary: "Review timed out after 596.371s: claude review",
-        terminal_reason: "error",
-        publication_state: null,
-        ...currentAttempt,
-      }],
-    });
+    await expect(createReviewCheck(tracker)).rejects.toThrow("GitHub unavailable");
 
-    await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: null }))
-      .resolves.toEqual({
-        unavailable: true,
-        verdict: "error",
-        blocked: false,
-        findings: [],
-        reason: "error",
-        error: "Review timed out after 596.371s: claude review",
-      });
-
-    expect(mockQuery).toHaveBeenCalledWith(
-      expect.stringContaining("WHERE repo_id = $1 AND pr_number = $2 AND commit_sha = $3"),
-      [123, 42, "abc123"]
-    );
-    expect(mockQuery.mock.calls[0][0]).toContain("started_at");
-    expect(mockQuery.mock.calls[0][0]).toContain("completed_at");
-  });
-
-  it("does not reuse a stale error receipt after a newer same-head attempt starts", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{
-        verdict: "error",
-        summary: "Old timeout from a prior attempt",
-        terminal_reason: "error",
-        publication_state: null,
-        started_at: "2026-09-24T08:41:00.000Z",
-        completed_at: "2026-09-24T08:40:00.000Z",
-      }],
-    });
-
-    await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: null }))
-      .resolves.toBeNull();
-  });
-
-  it("does not reuse stale failed-publication state without a current completion", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{
-        verdict: null,
-        summary: "Old publication failure",
-        terminal_reason: "ambiguous_publication",
-        publication_state: "failed",
-        started_at: "2026-09-24T08:41:00.000Z",
-        completed_at: null,
-      }],
-    });
-
-    await expect(normalizeReviewResultForPresentation({ ...base, reviewResult: null }))
-      .resolves.toBeNull();
-  });
-
-  it("treats a current-attempt terminally failed publication as unavailable even without verdict=error", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{
-        verdict: null,
-        summary: "A prior publication attempt failed.",
-        terminal_reason: null,
-        publication_state: "failed",
-        ...currentAttempt,
-      }],
-    });
-
-    const result = await normalizeReviewResultForPresentation({ ...base, reviewResult: null });
-    expect(result).toEqual(expect.objectContaining({
-      unavailable: true,
-      reason: "publication_failed",
-      error: "A prior publication attempt failed.",
-    }));
-  });
-
-  it("uses the durable terminal reason when a current failed publication has no summary", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [{
-        verdict: null,
-        summary: null,
-        terminal_reason: "ambiguous_publication",
-        publication_state: "failed",
-        ...currentAttempt,
-      }],
-    });
-
-    const result = await normalizeReviewResultForPresentation({ ...base, reviewResult: null });
-    expect(result).toEqual(expect.objectContaining({
-      unavailable: true,
-      reason: "ambiguous_publication",
-      error: "ambiguous_publication",
-    }));
-  });
-
-  it("reports unavailable when durable outcome lookup itself fails", async () => {
-    mockQuery.mockRejectedValueOnce(new Error("database unavailable"));
-
-    const result = await normalizeReviewResultForPresentation({ ...base, reviewResult: null });
-    expect(result).toEqual({
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: tracker.snapshot(),
+    })).toEqual({
       unavailable: true,
       verdict: "error",
       blocked: false,
       findings: [],
-      reason: "outcome_lookup_failed",
-      error: "AI review outcome could not be verified from durable review state.",
+      reason: "review_check_unavailable",
+      error: "GitHub unavailable",
     });
-    expect(mockWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the explicit no-reviewable-files null contract", async () => {
+    const tracker = createReviewPresentationTracker(fakeOctokit());
+    const created = await createReviewCheck(tracker);
+    await finishReviewCheck(tracker, created.data.id, {
+      conclusion: "success",
+      title: "✅ No reviewable files changed",
+      summary: "All changed files are excluded by the ignore patterns.",
+    });
+
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: tracker.snapshot(),
+    })).toBeNull();
+  });
+
+  it("preserves the explicit no-files-admitted null contract", async () => {
+    const tracker = createReviewPresentationTracker(fakeOctokit());
+    const created = await createReviewCheck(tracker);
+    await finishReviewCheck(tracker, created.data.id, {
+      title: "⚠️ AI review not run — no files admitted",
+      summary: "Changed files exist but none were admitted.",
+    });
+
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: tracker.snapshot(),
+    })).toBeNull();
+  });
+
+  it("converts an invocation-specific parse failure into unavailable with its actual summary", async () => {
+    const tracker = createReviewPresentationTracker(fakeOctokit());
+    const created = await createReviewCheck(tracker);
+    await finishReviewCheck(tracker, created.data.id, {
+      title: "⚠️ AI review: could not parse response",
+      summary: "Review completed but the response format was unexpected. Strategy: none",
+    });
+
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: tracker.snapshot(),
+    })).toEqual({
+      unavailable: true,
+      verdict: "error",
+      blocked: false,
+      findings: [],
+      reason: "review_unavailable",
+      error: "Review completed but the response format was unexpected. Strategy: none",
+    });
+  });
+
+  it("fails safe when a null result has no verified terminal patch for its exact check", async () => {
+    const tracker = createReviewPresentationTracker(fakeOctokit());
+    await createReviewCheck(tracker);
+
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: tracker.snapshot(),
+    })).toEqual(expect.objectContaining({
+      unavailable: true,
+      reason: "review_outcome_unverified",
+    }));
+  });
+
+  it("ignores terminal patches for a different check-run id", async () => {
+    const tracker = createReviewPresentationTracker(fakeOctokit());
+    const created = await createReviewCheck(tracker);
+    await finishReviewCheck(tracker, created.data.id + 999, {
+      title: "✅ No reviewable files changed",
+      summary: "Unrelated check",
+    });
+
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: tracker.snapshot(),
+    })).toEqual(expect.objectContaining({
+      unavailable: true,
+      reason: "review_outcome_unverified",
+    }));
+  });
+
+  it("keeps concurrent same-head invocation outcomes isolated by immutable check-run id", async () => {
+    const sharedOctokit = fakeOctokit();
+    const first = createReviewPresentationTracker(sharedOctokit);
+    const second = createReviewPresentationTracker(sharedOctokit);
+
+    const firstCheck = await createReviewCheck(first);
+    const secondCheck = await createReviewCheck(second);
+
+    // Interleave terminalization in the opposite order. Shared ai_reviews
+    // timestamps cannot safely represent this shape; per-invocation check ids can.
+    await finishReviewCheck(second, secondCheck.data.id, {
+      conclusion: "success",
+      title: "✅ No reviewable files changed",
+      summary: "No reviewable files.",
+    });
+    await finishReviewCheck(first, firstCheck.data.id, {
+      title: "⚠️ AI review: validation errors",
+      summary: "Review completed but findings could not be validated.",
+    });
+
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: first.snapshot(),
+    })).toEqual(expect.objectContaining({
+      unavailable: true,
+      error: "Review completed but findings could not be validated.",
+    }));
+
+    expect(normalizeReviewResultForPresentation({
+      reviewResult: null,
+      invocation: second.snapshot(),
+    })).toBeNull();
   });
 });
