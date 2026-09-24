@@ -47,6 +47,29 @@ describe("issue-fix trusted target resolver", () => {
     expect(params).toEqual(["octo/repo"]);
   });
 
+  it("derives GitHub API coordinates from canonical full_name rather than stale denormalized columns", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        ...row,
+        full_name: "new-owner/new-repo",
+        owner: "old-owner",
+        name: "old-repo",
+      }],
+    });
+
+    await expect(resolveIssueFixRepositoryById("99002")).resolves.toEqual({
+      status: "resolved",
+      repository: {
+        github_id: "99002",
+        installation_id: "99001",
+        full_name: "new-owner/new-repo",
+        owner: "new-owner",
+        name: "new-repo",
+        default_branch: "main",
+      },
+    });
+  });
+
   it("fails closed when active full_name mapping is ambiguous", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [row, { ...row, github_id: "99003" }] });
     await expect(resolveIssueFixRepositoryByFullName("octo/repo")).resolves.toEqual({ status: "ambiguous" });

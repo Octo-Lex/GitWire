@@ -47,15 +47,22 @@ function normalizeIssueLabels(labels) {
 function toRuntimeSafeTarget(row) {
   const repositoryId = normalizePositivePgBigint(row?.github_id);
   const installationId = normalizePositivePgBigint(row?.installation_id);
-  if (!repositoryId || !installationId) return null;
+  const fullName = normalizeFullName(row?.full_name);
+  if (!repositoryId || !installationId || !fullName) return null;
   if (repositoryId > JS_SAFE_ID_MAX || installationId > JS_SAFE_ID_MAX) return null;
+
+  // `full_name` is the canonical repository coordinate tracked by the identity
+  // reconciliation path. Historical/full-sync rows can carry stale denormalized
+  // owner/name columns after a rename or transfer, so never use those columns as
+  // GitHub request authority. Derive both API coordinates from canonical full_name.
+  const [owner, name] = fullName.split("/");
 
   return {
     github_id: repositoryId.toString(),
     installation_id: installationId.toString(),
-    full_name: row.full_name,
-    owner: row.owner,
-    name: row.name,
+    full_name: fullName,
+    owner,
+    name,
     default_branch: row.default_branch,
   };
 }
