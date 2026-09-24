@@ -1,69 +1,95 @@
 // src/services/auth/declarations.js
-//
-// Protected-surface declarations for Wave 2 (issue #94).
-//
-// Registers every protected HTTP route, worker, scheduled task, Telegram
-// action, and mutation-producing execution path with the protected-surface
-// registry. Each declaration names: required permission, resource type,
-// principal source, authentication method, and observe-only handling.
-//
-// This is the machine-testable source of truth that the protected-surface
-// completeness check (issue #94 §5) consults. A surface not declared here
-// fails the check.
-//
-// Wave 2 observes only — every surface's observeHandling is 'record' (the
-// authoritative decision is computed and logged, but legacy behavior is not
-// globally blocked). Enforcement is Wave 5.
+// Protected-surface authorization metadata. D0-04 keeps this declaration
+// inventory separate from the source-derived surface manifest so completeness
+// is no longer declaration-self-consistent.
 
 import { declareProtectedSurfaces } from "./protectedSurfaces.js";
+import { expectedProtectedSurfaceIdsFromManifest } from "./consequentialSurfaceManifest.js";
 
-// ── HTTP routes (from the route inventory) ──────────────────────────────────
-// Permission tokens follow '<resource_type>:<action>' (ADR-0002 vocabulary).
+const R = (id, permission, resourceType) => ({ id, kind: "route", permission, resourceType, principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" });
+
 const ROUTE_SURFACES = [
-  // maintainer.js — highest-risk: real GitHub mutations (collaborators, branch protection)
-  { id: "route:DELETE:/api/maintainer/collaborators/:owner/:repo/:login", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:PUT:/api/maintainer/branch-rules/:owner/:repo/:pattern", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/maintainer/members/sync", "installation:read", "fleet"),
+  R("route:PUT:/api/maintainer/collaborators/:owner/:repo/:login", "repository:github:act", "repository"),
+  R("route:DELETE:/api/maintainer/collaborators/:owner/:repo/:login", "repository:github:act", "repository"),
+  R("route:PUT:/api/maintainer/branch-rules/:owner/:repo/:pattern", "repository:github:act", "repository"),
+  R("route:PATCH:/api/maintainer/:owner/:repo/settings", "repository:update", "repository"),
+  R("route:POST:/api/maintainer/:owner/:repo/stale-scan", "repository:github:act", "repository"),
+  R("route:POST:/api/maintainer/:owner/:repo/branch-cleanup", "repository:github:act", "repository"),
 
-  // config.js — privileged config changes
-  { id: "route:PUT:/api/config/:owner/:repo", kind: "route", permission: "repository:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/config/:owner/:repo/restore/:historyId", kind: "route", permission: "repository:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:PUT:/api/config/:owner/:repo", "repository:update", "repository"),
+  R("route:PATCH:/api/config/:owner/:repo", "repository:update", "repository"),
+  R("route:DELETE:/api/config/:owner/:repo", "repository:update", "repository"),
+  R("route:POST:/api/config/:owner/:repo/restore/:historyId", "repository:update", "repository"),
 
-  // rollouts.js — governed policy mutations
-  { id: "route:POST:/api/rollouts", kind: "route", permission: "policy_definition:create", resourceType: "policy_definition", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/rollouts/:id/transition", kind: "route", permission: "policy_rollout_plan:update", resourceType: "policy_rollout_plan", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/rollouts/:id/approve", kind: "route", permission: "policy_rollout_plan:approve", resourceType: "policy_rollout_plan", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/rollouts/:id/promote", kind: "route", permission: "policy_rollout_plan:approve", resourceType: "policy_rollout_plan", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/rollouts/:id/rollback", kind: "route", permission: "policy_rollout_plan:approve", resourceType: "policy_rollout_plan", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/rollouts", "policy_definition:create", "policy_definition"),
+  R("route:PATCH:/api/rollouts/:id/evidence", "policy_rollout_plan:update", "policy_rollout_plan"),
+  R("route:POST:/api/rollouts/:id/transition", "policy_rollout_plan:update", "policy_rollout_plan"),
+  R("route:POST:/api/rollouts/:id/approve", "policy_rollout_plan:approve", "policy_rollout_plan"),
+  R("route:POST:/api/rollouts/:id/reject", "policy_rollout_plan:approve", "policy_rollout_plan"),
+  R("route:POST:/api/rollouts/:id/promote", "policy_rollout_plan:approve", "policy_rollout_plan"),
+  R("route:POST:/api/rollouts/:id/rollback", "policy_rollout_plan:approve", "policy_rollout_plan"),
 
-  // ciRuns.js — trusted runId → repository resolution before enqueue
-  { id: "route:POST:/api/ci/:runId/heal", kind: "route", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/ci/:runId/retry", "repository:github:act", "repository"),
+  R("route:POST:/api/ci/:runId/heal", "repository:github:act", "repository"),
+  R("route:POST:/api/fix/:owner/:repo/issues/:number", "issue:create", "repository"),
 
-  // fix.js — enqueues issue-fix; repository is resolved by owner/repo server state
-  { id: "route:POST:/api/fix/:owner/:repo/issues/:number", kind: "route", permission: "issue:create", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/actions/:id/retry", "repository:update", "repository"),
+  R("route:POST:/api/actions/:id/cancel", "repository:update", "repository"),
+  R("route:POST:/api/actions/:id/reconcile", "repository:update", "repository"),
 
-  // Fleet-wide orchestration routes have no single installation target.
-  { id: "route:POST:/api/enforcement/run", kind: "route", permission: "repository:github:act", resourceType: "fleet", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/phase2/queue/:owner/:repo/config", "repository:update", "repository"),
+  R("route:POST:/api/phase2/queue/:owner/:repo/:pr/admit", "merge_queue_entry:update", "repository"),
+  R("route:POST:/api/phase2/queue/:owner/:repo/:pr/remove", "merge_queue_entry:update", "repository"),
+  R("route:POST:/api/phase2/feedback", "repository:update", "installation"),
+  R("route:PUT:/api/phase2/feedback/:id", "repository:update", "installation"),
+  R("route:DELETE:/api/phase2/feedback/:id", "repository:update", "installation"),
 
-  // phase2/phase3/phase4 automation mutations
-  { id: "route:POST:/api/phase2/queue/:owner/:repo/:pr/admit", kind: "route", permission: "merge_queue_entry:update", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/phase3/reconciler/run", kind: "route", permission: "installation:read", resourceType: "fleet", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:POST:/api/review/trigger/:owner/:repo/:pr", kind: "route", permission: "ai_review:create", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/enforcement/run", "repository:github:act", "fleet"),
+  R("route:POST:/api/enforcement/policies", "repository:update", "installation"),
+  R("route:PUT:/api/enforcement/policies/:id", "repository:update", "installation"),
+  R("route:DELETE:/api/enforcement/policies/:id", "repository:update", "installation"),
+  R("route:POST:/api/enforcement/violations/:id/suppress", "repository:update", "repository"),
 
-  // repos.js — repository lookup supplies the installation scope
-  { id: "route:POST:/api/repos/:owner/:repo/sync", kind: "route", permission: "repository:update", resourceType: "installation", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/duplicates/:id(\\d+)/confirm", "repository:github:act", "repository"),
+  R("route:POST:/api/duplicates/:id(\\d+)/dismiss", "repository:update", "repository"),
+  R("route:POST:/api/duplicates/backfill/:owner/:repo", "repository:update", "repository"),
 
-  // gates.js — posts check runs
-  { id: "route:POST:/api/gates/:owner/:repo/evaluate", kind: "route", permission: "quality_gate:evaluate", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/gates/:owner/:repo", "repository:update", "repository"),
+  R("route:DELETE:/api/gates/:owner/:repo/:name", "repository:update", "repository"),
+  R("route:POST:/api/gates/:owner/:repo/evaluate", "quality_gate:evaluate", "repository"),
 
-  // Read-only aggregate routes are fleet-scoped; owner/repo reads remain repository-scoped.
-  { id: "route:GET:/api/repos", kind: "route", permission: "repository:list", resourceType: "fleet", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:GET:/api/issues/:owner/:repo", kind: "route", permission: "issue:list", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:GET:/api/pull-requests/:owner/:repo", kind: "route", permission: "pull_request:list", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:GET:/api/decisions", kind: "route", permission: "decision_log:list", resourceType: "fleet", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
-  { id: "route:GET:/api/repairs", kind: "route", permission: "repair_proposal:list", resourceType: "fleet", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
+  R("route:POST:/api/phase3/flaky/:id/graduate", "repository:update", "repository"),
+  R("route:POST:/api/phase3/flaky/:id/dismiss", "repository:update", "repository"),
+  R("route:POST:/api/phase3/reconciler/run", "installation:read", "fleet"),
+  R("route:PUT:/api/phase3/reconciler/repos/:owner/:repo", "repository:update", "repository"),
+  R("route:POST:/api/phase3/dependencies/:owner/:repo/scan", "repository:update", "repository"),
+  R("route:POST:/api/phase3/dependencies/:owner/:repo/batch-pr", "repository:github:act", "repository"),
+  R("route:POST:/api/phase3/dependencies/vuln/:id/dismiss", "repository:update", "repository"),
+
+  R("route:POST:/api/review/config/:owner/:repo", "repository:update", "repository"),
+  R("route:POST:/api/review/trigger/:owner/:repo/:pr", "ai_review:create", "repository"),
+  R("route:POST:/api/audit/export", "decision_log:list", "fleet"),
+  R("route:POST:/api/audit/reports", "decision_log:list", "fleet"),
+
+  R("route:POST:/api/repos/:owner/:repo/sync", "repository:update", "installation"),
+  R("route:POST:/api/repos/reconcile/merge", "repository:update", "repository"),
+  R("route:POST:/api/repos/reconcile/discard", "repository:update", "repository"),
+
+  R("route:POST:/api/triage/failures/:jobId/disposition", "repository:update", "repository"),
+  R("route:POST:/api/triage/failures/:jobId/retry", "repository:update", "repository"),
+
+  R("route:POST:/api/waivers", "repository:update", "repository"),
+  R("route:DELETE:/api/waivers/:id", "repository:update", "repository"),
+
+  // Existing read-only protected surfaces remain part of completeness.
+  R("route:GET:/api/repos", "repository:list", "fleet"),
+  R("route:GET:/api/issues/:owner/:repo", "issue:list", "repository"),
+  R("route:GET:/api/pull-requests/:owner/:repo", "pull_request:list", "repository"),
+  R("route:GET:/api/decisions", "decision_log:list", "fleet"),
+  R("route:GET:/api/repairs", "repair_proposal:list", "fleet"),
 ];
 
-// ── Workers (from the worker inventory) ─────────────────────────────────────
 const WORKER_SURFACES = [
   { id: "worker:webhook", kind: "worker", permission: "installation:read", resourceType: "installation", principalSource: "worker-context", authMethod: "webhook_hmac", observeHandling: "record" },
   { id: "worker:triage", kind: "worker", permission: "issue:update", resourceType: "repository", principalSource: "worker-context", authMethod: "system", observeHandling: "record" },
@@ -81,7 +107,6 @@ const WORKER_SURFACES = [
   { id: "worker:phase4", kind: "worker", permission: "ai_review:create", resourceType: "repository", principalSource: "worker-context", authMethod: "system", observeHandling: "record" },
 ];
 
-// ── Scheduled tasks ─────────────────────────────────────────────────────────
 const SCHEDULED_SURFACES = [
   { id: "scheduled:sync", kind: "scheduled", permission: "installation:read", resourceType: "fleet", principalSource: "worker-context", authMethod: "system", observeHandling: "record" },
   { id: "scheduled:maintainer", kind: "scheduled", permission: "repository:github:act", resourceType: "installation", principalSource: "worker-context", authMethod: "system", observeHandling: "record" },
@@ -90,7 +115,6 @@ const SCHEDULED_SURFACES = [
   { id: "scheduled:reconciliation", kind: "scheduled", permission: "installation:read", resourceType: "fleet", principalSource: "worker-context", authMethod: "system", observeHandling: "record" },
 ];
 
-// ── Telegram + webhook ingress ──────────────────────────────────────────────
 const INGRESS_SURFACES = [
   { id: "telegram:heal", kind: "telegram", permission: "repository:github:act", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
   { id: "telegram:fix", kind: "telegram", permission: "issue:create", resourceType: "repository", principalSource: "req.auth", authMethod: "api_key", observeHandling: "record" },
@@ -101,20 +125,10 @@ let REGISTERED = false;
 
 export function registerAllProtectedSurfaces() {
   if (REGISTERED) return;
-  declareProtectedSurfaces([
-    ...ROUTE_SURFACES,
-    ...WORKER_SURFACES,
-    ...SCHEDULED_SURFACES,
-    ...INGRESS_SURFACES,
-  ]);
+  declareProtectedSurfaces([...ROUTE_SURFACES, ...WORKER_SURFACES, ...SCHEDULED_SURFACES, ...INGRESS_SURFACES]);
   REGISTERED = true;
 }
 
 export function expectedProtectedSurfaceIds() {
-  return [
-    ...ROUTE_SURFACES,
-    ...WORKER_SURFACES,
-    ...SCHEDULED_SURFACES,
-    ...INGRESS_SURFACES,
-  ].map((s) => s.id);
+  return expectedProtectedSurfaceIdsFromManifest();
 }
