@@ -50,7 +50,7 @@ describe("W1-02 central authorization mode", () => {
     expect(RouteAuthorizationMode.ENFORCED).toBe("enforced");
   });
 
-  test("denial remains advisory in observe mode", async () => {
+  test("denial remains advisory and is logged as observe-mode in observe mode", async () => {
     const result = await authorizeControlled({
       principal: null,
       permission: "repository:update",
@@ -63,10 +63,14 @@ describe("W1-02 central authorization mode", () => {
     expect(result.blocked).toBe(false);
     expect(result.persisted).toBe(true);
     expect(Object.isFrozen(result)).toBe(true);
-    expect(mockLogDecision).toHaveBeenCalledTimes(1);
+    expect(mockLogDecision).toHaveBeenCalledWith(
+      result.decision,
+      null,
+      { observeMode: true },
+    );
   });
 
-  test("denial becomes blocking only in enforced mode", async () => {
+  test("denial becomes blocking and is logged as enforced in enforced mode", async () => {
     const result = await authorizeControlled({
       principal: null,
       permission: "repository:update",
@@ -78,7 +82,11 @@ describe("W1-02 central authorization mode", () => {
     expect(result.mode).toBe("enforced");
     expect(result.blocked).toBe(true);
     expect(result.persisted).toBe(true);
-    expect(mockLogDecision).toHaveBeenCalledTimes(1);
+    expect(mockLogDecision).toHaveBeenCalledWith(
+      result.decision,
+      null,
+      { observeMode: false },
+    );
   });
 
   test("omitted mode preserves legacy observe-only behavior", async () => {
@@ -90,9 +98,42 @@ describe("W1-02 central authorization mode", () => {
 
     expect(result.mode).toBe("observe");
     expect(result.blocked).toBe(false);
+    expect(mockLogDecision).toHaveBeenCalledWith(
+      result.decision,
+      null,
+      { observeMode: true },
+    );
   });
 
-  test("an allowed decision never blocks in enforced mode", () => {
+  test("an allowed enforced decision never blocks and is logged as enforced", async () => {
+    const principal = Object.freeze({
+      principalId: "principal-1",
+      authenticationMethod: "api_key",
+    });
+    mockGetPrincipalById.mockResolvedValue({ id: "principal-1" });
+    mockPrincipalValidityCode.mockReturnValue("allowed");
+    mockQuery.mockResolvedValue({
+      rows: [{ assignment_id: "assignment-1", scope_type: "fleet" }],
+    });
+
+    const result = await authorizeControlled({
+      principal,
+      permission: "fleet:update",
+      resource: { type: "fleet" },
+      mode: AuthorizationMode.ENFORCED,
+    });
+
+    expect(result.decision.allowed).toBe(true);
+    expect(result.mode).toBe("enforced");
+    expect(result.blocked).toBe(false);
+    expect(mockLogDecision).toHaveBeenCalledWith(
+      result.decision,
+      principal,
+      { observeMode: false },
+    );
+  });
+
+  test("outcome helper keeps allowed decisions non-blocking in enforced mode", () => {
     const decision = Object.freeze({ allowed: true, code: "allowed" });
     const result = createAuthorizationOutcome({
       decision,
