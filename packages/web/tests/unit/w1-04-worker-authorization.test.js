@@ -115,6 +115,24 @@ describe("W1-04 worker authorization cutover", () => {
     expect(mockAuthorizeControlled).not.toHaveBeenCalled();
   });
 
+  test("Phase-3-only repository id forms do not change observe-only repository workers", async () => {
+    await adoptWorker({
+      workerId: "worker:diagnosis",
+      permission: "pull_request:read",
+      resourceType: "repository",
+      installationId: 7,
+      jobData: { repoId: 99, repository: { id: 101 } },
+    });
+
+    expect(mockResolveRepositoryResource).not.toHaveBeenCalled();
+    expect(mockAuthorize).toHaveBeenCalledWith({
+      principal: installationPrincipal,
+      permission: "pull_request:read",
+      resource: { type: "repository", installationId: 7 },
+    });
+    expect(mockAuthorizeControlled).not.toHaveBeenCalled();
+  });
+
   test("enforced allow requires a persisted controlled decision", async () => {
     const trustedResource = {
       type: "repository",

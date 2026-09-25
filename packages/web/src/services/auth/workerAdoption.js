@@ -141,11 +141,13 @@ export async function adoptWorker({
   // repo id, while Phase-3 installation jobs carry repository + installation
   // candidates that must agree with the repositories table before authorization.
   let resource;
+  const phase3PayloadRepoId = workerId === "worker:phase3"
+    ? (jobData?.repository?.id || jobData?.repoId || null)
+    : null;
   const payloadRepoId =
     jobData?.payload?.repository?.id ||
-    jobData?.repository?.id ||
     jobData?.repositoryId ||
-    jobData?.repoId ||
+    phase3PayloadRepoId ||
     null;
   const payloadRepoFullName = jobData?.repoFullName || null;
   const candidateInstId = context?.installationId || (installationId ? Number(installationId) : null);
