@@ -1,6 +1,6 @@
 // Declaration-driven observe-only route authorization observer (Wave 2 / #94).
 
-import { authorize } from "../services/auth/authorize.js";
+import { authorizeWithPersistence } from "../services/auth/authorize.js";
 import { logDecision } from "../services/auth/decisionLog.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -52,21 +52,38 @@ async function ensureRouteMap() {
 /**
  * Record one declaration-driven Wave-2 authorization observation.
  *
- * authorize() records the authoritative decision. When that decision denies,
- * preserve the same legacy-vs-authoritative disagreement evidence that
- * observeAuthorize() records on route-local adoption paths. Mark the request
- * observed only after that evidence is confirmed persisted so route-local
- * observation remains available as a non-fatal fallback if persistence fails.
+ * The declaration seam suppresses a later route-local observation only after
+ * its base decision evidence (and disagreement evidence on deny) is confirmed
+ * persisted. Otherwise the request stays unmarked so the existing route-local
+ * observe-only path remains available as a non-fatal fallback.
  */
 export async function observeDeclarationAuthorization(req, { permission, resource, surfaceId = null }) {
   const principal = req.auth || null;
-  const decision = await authorize({ principal, permission, resource });
+  const { decision, persisted: basePersisted } = await authorizeWithPersistence({
+    principal,
+    permission,
+    resource,
+  });
+
+  if (!basePersisted) {
+    logger.warn(
+      {
+        permission,
+        code: decision.code,
+        principalId: principal?.principalId ?? null,
+        surface: surfaceId,
+        resource: resource?.type ?? null,
+      },
+      "routeAuthObserver: base decision evidence was not persisted; preserving route-local fallback",
+    );
+    return decision;
+  }
 
   const legacyExpected = true; // request reached this observer through the legacy-authorized path
   const disagreement = legacyExpected && !decision.allowed;
   if (disagreement) {
-    const persisted = await logDecision(decision, principal, { legacyExpected, disagreement });
-    if (!persisted) {
+    const disagreementPersisted = await logDecision(decision, principal, { legacyExpected, disagreement });
+    if (!disagreementPersisted) {
       logger.warn(
         {
           permission,
@@ -91,7 +108,11 @@ export async function observeDeclarationAuthorization(req, { permission, resourc
     );
   }
 
+  // Cache the declaration-driven result so explicitly adopted route handlers
+  // can reuse it instead of recording a second decision for the same surface.
   req._wave2Observed = true;
+  req._wave2DeclarationObserved = true;
+  req._wave2DeclarationDecision = decision;
   return decision;
 }
 

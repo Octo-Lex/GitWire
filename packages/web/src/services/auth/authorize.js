@@ -28,7 +28,9 @@ import { logDecision } from "./decisionLog.js";
 const POLICY_VERSION = "level1";
 
 /**
- * The central authorization interface.
+ * The central authorization interface. Existing callers receive the same
+ * immutable AuthorizationDecision contract; logging persistence remains
+ * best-effort and does not alter the authorization outcome.
  *
  * @param {object} opts
  * @param {object} opts.principal - AuthContext (the resolved caller)
@@ -37,6 +39,18 @@ const POLICY_VERSION = "level1";
  * @returns {Promise<Readonly<AuthorizationDecision>>}
  */
 export async function authorize({ principal, permission, resource }) {
+  const { decision } = await authorizeWithPersistence({ principal, permission, resource });
+  return decision;
+}
+
+/**
+ * Evaluate authorization and report whether the base decision row persisted.
+ * This is for observe-only de-duplication seams that need to preserve a
+ * route-local fallback when best-effort decision logging fails.
+ *
+ * @returns {Promise<{decision: Readonly<AuthorizationDecision>, persisted: boolean}>}
+ */
+export async function authorizeWithPersistence({ principal, permission, resource }) {
   // Defensive: a null principal (unauthenticated path) short-circuits.
   if (!principal || !principal.principalId) {
     return denyAndLog(DecisionCode.UNAUTHENTICATED, principal, permission, resource, null, null);
@@ -128,8 +142,8 @@ export async function authorize({ principal, permission, resource }) {
       authenticationMethod: principal.authenticationMethod,
       detail: { matchCount: rows.length },
     });
-    await logDecision(decision, principal);
-    return decision;
+    const persisted = await logDecision(decision, principal);
+    return { decision, persisted };
   } catch (err) {
     logger.warn({ err, principalId: principal.principalId, permission }, "authorize: evaluation failed");
     return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err);
@@ -149,6 +163,6 @@ async function denyAndLog(code, principal, permission, resource, assignmentId, s
     authenticationMethod: principal?.authenticationMethod ?? null,
     detail: err ? { error: err.message } : null,
   });
-  await logDecision(decision, principal);
-  return decision;
+  const persisted = await logDecision(decision, principal);
+  return { decision, persisted };
 }
