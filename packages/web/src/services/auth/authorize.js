@@ -28,15 +28,16 @@ import { logDecision } from "./decisionLog.js";
 const POLICY_VERSION = "level1";
 
 /**
- * The central authorization interface.
+ * The persistence-aware authorization interface used by observation seams that
+ * must distinguish a recorded decision from best-effort logging failure.
  *
  * @param {object} opts
  * @param {object} opts.principal - AuthContext (the resolved caller)
  * @param {string} opts.permission - required permission token '<resource_type>:<action>'
  * @param {object} opts.resource - Resource descriptor
- * @returns {Promise<Readonly<AuthorizationDecision>>}
+ * @returns {Promise<{decision: Readonly<AuthorizationDecision>, persisted: boolean}>}
  */
-export async function authorize({ principal, permission, resource }) {
+export async function authorizeWithPersistence({ principal, permission, resource }) {
   // Defensive: a null principal (unauthenticated path) short-circuits.
   if (!principal || !principal.principalId) {
     return denyAndLog(DecisionCode.UNAUTHENTICATED, principal, permission, resource, null, null);
@@ -128,8 +129,8 @@ export async function authorize({ principal, permission, resource }) {
       authenticationMethod: principal.authenticationMethod,
       detail: { matchCount: rows.length },
     });
-    await logDecision(decision, principal);
-    return decision;
+    const persisted = await logDecision(decision, principal);
+    return { decision, persisted };
   } catch (err) {
     logger.warn({ err, principalId: principal.principalId, permission }, "authorize: evaluation failed");
     return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err);
@@ -149,6 +150,12 @@ async function denyAndLog(code, principal, permission, resource, assignmentId, s
     authenticationMethod: principal?.authenticationMethod ?? null,
     detail: err ? { error: err.message } : null,
   });
-  await logDecision(decision, principal);
+  const persisted = await logDecision(decision, principal);
+  return { decision, persisted };
+}
+
+/** Preserve the established decision-only contract for all existing callers. */
+export async function authorize(opts) {
+  const { decision } = await authorizeWithPersistence(opts);
   return decision;
 }

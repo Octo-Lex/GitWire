@@ -21,6 +21,16 @@ import {
 
 export const rolloutRouter = Router();
 
+// routeAuthObserver runs before route handlers. When it successfully records
+// the declaration-derived decision, do not emit a second route-local decision
+// with a less complete resource. If the app observer failed, retain the
+// route-local observe-only fallback.
+export async function observeRolloutAuthorize(req, options, observe = observeAuthorize) {
+  if (req._wave2Observed) return false;
+  await observe(req, options);
+  return true;
+}
+
 /**
  * POST /api/rollouts
  *
@@ -43,7 +53,7 @@ rolloutRouter.post("/", async (req, res) => {
     // Wave 2: observe-only authorization decision. The principal_id from
     // req.auth is authoritative; created_by is compatibility metadata.
     const principalId = authoritativePrincipalId(req);
-    await observeAuthorize(req, {
+    await observeRolloutAuthorize(req, {
       permission: "policy_definition:create",
       resource: { type: "policy_definition" },
       legacyActor: created_by,
@@ -153,7 +163,7 @@ rolloutRouter.post("/:id/transition", async (req, res) => {
     }
 
     // Wave 2: observe-only authorization decision.
-    await observeAuthorize(req, {
+    await observeRolloutAuthorize(req, {
       permission: "policy_rollout_plan:update",
       resource: { type: "policy_rollout_plan", resourceId: String(id) },
       legacyActor: actor,
@@ -196,7 +206,7 @@ rolloutRouter.post("/:id/approve", async (req, res) => {
     }
 
     // Wave 2: observe-only authorization decision.
-    await observeAuthorize(req, {
+    await observeRolloutAuthorize(req, {
       permission: "policy_rollout_plan:approve",
       resource: { type: "policy_rollout_plan", resourceId: String(id) },
       legacyActor: actor,
@@ -240,7 +250,7 @@ rolloutRouter.post("/:id/reject", async (req, res) => {
     }
 
     // Wave 2: observe-only authorization decision.
-    await observeAuthorize(req, {
+    await observeRolloutAuthorize(req, {
       permission: "policy_rollout_plan:approve",
       resource: { type: "policy_rollout_plan", resourceId: String(id) },
       legacyActor: actor,
@@ -286,7 +296,7 @@ rolloutRouter.post("/:id/promote", async (req, res) => {
     }
 
     // Wave 2: observe-only authorization decision.
-    await observeAuthorize(req, {
+    await observeRolloutAuthorize(req, {
       permission: "policy_rollout_plan:approve",
       resource: { type: "policy_rollout_plan", resourceId: String(id) },
       legacyActor: actor,
@@ -337,7 +347,7 @@ rolloutRouter.post("/:id/rollback", async (req, res) => {
     }
 
     // Wave 2: observe-only authorization decision.
-    await observeAuthorize(req, {
+    await observeRolloutAuthorize(req, {
       permission: "policy_rollout_plan:approve",
       resource: { type: "policy_rollout_plan", resourceId: String(id) },
       legacyActor: actor,

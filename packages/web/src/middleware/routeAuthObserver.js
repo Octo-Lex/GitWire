@@ -1,16 +1,16 @@
-// src/middleware/routeAuthObserver.js
-//
 // Declaration-driven observe-only route authorization observer (Wave 2 / #94).
-//
-// Matches each incoming request against the protected-surface registry by
-// method + path pattern. For matched surfaces that are NOT already explicitly
-// adopted (req._wave2Observed), it resolves permission/resource from trusted
-// server-side state, calls authorize(), and records observe-only evidence.
 
-import { authorize } from "../services/auth/authorize.js";
-import { db } from "../lib/db.js";
+import * as authorization from "../services/auth/authorize.js";
+import { logDecision } from "../services/auth/decisionLog.js";
 import { logger } from "../lib/logger.js";
-import { resolveStoredCIRunIdentifier } from "../services/ciRunResolver.js";
+import {
+  resolveRouteResource,
+  SUPPORTED_ROUTE_RESOURCE_RESOLVERS,
+} from "../services/routeResourceResolver.js";
+import { RouteAuthorizationMode } from "../services/auth/routeAuthorizationModes.js";
+
+export { SUPPORTED_ROUTE_RESOURCE_RESOLVERS };
+export const resolveResource = resolveRouteResource;
 
 let _routeMap = null;
 let _initStarted = false;
@@ -24,117 +24,122 @@ async function ensureRouteMap() {
   mod.registerAllProtectedSurfaces();
   const { listProtectedSurfaces } = await import("../services/auth/protectedSurfaces.js");
 
-  const surfaces = listProtectedSurfaces().filter((s) => s.kind === "route");
-  _routeMap = surfaces.map((s) => {
-    const parts = s.id.split(":");
-    const method = parts[1];
-    const pathPattern = parts.slice(2).join(":");
-    const paramNames = [];
-    const regexStr = pathPattern.replace(/:([^/]+)/g, (_, name) => {
-      paramNames.push(name);
-      return "([^/]+)";
+  _routeMap = listProtectedSurfaces()
+    .filter((surface) => surface.kind === "route")
+    .map((surface) => {
+      const parts = surface.id.split(":");
+      const pathPattern = parts.slice(2).join(":");
+      const paramNames = [];
+      const regexStr = pathPattern.replace(
+        /:([A-Za-z_$][\w$]*)(?:\(([^)]*)\))?/g,
+        (_, name, constraint) => {
+          paramNames.push(name);
+          return constraint ? `(${constraint})` : "([^/]+)";
+        },
+      );
+      return {
+        id: surface.id,
+        method: parts[1],
+        // Express 4 defaults to case-insensitive, non-strict routing, so a
+        // declaration must observe the same case and trailing-slash forms.
+        regex: new RegExp(`^${regexStr}/?$`, "i"),
+        paramNames,
+        permission: surface.permission,
+        resourceType: surface.resourceType,
+        resourceResolver: surface.resourceResolver ?? null,
+        authorizationMode: surface.authorizationMode ?? RouteAuthorizationMode.OBSERVE,
+      };
     });
-    return {
-      id: s.id,
-      method,
-      regex: new RegExp(`^${regexStr}$`),
-      paramNames,
-      permission: s.permission,
-      resourceType: s.resourceType,
-    };
-  });
   return _routeMap;
 }
 
-async function lookupRepositoryByName(owner, repo) {
-  const { rows } = await db.query(
-    `SELECT r.github_id, r.installation_id, r.owner, r.name
-       FROM repositories r
-       JOIN installations i
-         ON i.github_id = r.installation_id
-        AND i.deleted_at IS NULL
-      WHERE r.full_name = $1
-        AND r.deleted_at IS NULL
-      LIMIT 2`,
-    [`${owner}/${repo}`]
-  );
-  // Resource ambiguity must never be resolved by row order. This keeps route
-  // authorization aligned with the D0-02 issue-fix admission semantics and is
-  // also safer for every other owner/repo protected route.
-  return rows.length === 1 ? rows[0] : null;
-}
-
-/** Resolve the trusted resource for a matched route surface. */
-export async function resolveResource(resourceType, params) {
-  if (resourceType === "repository") {
-    let row = null;
-    if (params.owner && params.repo) {
-      row = await lookupRepositoryByName(params.owner, params.repo);
-    } else if (params.runId) {
-      const resolution = await resolveStoredCIRunIdentifier(params.runId);
-      if (resolution.status === "resolved") {
-        row = {
-          github_id: resolution.run.repo_github_id,
-          installation_id: resolution.run.installation_id,
-          owner: resolution.run.owner,
-          name: resolution.run.name,
-        };
-      }
-    }
-
-    if (!row) {
-      return {
-        type: "repository",
-        organization: params.owner ?? null,
-        repository: params.repo ?? null,
-      };
-    }
-    return {
-      type: "repository",
-      installationId: row.installation_id,
-      repositoryId: row.github_id,
-      organization: row.owner,
-      repository: row.name,
-    };
+async function authorizeForObservation(opts) {
+  if (typeof authorization.authorizeWithPersistence === "function") {
+    return authorization.authorizeWithPersistence(opts);
   }
 
-  if (resourceType === "installation") {
-    if (params.owner && params.repo) {
-      const row = await lookupRepositoryByName(params.owner, params.repo);
-      if (row) {
-        return {
-          type: "installation",
-          installationId: row.installation_id,
-          organization: row.owner,
-          repository: row.name,
-        };
-      }
-    }
-    return { type: "installation" };
-  }
-
-  if (resourceType === "fleet") return { type: "fleet" };
-  if (resourceType === "policy_rollout_plan" && params.id) {
-    return { type: "policy_rollout_plan", resourceId: params.id };
-  }
-  if (resourceType === "policy_definition") return { type: "policy_definition" };
-  return { type: resourceType || "unknown" };
+  // Compatibility for focused unit tests that intentionally provide the
+  // established authorize()-only module mock. Production always exports the
+  // persistence-aware interface; an authorize-only fallback is conservatively
+  // treated as unpersisted so it can never suppress route-local observation.
+  const decision = await authorization.authorize(opts);
+  return { decision, persisted: false };
 }
 
 /**
- * Declaration-driven observe-only route authorization observer.
- * Runs BEFORE the route handler. Calls authorize() once if the route matches
- * a declaration and hasn't been explicitly observed. Does NOT block.
+ * Record one declaration-driven Wave-2 authorization observation.
+ *
+ * The declaration seam suppresses a later route-local observation only after
+ * its base decision evidence (and disagreement evidence on deny) is confirmed
+ * persisted. Otherwise the request stays unmarked so the existing route-local
+ * observe-only path remains available as a non-fatal fallback.
  */
-export async function routeAuthObserver(req, res, next) {
-  if (
-    !req.path.startsWith("/api") ||
-    req.path.startsWith("/api/auth") ||
-    req.path.startsWith("/api/bootstrap") ||
-    req.path.startsWith("/api/setup")
-  ) {
-    return next();
+export async function observeDeclarationAuthorization(req, { permission, resource, surfaceId = null }) {
+  const principal = req.auth || null;
+  const { decision, persisted: basePersisted } = await authorizeForObservation({
+    principal,
+    permission,
+    resource,
+  });
+
+  if (!basePersisted) {
+    logger.warn(
+      {
+        permission,
+        code: decision.code,
+        principalId: principal?.principalId ?? null,
+        surface: surfaceId,
+        resource: resource?.type ?? null,
+      },
+      "routeAuthObserver: base decision evidence was not persisted; preserving route-local fallback",
+    );
+    return decision;
   }
+
+  const legacyExpected = true;
+  const disagreement = legacyExpected && !decision.allowed;
+  if (disagreement) {
+    const disagreementPersisted = await logDecision(decision, principal, { legacyExpected, disagreement });
+    if (!disagreementPersisted) {
+      logger.warn(
+        {
+          permission,
+          code: decision.code,
+          principalId: principal?.principalId ?? null,
+          surface: surfaceId,
+          resource: resource?.type ?? null,
+        },
+        "routeAuthObserver: disagreement evidence was not persisted; preserving route-local fallback",
+      );
+      return decision;
+    }
+    logger.info(
+      {
+        permission,
+        code: decision.code,
+        principalId: principal?.principalId ?? null,
+        surface: surfaceId,
+        resource: resource?.type ?? null,
+      },
+      "observe-only: authoritative decision disagrees with legacy behavior",
+    );
+  }
+
+  req._wave2Observed = true;
+  req._wave2DeclarationObserved = true;
+  req._wave2DeclarationDecision = decision;
+  return decision;
+}
+
+/** Observe authorization without blocking the request (Wave 2 contract). */
+export async function routeAuthObserver(req, res, next) {
+  const normalizedPath = req.path.toLowerCase();
+  if (
+    !normalizedPath.startsWith("/api") ||
+    normalizedPath.startsWith("/api/auth") ||
+    normalizedPath.startsWith("/api/bootstrap") ||
+    normalizedPath.startsWith("/api/setup")
+  ) return next();
 
   let routeMap;
   try {
@@ -144,30 +149,41 @@ export async function routeAuthObserver(req, res, next) {
     return next();
   }
 
-  const match = routeMap.find(
-    (r) => r.method === req.method && r.regex.test(req.path)
-  );
-
+  const match = routeMap.find((entry) => entry.method === req.method && entry.regex.test(req.path));
   if (match) {
-    const m = req.path.match(match.regex);
-    const params = {};
-    if (m) {
-      match.paramNames.forEach((name, i) => {
-        params[name] = decodeURIComponent(m[i + 1]);
-      });
+    // Already-enforced routes own their authoritative gate in the handler.
+    // Do not pre-observe them as legacy-allowed: a handler denial is expected
+    // enforcement, not a Wave-2 disagreement.
+    if (match.authorizationMode === RouteAuthorizationMode.ENFORCED) {
+      return next();
     }
 
     if (!req._wave2Observed) {
       try {
-        const resource = await resolveResource(match.resourceType, params);
-        await authorize({
-          principal: req.auth || null,
+        const pathMatch = req.path.match(match.regex);
+        const params = {};
+        if (pathMatch) {
+          match.paramNames.forEach((name, index) => {
+            params[name] = decodeURIComponent(pathMatch[index + 1]);
+          });
+        }
+
+        const resource = await resolveRouteResource(
+          match.resourceType,
+          params,
+          match.resourceResolver,
+          req.body ?? {},
+        );
+        await observeDeclarationAuthorization(req, {
           permission: match.permission,
           resource,
+          surfaceId: match.id,
         });
-        req._wave2Observed = true;
       } catch (err) {
-        logger.warn({ err, path: req.path, surface: match.id }, "routeAuthObserver: authorize failed (non-fatal)");
+        logger.warn(
+          { err, path: req.path, surface: match.id },
+          "routeAuthObserver: authorize failed (non-fatal)",
+        );
       }
     }
   }

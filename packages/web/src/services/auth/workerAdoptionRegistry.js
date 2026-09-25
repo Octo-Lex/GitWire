@@ -207,7 +207,17 @@ const WIRING = {
     principal_destination: "principalId passed to reviewPR",
   },
 
-  // ── Ingress (2 proven) ────────────────────────────────────────────────────
+  // ── Ingress (3 wired; two have disposable integration proofs) ─────────────
+  "telegram:evaluate": {
+    entry_module: "packages/bot/src/commands.js",
+    exported_symbol: "registerCommands → bot.command('evaluate')",
+    adoption_location: "commands.js:230 (API key → evaluateGates → POST /api/gates/:owner/:repo/evaluate)",
+    principal_origin: "API key from Redis → Bearer header → route observer resolves principal",
+    permission: "quality_gate:evaluate",
+    resource_origin: "owner/repo command target → /api/gates route resolves repository",
+    first_side_effect: "gate evaluation persistence / optional GitHub check via /api/gates route",
+    principal_destination: "auth_decision_log.principal_id (via route observer)",
+  },
   "telegram:fix": {
     entry_module: "packages/bot/src/commands.js",
     exported_symbol: "registerCommands → bot.command('fix')",
