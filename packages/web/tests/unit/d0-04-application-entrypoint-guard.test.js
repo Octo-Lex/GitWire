@@ -91,26 +91,35 @@ function siblingRouteModuleBindings(source, sourcePath) {
   return bindings;
 }
 
+function hiddenChildRouterBindings(source, sourcePath) {
+  const sites = [];
+  const siblingBindings = siblingRouteModuleBindings(source, sourcePath);
+  const routerDeclarations = [...source.matchAll(/(?:^|\n)\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:express\s*\.\s*)?Router\s*\(\s*\)/g)];
+
+  for (const declaration of routerDeclarations) {
+    const routerBinding = escapeRegExp(declaration[1]);
+    for (const childBinding of siblingBindings) {
+      const child = escapeRegExp(childBinding);
+      if (new RegExp(`\\b${routerBinding}\\s*\\.\\s*use\\s*\\([^;]*\\b${child}\\b`, "gms").test(source)) {
+        sites.push(childBinding);
+      }
+    }
+
+    if (new RegExp(`\\b${routerBinding}\\s*\\.\\s*use\\s*\\([^;]*\\bimport\\s*\\(\\s*["'](?:\\.\\/|\\.\\.\\/routes\\/)`, "gms").test(source)) {
+      sites.push("dynamic-import");
+    }
+  }
+
+  return sites;
+}
+
 function routeModuleCompositionSites() {
   const sites = [];
   for (const fileName of fs.readdirSync(ROUTES_ROOT).filter((name) => name.endsWith(".js"))) {
     const sourcePath = `src/routes/${fileName}`;
     const source = fs.readFileSync(path.join(ROUTES_ROOT, fileName), "utf8");
-    const siblingBindings = siblingRouteModuleBindings(source, sourcePath);
-    const routerDeclarations = [...source.matchAll(/(?:^|\n)\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:express\s*\.\s*)?Router\s*\(\s*\)/g)];
-
-    for (const declaration of routerDeclarations) {
-      const routerBinding = escapeRegExp(declaration[1]);
-      for (const childBinding of siblingBindings) {
-        const child = escapeRegExp(childBinding);
-        if (new RegExp(`\\b${routerBinding}\\s*\\.\\s*use\\s*\\([^;]*\\b${child}\\b`, "gms").test(source)) {
-          sites.push(`${fileName}:${childBinding}`);
-        }
-      }
-
-      if (new RegExp(`\\b${routerBinding}\\s*\\.\\s*use\\s*\\([^;]*\\bimport\\s*\\(\\s*["'](?:\\.\\/|\\.\\.\\/routes\\/)`, "gms").test(source)) {
-        sites.push(`${fileName}:dynamic-import`);
-      }
+    for (const site of hiddenChildRouterBindings(source, sourcePath)) {
+      sites.push(`${fileName}:${site}`);
     }
   }
   return sites;
@@ -129,6 +138,31 @@ describe("D0-04 application entrypoint guard", () => {
 
   test("mounted route modules do not compose hidden child routers", () => {
     expect(routeModuleCompositionSites()).toEqual([]);
+  });
+
+  test("composition guard allows middleware but rejects sibling and dynamic child routers", () => {
+    const middleware = [
+      'import { Router } from "express";',
+      'import { paginationMiddleware } from "../middleware/pagination.js";',
+      "const router = Router();",
+      "router.use(paginationMiddleware);",
+    ].join("\n");
+    expect(hiddenChildRouterBindings(middleware, "src/routes/synthetic.js")).toEqual([]);
+
+    const sibling = [
+      'import { Router } from "express";',
+      'import childRouter from "./child.js";',
+      "const router = Router();",
+      'router.use("/child", childRouter);',
+    ].join("\n");
+    expect(hiddenChildRouterBindings(sibling, "src/routes/synthetic.js")).toEqual(["childRouter"]);
+
+    const dynamic = [
+      'import { Router } from "express";',
+      "const router = Router();",
+      'router.use("/child", (await import("./child.js")).default);',
+    ].join("\n");
+    expect(hiddenChildRouterBindings(dynamic, "src/routes/synthetic.js")).toContain("dynamic-import");
   });
 
   test("single-quoted, semicolonless, dynamic, or variable-mounted route wiring fails closed", () => {
