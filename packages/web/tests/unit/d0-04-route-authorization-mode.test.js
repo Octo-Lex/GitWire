@@ -26,7 +26,7 @@ jest.unstable_mockModule("../../src/lib/logger.js", () => ({
 }));
 
 const {
-  ENFORCED_ROUTE_SURFACE_IDS,
+  HANDLER_ENFORCED_ROUTE_SURFACE_IDS,
   RouteAuthorizationMode,
   routeAuthorizationMode,
 } = await import("../../src/services/auth/routeAuthorizationModes.js");
@@ -63,12 +63,12 @@ describe("D0-04 route authorization mode", () => {
     mockResolveRouteResource.mockReset();
   });
 
-  test("source-derived route-local enforcement exactly matches the enforced inventory", () => {
-    expect(directEnforcedTriageSurfaceIds()).toEqual([...ENFORCED_ROUTE_SURFACE_IDS].sort());
+  test("source-derived route-local enforcement exactly matches the handler-owned inventory", () => {
+    expect(directEnforcedTriageSurfaceIds()).toEqual([...HANDLER_ENFORCED_ROUTE_SURFACE_IDS].sort());
   });
 
   test("protected triage declarations expose enforced authorization mode", () => {
-    for (const surfaceId of ENFORCED_ROUTE_SURFACE_IDS) {
+    for (const surfaceId of HANDLER_ENFORCED_ROUTE_SURFACE_IDS) {
       expect(routeAuthorizationMode(surfaceId)).toBe(RouteAuthorizationMode.ENFORCED);
       expect(getProtectedSurface(surfaceId)).toMatchObject({
         id: surfaceId,

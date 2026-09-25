@@ -1,10 +1,12 @@
-// D0-04: observe-only route authorization must bind the same repository
-// resource the action/waiver handler will mutate.
+// D0-04: route authorization must bind the same repository resource the
+// action/waiver handler will mutate. W1-03 promotes waiver routes from observe
+// to central enforced authorization without changing that resource contract.
 
 import { jest } from "@jest/globals";
 
 const mockQuery = jest.fn();
 const mockAuthorize = jest.fn(async () => ({ allowed: true }));
+const mockAuthorizeControlled = jest.fn();
 const mockResolveStoredCIRunIdentifier = jest.fn();
 
 jest.unstable_mockModule("../../src/lib/db.js", () => ({
@@ -15,6 +17,7 @@ jest.unstable_mockModule("../../src/lib/logger.js", () => ({
 }));
 jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
   authorize: mockAuthorize,
+  authorizeControlled: mockAuthorizeControlled,
 }));
 jest.unstable_mockModule("../../src/services/ciRunResolver.js", () => ({
   resolveStoredCIRunIdentifier: mockResolveStoredCIRunIdentifier,
@@ -43,10 +46,17 @@ function expectedResource() {
   };
 }
 
+function makeResponse() {
+  const json = jest.fn();
+  const status = jest.fn(() => ({ json }));
+  return { status, json };
+}
+
 describe("D0-04 route resource binding regressions", () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockAuthorize.mockClear();
+    mockAuthorizeControlled.mockReset();
     mockResolveStoredCIRunIdentifier.mockReset();
   });
 
@@ -81,8 +91,21 @@ describe("D0-04 route resource binding regressions", () => {
     );
   });
 
-  test("waiver grant observer passes the request body into resource resolution", async () => {
+  test("waiver grant central gate passes the request body into canonical resource resolution", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [REPOSITORY_ROW] });
+    const resource = expectedResource();
+    const decision = Object.freeze({
+      allowed: true,
+      code: "allowed",
+      permission: "repository:update",
+      resource: Object.freeze(resource),
+    });
+    mockAuthorizeControlled.mockResolvedValue(Object.freeze({
+      decision,
+      persisted: true,
+      mode: "enforced",
+      blocked: false,
+    }));
     const req = {
       path: "/api/waivers",
       method: "POST",
@@ -90,15 +113,19 @@ describe("D0-04 route resource binding regressions", () => {
       auth: { principalId: "principal-1", authenticationMethod: "api_key" },
       _wave2Observed: false,
     };
+    const res = makeResponse();
     const next = jest.fn();
 
-    await routeAuthObserver(req, {}, next);
+    await routeAuthObserver(req, res, next);
 
-    expect(mockAuthorize).toHaveBeenCalledWith({
+    expect(mockAuthorizeControlled).toHaveBeenCalledWith({
       principal: req.auth,
       permission: "repository:update",
-      resource: expectedResource(),
+      resource,
+      mode: "enforced",
     });
+    expect(mockAuthorize).not.toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledTimes(1);
   });
 
