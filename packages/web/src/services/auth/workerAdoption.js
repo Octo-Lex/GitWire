@@ -101,7 +101,7 @@ function validateControlledOutcome(outcome, workerId) {
  * @param {string} [opts.jobName]      - BullMQ job name where authority varies by job contract
  * @param {object} [opts.jobData]      - BullMQ job data
  * @param {string} [opts.systemPrincipalName] - for scheduled/autonomous workers
- * @param {number} [opts.installationId] - trusted installation lookup key
+ * @param {number} [opts.installationId] - installation lookup candidate; never authoritative without trusted resolution where required
  * @param {string} [opts.legacyActor]  - non-authoritative compatibility metadata
  * @returns {Promise<{context: object|null, resource: object, authority: object, legacyActor: string, decision: object, authorizationOutcome: object|null}>}
  */
@@ -131,45 +131,69 @@ export async function adoptWorker({
 
   // Phase 3 is one BullMQ consumer with two authority domains. Select fleet
   // scope from the exact job contract, never from whether job.data happens to
-  // be empty. Every other Phase-3 job remains installation-scoped and therefore
-  // fails closed when no trusted installation can be resolved.
+  // be empty. Every other Phase-3 job remains installation-scoped.
   const effectiveResourceType = workerId === "worker:phase3"
     ? phase3ResourceTypeForJob(jobName)
     : resourceType;
 
   // Resolve resource identity from server-owned state. Queue values are lookup
-  // keys only. Maintainer jobs historically carry full_name rather than repo id,
-  // so W1-04 resolves that name through the repositories table before enforcing.
+  // candidates only. Maintainer jobs historically carry full_name rather than
+  // repo id, while Phase-3 installation jobs carry repository + installation
+  // candidates that must agree with the repositories table before authorization.
   let resource;
-  const payloadRepoId = jobData?.payload?.repository?.id || jobData?.repositoryId || null;
+  const payloadRepoId =
+    jobData?.payload?.repository?.id ||
+    jobData?.repository?.id ||
+    jobData?.repositoryId ||
+    jobData?.repoId ||
+    null;
   const payloadRepoFullName = jobData?.repoFullName || null;
-  const trustedInstId = context?.installationId || (installationId ? Number(installationId) : null);
+  const candidateInstId = context?.installationId || (installationId ? Number(installationId) : null);
 
-  if (effectiveResourceType === "repository" && trustedInstId && payloadRepoId) {
-    resource = await resources.resolveRepositoryResource(trustedInstId, Number(payloadRepoId));
+  if (
+    workerId === "worker:phase3" &&
+    effectiveResourceType === "installation" &&
+    candidateInstId &&
+    payloadRepoId
+  ) {
+    const resolvedRepo = await resources.resolveRepositoryResource(
+      candidateInstId,
+      Number(payloadRepoId),
+    );
+    if (resolvedRepo) {
+      resource = { type: "installation", installationId: resolvedRepo.installationId };
+    } else {
+      resource = { type: "installation" };
+      logger.warn(
+        { workerId, installationId: candidateInstId, repositoryId: payloadRepoId, jobName },
+        "adoptWorker: Phase-3 repository/installation binding failed — resource will fail-closed",
+      );
+    }
+  } else if (effectiveResourceType === "repository" && candidateInstId && payloadRepoId) {
+    resource = await resources.resolveRepositoryResource(candidateInstId, Number(payloadRepoId));
     if (!resource) {
       resource = { type: "repository" };
       logger.warn(
-        { workerId, installationId: trustedInstId, repositoryId: payloadRepoId },
+        { workerId, installationId: candidateInstId, repositoryId: payloadRepoId },
         "adoptWorker: trusted repository lookup failed — resource will fail-closed",
       );
     }
   } else if (
     effectiveResourceType === "repository" &&
-    trustedInstId &&
+    candidateInstId &&
     payloadRepoFullName &&
     typeof resources.resolveRepositoryResourceByFullName === "function"
   ) {
-    resource = await resources.resolveRepositoryResourceByFullName(trustedInstId, payloadRepoFullName);
+    resource = await resources.resolveRepositoryResourceByFullName(candidateInstId, payloadRepoFullName);
     if (!resource) {
       resource = { type: "repository" };
       logger.warn(
-        { workerId, installationId: trustedInstId, repoFullName: payloadRepoFullName },
+        { workerId, installationId: candidateInstId, repoFullName: payloadRepoFullName },
         "adoptWorker: trusted repository full-name lookup failed — resource will fail-closed",
       );
     }
   } else {
-    resource = { type: effectiveResourceType, installationId: trustedInstId };
+    resource = { type: effectiveResourceType, installationId: candidateInstId };
   }
 
   const authority = createAuthorityContext({

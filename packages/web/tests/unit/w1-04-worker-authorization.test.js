@@ -2,7 +2,8 @@
 //
 // These tests prove the bounded enforced set, durable-decision fail-closed
 // behavior, maintainer repository rebinding, Phase-3 job-contract authority,
-// and that non-W1-04 runtime surfaces remain observe-only.
+// Phase-3 repository/installation binding, and that non-W1-04 runtime surfaces
+// remain observe-only.
 
 import { jest } from "@jest/globals";
 
@@ -259,7 +260,7 @@ describe("W1-04 worker authorization cutover", () => {
       resourceType: "installation",
       jobName: "policy-reconcile-fleet",
       systemPrincipalName: "system:phase3-worker",
-      jobData: { incidentalMetadata: true },
+      jobData: { incidentalMetadata: true, repoId: 99, installationId: 7 },
     });
 
     expect(result.resource).toEqual({
@@ -270,6 +271,7 @@ describe("W1-04 worker authorization cutover", () => {
       repository: null,
       resourceId: null,
     });
+    expect(mockResolveRepositoryResource).not.toHaveBeenCalled();
     expect(mockAuthorizeControlled).toHaveBeenCalledWith(expect.objectContaining({
       principal: systemPrincipal,
       resource: result.resource,
@@ -297,7 +299,15 @@ describe("W1-04 worker authorization cutover", () => {
     });
   });
 
-  test("Phase-3 installation jobs retain trusted installation scope", async () => {
+  test("Phase-3 installation jobs require DB-confirmed repository/installation binding", async () => {
+    mockResolveRepositoryResource.mockResolvedValue({
+      type: "repository",
+      installationId: 7,
+      repositoryId: 99,
+      organization: "trusted-owner",
+      repository: "trusted-repo",
+    });
+
     const result = await adoptWorker({
       workerId: "worker:phase3",
       permission: "installation:read",
@@ -308,6 +318,7 @@ describe("W1-04 worker authorization cutover", () => {
       jobData: { repoId: 99, installationId: 7 },
     });
 
+    expect(mockResolveRepositoryResource).toHaveBeenCalledWith(7, 99);
     expect(result.resource).toEqual({
       type: "installation",
       installationId: 7,
@@ -316,6 +327,64 @@ describe("W1-04 worker authorization cutover", () => {
       repository: null,
       resourceId: null,
     });
+  });
+
+  test("Phase-3 repository/installation mismatch produces an incomplete installation resource", async () => {
+    mockResolveRepositoryResource.mockResolvedValue(null);
+
+    const result = await adoptWorker({
+      workerId: "worker:phase3",
+      permission: "installation:read",
+      resourceType: "installation",
+      jobName: "dependency-scan-repo",
+      systemPrincipalName: "system:phase3-worker",
+      installationId: 7,
+      jobData: { repoId: 99, installationId: 7 },
+    });
+
+    expect(mockResolveRepositoryResource).toHaveBeenCalledWith(7, 99);
+    expect(result.resource).toEqual({
+      type: "installation",
+      installationId: null,
+      repositoryId: null,
+      organization: null,
+      repository: null,
+      resourceId: null,
+    });
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workerId: "worker:phase3",
+        installationId: 7,
+        repositoryId: 99,
+        jobName: "dependency-scan-repo",
+      }),
+      "adoptWorker: Phase-3 repository/installation binding failed — resource will fail-closed",
+    );
+  });
+
+  test("Phase-3 webhook-shaped installation jobs also bind repository to installation", async () => {
+    mockResolveRepositoryResource.mockResolvedValue({
+      type: "repository",
+      installationId: 7,
+      repositoryId: 101,
+      organization: "trusted-owner",
+      repository: "trusted-repo",
+    });
+
+    await adoptWorker({
+      workerId: "worker:phase3",
+      permission: "installation:read",
+      resourceType: "installation",
+      jobName: "ingest-test-results",
+      systemPrincipalName: "system:phase3-worker",
+      installationId: 7,
+      jobData: {
+        repository: { id: 101 },
+        installation: { id: 7 },
+      },
+    });
+
+    expect(mockResolveRepositoryResource).toHaveBeenCalledWith(7, 101);
   });
 
   test("scheduled reconciliation is centrally enforced at fleet scope", async () => {
