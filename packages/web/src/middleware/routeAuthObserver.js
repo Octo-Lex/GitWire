@@ -41,6 +41,7 @@ async function ensureRouteMap() {
       paramNames,
       permission: s.permission,
       resourceType: s.resourceType,
+      resourceResolver: s.resourceResolver ?? null,
     };
   });
   return _routeMap;
@@ -64,8 +65,31 @@ async function lookupRepositoryByName(owner, repo) {
   return rows.length === 1 ? rows[0] : null;
 }
 
+async function lookupRepositoryByActionId(actionId) {
+  const numericId = Number(actionId);
+  if (!Number.isSafeInteger(numericId) || numericId <= 0) return null;
+
+  const { rows } = await db.query(
+    `SELECT r.github_id, r.installation_id, r.owner, r.name
+       FROM managed_actions a
+       JOIN repositories r
+         ON (
+              (a.repo_id IS NOT NULL AND r.id = a.repo_id)
+           OR (a.repo_id IS NULL AND a.repo_full_name IS NOT NULL AND r.full_name = a.repo_full_name)
+         )
+       JOIN installations i
+         ON i.github_id = r.installation_id
+        AND i.deleted_at IS NULL
+      WHERE a.id = $1
+        AND r.deleted_at IS NULL
+      LIMIT 2`,
+    [numericId]
+  );
+  return rows.length === 1 ? rows[0] : null;
+}
+
 /** Resolve the trusted resource for a matched route surface. */
-export async function resolveResource(resourceType, params) {
+export async function resolveResource(resourceType, params, resourceResolver = null) {
   if (resourceType === "repository") {
     let row = null;
     if (params.owner && params.repo) {
@@ -80,6 +104,11 @@ export async function resolveResource(resourceType, params) {
           name: resolution.run.name,
         };
       }
+    } else if (
+      resourceResolver === "action id -> managed_actions -> repository" &&
+      params.id
+    ) {
+      row = await lookupRepositoryByActionId(params.id);
     }
 
     if (!row) {
@@ -159,7 +188,11 @@ export async function routeAuthObserver(req, res, next) {
 
     if (!req._wave2Observed) {
       try {
-        const resource = await resolveResource(match.resourceType, params);
+        const resource = await resolveResource(
+          match.resourceType,
+          params,
+          match.resourceResolver,
+        );
         await authorize({
           principal: req.auth || null,
           permission: match.permission,
