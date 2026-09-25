@@ -178,7 +178,12 @@ export async function enforceDeclarationAuthorization(req, { permission, resourc
     mode: RouteAuthorizationMode.ENFORCED,
   });
 
-  if (!outcome?.decision || outcome.mode !== RouteAuthorizationMode.ENFORCED) {
+  if (
+    !outcome?.decision ||
+    outcome.mode !== RouteAuthorizationMode.ENFORCED ||
+    typeof outcome.blocked !== "boolean" ||
+    outcome.blocked !== !outcome.decision.allowed
+  ) {
     throw new Error("routeAuthObserver: invalid enforced authorization outcome");
   }
 
@@ -240,7 +245,16 @@ export async function routeAuthObserver(req, res, next) {
   }
 
   const match = routeMap.find((entry) => entry.method === req.method && entry.regex.test(req.path));
-  if (!match) return next();
+  if (!match) {
+    if (isCentrallyEnforcedRequest(req)) {
+      logger.error(
+        { path: req.path, method: req.method },
+        "routeAuthObserver: centrally enforced request has no protected declaration; failing closed",
+      );
+      return authorizationUnavailable(res);
+    }
+    return next();
+  }
 
   // Handler-owned enforced routes (the two triage mutations) keep their
   // existing local gate and must not be evaluated a second time here.
@@ -271,13 +285,6 @@ export async function routeAuthObserver(req, res, next) {
           error: "Forbidden",
           code: outcome.decision.code,
         });
-      }
-      if (!outcome.decision.allowed) {
-        logger.error(
-          { surface: match.id, code: outcome.decision.code },
-          "routeAuthObserver: enforced denial was not marked blocked; failing closed",
-        );
-        return authorizationUnavailable(res);
       }
       return next();
     } catch (err) {
