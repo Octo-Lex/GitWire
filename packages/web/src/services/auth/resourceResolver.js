@@ -68,3 +68,61 @@ export async function resolveRepositoryResource(installationId, repositoryId) {
     return null;
   }
 }
+
+/**
+ * Resolve a trusted repository resource from installation + full_name.
+ *
+ * Maintainer jobs historically carry `repoFullName` instead of a repository
+ * id. W1-04 uses that value only as a lookup key and reconstructs the
+ * authorization resource from the server-owned repositories row.
+ *
+ * @param {number} installationId
+ * @param {string} fullName
+ * @returns {Promise<{type: string, installationId: number, repositoryId: number, organization: string, repository: string}|null>}
+ */
+export async function resolveRepositoryResourceByFullName(installationId, fullName) {
+  if (!installationId || typeof fullName !== "string" || !fullName.trim()) {
+    return null;
+  }
+
+  try {
+    const { rows } = await db.query(
+      `SELECT r.github_id, r.installation_id, r.full_name, r.owner, r.name
+         FROM repositories r
+        WHERE r.full_name = $1
+          AND r.installation_id = $2
+        LIMIT 2`,
+      [fullName, installationId]
+    );
+
+    if (rows.length === 0) {
+      logger.warn({ installationId, fullName }, "resourceResolver: repository full name not found for installation");
+      return null;
+    }
+
+    if (rows.length > 1) {
+      logger.error({ installationId, fullName, count: rows.length }, "resourceResolver: ambiguous repository full-name mapping");
+      return null;
+    }
+
+    const row = rows[0];
+    if (Number(row.installation_id) !== Number(installationId)) {
+      logger.error(
+        { installationId, fullName, actualInstallation: row.installation_id },
+        "resourceResolver: full-name repository belongs to different installation"
+      );
+      return null;
+    }
+
+    return {
+      type: "repository",
+      installationId: Number(row.installation_id),
+      repositoryId: Number(row.github_id),
+      organization: row.owner,
+      repository: row.name,
+    };
+  } catch (err) {
+    logger.warn({ err, installationId, fullName }, "resourceResolver: DB full-name lookup failed");
+    return null;
+  }
+}
