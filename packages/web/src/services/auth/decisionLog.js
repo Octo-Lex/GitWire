@@ -1,11 +1,10 @@
 // src/services/auth/decisionLog.js
 //
-// Observe-only decision log (Wave 2 / issue #94).
+// Authorization decision log (Wave 2 / issue #94).
 //
 // Records every authorization decision computed by authorize() into the
-// append-only gitwire_auth.auth_decision_log table. Used in observe-only
-// mode to compare authoritative decisions against legacy behavior and to
-// surface disagreements (a future enforcement gate consumes the evidence).
+// append-only gitwire_auth.auth_decision_log table. Observe/enforced mode is
+// recorded explicitly so later audit and reporting preserve execution truth.
 //
 // Insertion is best-effort: a logging failure MUST NOT change the
 // authorization decision (it is recorded but does not throw to the caller).
@@ -20,7 +19,7 @@ import { logger } from "../../lib/logger.js";
  * Record a decision to auth_decision_log. Best-effort; never throws.
  * @param {object} decision - AuthorizationDecision
  * @param {object} [principal] - AuthContext
- * @param {object} [observeOpts] - { legacyExpected, disagreement }
+ * @param {object} [observeOpts] - { legacyExpected, disagreement, observeMode }
  * @returns {Promise<boolean>} true when the row persisted, false on best-effort failure
  */
 export async function logDecision(decision, principal, observeOpts = {}) {
@@ -48,7 +47,7 @@ export async function logDecision(decision, principal, observeOpts = {}) {
         decision.matchedScopeType ?? null,
         decision.policyVersion ?? "level1",
         decision.authenticationMethod ?? null,
-        true, // observe_mode — Wave 2 never enforces globally
+        observeOpts.observeMode !== false,
         observeOpts.legacyExpected ?? null,
         observeOpts.disagreement ?? null,
         decision.detail ? JSON.stringify(decision.detail) : null,

@@ -24,8 +24,15 @@ import { createDecision } from "./context.js";
 import { DecisionCode } from "./denialCodes.js";
 import { getPrincipalById, principalValidityCode } from "./principalResolver.js";
 import { logDecision } from "./decisionLog.js";
+import {
+  AuthorizationMode,
+  createAuthorizationOutcome,
+  normalizeAuthorizationMode,
+} from "./authorizationMode.js";
 
 const POLICY_VERSION = "level1";
+
+export { AuthorizationMode };
 
 /**
  * The persistence-aware authorization interface used by observation seams that
@@ -37,33 +44,33 @@ const POLICY_VERSION = "level1";
  * @param {object} opts.resource - Resource descriptor
  * @returns {Promise<{decision: Readonly<AuthorizationDecision>, persisted: boolean}>}
  */
-export async function authorizeWithPersistence({ principal, permission, resource }) {
+export async function authorizeWithPersistence({ principal, permission, resource, observeMode = true }) {
   // Defensive: a null principal (unauthenticated path) short-circuits.
   if (!principal || !principal.principalId) {
-    return denyAndLog(DecisionCode.UNAUTHENTICATED, principal, permission, resource, null, null);
+    return denyAndLog(DecisionCode.UNAUTHENTICATED, principal, permission, resource, null, null, undefined, observeMode);
   }
 
   let principalRecord;
   try {
     principalRecord = await getPrincipalById(principal.principalId);
   } catch (err) {
-    return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err);
+    return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err, observeMode);
   }
   const vcode = principalValidityCode(principalRecord);
   if (vcode !== DecisionCode.ALLOWED) {
-    return denyAndLog(vcode, principal, permission, resource, null, null);
+    return denyAndLog(vcode, principal, permission, resource, null, null, undefined, observeMode);
   }
 
   // Resource validation: server-owned identifiers are mandatory for scoped
   // resources. Request-supplied names alone never establish scope.
   if (!resource || !resource.type) {
-    return denyAndLog(DecisionCode.RESOURCE_MISSING, principal, permission, resource, null, null);
+    return denyAndLog(DecisionCode.RESOURCE_MISSING, principal, permission, resource, null, null, undefined, observeMode);
   }
   if (resource.type === "repository" && (!resource.installationId || !resource.repositoryId)) {
-    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null);
+    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null, undefined, observeMode);
   }
   if (resource.type === "installation" && !resource.installationId) {
-    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null);
+    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null, undefined, observeMode);
   }
 
   // Load the principal's active, non-expired, non-revoked role assignments
@@ -113,7 +120,7 @@ export async function authorizeWithPersistence({ principal, permission, resource
       const code = scopeRows.rows.length > 0
         ? DecisionCode.SCOPE_MISMATCH
         : DecisionCode.PERMISSION_MISSING;
-      return denyAndLog(code, principal, permission, resource, null, null);
+      return denyAndLog(code, principal, permission, resource, null, null, undefined, observeMode);
     }
 
     const match = rows[0];
@@ -129,15 +136,15 @@ export async function authorizeWithPersistence({ principal, permission, resource
       authenticationMethod: principal.authenticationMethod,
       detail: { matchCount: rows.length },
     });
-    const persisted = await logDecision(decision, principal);
+    const persisted = await logDecision(decision, principal, { observeMode });
     return { decision, persisted };
   } catch (err) {
     logger.warn({ err, principalId: principal.principalId, permission }, "authorize: evaluation failed");
-    return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err);
+    return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err, observeMode);
   }
 }
 
-async function denyAndLog(code, principal, permission, resource, assignmentId, scopeType, err) {
+async function denyAndLog(code, principal, permission, resource, assignmentId, scopeType, err, observeMode = true) {
   const decision = createDecision({
     allowed: false,
     code,
@@ -150,8 +157,34 @@ async function denyAndLog(code, principal, permission, resource, assignmentId, s
     authenticationMethod: principal?.authenticationMethod ?? null,
     detail: err ? { error: err.message } : null,
   });
-  const persisted = await logDecision(decision, principal);
+  const persisted = await logDecision(decision, principal, { observeMode });
   return { decision, persisted };
+}
+
+/**
+ * W1-02 transport-neutral authorization control. The policy decision remains
+ * unchanged; mode decides whether a denied decision is advisory (`observe`) or
+ * requires the caller to stop before its protected effect (`enforced`).
+ *
+ * Invalid modes are rejected before authorization evaluation so a misspelled
+ * enforcement request cannot silently become an observed decision.
+ *
+ * @param {object} opts
+ * @param {object|null} opts.principal
+ * @param {string} opts.permission
+ * @param {object} opts.resource
+ * @param {"observe"|"enforced"} [opts.mode]
+ * @returns {Promise<Readonly<{decision: Readonly<AuthorizationDecision>, persisted: boolean, mode: string, blocked: boolean}>>}
+ */
+export async function authorizeControlled({
+  principal,
+  permission,
+  resource,
+  mode = AuthorizationMode.OBSERVE,
+}) {
+  const normalizedMode = normalizeAuthorizationMode(mode);
+  const result = await authorizeWithPersistence({ principal, permission, resource, observeMode: normalizedMode === AuthorizationMode.OBSERVE });
+  return createAuthorizationOutcome({ ...result, mode: normalizedMode });
 }
 
 /** Preserve the established decision-only contract for all existing callers. */

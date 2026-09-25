@@ -23,8 +23,8 @@ const SRC_ROOT = path.join(__dirname, "..", "..", "src");
 const AUDIT = {
   decision_log: [
     // authorize.js — internal auth layer; principalId from authorize decision
-    { file: "services/auth/authorize.js", line: 131, func: "authorize (allow path)", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
-    { file: "services/auth/authorize.js", line: 152, func: "denyAndLog", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
+    { file: "services/auth/authorize.js", line: 139, func: "authorize (allow path)", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
+    { file: "services/auth/authorize.js", line: 160, func: "denyAndLog", principalIdExpr: "decision.principalId", contextSource: "authorize decision", legacyActor: "n/a", classification: "system_or_bootstrap_context" },
     // observeAdopt.js — auth layer; principal from req.auth
     { file: "services/auth/observeAdopt.js", line: 52, func: "observeAuthorize", principalIdExpr: "decision.principalId", contextSource: "req.auth", legacyActor: "legacyActor param", classification: "http_auth_context" },
     // customRulesService.js — worker context (webhook handler passes webhookPrincipalId)
