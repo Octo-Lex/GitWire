@@ -40,9 +40,9 @@ async function ensureRouteMap() {
       return {
         id: surface.id,
         method: parts[1],
-        // Express 4 defaults to non-strict routing, so a declaration path must
-        // also observe the equivalent trailing-slash request.
-        regex: new RegExp(`^${regexStr}/?$`),
+        // Express 4 defaults to case-insensitive, non-strict routing, so a
+        // declaration must observe the same case and trailing-slash forms.
+        regex: new RegExp(`^${regexStr}/?$`, "i"),
         paramNames,
         permission: surface.permission,
         resourceType: surface.resourceType,
@@ -133,11 +133,12 @@ export async function observeDeclarationAuthorization(req, { permission, resourc
 
 /** Observe authorization without blocking the request (Wave 2 contract). */
 export async function routeAuthObserver(req, res, next) {
+  const normalizedPath = req.path.toLowerCase();
   if (
-    !req.path.startsWith("/api") ||
-    req.path.startsWith("/api/auth") ||
-    req.path.startsWith("/api/bootstrap") ||
-    req.path.startsWith("/api/setup")
+    !normalizedPath.startsWith("/api") ||
+    normalizedPath.startsWith("/api/auth") ||
+    normalizedPath.startsWith("/api/bootstrap") ||
+    normalizedPath.startsWith("/api/setup")
   ) return next();
 
   let routeMap;

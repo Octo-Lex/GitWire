@@ -84,6 +84,28 @@ describe("D0-04 route observer path semantics", () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
+  test("observes case variants accepted by Express case-insensitive routing", async () => {
+    const req = {
+      path: "/API/ACTIONS/42/RETRY",
+      method: "POST",
+      auth: { principalId: "principal-1" },
+      body: {},
+    };
+    const next = jest.fn();
+
+    await expect(routeAuthObserver(req, {}, next)).resolves.toBeUndefined();
+
+    expect(mockResolveRouteResource).toHaveBeenCalledWith(
+      "repository",
+      { id: "42" },
+      "action id -> managed action -> repository",
+      {},
+    );
+    expect(mockAuthorizeWithPersistence).toHaveBeenCalledTimes(1);
+    expect(req._wave2Observed).toBe(true);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
   test("decodes a valid encoded parameter exactly once before trusted resolution", async () => {
     const req = {
       path: "/api/actions/a%252Fb/retry",
