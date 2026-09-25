@@ -8,26 +8,14 @@ import { fileURLToPath } from "url";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = path.resolve(TEST_DIR, "../..");
 const APP_PATH = path.join(WEB_ROOT, "src", "app.js");
+const ROUTE_IMPORT_CANDIDATE_RE = /from\s+"\.\/routes\/[^"]+\.js";/g;
+const SCANNER_ROUTE_IMPORT_RE = /import\s+(?:\{\s*([A-Za-z_$][\w$]*)\s*\}|([A-Za-z_$][\w$]*))\s+from\s+"\.\/routes\/([^"]+\.js)";/g;
 
-function routeImportBindings(source) {
+function scannerRouteImportBindings(source) {
   const bindings = new Set();
-  const importRe = /import\s+(?:\{([^}]+)\}|([A-Za-z_$][\w$]*))\s+from\s+"\.\/routes\/[^\"]+\.js";/gms;
-
-  for (const match of source.matchAll(importRe)) {
-    if (match[2]) {
-      bindings.add(match[2]);
-      continue;
-    }
-
-    for (const rawSpecifier of match[1].split(",")) {
-      const specifier = rawSpecifier.trim();
-      if (!specifier) continue;
-      const parsed = specifier.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
-      if (!parsed) throw new Error(`Unsupported route import specifier in src/app.js: ${specifier}`);
-      bindings.add(parsed[2] || parsed[1]);
-    }
+  for (const match of source.matchAll(SCANNER_ROUTE_IMPORT_RE)) {
+    bindings.add(match[1] || match[2]);
   }
-
   return bindings;
 }
 
@@ -38,9 +26,15 @@ describe("D0-04 application entrypoint guard", () => {
     expect([...appSource.matchAll(/\bapp\s*\.\s*(post|put|patch|delete)\s*\(/g)]).toEqual([]);
   });
 
-  test("every path-mounted identifier is sourced from a route module", () => {
-    const routeBindings = routeImportBindings(appSource);
-    const mounts = [...appSource.matchAll(/app\.use\(\s*"[^\"]+"\s*,\s*([A-Za-z_$][\w$]*)\s*\);/g)];
+  test("route-module imports stay compatible with the mounted-router scanner", () => {
+    const candidateCount = [...appSource.matchAll(ROUTE_IMPORT_CANDIDATE_RE)].length;
+    const parsedCount = [...appSource.matchAll(SCANNER_ROUTE_IMPORT_RE)].length;
+    expect(parsedCount).toBe(candidateCount);
+  });
+
+  test("every path-mounted identifier is visible to the mounted-router scanner", () => {
+    const routeBindings = scannerRouteImportBindings(appSource);
+    const mounts = [...appSource.matchAll(/app\.use\(\s*"[^"]+"\s*,\s*([A-Za-z_$][\w$]*)\s*\);/g)];
 
     for (const mount of mounts) {
       expect(routeBindings.has(mount[1])).toBe(true);
