@@ -10,10 +10,11 @@
 //   - authentication method
 //   - observe-only decision handling
 //
-// This module is the machine-testable registry of those declarations. The
-// protected-surface completeness check (issue #94 §5) asserts that every
-// known surface is registered with all required fields. Unclassified or
-// undeclared protected surfaces fail the check.
+// Route declarations are additionally annotated with source-derived
+// authorizationMode so already-enforced routes are not misclassified as
+// legacy-allowed observe-only paths.
+
+import { routeAuthorizationMode } from "./routeAuthorizationModes.js";
 
 /**
  * @typedef {Object} ProtectedSurface
@@ -23,7 +24,8 @@
  * @property {string} resourceType  - resource type resolved by the surface
  * @property {string} principalSource - 'req.auth' | 'worker-context' | 'webhook-installation'
  * @property {string} authMethod    - 'api_key' | 'session' | 'webhook_hmac' | 'system'
- * @property {string} observeHandling - 'record' | 'record-and-block' (Wave 2: record only)
+ * @property {string} observeHandling - 'record' | 'record-and-block'
+ * @property {string} [authorizationMode] - route runtime mode: 'observe' | 'enforced'
  * @property {string} [notes]
  */
 
@@ -48,7 +50,11 @@ export function declareProtectedSurface(surface) {
   if (REGISTRY.has(surface.id)) {
     throw new Error(`declareProtectedSurface: duplicate surface id '${surface.id}'`);
   }
-  REGISTRY.set(surface.id, Object.freeze({ ...surface }));
+
+  const normalized = surface.kind === "route"
+    ? { ...surface, authorizationMode: routeAuthorizationMode(surface.id) }
+    : { ...surface };
+  REGISTRY.set(surface.id, Object.freeze(normalized));
 }
 
 /**
@@ -93,9 +99,11 @@ export function assertProtectedSurfaceCompleteness(expectedIds) {
       missing.push(id);
       continue;
     }
-    // All fields non-empty (declareProtectedSurface enforced at registration;
-    // this is the independent verification).
     if (!s.permission || !s.resourceType || !s.principalSource || !s.authMethod || !s.observeHandling) {
+      incomplete.push(id);
+      continue;
+    }
+    if (s.kind === "route" && !s.authorizationMode) {
       incomplete.push(id);
     }
   }

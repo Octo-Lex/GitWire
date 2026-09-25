@@ -7,6 +7,7 @@ import {
   resolveRouteResource,
   SUPPORTED_ROUTE_RESOURCE_RESOLVERS,
 } from "../services/routeResourceResolver.js";
+import { RouteAuthorizationMode } from "../services/auth/routeAuthorizationModes.js";
 
 export { SUPPORTED_ROUTE_RESOURCE_RESOLVERS };
 export const resolveResource = resolveRouteResource;
@@ -44,6 +45,7 @@ async function ensureRouteMap() {
         permission: surface.permission,
         resourceType: surface.resourceType,
         resourceResolver: surface.resourceResolver ?? null,
+        authorizationMode: surface.authorizationMode ?? RouteAuthorizationMode.OBSERVE,
       };
     });
   return _routeMap;
@@ -92,7 +94,7 @@ export async function observeDeclarationAuthorization(req, { permission, resourc
     return decision;
   }
 
-  const legacyExpected = true; // request reached this observer through the legacy-authorized path
+  const legacyExpected = true;
   const disagreement = legacyExpected && !decision.allowed;
   if (disagreement) {
     const disagreementPersisted = await logDecision(decision, principal, { legacyExpected, disagreement });
@@ -121,8 +123,6 @@ export async function observeDeclarationAuthorization(req, { permission, resourc
     );
   }
 
-  // Cache the declaration-driven result so explicitly adopted route handlers
-  // can reuse it instead of recording a second decision for the same surface.
   req._wave2Observed = true;
   req._wave2DeclarationObserved = true;
   req._wave2DeclarationDecision = decision;
@@ -148,6 +148,13 @@ export async function routeAuthObserver(req, res, next) {
 
   const match = routeMap.find((entry) => entry.method === req.method && entry.regex.test(req.path));
   if (match) {
+    // Already-enforced routes own their authoritative gate in the handler.
+    // Do not pre-observe them as legacy-allowed: a handler denial is expected
+    // enforcement, not a Wave-2 disagreement.
+    if (match.authorizationMode === RouteAuthorizationMode.ENFORCED) {
+      return next();
+    }
+
     const pathMatch = req.path.match(match.regex);
     const params = {};
     if (pathMatch) {
