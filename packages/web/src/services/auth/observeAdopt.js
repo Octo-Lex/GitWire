@@ -1,14 +1,6 @@
-// src/services/auth/observeAdopt.js
-//
 // Observe-only route adoption helper (Wave 2 / issue #94).
-//
-// Provides the `observeAuthorize` helper that routes call to compute + record
-// an authoritative authorization decision WITHOUT blocking the existing
-// legacy-authorized path. The decision (and any disagreement with legacy
-// behavior) is recorded to auth_decision_log; the route proceeds regardless.
-//
-// This is the Wave 2 observe-only adoption seam. Wave 5 (enforcement cutover)
-// will replace `observeAuthorize` with `enforceAuthorize` that blocks on deny.
+// Records authoritative decisions without blocking legacy-authorized requests.
+// Wave 5 replaces this seam with blocking enforcement.
 
 import { authorize } from "./authorize.js";
 import { logDecision } from "./decisionLog.js";
@@ -28,16 +20,8 @@ function sameResourceIdentity(a, b) {
 }
 
 /**
- * Compute + record an observe-only authorization decision. Does NOT block.
- * Reuses a successfully persisted declaration-driven observation only when the
- * requested permission and normalized resource identity match that decision.
- *
- * @param {object} req - Express request (must have req.auth from authContext)
- * @param {object} opts
- * @param {string} opts.permission - the route's declared permission
- * @param {object} opts.resource - the resolved resource descriptor
- * @param {string} [opts.legacyActor] - the legacy actor string (for disagreement detection)
- * @returns {Promise<{allowed: boolean, code: string}>} the decision (for routes that want to inspect it)
+ * Observe authorization without blocking. Reuse a persisted declaration
+ * decision only when permission and normalized resource identity match.
  */
 export async function observeAuthorize(req, { permission, resource, legacyActor }) {
   const declarationDecision = req._wave2DeclarationDecision;

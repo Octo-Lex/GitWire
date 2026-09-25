@@ -5,6 +5,10 @@ import { jest } from "@jest/globals";
 
 const mockQuery = jest.fn();
 const mockAuthorize = jest.fn(async () => ({ allowed: true }));
+const mockAuthorizeWithPersistence = jest.fn(async (opts) => ({
+  decision: await mockAuthorize(opts),
+  persisted: true,
+}));
 const mockResolveStoredCIRunIdentifier = jest.fn();
 
 jest.unstable_mockModule("../../src/lib/db.js", () => ({
@@ -15,6 +19,7 @@ jest.unstable_mockModule("../../src/lib/logger.js", () => ({
 }));
 jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
   authorize: mockAuthorize,
+  authorizeWithPersistence: mockAuthorizeWithPersistence,
 }));
 jest.unstable_mockModule("../../src/services/ciRunResolver.js", () => ({
   resolveStoredCIRunIdentifier: mockResolveStoredCIRunIdentifier,
@@ -35,6 +40,7 @@ describe("D0-04 action route resource resolution", () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockAuthorize.mockClear();
+    mockAuthorizeWithPersistence.mockClear();
     mockResolveStoredCIRunIdentifier.mockReset();
   });
 
