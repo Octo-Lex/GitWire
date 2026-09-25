@@ -37,33 +37,39 @@ const UNKNOWN_INSTALLATION = Object.freeze({ type: "installation" });
 const REPOSITORY_LOOKUPS = Object.freeze({
   "action id -> managed_actions -> repository": {
     parse: (value) => parseInt(value),
-    from: "managed_actions x",
-    join: "x.repo_id",
+    from: "managed_actions a",
+    join: "a.repo_id",
+    id: "a.id",
   },
   "waiver id -> waivers.repo_id -> repositories": {
     parse: (value) => parseInt(value, 10),
-    from: "policy_waivers x",
-    join: "x.repo_id",
+    from: "policy_waivers w",
+    join: "w.repo_id",
+    id: "w.id",
   },
   "violation id -> enforcement_violations.repo_id": {
     parse: (value) => value,
     from: "enforcement_violations x",
     join: "x.repo_id",
+    id: "x.id",
   },
   "duplicate signal id -> repository": {
     parse: (value) => value,
     from: "duplicate_signals x",
     join: "x.repo_id",
+    id: "x.id",
   },
   "flaky test id -> flaky_tests.repo_id": {
     parse: (value) => value,
     from: "flaky_tests x",
     join: "x.repo_id",
+    id: "x.id",
   },
   "vulnerability id -> vulnerability_advisories.repo_id": {
     parse: (value) => value,
     from: "vulnerability_advisories x",
     join: "x.repo_id",
+    id: "x.id",
   },
 });
 
@@ -77,8 +83,14 @@ async function uniqueRow(sql, params) {
   return rows.length === 1 ? rows[0] : null;
 }
 
-function repositoryResource(row) {
-  if (!row) return { ...UNKNOWN_REPOSITORY };
+function repositoryResource(row, requested = {}) {
+  if (!row) {
+    return {
+      type: "repository",
+      organization: requested.organization ?? null,
+      repository: requested.repository ?? null,
+    };
+  }
   return {
     type: "repository",
     installationId: row.installation_id,
@@ -126,7 +138,7 @@ async function repositoryByDeclaredId(resolver, rawId) {
        FROM ${cfg.from}
        JOIN repositories r ON r.github_id = ${cfg.join}
        JOIN installations i ON i.github_id = r.installation_id AND i.deleted_at IS NULL
-      WHERE x.id = $1 AND r.deleted_at IS NULL
+      WHERE ${cfg.id} = $1 AND r.deleted_at IS NULL
       LIMIT 2`,
     [id],
   );
@@ -219,18 +231,31 @@ function policyScopedResource(type, row, resourceId = null) {
 
 /** Resolve trusted resource identity for one protected route declaration. */
 export async function resolveRouteResource(resourceType, params = {}, resolver = null, body = {}) {
-  // Protected reads predate D0-04 resolver metadata; retain their old trusted path/fleet behavior.
+  // Protected reads predate D0-04 resolver metadata. Preserve their Wave-2
+  // trusted resolution contracts so declaration completeness does not change
+  // existing authorization evidence semantics.
   if (!resolver) {
-    if (resourceType === "repository" && params.owner && params.repo) {
-      return repositoryResource(await repositoryByOwnerRepo(params.owner, params.repo));
+    if (resourceType === "repository") {
+      if (params.owner && params.repo) {
+        return repositoryResource(
+          await repositoryByOwnerRepo(params.owner, params.repo),
+          { organization: params.owner, repository: params.repo },
+        );
+      }
+      if (params.runId) {
+        return repositoryResource(await ciRunRepository(params.runId));
+      }
+      return { ...UNKNOWN_REPOSITORY };
     }
     if (resourceType === "installation" && params.owner && params.repo) {
       return installationResource(await repositoryByOwnerRepo(params.owner, params.repo));
     }
+    if (resourceType === "installation") return { ...UNKNOWN_INSTALLATION };
     if (resourceType === "fleet") return { type: "fleet" };
     if (resourceType === "policy_rollout_plan" && params.id) {
       return { type: "policy_rollout_plan", resourceId: params.id };
     }
+    if (resourceType === "policy_definition") return { type: "policy_definition" };
     return { type: resourceType || "unknown" };
   }
 
@@ -245,7 +270,10 @@ export async function resolveRouteResource(resourceType, params = {}, resolver =
   ) return { type: "fleet" };
 
   if (resolver === "owner/repo -> repositories") {
-    return repositoryResource(params.owner && params.repo ? await repositoryByOwnerRepo(params.owner, params.repo) : null);
+    return repositoryResource(
+      params.owner && params.repo ? await repositoryByOwnerRepo(params.owner, params.repo) : null,
+      { organization: params.owner ?? null, repository: params.repo ?? null },
+    );
   }
   if (resolver === "owner/repo -> repositories -> installation") {
     return installationResource(params.owner && params.repo ? await repositoryByOwnerRepo(params.owner, params.repo) : null);
