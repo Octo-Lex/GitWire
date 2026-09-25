@@ -28,25 +28,25 @@ describe("W1-04 maintainer repository resolver", () => {
     mockError.mockReset();
   });
 
-  test("uses full_name only as lookup input and returns DB-owned identity", async () => {
+  test("uses DB full_name as canonical coordinates even when denormalized owner/name are stale", async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{
         github_id: "22",
         installation_id: "7",
         full_name: "current-owner/current-repo",
-        owner: "current-owner",
-        name: "current-repo",
+        owner: "stale-owner",
+        name: "stale-repo",
       }],
     });
 
     const resource = await resolveRepositoryResourceByFullName(
       7,
-      "queued-owner/queued-repo",
+      "current-owner/current-repo",
     );
 
     expect(mockQuery).toHaveBeenCalledWith(
       expect.stringContaining("WHERE r.full_name = $1"),
-      ["queued-owner/queued-repo", 7],
+      ["current-owner/current-repo", 7],
     );
     expect(resource).toEqual({
       type: "repository",
@@ -60,8 +60,8 @@ describe("W1-04 maintainer repository resolver", () => {
   test("ambiguous full-name binding fails closed", async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
-        { github_id: "22", installation_id: "7", owner: "a", name: "repo" },
-        { github_id: "23", installation_id: "7", owner: "a", name: "repo" },
+        { github_id: "22", installation_id: "7", full_name: "a/repo", owner: "a", name: "repo" },
+        { github_id: "23", installation_id: "7", full_name: "a/repo", owner: "a", name: "repo" },
       ],
     });
 
@@ -74,13 +74,35 @@ describe("W1-04 maintainer repository resolver", () => {
 
   test("installation mismatch fails closed", async () => {
     mockQuery.mockResolvedValueOnce({
-      rows: [{ github_id: "22", installation_id: "8", owner: "a", name: "repo" }],
+      rows: [{ github_id: "22", installation_id: "8", full_name: "a/repo", owner: "a", name: "repo" }],
     });
 
     await expect(resolveRepositoryResourceByFullName(7, "a/repo")).resolves.toBeNull();
     expect(mockError).toHaveBeenCalledWith(
       expect.objectContaining({ installationId: 7, actualInstallation: "8" }),
       "resourceResolver: full-name repository belongs to different installation",
+    );
+  });
+
+  test("invalid stored full_name fails closed instead of using stale denormalized coordinates", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        github_id: "22",
+        installation_id: "7",
+        full_name: "malformed",
+        owner: "usable-looking-owner",
+        name: "usable-looking-repo",
+      }],
+    });
+
+    await expect(resolveRepositoryResourceByFullName(7, "malformed")).resolves.toBeNull();
+    expect(mockError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installationId: 7,
+        fullName: "malformed",
+        storedFullName: "malformed",
+      }),
+      "resourceResolver: stored repository full name is invalid",
     );
   });
 

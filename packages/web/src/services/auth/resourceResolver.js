@@ -69,12 +69,21 @@ export async function resolveRepositoryResource(installationId, repositoryId) {
   }
 }
 
+function canonicalCoordinatesFromFullName(fullName) {
+  if (typeof fullName !== "string") return null;
+  const parts = fullName.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  return { organization: parts[0], repository: parts[1] };
+}
+
 /**
  * Resolve a trusted repository resource from installation + full_name.
  *
  * Maintainer jobs historically carry `repoFullName` instead of a repository
  * id. W1-04 uses that value only as a lookup key and reconstructs the
- * authorization resource from the server-owned repositories row.
+ * authorization resource from the server-owned repositories row. The row's
+ * validated `full_name` is the canonical GitHub coordinate: denormalized
+ * `owner` / `name` columns can lag after repository rename or transfer.
  *
  * @param {number} installationId
  * @param {string} fullName
@@ -114,12 +123,21 @@ export async function resolveRepositoryResourceByFullName(installationId, fullNa
       return null;
     }
 
+    const coordinates = canonicalCoordinatesFromFullName(row.full_name);
+    if (!coordinates) {
+      logger.error(
+        { installationId, fullName, storedFullName: row.full_name },
+        "resourceResolver: stored repository full name is invalid"
+      );
+      return null;
+    }
+
     return {
       type: "repository",
       installationId: Number(row.installation_id),
       repositoryId: Number(row.github_id),
-      organization: row.owner,
-      repository: row.name,
+      organization: coordinates.organization,
+      repository: coordinates.repository,
     };
   } catch (err) {
     logger.warn({ err, installationId, fullName }, "resourceResolver: DB full-name lookup failed");
