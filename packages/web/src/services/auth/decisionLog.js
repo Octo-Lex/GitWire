@@ -9,6 +9,8 @@
 //
 // Insertion is best-effort: a logging failure MUST NOT change the
 // authorization decision (it is recorded but does not throw to the caller).
+// The boolean return lets callers that de-duplicate observations distinguish
+// persisted evidence from a swallowed best-effort logging failure.
 // The table's append-only triggers reject UPDATE/DELETE (Wave 1 / 041).
 
 import { db } from "../../lib/db.js";
@@ -19,6 +21,7 @@ import { logger } from "../../lib/logger.js";
  * @param {object} decision - AuthorizationDecision
  * @param {object} [principal] - AuthContext
  * @param {object} [observeOpts] - { legacyExpected, disagreement }
+ * @returns {Promise<boolean>} true when the row persisted, false on best-effort failure
  */
 export async function logDecision(decision, principal, observeOpts = {}) {
   try {
@@ -51,9 +54,11 @@ export async function logDecision(decision, principal, observeOpts = {}) {
         decision.detail ? JSON.stringify(decision.detail) : null,
       ]
     );
+    return true;
   } catch (err) {
     // Best-effort: a logging failure must not change the authorization outcome.
     logger.warn({ err, code: decision.code }, "decisionLog: insert failed (non-fatal)");
+    return false;
   }
 }
 

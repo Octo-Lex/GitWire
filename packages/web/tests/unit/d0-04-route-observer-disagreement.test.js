@@ -40,7 +40,7 @@ describe("D0-04 declaration-driven disagreement evidence", () => {
   test("records disagreement metadata before marking a denied request observed", async () => {
     const decision = Object.freeze({ allowed: false, code: "scope_mismatch" });
     mockAuthorize.mockResolvedValue(decision);
-    mockLogDecision.mockResolvedValue(undefined);
+    mockLogDecision.mockResolvedValue(true);
     const req = {
       auth: { principalId: "principal-1", authenticationMethod: "api_key" },
     };
@@ -84,17 +84,26 @@ describe("D0-04 declaration-driven disagreement evidence", () => {
     expect(req._wave2Observed).toBe(true);
   });
 
-  test("leaves the request unmarked when disagreement evidence cannot be persisted", async () => {
+  test("leaves the request unmarked when disagreement evidence is not persisted", async () => {
     const decision = Object.freeze({ allowed: false, code: "permission_missing" });
     mockAuthorize.mockResolvedValue(decision);
-    mockLogDecision.mockRejectedValue(new Error("decision log unavailable"));
+    mockLogDecision.mockResolvedValue(false);
     const req = { auth: { principalId: "principal-1" } };
 
     await expect(observeDeclarationAuthorization(req, {
       permission: "policy_rollout_plan:approve",
       resource: { type: "policy_rollout_plan", resourceId: "42" },
-    })).rejects.toThrow("decision log unavailable");
+      surfaceId: "route:POST:/api/rollouts/:id/approve",
+    })).resolves.toBe(decision);
 
     expect(req._wave2Observed).toBeUndefined();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permission: "policy_rollout_plan:approve",
+        code: "permission_missing",
+        surface: "route:POST:/api/rollouts/:id/approve",
+      }),
+      "routeAuthObserver: disagreement evidence was not persisted; preserving route-local fallback",
+    );
   });
 });

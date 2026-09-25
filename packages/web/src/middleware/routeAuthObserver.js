@@ -55,8 +55,8 @@ async function ensureRouteMap() {
  * authorize() records the authoritative decision. When that decision denies,
  * preserve the same legacy-vs-authoritative disagreement evidence that
  * observeAuthorize() records on route-local adoption paths. Mark the request
- * observed only after the evidence write succeeds so route-local observation
- * remains available as a non-fatal fallback if this seam fails.
+ * observed only after that evidence is confirmed persisted so route-local
+ * observation remains available as a non-fatal fallback if persistence fails.
  */
 export async function observeDeclarationAuthorization(req, { permission, resource, surfaceId = null }) {
   const principal = req.auth || null;
@@ -65,7 +65,20 @@ export async function observeDeclarationAuthorization(req, { permission, resourc
   const legacyExpected = true; // request reached this observer through the legacy-authorized path
   const disagreement = legacyExpected && !decision.allowed;
   if (disagreement) {
-    await logDecision(decision, principal, { legacyExpected, disagreement });
+    const persisted = await logDecision(decision, principal, { legacyExpected, disagreement });
+    if (!persisted) {
+      logger.warn(
+        {
+          permission,
+          code: decision.code,
+          principalId: principal?.principalId ?? null,
+          surface: surfaceId,
+          resource: resource?.type ?? null,
+        },
+        "routeAuthObserver: disagreement evidence was not persisted; preserving route-local fallback",
+      );
+      return decision;
+    }
     logger.info(
       {
         permission,
