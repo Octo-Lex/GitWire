@@ -37,6 +37,27 @@ function joinRoute(mountPath, routePath) {
   return mountPath.replace(/\/$/, "") + routePath;
 }
 
+function discoverModuleRouterBinding(source, sourcePath) {
+  const routerFactoryCandidates = [
+    ...source.matchAll(/\b(?:express\s*\.\s*)?Router\s*\(\s*\)/g),
+  ];
+  const declarationRe = /(?:^|\n)\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:express\s*\.\s*)?Router\s*\(\s*\)\s*;/g;
+  const declarations = [...source.matchAll(declarationRe)];
+
+  if (declarations.length !== routerFactoryCandidates.length) {
+    throw new Error(
+      `Unsupported Router() construction syntax in ${sourcePath}: discovered ${routerFactoryCandidates.length} factories but parsed ${declarations.length} declarations`,
+    );
+  }
+  if (declarations.length !== 1) {
+    throw new Error(
+      `Mounted route module ${sourcePath} must expose exactly one parseable Router() instance; found ${declarations.length}`,
+    );
+  }
+
+  return declarations[0][1];
+}
+
 function discoverMountedMutatingRoutes() {
   const appSource = fs.readFileSync(path.join(SRC_ROOT, "app.js"), "utf8");
   const imports = new Map();
@@ -49,18 +70,19 @@ function discoverMountedMutatingRoutes() {
   const mounted = [];
   const mountRe = /app\.use\(\s*"([^"]+)"\s*,\s*([A-Za-z_$][\w$]*)\s*\);/g;
   for (const match of appSource.matchAll(mountRe)) {
-    const [, mountPath, routerName] = match;
-    const fileName = imports.get(routerName);
-    if (!fileName && /Router$/.test(routerName)) {
-      throw new Error(`Mounted route router ${routerName} is not mapped to a route-module import`);
+    const [, mountPath, appBinding] = match;
+    const fileName = imports.get(appBinding);
+    if (!fileName) {
+      throw new Error(`Path-mounted identifier ${appBinding} is not mapped to a parseable route-module import`);
     }
-    if (fileName) mounted.push({ mountPath, fileName, routerName });
+    mounted.push({ mountPath, fileName, appBinding });
   }
 
   const discovered = [];
-  for (const { mountPath, fileName, routerName } of mounted) {
+  for (const { mountPath, fileName } of mounted) {
     const sourcePath = `src/routes/${fileName}`;
     const source = fs.readFileSync(path.join(SRC_ROOT, "routes", fileName), "utf8");
+    const routerName = discoverModuleRouterBinding(source, sourcePath);
     const escapedRouter = escapeRegExp(routerName);
     const candidateRe = new RegExp(`\\b${escapedRouter}\\s*\\.\\s*(post|put|patch|delete)\\s*\\(`, "g");
     const routeRe = new RegExp(

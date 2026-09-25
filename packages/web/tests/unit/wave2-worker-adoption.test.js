@@ -39,12 +39,12 @@ const NON_HTTP_IDS = ALL_IDS.filter((id) => !id.startsWith("route:"));
 describe("Wave 2 — four-state adoption gate", () => {
   const states = classifyAdoptionStates(NON_HTTP_IDS);
 
-  it("every non-HTTP surface is declared (completeness contract: 22)", () => {
-    expect(states.counts.declared).toBe(22);
+  it("every non-HTTP surface is declared (completeness contract: 23)", () => {
+    expect(states.counts.declared).toBe(23);
   });
 
-  it("wired count is 22/22 (worker:webhook consumer now wired)", () => {
-    expect(states.counts.wired).toBe(22);
+  it("wired count is 23/23 (including telegram:evaluate)", () => {
+    expect(states.counts.wired).toBe(23);
     expect(states.declaredOnly).toEqual([]);
   });
 
@@ -73,6 +73,16 @@ describe("Wave 2 — four-state adoption gate", () => {
 
   it("webhook:github ingress IS wired (adoptWorker at webhooks.js:81)", () => {
     expect(isWired("webhook:github")).toBe(true);
+  });
+
+  it("telegram:evaluate is wired without overstating proof strength", () => {
+    expect(isWired("telegram:evaluate")).toBe(true);
+    expect(isAdoptionProven("telegram:evaluate")).toBe(false);
+    expect(isProven("telegram:evaluate")).toBe(false);
+    expect(getWiring("telegram:evaluate")).toMatchObject({
+      entry_module: "packages/bot/src/commands.js",
+      permission: "quality_gate:evaluate",
+    });
   });
 
   it("webhook:github and worker:webhook are distinct boundaries (no ambiguity)", () => {
@@ -135,7 +145,7 @@ describe("Wave 2 — four-state adoption gate", () => {
   it("ambiguousMappings is empty (webhook double mapping resolved)", () => {
     // worker:webhook and webhook:github were previously ambiguous (same module
     // + adoption line). Now resolved: webhook:github = HTTP ingress (wired),
-    // worker:webhook = BullMQ consumer (not wired, different module).
+    // worker:webhook = BullMQ consumer (different module).
     expect(states.ambiguousMappings).toEqual([]);
   });
 
