@@ -1,11 +1,11 @@
 // Source-derived authorization-mode classification for protected HTTP routes.
-// D0-04 keeps this separate from the declaration inventory so runtime behavior
-// can be checked against the handlers that actually enforce authorization.
+// D0-04 keeps the source-derived route list separate from the declaration
+// inventory. W1-02 reuses the central authorization mode vocabulary so route
+// classification cannot drift from runtime control semantics.
 
-export const RouteAuthorizationMode = Object.freeze({
-  OBSERVE: "observe",
-  ENFORCED: "enforced",
-});
+import { AuthorizationMode } from "./authorizationMode.js";
+
+export const RouteAuthorizationMode = AuthorizationMode;
 
 export const ENFORCED_ROUTE_SURFACE_IDS = Object.freeze([
   "route:POST:/api/triage/failures/:jobId/disposition",

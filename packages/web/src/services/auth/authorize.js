@@ -24,8 +24,15 @@ import { createDecision } from "./context.js";
 import { DecisionCode } from "./denialCodes.js";
 import { getPrincipalById, principalValidityCode } from "./principalResolver.js";
 import { logDecision } from "./decisionLog.js";
+import {
+  AuthorizationMode,
+  createAuthorizationOutcome,
+  normalizeAuthorizationMode,
+} from "./authorizationMode.js";
 
 const POLICY_VERSION = "level1";
+
+export { AuthorizationMode };
 
 /**
  * The persistence-aware authorization interface used by observation seams that
@@ -152,6 +159,32 @@ async function denyAndLog(code, principal, permission, resource, assignmentId, s
   });
   const persisted = await logDecision(decision, principal);
   return { decision, persisted };
+}
+
+/**
+ * W1-02 transport-neutral authorization control. The policy decision remains
+ * unchanged; mode decides whether a denied decision is advisory (`observe`) or
+ * requires the caller to stop before its protected effect (`enforced`).
+ *
+ * Invalid modes are rejected before authorization evaluation so a misspelled
+ * enforcement request cannot silently become an observed decision.
+ *
+ * @param {object} opts
+ * @param {object|null} opts.principal
+ * @param {string} opts.permission
+ * @param {object} opts.resource
+ * @param {"observe"|"enforced"} [opts.mode]
+ * @returns {Promise<Readonly<{decision: Readonly<AuthorizationDecision>, persisted: boolean, mode: string, blocked: boolean}>>}
+ */
+export async function authorizeControlled({
+  principal,
+  permission,
+  resource,
+  mode = AuthorizationMode.OBSERVE,
+}) {
+  const normalizedMode = normalizeAuthorizationMode(mode);
+  const result = await authorizeWithPersistence({ principal, permission, resource });
+  return createAuthorizationOutcome({ ...result, mode: normalizedMode });
 }
 
 /** Preserve the established decision-only contract for all existing callers. */
