@@ -76,6 +76,55 @@ export function unauthenticatedContext(method = "unauthenticated") {
  */
 
 /**
+ * Canonicalize a resolved resource into the immutable shape carried across
+ * request and worker execution boundaries. This function does not resolve
+ * caller input; callers must pass a resource produced by a trusted resolver.
+ * Unknown/missing fields stay explicit nulls so downstream code cannot fall
+ * back to request/job payload identity by omission.
+ *
+ * @param {Resource|object|null} resource
+ * @returns {Readonly<Resource>}
+ */
+export function createResource(resource) {
+  return Object.freeze({
+    type: resource?.type ?? "unknown",
+    installationId: resource?.installationId ?? null,
+    repositoryId: resource?.repositoryId ?? null,
+    organization: resource?.organization ?? null,
+    repository: resource?.repository ?? null,
+    resourceId: resource?.resourceId ?? null,
+  });
+}
+
+/**
+ * @typedef {Object} AuthorityContext
+ * @property {Readonly<AuthContext>|null} principal - server-resolved principal
+ * @property {Readonly<Resource>} resource           - server-resolved canonical resource
+ * @property {string|null} surfaceId                 - protected execution surface
+ */
+
+/**
+ * Bind an already-resolved principal and resource into one immutable execution
+ * authority context. Identity/resource resolution remains the responsibility
+ * of the trusted request/worker resolvers; this helper only canonicalizes and
+ * transports the result so later cutover work never needs to re-read payload
+ * identity.
+ *
+ * @param {object} value
+ * @param {Readonly<AuthContext>|null} value.principal
+ * @param {Resource|object|null} value.resource
+ * @param {string|null} [value.surfaceId]
+ * @returns {Readonly<AuthorityContext>}
+ */
+export function createAuthorityContext({ principal, resource, surfaceId = null }) {
+  return Object.freeze({
+    principal: principal ?? null,
+    resource: createResource(resource),
+    surfaceId: surfaceId ?? null,
+  });
+}
+
+/**
  * @typedef {Object} AuthorizationDecision
  * @property {boolean} allowed
  * @property {string} code                - a DecisionCode value
@@ -100,14 +149,7 @@ export function createDecision(d) {
     code: d.code,
     principalId: d.principalId ?? null,
     permission: d.permission,
-    resource: Object.freeze({
-      type: d.resource?.type ?? "unknown",
-      installationId: d.resource?.installationId ?? null,
-      repositoryId: d.resource?.repositoryId ?? null,
-      organization: d.resource?.organization ?? null,
-      repository: d.resource?.repository ?? null,
-      resourceId: d.resource?.resourceId ?? null,
-    }),
+    resource: createResource(d.resource),
     matchedAssignmentId: d.matchedAssignmentId ?? null,
     matchedScopeType: d.matchedScopeType ?? null,
     policyVersion: d.policyVersion ?? "level1",
