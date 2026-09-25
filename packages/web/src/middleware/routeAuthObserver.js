@@ -40,7 +40,9 @@ async function ensureRouteMap() {
       return {
         id: surface.id,
         method: parts[1],
-        regex: new RegExp(`^${regexStr}$`),
+        // Express 4 defaults to non-strict routing, so a declaration path must
+        // also observe the equivalent trailing-slash request.
+        regex: new RegExp(`^${regexStr}/?$`),
         paramNames,
         permission: surface.permission,
         resourceType: surface.resourceType,
@@ -155,16 +157,16 @@ export async function routeAuthObserver(req, res, next) {
       return next();
     }
 
-    const pathMatch = req.path.match(match.regex);
-    const params = {};
-    if (pathMatch) {
-      match.paramNames.forEach((name, index) => {
-        params[name] = decodeURIComponent(pathMatch[index + 1]);
-      });
-    }
-
     if (!req._wave2Observed) {
       try {
+        const pathMatch = req.path.match(match.regex);
+        const params = {};
+        if (pathMatch) {
+          match.paramNames.forEach((name, index) => {
+            params[name] = decodeURIComponent(pathMatch[index + 1]);
+          });
+        }
+
         const resource = await resolveRouteResource(
           match.resourceType,
           params,
