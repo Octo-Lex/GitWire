@@ -10,6 +10,7 @@ const WEB_ROOT = path.resolve(TEST_DIR, "../..");
 const SRC_ROOT = path.join(WEB_ROOT, "src");
 const APP_PATH = path.join(SRC_ROOT, "app.js");
 const ROUTES_ROOT = path.join(SRC_ROOT, "routes");
+const ROUTE_MODULE_REFERENCE_RE = /["']\.\/routes\/[^"']+\.js["']/g;
 const ROUTE_IMPORT_CANDIDATE_RE = /from\s+["']\.\/routes\/[^"']+\.js["']/g;
 const SCANNER_ROUTE_IMPORT_RE = /import\s+(?:\{\s*([A-Za-z_$][\w$]*)\s*\}|([A-Za-z_$][\w$]*))\s+from\s+"\.\/routes\/([^"]+\.js)";/g;
 const PATH_MOUNT_CANDIDATE_RE = /app\.use\(\s*["'][^"']+["']\s*,\s*([A-Za-z_$][\w$]*)\s*\)/g;
@@ -23,12 +24,17 @@ function scannerRouteImportBindings(source) {
   return bindings;
 }
 
+function scannerMountedBindings(source) {
+  return new Set([...source.matchAll(SCANNER_PATH_MOUNT_RE)].map((match) => match[1]));
+}
+
 function assertScannerCompatibleAppWiring(source) {
+  const routeModuleReferences = [...source.matchAll(ROUTE_MODULE_REFERENCE_RE)].length;
   const routeImportCandidates = [...source.matchAll(ROUTE_IMPORT_CANDIDATE_RE)].length;
   const parsedRouteImports = [...source.matchAll(SCANNER_ROUTE_IMPORT_RE)].length;
-  if (parsedRouteImports !== routeImportCandidates) {
+  if (routeModuleReferences !== routeImportCandidates || parsedRouteImports !== routeImportCandidates) {
     throw new Error(
-      `Scanner-incompatible route import syntax: found ${routeImportCandidates} candidates but parsed ${parsedRouteImports}`,
+      `Scanner-incompatible route import syntax: found ${routeModuleReferences} route references, ${routeImportCandidates} import candidates, and ${parsedRouteImports} parsed imports`,
     );
   }
 
@@ -37,6 +43,14 @@ function assertScannerCompatibleAppWiring(source) {
   if (parsedPathMounts !== pathMountCandidates) {
     throw new Error(
       `Scanner-incompatible path mount syntax: found ${pathMountCandidates} candidates but parsed ${parsedPathMounts}`,
+    );
+  }
+
+  const importedBindings = [...scannerRouteImportBindings(source)].sort();
+  const mountedBindings = [...scannerMountedBindings(source)].sort();
+  if (importedBindings.length !== mountedBindings.length || importedBindings.some((binding, i) => binding !== mountedBindings[i])) {
+    throw new Error(
+      `Scanner-incompatible route mounting: imported [${importedBindings.join(", ")}] but mounted [${mountedBindings.join(", ")}]`,
     );
   }
 }
@@ -71,33 +85,24 @@ describe("D0-04 application entrypoint guard", () => {
     expect(unsupportedDirectAppMutationSyntax(appSource)).toEqual([]);
   });
 
-  test("route imports and path mounts stay compatible with the source scanner", () => {
+  test("route references, imports, and mounts stay exactly compatible with the source scanner", () => {
     expect(() => assertScannerCompatibleAppWiring(appSource)).not.toThrow();
-  });
-
-  test("every path-mounted identifier is visible to the mounted-router scanner", () => {
-    const routeBindings = scannerRouteImportBindings(appSource);
-    const mounts = [...appSource.matchAll(SCANNER_PATH_MOUNT_RE)];
-
-    for (const mount of mounts) {
-      expect(routeBindings.has(mount[1])).toBe(true);
-    }
   });
 
   test("mounted route modules do not compose hidden child routers", () => {
     expect(routeModuleCompositionSites()).toEqual([]);
   });
 
-  test("single-quoted or semicolonless route wiring fails closed until explicitly supported", () => {
+  test("single-quoted, semicolonless, dynamic, or variable-mounted route wiring fails closed", () => {
     const variants = [
       ["import router from './routes/new.js';", "app.use('/api/new', router);"],
       ["import router from \"./routes/new.js\"", "app.use(\"/api/new\", router)"],
+      ["const mod = await import(\"./routes/new.js\");", "app.use(\"/api/new\", mod.default);"],
+      ["import router from \"./routes/new.js\";", "app.use(prefix, router);"],
     ];
 
     for (const lines of variants) {
-      expect(() => assertScannerCompatibleAppWiring(lines.join("\n"))).toThrow(
-        /Scanner-incompatible (route import|path mount) syntax/,
-      );
+      expect(() => assertScannerCompatibleAppWiring(lines.join("\n"))).toThrow(/Scanner-incompatible/);
     }
   });
 
