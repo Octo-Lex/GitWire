@@ -1,8 +1,8 @@
 // W1-04 — exact worker/scheduler authorization cutover.
 //
 // These tests prove the bounded enforced set, durable-decision fail-closed
-// behavior, maintainer repository rebinding, Phase-3 fleet handling, and that
-// non-W1-04 runtime surfaces remain observe-only.
+// behavior, maintainer repository rebinding, Phase-3 job-contract authority,
+// and that non-W1-04 runtime surfaces remain observe-only.
 
 import { jest } from "@jest/globals";
 
@@ -39,7 +39,8 @@ const {
   adoptWorker,
   isW104EnforcedSurface,
   W1_04_ENFORCED_SURFACE_IDS,
-  WorkerAuthorizationError,
+  PHASE3_FLEET_JOB_NAMES,
+  phase3ResourceTypeForJob,
 } = await import("../../src/services/auth/workerAdoption.js");
 
 const installationPrincipal = Object.freeze({
@@ -193,16 +194,11 @@ describe("W1-04 worker authorization cutover", () => {
       installationId: 7,
       systemPrincipalName: "system:issue-fix-worker",
       jobData: { repositoryId: 11 },
-    })).rejects.toBeInstanceOf(WorkerAuthorizationError);
-
-    await expect(adoptWorker({
+    })).rejects.toMatchObject({
+      name: "WorkerAuthorizationError",
+      reason: "authorization_evidence_unavailable",
       workerId: "worker:issueFix",
-      permission: "pull_request:create",
-      resourceType: "repository",
-      installationId: 7,
-      systemPrincipalName: "system:issue-fix-worker",
-      jobData: { repositoryId: 11 },
-    })).rejects.toMatchObject({ reason: "authorization_evidence_unavailable" });
+    });
   });
 
   test("maintainer full-name lookup is rebound to DB-owned repository identity", async () => {
@@ -241,13 +237,29 @@ describe("W1-04 worker authorization cutover", () => {
     }));
   });
 
-  test("Phase-3 empty scheduled jobs use fleet authority, not an unknown installation", async () => {
+  test("freezes the exact Phase-3 fleet job contract", () => {
+    expect(PHASE3_FLEET_JOB_NAMES).toEqual([
+      "graduation-check",
+      "policy-reconcile-fleet",
+      "dependency-scan-fleet",
+    ]);
+    for (const jobName of PHASE3_FLEET_JOB_NAMES) {
+      expect(phase3ResourceTypeForJob(jobName)).toBe("fleet");
+    }
+    expect(phase3ResourceTypeForJob("ingest-test-results")).toBe("installation");
+    expect(phase3ResourceTypeForJob("dependency-scan-repo")).toBe("installation");
+    expect(phase3ResourceTypeForJob("unknown-job")).toBe("installation");
+    expect(phase3ResourceTypeForJob(undefined)).toBe("installation");
+  });
+
+  test("Phase-3 fleet scope is selected by exact job name, not job-data shape", async () => {
     const result = await adoptWorker({
       workerId: "worker:phase3",
       permission: "installation:read",
       resourceType: "installation",
+      jobName: "policy-reconcile-fleet",
       systemPrincipalName: "system:phase3-worker",
-      jobData: {},
+      jobData: { incidentalMetadata: true },
     });
 
     expect(result.resource).toEqual({
@@ -265,18 +277,40 @@ describe("W1-04 worker authorization cutover", () => {
     }));
   });
 
-  test("Phase-3 nonempty jobs without installation remain fail-closed installation scope", async () => {
+  test("Phase-3 installation jobs cannot acquire fleet authority from empty job data", async () => {
     const result = await adoptWorker({
       workerId: "worker:phase3",
       permission: "installation:read",
       resourceType: "installation",
+      jobName: "dependency-scan-repo",
       systemPrincipalName: "system:phase3-worker",
-      jobData: { repoId: 99 },
+      jobData: {},
     });
 
     expect(result.resource).toEqual({
       type: "installation",
       installationId: null,
+      repositoryId: null,
+      organization: null,
+      repository: null,
+      resourceId: null,
+    });
+  });
+
+  test("Phase-3 installation jobs retain trusted installation scope", async () => {
+    const result = await adoptWorker({
+      workerId: "worker:phase3",
+      permission: "installation:read",
+      resourceType: "installation",
+      jobName: "dependency-scan-repo",
+      systemPrincipalName: "system:phase3-worker",
+      installationId: 7,
+      jobData: { repoId: 99, installationId: 7 },
+    });
+
+    expect(result.resource).toEqual({
+      type: "installation",
+      installationId: 7,
       repositoryId: null,
       organization: null,
       repository: null,

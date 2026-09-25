@@ -17,18 +17,16 @@ import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.
 // ── Worker ────────────────────────────────────────────────────────────────────
 export function startPhase3Worker() {
   return createWorker("phase3", async (job) => {
-    // Wave 2: resolve trusted principal. Phase3 has mixed job types:
-    //   - installation-scoped (ingest-test-results, dependency-scan-repo)
-    //     → use installationId from job data when available
-    //   - fleet-wide (graduation-check, policy-reconcile-fleet,
-    //     dependency-scan-fleet) → system principal
-    // Adoption uses the system principal as the base; installation-scoped
-    // jobs additionally carry the installationId for resource resolution.
+    // W1-04: Phase 3 is one BullMQ consumer with two authority domains.
+    // `adoptWorker` selects fleet scope only for the exact fleet job names;
+    // every other job remains installation-scoped. `job.data` is never used
+    // to infer fleet authority merely because it is empty.
     const jobInstId = job.data?.installation?.id || job.data?.installationId;
     const adoption = await adoptWorker({
       workerId: "worker:phase3",
       permission: "installation:read",
       resourceType: "installation",
+      jobName: job.name,
       systemPrincipalName: "system:phase3-worker",
       installationId: jobInstId,
       jobData: job.data,

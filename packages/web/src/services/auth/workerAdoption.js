@@ -30,10 +30,21 @@ export const W1_04_ENFORCED_SURFACE_IDS = Object.freeze([
   "scheduled:reconciliation",
 ]);
 
+export const PHASE3_FLEET_JOB_NAMES = Object.freeze([
+  "graduation-check",
+  "policy-reconcile-fleet",
+  "dependency-scan-fleet",
+]);
+
 const W1_04_ENFORCED_SURFACE_SET = new Set(W1_04_ENFORCED_SURFACE_IDS);
+const PHASE3_FLEET_JOB_SET = new Set(PHASE3_FLEET_JOB_NAMES);
 
 export function isW104EnforcedSurface(workerId) {
   return W1_04_ENFORCED_SURFACE_SET.has(workerId);
+}
+
+export function phase3ResourceTypeForJob(jobName) {
+  return PHASE3_FLEET_JOB_SET.has(jobName) ? "fleet" : "installation";
 }
 
 export class WorkerAuthorizationError extends Error {
@@ -86,7 +97,8 @@ function validateControlledOutcome(outcome, workerId) {
  * @param {object} opts
  * @param {string} opts.workerId       - protected runtime surface id
  * @param {string} opts.permission     - declared permission
- * @param {string} opts.resourceType   - declared resource type
+ * @param {string} opts.resourceType   - declared/default resource type
+ * @param {string} [opts.jobName]      - BullMQ job name where authority varies by job contract
  * @param {object} [opts.jobData]      - BullMQ job data
  * @param {string} [opts.systemPrincipalName] - for scheduled/autonomous workers
  * @param {number} [opts.installationId] - trusted installation lookup key
@@ -97,6 +109,7 @@ export async function adoptWorker({
   workerId,
   permission,
   resourceType,
+  jobName,
   jobData = {},
   systemPrincipalName,
   installationId,
@@ -116,6 +129,14 @@ export async function adoptWorker({
     logger.warn({ workerId }, "adoptWorker: no principal resolved — recording gap");
   }
 
+  // Phase 3 is one BullMQ consumer with two authority domains. Select fleet
+  // scope from the exact job contract, never from whether job.data happens to
+  // be empty. Every other Phase-3 job remains installation-scoped and therefore
+  // fails closed when no trusted installation can be resolved.
+  const effectiveResourceType = workerId === "worker:phase3"
+    ? phase3ResourceTypeForJob(jobName)
+    : resourceType;
+
   // Resolve resource identity from server-owned state. Queue values are lookup
   // keys only. Maintainer jobs historically carry full_name rather than repo id,
   // so W1-04 resolves that name through the repositories table before enforcing.
@@ -124,7 +145,7 @@ export async function adoptWorker({
   const payloadRepoFullName = jobData?.repoFullName || null;
   const trustedInstId = context?.installationId || (installationId ? Number(installationId) : null);
 
-  if (resourceType === "repository" && trustedInstId && payloadRepoId) {
+  if (effectiveResourceType === "repository" && trustedInstId && payloadRepoId) {
     resource = await resources.resolveRepositoryResource(trustedInstId, Number(payloadRepoId));
     if (!resource) {
       resource = { type: "repository" };
@@ -134,7 +155,7 @@ export async function adoptWorker({
       );
     }
   } else if (
-    resourceType === "repository" &&
+    effectiveResourceType === "repository" &&
     trustedInstId &&
     payloadRepoFullName &&
     typeof resources.resolveRepositoryResourceByFullName === "function"
@@ -147,19 +168,8 @@ export async function adoptWorker({
         "adoptWorker: trusted repository full-name lookup failed — resource will fail-closed",
       );
     }
-  } else if (
-    workerId === "worker:phase3" &&
-    resourceType === "installation" &&
-    !trustedInstId &&
-    Object.keys(jobData || {}).length === 0
-  ) {
-    // Phase 3 has three explicitly fleet-wide scheduled jobs whose job data is
-    // empty at the current contract. Treat only that exact shape as fleet.
-    // Installation-scoped/malformed jobs with data but no installation remain
-    // an incomplete installation resource and therefore fail closed.
-    resource = { type: "fleet" };
   } else {
-    resource = { type: resourceType, installationId: trustedInstId };
+    resource = { type: effectiveResourceType, installationId: trustedInstId };
   }
 
   const authority = createAuthorityContext({
