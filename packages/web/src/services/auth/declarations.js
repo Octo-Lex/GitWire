@@ -99,6 +99,7 @@ const RUNTIME_SURFACES = [
   W("scheduled:phase3", "scheduled", P.p0, T.t0, "worker-context", "system", V.r35, "phase3.schedule"),
   W("scheduled:phase4", "scheduled", P.p9, T.t0, "worker-context", "system", V.r36, "phase4.schedule"),
   W("scheduled:reconciliation", "scheduled", P.p0, T.t0, "worker-context", "system", V.r37, "reconciliation.schedule"),
+  W("telegram:evaluate", "telegram", P.p8, T.t1, "req.auth", "api_key", V.r38, "telegram.evaluate"),
   W("telegram:heal", "telegram", P.p1, T.t1, "req.auth", "api_key", V.r38, "telegram.heal"),
   W("telegram:fix", "telegram", P.p6, T.t1, "req.auth", "api_key", V.r38, "telegram.fix"),
   W("webhook:github", "webhook", P.p0, T.t4, "webhook-installation", "webhook_hmac", V.r39, "github.webhook.ingress"),

@@ -94,8 +94,9 @@ export const CONSEQUENTIAL_SURFACE_MANIFEST = Object.freeze([
   runtime("scheduled:phase3", "scheduled", P.p0, T.t0, "worker-context", "system", V.r35, "phase3.schedule", "src/workers/phase3Worker.js"),
   runtime("scheduled:phase4", "scheduled", P.p9, T.t0, "worker-context", "system", V.r36, "phase4.schedule", "src/workers/phase4Worker.js"),
   runtime("scheduled:reconciliation", "scheduled", P.p0, T.t0, "worker-context", "system", V.r37, "reconciliation.schedule", "src/workers/reconciliationWorker.js"),
-  runtime("telegram:heal", "telegram", P.p1, T.t1, "req.auth", "api_key", V.r38, "telegram.heal", "telegram heal handler"),
-  runtime("telegram:fix", "telegram", P.p6, T.t1, "req.auth", "api_key", V.r38, "telegram.fix", "telegram fix handler"),
+  runtime("telegram:evaluate", "telegram", P.p8, T.t1, "req.auth", "api_key", V.r38, "telegram.evaluate", "../bot/src/commands.js#evaluate"),
+  runtime("telegram:heal", "telegram", P.p1, T.t1, "req.auth", "api_key", V.r38, "telegram.heal", "../bot/src/commands.js#heal"),
+  runtime("telegram:fix", "telegram", P.p6, T.t1, "req.auth", "api_key", V.r38, "telegram.fix", "../bot/src/commands.js#fix"),
   runtime("webhook:github", "webhook", P.p0, T.t4, "webhook-installation", "webhook_hmac", V.r39, "github.webhook.ingress", "src/routes/webhooks.js"),
 ]);
 
