@@ -16,6 +16,10 @@ const SCANNER_ROUTE_IMPORT_RE = /import\s+(?:\{\s*([A-Za-z_$][\w$]*)\s*\}|([A-Za
 const PATH_MOUNT_CANDIDATE_RE = /app\.use\(\s*["'][^"']+["']\s*,\s*([A-Za-z_$][\w$]*)\s*\)/g;
 const SCANNER_PATH_MOUNT_RE = /app\.use\(\s*"[^"]+"\s*,\s*([A-Za-z_$][\w$]*)\s*\);/g;
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function scannerRouteImportBindings(source) {
   const bindings = new Set();
   for (const match of source.matchAll(SCANNER_ROUTE_IMPORT_RE)) {
@@ -63,15 +67,49 @@ function unsupportedDirectAppMutationSyntax(source) {
   ];
 }
 
+function siblingRouteModuleBindings(source, sourcePath) {
+  const bindings = new Set();
+  const siblingImportRe = /import\s+(?:\{([^}]+)\}|([A-Za-z_$][\w$]*))\s+from\s+["']((?:\.\/|\.\.\/routes\/)[^"']+\.js)["'];?/gms;
+
+  for (const match of source.matchAll(siblingImportRe)) {
+    if (match[2]) {
+      bindings.add(match[2]);
+      continue;
+    }
+
+    for (const rawSpecifier of match[1].split(",")) {
+      const specifier = rawSpecifier.trim();
+      if (!specifier) continue;
+      const parsed = specifier.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+      if (!parsed) {
+        throw new Error(`Unsupported sibling route import specifier in ${sourcePath}: ${specifier}`);
+      }
+      bindings.add(parsed[2] || parsed[1]);
+    }
+  }
+
+  return bindings;
+}
+
 function routeModuleCompositionSites() {
   const sites = [];
   for (const fileName of fs.readdirSync(ROUTES_ROOT).filter((name) => name.endsWith(".js"))) {
+    const sourcePath = `src/routes/${fileName}`;
     const source = fs.readFileSync(path.join(ROUTES_ROOT, fileName), "utf8");
+    const siblingBindings = siblingRouteModuleBindings(source, sourcePath);
     const routerDeclarations = [...source.matchAll(/(?:^|\n)\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:express\s*\.\s*)?Router\s*\(\s*\)/g)];
+
     for (const declaration of routerDeclarations) {
-      const binding = declaration[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (new RegExp(`\\b${binding}\\s*\\.\\s*use\\s*\\(`).test(source)) {
-        sites.push(fileName);
+      const routerBinding = escapeRegExp(declaration[1]);
+      for (const childBinding of siblingBindings) {
+        const child = escapeRegExp(childBinding);
+        if (new RegExp(`\\b${routerBinding}\\s*\\.\\s*use\\s*\\([^;]*\\b${child}\\b`, "gms").test(source)) {
+          sites.push(`${fileName}:${childBinding}`);
+        }
+      }
+
+      if (new RegExp(`\\b${routerBinding}\\s*\\.\\s*use\\s*\\([^;]*\\bimport\\s*\\(\\s*["'](?:\\.\\/|\\.\\.\\/routes\\/)`, "gms").test(source)) {
+        sites.push(`${fileName}:dynamic-import`);
       }
     }
   }
