@@ -18,18 +18,19 @@
 // as non-authoritative compatibility metadata.
 
 import { authorize } from "./authorize.js";
-import { logDecision } from "./decisionLog.js";
 import {
   resolveSystemWorkerContext,
   resolveInstallationWorkerContext,
 } from "./workerContext.js";
 import { resolveRepositoryResource } from "./resourceResolver.js";
+import { createAuthorityContext } from "./context.js";
 import { logger } from "../../lib/logger.js";
 
 /**
- * Worker adoption wrapper. Resolves a trusted principal, calls authorize()
- * (observe-only), and returns the context + legacy actor for the worker to
- * pass to persistence writers.
+ * Worker adoption wrapper. Resolves a trusted principal and resource, binds
+ * them into one immutable authority context, then calls authorize()
+ * (observe-only). The authority context is carried forward for later worker
+ * cutover work so execution never needs to reconstruct identity from payloads.
  *
  * @param {object} opts
  * @param {string} opts.workerId       - the worker's surface id (e.g. 'worker:triage')
@@ -39,7 +40,7 @@ import { logger } from "../../lib/logger.js";
  * @param {string} [opts.systemPrincipalName] - for scheduled/autonomous workers
  * @param {number} [opts.installationId] - for installation-scoped workers (from trusted source)
  * @param {string} [opts.legacyActor]  - non-authoritative actor metadata from payload
- * @returns {Promise<{context: object|null, legacyActor: string, decision: object}>}
+ * @returns {Promise<{context: object|null, resource: object, authority: object, legacyActor: string, decision: object}>}
  */
 export async function adoptWorker({
   workerId,
@@ -88,6 +89,16 @@ export async function adoptWorker({
     resource = { type: resourceType, installationId: trustedInstId };
   }
 
+  // W1-01: preserve the server-owned principal/resource pair as a single
+  // immutable transport object. This does not change authorization mode; it
+  // gives W1-03/W1-04 a canonical context to consume instead of re-reading
+  // request/job identity.
+  const authority = createAuthorityContext({
+    principal: context,
+    resource,
+    surfaceId: workerId,
+  });
+
   // Call authorize() once (observe-only: records decision, does not block).
   const decision = await authorize({
     principal: context,
@@ -97,7 +108,13 @@ export async function adoptWorker({
 
   const actor = legacyActor || jobData?.triggeredBy || jobData?.actor || "worker";
 
-  return { context, legacyActor: actor, decision };
+  return {
+    context,
+    resource: authority.resource,
+    authority,
+    legacyActor: actor,
+    decision,
+  };
 }
 
 /**

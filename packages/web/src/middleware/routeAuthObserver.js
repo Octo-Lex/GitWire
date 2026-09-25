@@ -2,6 +2,7 @@
 
 import * as authorization from "../services/auth/authorize.js";
 import { logDecision } from "../services/auth/decisionLog.js";
+import { createAuthorityContext } from "../services/auth/context.js";
 import { logger } from "../lib/logger.js";
 import {
   resolveRouteResource,
@@ -69,6 +70,10 @@ async function authorizeForObservation(opts) {
 /**
  * Record one declaration-driven Wave-2 authorization observation.
  *
+ * W1-01 additionally binds the already server-resolved principal and resource
+ * into req.authority. Evidence persistence still controls observation de-dupe,
+ * but does not erase the canonical request authority context.
+ *
  * The declaration seam suppresses a later route-local observation only after
  * its base decision evidence (and disagreement evidence on deny) is confirmed
  * persisted. Otherwise the request stays unmarked so the existing route-local
@@ -76,6 +81,12 @@ async function authorizeForObservation(opts) {
  */
 export async function observeDeclarationAuthorization(req, { permission, resource, surfaceId = null }) {
   const principal = req.auth || null;
+  req.authority = createAuthorityContext({
+    principal,
+    resource,
+    surfaceId,
+  });
+
   const { decision, persisted: basePersisted } = await authorizeForObservation({
     principal,
     permission,
