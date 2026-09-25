@@ -73,10 +73,7 @@ async function lookupRepositoryByActionId(actionId) {
     `SELECT r.github_id, r.installation_id, r.owner, r.name
        FROM managed_actions a
        JOIN repositories r
-         ON (
-              (a.repo_id IS NOT NULL AND r.id = a.repo_id)
-           OR (a.repo_id IS NULL AND a.repo_full_name IS NOT NULL AND r.full_name = a.repo_full_name)
-         )
+         ON r.github_id = a.repo_id
        JOIN installations i
          ON i.github_id = r.installation_id
         AND i.deleted_at IS NULL
