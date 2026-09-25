@@ -97,6 +97,40 @@ export function createResource(resource) {
 }
 
 /**
+ * Canonicalize only identity that has a server-owned binding for authority
+ * transport. Resolvers may deliberately retain caller-supplied names/ids for
+ * diagnostic authorization evidence when lookup fails; those values must not
+ * become authoritative merely because they are carried forward.
+ *
+ * @param {Resource|object|null} resource
+ * @returns {Readonly<Resource>}
+ */
+function createAuthorityResource(resource) {
+  const canonical = createResource(resource);
+
+  if (
+    canonical.type === "repository" &&
+    (canonical.installationId === null || canonical.repositoryId === null)
+  ) {
+    return createResource({ type: "repository" });
+  }
+
+  if (canonical.type === "installation" && canonical.installationId === null) {
+    return createResource({ type: "installation" });
+  }
+
+  if (
+    canonical.type === "policy_rollout_plan" &&
+    canonical.installationId === null &&
+    canonical.repositoryId === null
+  ) {
+    return createResource({ type: "policy_rollout_plan" });
+  }
+
+  return canonical;
+}
+
+/**
  * @typedef {Object} AuthorityContext
  * @property {Readonly<AuthContext>|null} principal - server-resolved principal
  * @property {Readonly<Resource>} resource           - server-resolved canonical resource
@@ -119,7 +153,7 @@ export function createResource(resource) {
 export function createAuthorityContext({ principal, resource, surfaceId = null }) {
   return Object.freeze({
     principal: principal ?? null,
-    resource: createResource(resource),
+    resource: createAuthorityResource(resource),
     surfaceId: surfaceId ?? null,
   });
 }

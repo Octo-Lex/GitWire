@@ -106,4 +106,50 @@ describe("W1-01 authority context schema", () => {
       resource,
     });
   });
+
+  test("unresolved diagnostic request names never become authoritative resource identity", async () => {
+    const decision = Object.freeze({ allowed: false, code: "resource_unknown" });
+    mockAuthorizeWithPersistence.mockResolvedValue({ decision, persisted: true });
+    mockLogDecision.mockResolvedValue(true);
+
+    const principal = Object.freeze({
+      principalId: "principal-1",
+      principalType: "service",
+      authenticationMethod: "api_key",
+    });
+    const req = { auth: principal };
+    const diagnosticResource = {
+      type: "repository",
+      installationId: null,
+      repositoryId: null,
+      organization: "attacker-owner",
+      repository: "attacker-repo",
+    };
+
+    await expect(observeDeclarationAuthorization(req, {
+      permission: "repository:update",
+      resource: diagnosticResource,
+      surfaceId: "route:PATCH:/api/config/:owner/:repo",
+    })).resolves.toBe(decision);
+
+    // Authorization keeps diagnostic lookup input for evidence and denial.
+    expect(mockAuthorizeWithPersistence).toHaveBeenCalledWith({
+      principal,
+      permission: "repository:update",
+      resource: diagnosticResource,
+    });
+
+    // Authority transport carries only server-owned identity. The unresolved
+    // request names cannot be mistaken for an exact resource by later waves.
+    expect(req.authority.resource).toEqual({
+      type: "repository",
+      installationId: null,
+      repositoryId: null,
+      organization: null,
+      repository: null,
+      resourceId: null,
+    });
+    expect(req.authority.resource.organization).not.toBe("attacker-owner");
+    expect(req.authority.resource.repository).not.toBe("attacker-repo");
+  });
 });
