@@ -1,6 +1,6 @@
 // Declaration-driven observe-only route authorization observer (Wave 2 / #94).
 
-import { authorizeWithPersistence } from "../services/auth/authorize.js";
+import * as authorization from "../services/auth/authorize.js";
 import { logDecision } from "../services/auth/decisionLog.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -49,6 +49,19 @@ async function ensureRouteMap() {
   return _routeMap;
 }
 
+async function authorizeForObservation(opts) {
+  if (typeof authorization.authorizeWithPersistence === "function") {
+    return authorization.authorizeWithPersistence(opts);
+  }
+
+  // Compatibility for focused unit tests that intentionally provide the
+  // established authorize()-only module mock. Production always exports the
+  // persistence-aware interface; an authorize-only fallback is conservatively
+  // treated as unpersisted so it can never suppress route-local observation.
+  const decision = await authorization.authorize(opts);
+  return { decision, persisted: false };
+}
+
 /**
  * Record one declaration-driven Wave-2 authorization observation.
  *
@@ -59,7 +72,7 @@ async function ensureRouteMap() {
  */
 export async function observeDeclarationAuthorization(req, { permission, resource, surfaceId = null }) {
   const principal = req.auth || null;
-  const { decision, persisted: basePersisted } = await authorizeWithPersistence({
+  const { decision, persisted: basePersisted } = await authorizeForObservation({
     principal,
     permission,
     resource,

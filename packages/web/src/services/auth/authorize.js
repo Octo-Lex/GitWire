@@ -28,26 +28,13 @@ import { logDecision } from "./decisionLog.js";
 const POLICY_VERSION = "level1";
 
 /**
- * The central authorization interface. Existing callers receive the same
- * immutable AuthorizationDecision contract; logging persistence remains
- * best-effort and does not alter the authorization outcome.
+ * The persistence-aware authorization interface used by observation seams that
+ * must distinguish a recorded decision from best-effort logging failure.
  *
  * @param {object} opts
  * @param {object} opts.principal - AuthContext (the resolved caller)
  * @param {string} opts.permission - required permission token '<resource_type>:<action>'
  * @param {object} opts.resource - Resource descriptor
- * @returns {Promise<Readonly<AuthorizationDecision>>}
- */
-export async function authorize({ principal, permission, resource }) {
-  const { decision } = await authorizeWithPersistence({ principal, permission, resource });
-  return decision;
-}
-
-/**
- * Evaluate authorization and report whether the base decision row persisted.
- * This is for observe-only de-duplication seams that need to preserve a
- * route-local fallback when best-effort decision logging fails.
- *
  * @returns {Promise<{decision: Readonly<AuthorizationDecision>, persisted: boolean}>}
  */
 export async function authorizeWithPersistence({ principal, permission, resource }) {
@@ -165,4 +152,10 @@ async function denyAndLog(code, principal, permission, resource, assignmentId, s
   });
   const persisted = await logDecision(decision, principal);
   return { decision, persisted };
+}
+
+/** Preserve the established decision-only contract for all existing callers. */
+export async function authorize(opts) {
+  const { decision } = await authorizeWithPersistence(opts);
+  return decision;
 }
