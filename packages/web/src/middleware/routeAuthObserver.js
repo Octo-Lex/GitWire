@@ -1,6 +1,7 @@
 // Declaration-driven observe-only route authorization observer (Wave 2 / #94).
 
 import { authorize } from "../services/auth/authorize.js";
+import { logDecision } from "../services/auth/decisionLog.js";
 import { logger } from "../lib/logger.js";
 import {
   resolveRouteResource,
@@ -48,6 +49,39 @@ async function ensureRouteMap() {
   return _routeMap;
 }
 
+/**
+ * Record one declaration-driven Wave-2 authorization observation.
+ *
+ * authorize() records the authoritative decision. When that decision denies,
+ * preserve the same legacy-vs-authoritative disagreement evidence that
+ * observeAuthorize() records on route-local adoption paths. Mark the request
+ * observed only after the evidence write succeeds so route-local observation
+ * remains available as a non-fatal fallback if this seam fails.
+ */
+export async function observeDeclarationAuthorization(req, { permission, resource, surfaceId = null }) {
+  const principal = req.auth || null;
+  const decision = await authorize({ principal, permission, resource });
+
+  const legacyExpected = true; // request reached this observer through the legacy-authorized path
+  const disagreement = legacyExpected && !decision.allowed;
+  if (disagreement) {
+    await logDecision(decision, principal, { legacyExpected, disagreement });
+    logger.info(
+      {
+        permission,
+        code: decision.code,
+        principalId: principal?.principalId ?? null,
+        surface: surfaceId,
+        resource: resource?.type ?? null,
+      },
+      "observe-only: authoritative decision disagrees with legacy behavior",
+    );
+  }
+
+  req._wave2Observed = true;
+  return decision;
+}
+
 /** Observe authorization without blocking the request (Wave 2 contract). */
 export async function routeAuthObserver(req, res, next) {
   if (
@@ -83,12 +117,11 @@ export async function routeAuthObserver(req, res, next) {
           match.resourceResolver,
           req.body ?? {},
         );
-        await authorize({
-          principal: req.auth || null,
+        await observeDeclarationAuthorization(req, {
           permission: match.permission,
           resource,
+          surfaceId: match.id,
         });
-        req._wave2Observed = true;
       } catch (err) {
         logger.warn(
           { err, path: req.path, surface: match.id },
