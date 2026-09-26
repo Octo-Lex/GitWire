@@ -216,8 +216,10 @@ try {
       /append-only/,
       `${table} must reject DELETE`,
     );
+    // CASCADE is required here so PostgreSQL reaches BEFORE TRUNCATE triggers
+    // instead of rejecting parent tables at the FK dependency precheck.
     await expectReject(
-      baseClient.query(`TRUNCATE TABLE ${table}`),
+      baseClient.query(`TRUNCATE TABLE ${table} CASCADE`),
       /append-only/,
       `${table} must reject TRUNCATE`,
     );
