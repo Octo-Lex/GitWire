@@ -292,12 +292,25 @@ rolloutRouter.post("/:id/reject", async (req, res) => {
  */
 rolloutRouter.post("/:id/promote", async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!id) {
+    let id;
+    try {
+      const parsedId = BigInt(req.params.id);
+      if (parsedId <= 0n || parsedId > 9223372036854775807n) {
+        throw new RangeError("rollout plan ID outside PostgreSQL BIGINT range");
+      }
+      id = parsedId.toString();
+    } catch {
       return res.status(400).json({ error: "Valid plan ID is required" });
     }
 
     const { reason } = req.body || {};
+    if (reason !== undefined && reason !== null && typeof reason !== "string") {
+      return res.status(400).json({ error: "reason must be a string when provided" });
+    }
+    if (typeof reason === "string" && reason.length > 2000) {
+      return res.status(400).json({ error: "reason must be 2000 characters or fewer" });
+    }
+
     const committed = await promotePolicyRollout({
       rolloutPlanId: id,
       principal: req.auth,
