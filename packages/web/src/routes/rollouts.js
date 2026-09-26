@@ -15,9 +15,12 @@ import {
   transitionRolloutPlan,
   approveRolloutPlan,
   rejectRolloutPlan,
-  promoteRolloutPlan,
   rollbackRolloutPlan,
 } from "../services/policyRolloutService.js";
+import {
+  promotePolicyRollout,
+  PolicyPromotionError,
+} from "../services/policyPromotionService.js";
 
 export const rolloutRouter = Router();
 
@@ -272,47 +275,38 @@ rolloutRouter.post("/:id/reject", async (req, res) => {
 /**
  * POST /api/rollouts/:id/promote
  *
- * Promote an approved rollout plan to live policy.
- * This is the ONLY path that writes policy.
+ * W2-02 canonical governed promotion. Authority comes only from req.auth and
+ * W2-01 immutable records. A legacy body.actor may still be sent by old clients
+ * but is not consulted for authorization or attribution.
  *
- * Requires:
- * - Plan in approved state
- * - Approval metadata (approved_by, approved_at)
- * - All evidence attached
- * - Validation result still valid
- *
- * Captures previous config snapshot before writing.
- * If write fails, state remains approved.
- *
- * Body: { actor, reason? }
+ * Body: { reason?, actor? }
  */
 rolloutRouter.post("/:id/promote", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { actor, reason } = req.body;
-
-    if (!actor || typeof actor !== "string") {
-      return res.status(400).json({ error: "actor is required (GitHub username)" });
+    if (!id) {
+      return res.status(400).json({ error: "Valid plan ID is required" });
     }
 
-    // Wave 2: observe-only authorization decision.
-    await observeRolloutAuthorize(req, {
-      permission: "policy_rollout_plan:approve",
-      resource: { type: "policy_rollout_plan", resourceId: String(id) },
-      legacyActor: actor,
+    const { reason } = req.body || {};
+    await promotePolicyRollout({
+      rolloutPlanId: id,
+      principal: req.auth,
+      reason: reason || null,
     });
 
-    const plan = await promoteRolloutPlan(id, { actor, reason });
-
+    // Preserve the established response shape; getRolloutPlan applies the
+    // compatibility redaction rules before the record leaves the API.
+    const plan = await getRolloutPlan(id);
     res.json(plan);
   } catch (err) {
-    logger.error({ err: err.message }, "Failed to promote rollout plan");
-    if (err.message.includes("not found") ||
-        err.message.includes("Cannot promote") ||
-        err.message.includes("missing") ||
-        err.message.includes("validation failed") ||
-        err.message.includes("Promotion failed")) {
-      return res.status(400).json({ error: err.message });
+    logger.error({ err: err.message, reason: err.reason }, "Failed to promote rollout plan");
+    if (err instanceof PolicyPromotionError) {
+      const status = err.reason?.includes("authorization_") ||
+        err.reason === "promoter_principal_required"
+        ? 403
+        : 400;
+      return res.status(status).json({ error: err.reason, detail: err.detail ?? undefined });
     }
     res.status(500).json({ error: "Failed to promote rollout plan" });
   }
@@ -322,7 +316,8 @@ rolloutRouter.post("/:id/promote", async (req, res) => {
  * POST /api/rollouts/:id/rollback
  *
  * Roll back a promoted rollout plan — restore the previous policy.
- * This is a governed mutation that writes policy.
+ * This remains the legacy compatibility writer until W2-03 converts rollback
+ * to immutable-version promotion. W2-02 does not silently widen its boundary.
  *
  * Requires:
  * - Plan in promoted state
