@@ -13,6 +13,23 @@
 -- authoritative promotion; legacy rollouts must be explicitly re-proposed or
 -- rebound from server-owned principal context rather than silently adopted.
 
+-- Migration 038 is the shared pgcrypto bootstrap. W2-01 deliberately does not
+-- relocate or reinstall a pre-existing extension: it fails closed unless the
+-- dependency is present in the public schema where this migration qualifies it.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_extension e
+      JOIN pg_namespace n ON n.oid = e.extnamespace
+     WHERE e.extname = 'pgcrypto'
+       AND n.nspname = 'public'
+  ) THEN
+    RAISE EXCEPTION 'W2-01 requires pgcrypto installed in schema public by migration 038';
+  END IF;
+END;
+$$;
+
 -- Composite relationship used below to prove a change request refers to the
 -- same repository as its compatibility rollout plan.
 ALTER TABLE policy_rollout_plans
@@ -125,15 +142,16 @@ CREATE INDEX idx_policy_approvals_change_request
 -- Callers never choose authority hashes; insert triggers derive them from the
 -- stored JSONB payload before constraints/unique indexes are evaluated.
 -- Every trigger function pins its search_path so runtime object/function
--- resolution cannot drift with the calling session. pg_temp is explicitly last
+-- resolution cannot drift with the calling session. Built-ins resolve from
+-- pg_catalog first; pgcrypto is schema-qualified; pg_temp is explicitly last
 -- so temporary relations cannot shadow the W2-01 authority tables.
 CREATE FUNCTION prepare_w2_policy_version_insert()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog, pg_temp
+SET search_path = pg_catalog, public, pg_temp
 AS $$
 BEGIN
-  NEW.content_hash := 'sha256:' || encode(digest(NEW.policy_document::text, 'sha256'), 'hex');
+  NEW.content_hash := 'sha256:' || encode(public.digest(NEW.policy_document::text, 'sha256'), 'hex');
   RETURN NEW;
 END;
 $$;
@@ -145,7 +163,7 @@ CREATE TRIGGER trg_policy_versions_prepare_insert
 CREATE FUNCTION prepare_w2_policy_evidence_insert()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog, pg_temp
+SET search_path = pg_catalog, public, pg_temp
 AS $$
 DECLARE
   v_version_id UUID;
@@ -171,7 +189,7 @@ BEGIN
     RAISE EXCEPTION 'policy evidence is frozen after an approval decision exists';
   END IF;
 
-  NEW.evidence_hash := 'sha256:' || encode(digest(NEW.evidence_payload::text, 'sha256'), 'hex');
+  NEW.evidence_hash := 'sha256:' || encode(public.digest(NEW.evidence_payload::text, 'sha256'), 'hex');
   RETURN NEW;
 END;
 $$;
@@ -183,7 +201,7 @@ CREATE TRIGGER trg_policy_evidence_prepare_insert
 CREATE FUNCTION prepare_w2_policy_approval_insert()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog, pg_temp
+SET search_path = pg_catalog, public, pg_temp
 AS $$
 DECLARE
   v_author_principal_id UUID;
@@ -251,7 +269,7 @@ BEGIN
     END IF;
   END IF;
 
-  NEW.evidence_set_hash := 'sha256:' || encode(digest(NEW.evidence_manifest::text, 'sha256'), 'hex');
+  NEW.evidence_set_hash := 'sha256:' || encode(public.digest(NEW.evidence_manifest::text, 'sha256'), 'hex');
   RETURN NEW;
 END;
 $$;
@@ -265,7 +283,7 @@ CREATE TRIGGER trg_policy_approvals_prepare_insert
 CREATE FUNCTION enforce_w2_policy_authority_append_only()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path = public, pg_catalog, pg_temp
+SET search_path = pg_catalog, public, pg_temp
 AS $$
 BEGIN
   RAISE EXCEPTION '% is append-only', TG_TABLE_NAME;

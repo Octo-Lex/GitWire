@@ -32,6 +32,14 @@ const evidenceClient = new Client({ connectionString: databaseUrl });
 await Promise.all([baseClient.connect(), approvalClient.connect(), evidenceClient.connect()]);
 
 try {
+  const { rows: [pgcrypto] } = await baseClient.query(
+    `SELECT n.nspname
+       FROM pg_extension e
+       JOIN pg_namespace n ON n.oid = e.extnamespace
+      WHERE e.extname = 'pgcrypto'`,
+  );
+  assert.equal(pgcrypto?.nspname, "public", "migration 038 pgcrypto dependency must be in public");
+
   await baseClient.query(
     `INSERT INTO installations (github_id, account_login, account_type)
      VALUES ($1, 'w2-authority-ci', 'Organization')`,
@@ -145,8 +153,8 @@ try {
   assert.equal(functionRows.length, functionNames.length, "all W2-01 trigger functions must exist");
   for (const row of functionRows) {
     assert.ok(
-      row.proconfig?.includes("search_path=public, pg_catalog, pg_temp"),
-      `${row.proname} must pin a deterministic search_path`,
+      row.proconfig?.includes("search_path=pg_catalog, public, pg_temp"),
+      `${row.proname} must pin pg_catalog before mutable schemas`,
     );
   }
 

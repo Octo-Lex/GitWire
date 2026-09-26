@@ -34,13 +34,16 @@ const evidenceTypes = [
   "recommendations_summary",
 ];
 
-function installApprovalHarness(validationResult) {
+function installApprovalHarness(
+  validationResult,
+  recommendationsSummary = { recommendations: [] },
+) {
   const proposedConfig = { dry_run: true };
   const evidencePayloads = {
     validation_result: validationResult,
     simulation_summary: { changed: 0 },
     diff_impact_summary: { risk: "low" },
-    recommendations_summary: { recommendations: [] },
+    recommendations_summary: recommendationsSummary,
   };
   const evidenceRows = evidenceTypes.map((type, index) => ({
     id: `00000000-0000-4000-8000-00000000000${index + 1}`,
@@ -122,11 +125,12 @@ function installApprovalHarness(validationResult) {
   });
 }
 
-async function approve() {
+async function approve(acknowledgedRecommendations = []) {
   return recordPolicyApprovalForRollout({
     rolloutPlanId: 42,
     principal: approverPrincipal,
     decision: "approved",
+    acknowledgedRecommendations,
   });
 }
 
@@ -158,6 +162,46 @@ describe("W2-01 closure hardening", () => {
     installApprovalHarness({ valid: true });
 
     await expect(approve()).resolves.toMatchObject({ decision: "approved" });
+  });
+
+  test.each([
+    ["missing id", { recommendations: [{ severity: "critical" }] }],
+    ["null id", { recommendations: [{ severity: "critical", id: null }] }],
+    ["numeric id", { recommendations: [{ severity: "critical", id: 7 }] }],
+    ["empty id", { recommendations: [{ severity: "critical", id: "" }] }],
+    ["whitespace id", { recommendations: [{ severity: "critical", id: "   " }] }],
+  ])("critical recommendation fails closed for malformed identifier: %s", async (_label, summary) => {
+    installApprovalHarness({ valid: true }, summary);
+
+    await expect(approve()).rejects.toMatchObject({
+      reason: "critical_recommendation_id_invalid",
+    });
+  });
+
+  test("valid critical recommendation requires the exact string acknowledgement", async () => {
+    const summary = {
+      recommendations: [{ severity: "critical", id: "rec-critical" }],
+    };
+    installApprovalHarness({ valid: true }, summary);
+
+    await expect(approve()).rejects.toMatchObject({
+      reason: "critical_recommendations_unacknowledged",
+      detail: ["rec-critical"],
+    });
+
+    installApprovalHarness({ valid: true }, summary);
+    await expect(approve(["rec-critical"])).resolves.toMatchObject({ decision: "approved" });
+  });
+
+  test("decision snapshot locks both the change request and mutable rollout row", async () => {
+    installApprovalHarness({ valid: true });
+
+    await approve();
+
+    const envelopeQuery = mockQuery.mock.calls
+      .map(([sql]) => sql.replace(/\s+/g, " ").trim())
+      .find((sql) => sql.includes("FROM policy_change_requests cr") && sql.includes("JOIN policy_versions pv"));
+    expect(envelopeQuery).toContain("FOR UPDATE OF cr, p");
   });
 
   test("W2-01 does not expose an unauthenticated policy-authority read API", () => {

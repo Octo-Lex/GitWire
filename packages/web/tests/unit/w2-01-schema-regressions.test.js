@@ -26,9 +26,16 @@ describe("W2-01 schema exactness regressions", () => {
     expect(migration).toMatch(/base_policy_version_id IS NULL OR base_policy_version_id <> id/);
   });
 
-  test("all W2-01 trigger functions pin deterministic search paths", () => {
+  test("pgcrypto dependency is fail-closed and digest calls are schema-qualified", () => {
+    expect(migration).toMatch(/e\.extname = 'pgcrypto'/);
+    expect(migration).toMatch(/n\.nspname = 'public'/);
+    expect(migration).toMatch(/requires pgcrypto installed in schema public by migration 038/);
+    expect((migration.match(/public\.digest\(/g) || []).length).toBe(3);
+  });
+
+  test("all W2-01 trigger functions pin pg_catalog before mutable schemas", () => {
     const functionCount = (migration.match(/CREATE FUNCTION (?:prepare_w2_policy_|enforce_w2_policy_)/g) || []).length;
-    const searchPathCount = (migration.match(/SET search_path = public, pg_catalog, pg_temp/g) || []).length;
+    const searchPathCount = (migration.match(/SET search_path = pg_catalog, public, pg_temp/g) || []).length;
     expect(functionCount).toBe(4);
     expect(searchPathCount).toBe(4);
   });

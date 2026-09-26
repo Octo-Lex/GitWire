@@ -143,7 +143,7 @@ async function lockRolloutPlan(client, rolloutPlanId) {
 }
 
 async function getAuthorityEnvelope(client, rolloutPlanId, { lock = false } = {}) {
-  const lockClause = lock ? " FOR UPDATE OF cr" : "";
+  const lockClause = lock ? " FOR UPDATE OF cr, p" : "";
   const { rows: [row] } = await client.query(
     `SELECT cr.id AS change_request_id,
             cr.rollout_plan_id,
@@ -191,10 +191,15 @@ function assertRolloutPolicyStillMatches(envelope) {
 
 function getCriticalRecommendations(summary) {
   if (!summary || !Array.isArray(summary.recommendations)) return [];
-  return summary.recommendations
-    .filter((item) => item?.severity === "critical")
-    .map((item) => item.id)
-    .filter(Boolean);
+  const criticalIds = [];
+  for (const item of summary.recommendations) {
+    if (item?.severity !== "critical") continue;
+    if (typeof item.id !== "string" || item.id.trim().length === 0) {
+      throw new PolicyAuthorityError("critical_recommendation_id_invalid");
+    }
+    criticalIds.push(item.id);
+  }
+  return criticalIds;
 }
 
 /**
