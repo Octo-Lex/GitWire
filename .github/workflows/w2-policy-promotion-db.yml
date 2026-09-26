@@ -7,12 +7,14 @@ on:
     paths:
       - 'packages/web/db/migrations/**'
       - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
       - '.github/workflows/w2-policy-promotion-db.yml'
   pull_request:
     branches: [master]
     paths:
       - 'packages/web/db/migrations/**'
       - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
       - '.github/workflows/w2-policy-promotion-db.yml'
 
 permissions:
@@ -51,3 +53,5 @@ jobs:
         run: node scripts/migrate.js
       - name: Prove W2-02 Postgres promotion invariants
         run: node packages/web/tests/integration/w2-02-policy-promotion-db.mjs
+      - name: Prove W2-02 review hardening invariants
+        run: node packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs

@@ -15,6 +15,10 @@ ALTER TABLE policy_change_requests
   ADD CONSTRAINT uq_policy_change_requests_promotion_binding
   UNIQUE (id, repo_id, policy_version_id, author_principal_id);
 
+ALTER TABLE policy_change_requests
+  ADD CONSTRAINT uq_policy_change_requests_rollout_binding
+  UNIQUE (id, rollout_plan_id);
+
 ALTER TABLE policy_approval_records
   ADD CONSTRAINT uq_policy_approval_records_promotion_binding
   UNIQUE (
@@ -46,6 +50,10 @@ CREATE TABLE policy_promotion_records (
   CONSTRAINT fk_policy_promotion_rollout_repo
     FOREIGN KEY (rollout_plan_id, repo_id)
     REFERENCES policy_rollout_plans(id, repo_id) ON DELETE RESTRICT,
+
+  CONSTRAINT fk_policy_promotion_change_rollout
+    FOREIGN KEY (change_request_id, rollout_plan_id)
+    REFERENCES policy_change_requests(id, rollout_plan_id) ON DELETE RESTRICT,
 
   CONSTRAINT fk_policy_promotion_change_binding
     FOREIGN KEY (
@@ -116,6 +124,11 @@ CREATE TABLE active_policy_bindings (
 -- repositories row, then proves that the W2-01 approval is still structurally
 -- usable and that the supplied previous version equals the current active
 -- binding. Runtime authorization/revocation checks remain application-owned.
+--
+-- Approval expiry intentionally uses NOW(), PostgreSQL's transaction-start
+-- timestamp. The service holds the change-request row lock for the promotion
+-- transaction, so approval validity is evaluated against one stable authority
+-- snapshot rather than changing mid-transaction.
 CREATE FUNCTION prepare_w2_policy_promotion_insert()
 RETURNS trigger
 LANGUAGE plpgsql
