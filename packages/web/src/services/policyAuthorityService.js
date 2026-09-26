@@ -474,7 +474,7 @@ export async function recordPolicyApprovalForRollout({
     });
 
     if (decision === "approved") {
-      if (!envelope.validation_result || envelope.validation_result.valid === false) {
+      if (!envelope.validation_result || envelope.validation_result.valid !== true) {
         throw new PolicyAuthorityError("approval_validation_failed_or_missing");
       }
       const critical = getCriticalRecommendations(envelope.recommendations_summary);
@@ -509,7 +509,7 @@ export async function recordPolicyApprovalForRollout({
   });
 }
 
-export async function getPolicyAuthorityForRollout(rolloutPlanId, queryable = db) {
+async function getPolicyAuthorityForRollout(rolloutPlanId, queryable = db) {
   if (!rolloutPlanId) throw new PolicyAuthorityError("rollout_plan_id_required");
   const envelope = await getAuthorityEnvelope(queryable, rolloutPlanId);
   if (!envelope) return null;
