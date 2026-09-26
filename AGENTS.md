@@ -46,7 +46,7 @@ when prose and this block disagree, **this block is authoritative**.
   "version": "0.23.1",
   "services": ["gitwire-app", "gitwire-executor-service", "postgres", "redis", "bot", "landing", "tunnel", "dashboard", "docs", "demo"],
   "workers": ["startWebhookWorker", "startTriageWorker", "startCIHealWorker", "startCIEvidenceWorker", "startDiagnosisWorker", "startPatchWorker", "startVerificationWorker", "startCriticWorker", "startSyncWorker", "startMaintainerWorker", "startIssueFixWorker", "startMergeQueueWorker", "startPhase3Worker", "startPhase4Worker"],
-  "migrations": { "first": "001", "last": "044", "count": 44 }
+  "migrations": { "first": "001", "last": "045", "count": 45 }
 }
 ```
 <!-- gitwire:source-of-truth:end -->
@@ -227,8 +227,7 @@ Before tagging ANY release:
    If `"unknown"` or mismatched: **treat the release as failed**. Inspect the
    publication manifest, build metadata, and deployment run. Preserve or
    restore the previous validated release via coherent rollback. Use manual
-   rebuild only under the explicitly labeled disaster-recovery procedure in
-   the deployment runbook.
+   rebuild only under the explicitly labeled disaster-recovery procedure in the deployment runbook.
 10. Verify all migrations are applied in the production database
 11. Smoke test the API at `https://gitwire.erlab.uk/health`
 
