@@ -124,9 +124,13 @@ CREATE INDEX idx_policy_approvals_change_request
 -- PostgreSQL JSONB text is the single database-owned canonical hash basis.
 -- Callers never choose authority hashes; insert triggers derive them from the
 -- stored JSONB payload before constraints/unique indexes are evaluated.
+-- Every trigger function pins its search_path so runtime object/function
+-- resolution cannot drift with the calling session. pg_temp is explicitly last
+-- so temporary relations cannot shadow the W2-01 authority tables.
 CREATE FUNCTION prepare_w2_policy_version_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public, pg_catalog, pg_temp
 AS $$
 BEGIN
   NEW.content_hash := 'sha256:' || encode(digest(NEW.policy_document::text, 'sha256'), 'hex');
@@ -141,6 +145,7 @@ CREATE TRIGGER trg_policy_versions_prepare_insert
 CREATE FUNCTION prepare_w2_policy_evidence_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public, pg_catalog, pg_temp
 AS $$
 DECLARE
   v_version_id UUID;
@@ -178,6 +183,7 @@ CREATE TRIGGER trg_policy_evidence_prepare_insert
 CREATE FUNCTION prepare_w2_policy_approval_insert()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public, pg_catalog, pg_temp
 AS $$
 DECLARE
   v_author_principal_id UUID;
@@ -259,6 +265,7 @@ CREATE TRIGGER trg_policy_approvals_prepare_insert
 CREATE FUNCTION enforce_w2_policy_authority_append_only()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public, pg_catalog, pg_temp
 AS $$
 BEGIN
   RAISE EXCEPTION '% is append-only', TG_TABLE_NAME;

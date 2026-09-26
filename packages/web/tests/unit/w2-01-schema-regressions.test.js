@@ -25,4 +25,11 @@ describe("W2-01 schema exactness regressions", () => {
   test("policy version cannot name itself as its base", () => {
     expect(migration).toMatch(/base_policy_version_id IS NULL OR base_policy_version_id <> id/);
   });
+
+  test("all W2-01 trigger functions pin deterministic search paths", () => {
+    const functionCount = (migration.match(/CREATE FUNCTION (?:prepare_w2_policy_|enforce_w2_policy_)/g) || []).length;
+    const searchPathCount = (migration.match(/SET search_path = public, pg_catalog, pg_temp/g) || []).length;
+    expect(functionCount).toBe(4);
+    expect(searchPathCount).toBe(4);
+  });
 });
