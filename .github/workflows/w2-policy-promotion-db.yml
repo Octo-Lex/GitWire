@@ -1,0 +1,57 @@
+name: W2 Policy Promotion DB
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'packages/web/db/migrations/**'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
+      - '.github/workflows/w2-policy-promotion-db.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'packages/web/db/migrations/**'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
+      - '.github/workflows/w2-policy-promotion-db.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  w2-policy-promotion-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gitwire
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: gitops_hub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gitwire -d gitops_hub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://gitwire:test@127.0.0.1:5432/gitops_hub
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Apply repository migrations
+        run: node scripts/migrate.js
+      - name: Prove W2-02 Postgres promotion invariants
+        run: node packages/web/tests/integration/w2-02-policy-promotion-db.mjs
+      - name: Prove W2-02 review hardening invariants
+        run: node packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs

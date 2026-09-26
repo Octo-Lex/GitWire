@@ -163,44 +163,48 @@ describe("Rollout Promotion — generic transition blocked", () => {
   });
 });
 
-describe("Rollout Promotion — route contract", () => {
+describe("Rollout Promotion — governed route contract", () => {
   const source = readSource("packages/web/src/routes/rollouts.js");
+  const promoteStart = source.indexOf('rolloutRouter.post("/:id/promote"');
+  const rollbackStart = source.indexOf("POST /api/rollouts/:id/rollback");
+  const promoteSection = source.slice(promoteStart, rollbackStart);
 
-  it("imports promoteRolloutPlan", () => {
-    expect(source).toMatch(/promoteRolloutPlan/);
+  it("imports the governed promotion service and typed error", () => {
+    expect(source).toMatch(/promotePolicyRollout/);
+    expect(source).toMatch(/PolicyPromotionError/);
   });
 
   it("registers POST /:id/promote", () => {
-    expect(source).toMatch(/rolloutRouter\.post\("\/:id\/promote"/);
+    expect(promoteStart).toBeGreaterThanOrEqual(0);
   });
 
-  it("requires actor in promote body", () => {
-    expect(source).toMatch(/actor is required.*GitHub username/);
+  it("uses server-owned req.auth as promotion authority", () => {
+    expect(promoteSection).toMatch(/principal:\s*req\.auth/);
   });
 
-  it("passes reason to service", () => {
-    const promoteSection = source.slice(source.indexOf("promote"));
-    expect(promoteSection).toMatch(/reason/);
+  it("does not require or pass legacy body actor for promotion authority", () => {
+    expect(promoteSection).not.toMatch(/const\s*\{[^}]*actor[^}]*\}\s*=\s*req\.body/);
+    expect(promoteSection).not.toMatch(/principal:\s*actor/);
   });
 
-  it("handles promotion errors (400 for bad input)", () => {
-    const promoteSection = source.slice(source.indexOf("/:id/promote"));
-    expect(promoteSection).toMatch(/status\(400\)/);
+  it("passes optional promotion reason to governed service", () => {
+    expect(promoteSection).toMatch(/const\s*\{\s*reason\s*\}\s*=\s*req\.body\s*\|\|\s*\{\}/);
+    expect(promoteSection).toMatch(/reason:\s*reason\s*\|\|\s*null/);
   });
 
-  it("handles write failure errors (400)", () => {
-    const promoteSection = source.slice(source.indexOf("/:id/promote"));
-    expect(promoteSection).toMatch(/Promotion failed/);
+  it("maps typed authorization and missing-principal failures to 403", () => {
+    expect(promoteSection).toMatch(/err\s+instanceof\s+PolicyPromotionError/);
+    expect(promoteSection).toMatch(/err\.reason\?\.includes\("authorization_"\)/);
+    expect(promoteSection).toMatch(/err\.reason\s*===\s*"promoter_principal_required"/);
+    expect(promoteSection).toMatch(/authorizationFailure\s*\?\s*403\s*:\s*stateConflict\s*\?\s*409\s*:\s*400/);
   });
 
-  it("handles not found errors (400)", () => {
-    const promoteSection = source.slice(source.indexOf("/:id/promote"));
-    expect(promoteSection).toMatch(/not found/);
+  it("returns typed policy failures using stable reason codes", () => {
+    expect(promoteSection).toMatch(/json\(\{\s*error:\s*err\.reason,\s*detail:\s*err\.detail\s*\?\?\s*undefined\s*\}\)/);
   });
 
-  it("handles state errors (400)", () => {
-    const promoteSection = source.slice(source.indexOf("/:id/promote"));
-    expect(promoteSection).toMatch(/Cannot promote/);
+  it("keeps unknown promotion failures as generic 500 responses", () => {
+    expect(promoteSection).toMatch(/status\(500\)\.json\(\{\s*error:\s*"Failed to promote rollout plan"\s*\}\)/);
   });
 });
 
