@@ -111,8 +111,8 @@ try {
       `INSERT INTO policy_approval_records (
          change_request_id, policy_version_id, approver_principal_id,
          decision, evidence_manifest
-       ) VALUES ($1, $2, $3, 'approved', $4)`,
-      [changeRequest.id, version.id, approverId, manifest.slice(0, 3)],
+       ) VALUES ($1, $2, $3, 'approved', $4::jsonb)`,
+      [changeRequest.id, version.id, approverId, JSON.stringify(manifest.slice(0, 3))],
     ),
     /complete evidence set/,
     "approved records must bind exactly the complete four-type evidence set",
@@ -123,8 +123,8 @@ try {
       `INSERT INTO policy_approval_records (
          change_request_id, policy_version_id, approver_principal_id,
          decision, evidence_manifest
-       ) VALUES ($1, $2, $3, 'approved', $4)`,
-      [changeRequest.id, version.id, authorId, manifest],
+       ) VALUES ($1, $2, $3, 'approved', $4::jsonb)`,
+      [changeRequest.id, version.id, authorId, JSON.stringify(manifest)],
     ),
     /self-approval is forbidden/,
     "DB must reject author self-approval even if the service layer is bypassed",
@@ -158,9 +158,9 @@ try {
     `INSERT INTO policy_approval_records (
        change_request_id, policy_version_id, approver_principal_id,
        decision, reason, evidence_manifest
-     ) VALUES ($1, $2, $3, 'approved', 'db-concurrency-proof', $4)
+     ) VALUES ($1, $2, $3, 'approved', 'db-concurrency-proof', $4::jsonb)
      RETURNING id`,
-    [changeRequest.id, version.id, approverId, manifest],
+    [changeRequest.id, version.id, approverId, JSON.stringify(manifest)],
   );
 
   await evidenceClient.query("BEGIN");
