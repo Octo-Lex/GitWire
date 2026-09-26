@@ -1,16 +1,13 @@
 // src/services/policyAuthorityService.js
 // W2-01 — immutable policy authority records.
 //
-// This service intentionally binds to the existing policy_rollout_plans
-// workflow instead of creating a second workflow. It snapshots DB-owned rollout
-// state into immutable versions/change requests, appends immutable evidence,
-// and records immutable approvals using server-owned principal ids.
-//
-// W2-02 will make these records authoritative for promotion. W2-01 does not
-// change active policy or disable legacy config writers.
+// This service binds to the existing policy_rollout_plans compatibility
+// workflow; it does not create a second policy workflow and does not mutate
+// active policy. W2-02 will consume these immutable records as the promotion
+// authority boundary.
 
-import { createHash } from "node:crypto";
 import { db } from "../lib/db.js";
+import { authorizeControlled } from "./auth/authorize.js";
 
 export const POLICY_EVIDENCE_TYPES = Object.freeze([
   "validation_result",
@@ -19,13 +16,24 @@ export const POLICY_EVIDENCE_TYPES = Object.freeze([
   "recommendations_summary",
 ]);
 
+export const POLICY_AUTHORITY_PERMISSIONS = Object.freeze({
+  create: "policy_definition:create",
+  evidence: "policy_rollout_plan:update",
+  decision: "policy_rollout_plan:approve",
+});
+
+export class PolicyAuthorityError extends Error {
+  constructor(reason, detail = null) {
+    super(reason);
+    this.name = "PolicyAuthorityError";
+    this.reason = reason;
+    this.detail = detail;
+  }
+}
+
 function canonicalize(value) {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalize(item)).join(",")}]`;
-  }
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item)).join(",")}]`;
   const keys = Object.keys(value).sort();
   return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(",")}}`;
 }
@@ -34,50 +42,120 @@ export function canonicalPolicyJson(value) {
   return canonicalize(value);
 }
 
-export function hashPolicyJson(value) {
-  const digest = createHash("sha256").update(canonicalPolicyJson(value)).digest("hex");
-  return `sha256:${digest}`;
+function sameJson(left, right) {
+  return canonicalPolicyJson(left) === canonicalPolicyJson(right);
+}
+
+function exactIdEqual(left, right) {
+  return String(left) === String(right);
+}
+
+function principalIdOf(principal) {
+  return principal?.principalId || null;
 }
 
 async function inTransaction(queryable, fn) {
-  if (typeof queryable?.transaction === "function") {
-    return queryable.transaction(fn);
-  }
+  if (typeof queryable?.transaction === "function") return queryable.transaction(fn);
   return fn(queryable);
 }
 
-async function requireActivePrincipal(client, principalId) {
-  if (!principalId) {
-    throw new Error("authoritative principal_id is required");
-  }
-  const { rows: [principal] } = await client.query(
-    `SELECT id, status, display_name
+async function requireActivePrincipal(client, principal) {
+  const principalId = principalIdOf(principal);
+  if (!principalId) throw new PolicyAuthorityError("authoritative_principal_required");
+
+  const { rows: [record] } = await client.query(
+    `SELECT id, status
        FROM gitwire_auth.auth_principals
       WHERE id = $1`,
     [principalId],
   );
-  if (!principal) {
-    throw new Error("authoritative principal not found");
+  if (!record) throw new PolicyAuthorityError("authoritative_principal_not_found");
+  if (record.status !== "active") throw new PolicyAuthorityError("authoritative_principal_inactive");
+  return record;
+}
+
+function repositoryResource(row) {
+  if (!row?.installation_id || !row?.github_id || typeof row.full_name !== "string") {
+    throw new PolicyAuthorityError("repository_resource_unknown");
   }
-  if (principal.status !== "active") {
-    throw new Error("authoritative principal is not active");
+  const parts = row.full_name.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new PolicyAuthorityError("repository_resource_unknown");
   }
-  return principal;
+  return Object.freeze({
+    type: "repository",
+    installationId: Number(row.installation_id),
+    repositoryId: Number(row.github_id),
+    organization: parts[0],
+    repository: parts[1],
+  });
+}
+
+async function resolveRolloutRepository(queryable, rolloutPlanId) {
+  const { rows: [row] } = await queryable.query(
+    `SELECT p.repo_id, r.github_id, r.installation_id, r.full_name
+       FROM policy_rollout_plans p
+       JOIN repositories r ON r.github_id = p.repo_id
+      WHERE p.id = $1`,
+    [rolloutPlanId],
+  );
+  if (!row) throw new PolicyAuthorityError("rollout_repository_unknown");
+  return { repoId: row.repo_id, resource: repositoryResource(row) };
+}
+
+async function requireRepositoryAuthorization({ principal, permission, rolloutPlanId }, queryable) {
+  if (!principalIdOf(principal)) throw new PolicyAuthorityError("authoritative_principal_required");
+  const target = await resolveRolloutRepository(queryable, rolloutPlanId);
+  const outcome = await authorizeControlled({
+    principal,
+    permission,
+    resource: target.resource,
+    mode: "enforced",
+  });
+
+  if (
+    !outcome ||
+    outcome.mode !== "enforced" ||
+    outcome.persisted !== true ||
+    outcome.blocked === true ||
+    outcome.decision?.allowed !== true
+  ) {
+    throw new PolicyAuthorityError(
+      "authorization_denied",
+      outcome?.decision?.code || "invalid_authorization_outcome",
+    );
+  }
+  return target;
+}
+
+async function lockRolloutPlan(client, rolloutPlanId) {
+  const { rows: [plan] } = await client.query(
+    `SELECT id, repo_id, proposed_config, normalized_config, status,
+            validation_result, simulation_summary, diff_impact_summary,
+            recommendations_summary
+       FROM policy_rollout_plans
+      WHERE id = $1
+      FOR UPDATE`,
+    [rolloutPlanId],
+  );
+  if (!plan) throw new PolicyAuthorityError("rollout_plan_not_found");
+  return plan;
 }
 
 async function getAuthorityEnvelope(client, rolloutPlanId, { lock = false } = {}) {
-  const lockClause = lock ? " FOR SHARE OF p, cr, pv" : "";
+  const lockClause = lock ? " FOR UPDATE OF cr" : "";
   const { rows: [row] } = await client.query(
     `SELECT cr.id AS change_request_id,
             cr.rollout_plan_id,
             cr.repo_id,
             cr.policy_version_id,
             cr.author_principal_id,
-            cr.author_display_name,
             cr.created_at AS change_request_created_at,
             pv.content_hash AS policy_content_hash,
             pv.base_policy_version_id,
+            pv.policy_document,
             p.status AS rollout_status,
+            p.proposed_config,
             p.validation_result,
             p.simulation_summary,
             p.diff_impact_summary,
@@ -101,83 +179,96 @@ function authoritySummary(row) {
     policy_content_hash: row.policy_content_hash,
     base_policy_version_id: row.base_policy_version_id ?? null,
     author_principal_id: row.author_principal_id,
-    author_display_name: row.author_display_name ?? null,
     created_at: row.change_request_created_at,
   };
 }
 
+function assertRolloutPolicyStillMatches(envelope) {
+  if (!sameJson(envelope.policy_document, envelope.proposed_config)) {
+    throw new PolicyAuthorityError("rollout_policy_changed_after_authority_snapshot");
+  }
+}
+
+function getCriticalRecommendations(summary) {
+  if (!summary || !Array.isArray(summary.recommendations)) return [];
+  return summary.recommendations
+    .filter((item) => item?.severity === "critical")
+    .map((item) => item.id)
+    .filter(Boolean);
+}
+
 /**
- * Create the immutable authority envelope for an EXISTING rollout plan.
- * The policy payload is read from policy_rollout_plans inside the transaction;
- * callers cannot supply a different policy document for the same rollout.
+ * Snapshot an existing rollout into an immutable policy version/change request.
+ * The caller cannot supply policy content: the transaction reads the rollout's
+ * DB-owned proposed_config after locking the rollout row.
  */
 export async function createPolicyChangeRequestForRollout({
   rolloutPlanId,
-  authorPrincipalId,
-  authorDisplayName = null,
+  principal,
   basePolicyVersionId = null,
 } = {}, queryable = db) {
-  if (!rolloutPlanId) throw new Error("rolloutPlanId is required");
+  if (!rolloutPlanId) throw new PolicyAuthorityError("rollout_plan_id_required");
+
+  const target = await requireRepositoryAuthorization({
+    principal,
+    permission: POLICY_AUTHORITY_PERMISSIONS.create,
+    rolloutPlanId,
+  }, queryable);
 
   return inTransaction(queryable, async (client) => {
-    const principal = await requireActivePrincipal(client, authorPrincipalId);
+    const plan = await lockRolloutPlan(client, rolloutPlanId);
+    if (!exactIdEqual(plan.repo_id, target.repoId)) {
+      throw new PolicyAuthorityError("rollout_repository_changed_during_authorization");
+    }
+    await requireActivePrincipal(client, principal);
 
-    const existing = await getAuthorityEnvelope(client, rolloutPlanId, { lock: true });
+    const existing = await getAuthorityEnvelope(client, rolloutPlanId);
     if (existing) {
-      if (String(existing.author_principal_id) !== String(authorPrincipalId)) {
-        throw new Error("rollout authority is already bound to a different principal");
+      if (!exactIdEqual(existing.author_principal_id, principal.principalId)) {
+        throw new PolicyAuthorityError("rollout_authority_bound_to_different_principal");
+      }
+      if (
+        basePolicyVersionId &&
+        !exactIdEqual(existing.base_policy_version_id, basePolicyVersionId)
+      ) {
+        throw new PolicyAuthorityError("rollout_authority_base_version_mismatch");
       }
       return authoritySummary(existing);
     }
-
-    const { rows: [plan] } = await client.query(
-      `SELECT p.id, p.repo_id, p.proposed_config, p.normalized_config, p.created_by
-         FROM policy_rollout_plans p
-        WHERE p.id = $1
-        FOR SHARE`,
-      [rolloutPlanId],
-    );
-    if (!plan) throw new Error(`Rollout plan not found: ${rolloutPlanId}`);
 
     if (basePolicyVersionId) {
       const { rows: [base] } = await client.query(
         `SELECT id, repo_id FROM policy_versions WHERE id = $1`,
         [basePolicyVersionId],
       );
-      if (!base) throw new Error("base policy version not found");
-      if (Number(base.repo_id) !== Number(plan.repo_id)) {
-        throw new Error("base policy version belongs to a different repository");
+      if (!base) throw new PolicyAuthorityError("base_policy_version_not_found");
+      if (!exactIdEqual(base.repo_id, plan.repo_id)) {
+        throw new PolicyAuthorityError("base_policy_version_repository_mismatch");
       }
     }
-
-    const contentHash = hashPolicyJson(plan.proposed_config);
-    const displayName = authorDisplayName || plan.created_by || principal.display_name || null;
 
     const { rows: [version] } = await client.query(
       `INSERT INTO policy_versions (
          repo_id, base_policy_version_id, policy_document, normalized_document,
-         content_hash, author_principal_id, author_display_name
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         author_principal_id
+       ) VALUES ($1, $2, $3, $4, $5)
        RETURNING id, repo_id, base_policy_version_id, content_hash, created_at`,
       [
         plan.repo_id,
         basePolicyVersionId,
         plan.proposed_config,
         plan.normalized_config,
-        contentHash,
-        authorPrincipalId,
-        displayName,
+        principal.principalId,
       ],
     );
 
     const { rows: [request] } = await client.query(
       `INSERT INTO policy_change_requests (
-         rollout_plan_id, repo_id, policy_version_id,
-         author_principal_id, author_display_name
-       ) VALUES ($1, $2, $3, $4, $5)
+         rollout_plan_id, repo_id, policy_version_id, author_principal_id
+       ) VALUES ($1, $2, $3, $4)
        RETURNING id, rollout_plan_id, repo_id, policy_version_id,
-                 author_principal_id, author_display_name, created_at`,
-      [rolloutPlanId, plan.repo_id, version.id, authorPrincipalId, displayName],
+                 author_principal_id, created_at`,
+      [rolloutPlanId, plan.repo_id, version.id, principal.principalId],
     );
 
     return {
@@ -188,68 +279,76 @@ export async function createPolicyChangeRequestForRollout({
       policy_content_hash: version.content_hash,
       base_policy_version_id: version.base_policy_version_id ?? null,
       author_principal_id: request.author_principal_id,
-      author_display_name: request.author_display_name,
       created_at: request.created_at,
     };
   });
 }
 
 /**
- * Append immutable evidence for a rollout's authority envelope.
- * Evidence remains appendable only while the compatibility rollout is draft or
- * validated and before any approval/rejection record exists.
+ * Append immutable evidence by type. Evidence payloads are not accepted from
+ * the caller: each requested type is snapshotted from DB-owned rollout state.
  */
 export async function appendPolicyEvidenceForRollout({
   rolloutPlanId,
-  evidence = {},
-  recordedByPrincipalId,
-  recordedByDisplayName = null,
+  principal,
+  evidenceTypes = [],
 } = {}, queryable = db) {
-  if (!rolloutPlanId) throw new Error("rolloutPlanId is required");
+  if (!rolloutPlanId) throw new PolicyAuthorityError("rollout_plan_id_required");
+  if (!Array.isArray(evidenceTypes) || evidenceTypes.length === 0) {
+    throw new PolicyAuthorityError("evidence_types_required");
+  }
+  const uniqueTypes = [...new Set(evidenceTypes)];
+  for (const type of uniqueTypes) {
+    if (!POLICY_EVIDENCE_TYPES.includes(type)) {
+      throw new PolicyAuthorityError("unsupported_evidence_type", type);
+    }
+  }
 
-  const entries = POLICY_EVIDENCE_TYPES
-    .filter((type) => evidence[type] !== undefined)
-    .map((type) => [type, evidence[type]]);
-  if (entries.length === 0) throw new Error("No evidence fields provided");
+  const target = await requireRepositoryAuthorization({
+    principal,
+    permission: POLICY_AUTHORITY_PERMISSIONS.evidence,
+    rolloutPlanId,
+  }, queryable);
 
   return inTransaction(queryable, async (client) => {
-    const principal = await requireActivePrincipal(client, recordedByPrincipalId);
+    await requireActivePrincipal(client, principal);
     const envelope = await getAuthorityEnvelope(client, rolloutPlanId, { lock: true });
-    if (!envelope) throw new Error(`Policy authority not found for rollout plan: ${rolloutPlanId}`);
+    if (!envelope) throw new PolicyAuthorityError("policy_authority_not_found");
+    if (!exactIdEqual(envelope.repo_id, target.repoId)) {
+      throw new PolicyAuthorityError("rollout_repository_changed_during_authorization");
+    }
+    assertRolloutPolicyStillMatches(envelope);
 
     if (envelope.rollout_status !== "draft" && envelope.rollout_status !== "validated") {
-      throw new Error(`Cannot attach authority evidence to rollout in '${envelope.rollout_status}' state`);
+      throw new PolicyAuthorityError("rollout_state_disallows_evidence", envelope.rollout_status);
     }
 
     const { rows: [approval] } = await client.query(
       `SELECT id FROM policy_approval_records WHERE change_request_id = $1 LIMIT 1`,
       [envelope.change_request_id],
     );
-    if (approval) {
-      throw new Error("Cannot attach authority evidence after an approval decision exists");
-    }
+    if (approval) throw new PolicyAuthorityError("policy_evidence_frozen_after_decision");
 
     const recorded = [];
-    const displayName = recordedByDisplayName || principal.display_name || null;
+    for (const type of uniqueTypes) {
+      const payload = envelope[type];
+      if (payload === null || payload === undefined) {
+        throw new PolicyAuthorityError("rollout_evidence_missing", type);
+      }
 
-    for (const [type, payload] of entries) {
-      const evidenceHash = hashPolicyJson(payload);
       const { rows } = await client.query(
         `INSERT INTO policy_evidence_records (
            change_request_id, policy_version_id, evidence_type,
-           evidence_payload, evidence_hash,
-           recorded_by_principal_id, recorded_by_display_name
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (change_request_id, evidence_type, evidence_hash) DO NOTHING
+           evidence_payload, recorded_by_principal_id
+         ) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT DO NOTHING
          RETURNING id, evidence_type, evidence_hash, recorded_at`,
         [
           envelope.change_request_id,
           envelope.policy_version_id,
           type,
           payload,
-          evidenceHash,
-          recordedByPrincipalId,
-          displayName,
+          principal.principalId,
         ],
       );
 
@@ -261,24 +360,22 @@ export async function appendPolicyEvidenceForRollout({
              FROM policy_evidence_records
             WHERE change_request_id = $1
               AND evidence_type = $2
-              AND evidence_hash = $3`,
-          [envelope.change_request_id, type, evidenceHash],
+              AND evidence_payload = $3::jsonb
+            ORDER BY recorded_at DESC, id DESC
+            LIMIT 1`,
+          [envelope.change_request_id, type, JSON.stringify(payload)],
         );
+        if (!existing) throw new PolicyAuthorityError("policy_evidence_insert_conflict_unresolved", type);
         recorded.push(existing);
       }
     }
-
     return recorded;
   });
 }
 
-function evidencePayloadFromEnvelope(envelope, type) {
-  return envelope[type];
-}
-
 async function buildEvidenceManifest(client, envelope, { requireComplete }) {
   const { rows } = await client.query(
-    `SELECT id, evidence_type, evidence_hash, recorded_at
+    `SELECT id, evidence_type, evidence_payload, evidence_hash, recorded_at
        FROM policy_evidence_records
       WHERE change_request_id = $1
       ORDER BY evidence_type ASC, recorded_at ASC, id ASC`,
@@ -287,19 +384,16 @@ async function buildEvidenceManifest(client, envelope, { requireComplete }) {
 
   const manifest = [];
   for (const type of POLICY_EVIDENCE_TYPES) {
-    const payload = evidencePayloadFromEnvelope(envelope, type);
+    const payload = envelope[type];
     if (payload === null || payload === undefined) {
-      if (requireComplete) throw new Error(`Cannot approve: missing required evidence: ${type}`);
+      if (requireComplete) throw new PolicyAuthorityError("approval_evidence_incomplete", type);
       continue;
     }
 
-    const expectedHash = hashPolicyJson(payload);
     const match = [...rows].reverse().find(
-      (row) => row.evidence_type === type && row.evidence_hash === expectedHash,
+      (row) => row.evidence_type === type && sameJson(row.evidence_payload, payload),
     );
-    if (!match) {
-      throw new Error(`Authority evidence mismatch for ${type}`);
-    }
+    if (!match) throw new PolicyAuthorityError("approval_evidence_mismatch", type);
     manifest.push({
       evidence_type: type,
       evidence_id: match.id,
@@ -310,42 +404,60 @@ async function buildEvidenceManifest(client, envelope, { requireComplete }) {
 }
 
 /**
- * Record an immutable approval/rejection decision bound to an exact immutable
- * policy version and evidence-set hash.
+ * Record an immutable approval/rejection decision bound to the exact policy
+ * version and immutable evidence manifest. Current repository authorization is
+ * checked before the write. W2-02 must re-evaluate current approval policy and
+ * current principal authority again at promotion time.
  */
 export async function recordPolicyApprovalForRollout({
   rolloutPlanId,
-  approverPrincipalId,
-  approverDisplayName = null,
+  principal,
   decision,
   reason = null,
+  acknowledgedRecommendations = [],
   expiresAt = null,
 } = {}, queryable = db) {
-  if (!rolloutPlanId) throw new Error("rolloutPlanId is required");
+  if (!rolloutPlanId) throw new PolicyAuthorityError("rollout_plan_id_required");
   if (decision !== "approved" && decision !== "rejected") {
-    throw new Error("decision must be approved or rejected");
+    throw new PolicyAuthorityError("invalid_approval_decision");
+  }
+  if (!Array.isArray(acknowledgedRecommendations)) {
+    throw new PolicyAuthorityError("acknowledged_recommendations_must_be_array");
+  }
+  if (decision === "rejected" && expiresAt) {
+    throw new PolicyAuthorityError("rejection_cannot_expire");
   }
 
-  return inTransaction(queryable, async (client) => {
-    const principal = await requireActivePrincipal(client, approverPrincipalId);
-    const envelope = await getAuthorityEnvelope(client, rolloutPlanId, { lock: true });
-    if (!envelope) throw new Error(`Policy authority not found for rollout plan: ${rolloutPlanId}`);
-    if (envelope.rollout_status !== "review_ready") {
-      throw new Error(`Cannot record authority decision for rollout in '${envelope.rollout_status}' state`);
-    }
+  const target = await requireRepositoryAuthorization({
+    principal,
+    permission: POLICY_AUTHORITY_PERMISSIONS.decision,
+    rolloutPlanId,
+  }, queryable);
 
+  return inTransaction(queryable, async (client) => {
+    await requireActivePrincipal(client, principal);
+    const envelope = await getAuthorityEnvelope(client, rolloutPlanId, { lock: true });
+    if (!envelope) throw new PolicyAuthorityError("policy_authority_not_found");
+    if (!exactIdEqual(envelope.repo_id, target.repoId)) {
+      throw new PolicyAuthorityError("rollout_repository_changed_during_authorization");
+    }
+    assertRolloutPolicyStillMatches(envelope);
+
+    if (envelope.rollout_status !== "review_ready") {
+      throw new PolicyAuthorityError("rollout_state_disallows_decision", envelope.rollout_status);
+    }
     if (
       decision === "approved" &&
-      String(envelope.author_principal_id) === String(approverPrincipalId)
+      exactIdEqual(envelope.author_principal_id, principal.principalId)
     ) {
-      throw new Error("self-approval is forbidden for policy change requests");
+      throw new PolicyAuthorityError("self_approval_forbidden");
     }
 
     let normalizedExpiry = null;
     if (expiresAt) {
       const parsed = new Date(expiresAt);
       if (Number.isNaN(parsed.getTime()) || parsed.getTime() <= Date.now()) {
-        throw new Error("approval expiry must be a valid future timestamp");
+        throw new PolicyAuthorityError("approval_expiry_must_be_future");
       }
       normalizedExpiry = parsed.toISOString();
     }
@@ -353,83 +465,87 @@ export async function recordPolicyApprovalForRollout({
     const { rows: [existing] } = await client.query(
       `SELECT id FROM policy_approval_records
         WHERE change_request_id = $1 AND approver_principal_id = $2`,
-      [envelope.change_request_id, approverPrincipalId],
+      [envelope.change_request_id, principal.principalId],
     );
-    if (existing) {
-      throw new Error("approval decision already recorded for this principal");
-    }
+    if (existing) throw new PolicyAuthorityError("approval_decision_already_recorded");
 
     const evidenceManifest = await buildEvidenceManifest(client, envelope, {
       requireComplete: decision === "approved",
     });
-    const evidenceSetHash = hashPolicyJson(evidenceManifest);
-    const displayName = approverDisplayName || principal.display_name || null;
+
+    if (decision === "approved") {
+      if (!envelope.validation_result || envelope.validation_result.valid === false) {
+        throw new PolicyAuthorityError("approval_validation_failed_or_missing");
+      }
+      const critical = getCriticalRecommendations(envelope.recommendations_summary);
+      const acknowledged = new Set(acknowledgedRecommendations);
+      const missing = critical.filter((id) => !acknowledged.has(id));
+      if (missing.length > 0) {
+        throw new PolicyAuthorityError("critical_recommendations_unacknowledged", missing);
+      }
+    }
 
     const { rows: [record] } = await client.query(
       `INSERT INTO policy_approval_records (
          change_request_id, policy_version_id, approver_principal_id,
-         approver_display_name, decision, reason,
-         evidence_manifest, evidence_set_hash, expires_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         decision, reason, acknowledged_recommendations,
+         evidence_manifest, expires_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, change_request_id, policy_version_id, approver_principal_id,
-                 approver_display_name, decision, reason, evidence_manifest,
-                 evidence_set_hash, expires_at, created_at`,
+                 decision, reason, acknowledged_recommendations,
+                 evidence_manifest, evidence_set_hash, expires_at, created_at`,
       [
         envelope.change_request_id,
         envelope.policy_version_id,
-        approverPrincipalId,
-        displayName,
+        principal.principalId,
         decision,
         reason,
+        acknowledgedRecommendations,
         evidenceManifest,
-        evidenceSetHash,
         normalizedExpiry,
       ],
     );
-
     return record;
   });
 }
 
 export async function getPolicyAuthorityForRollout(rolloutPlanId, queryable = db) {
-  if (!rolloutPlanId) throw new Error("rolloutPlanId is required");
+  if (!rolloutPlanId) throw new PolicyAuthorityError("rollout_plan_id_required");
   const envelope = await getAuthorityEnvelope(queryable, rolloutPlanId);
   if (!envelope) return null;
 
   const { rows: evidence } = await queryable.query(
-    `SELECT id, evidence_type, evidence_hash, recorded_by_principal_id,
-            recorded_by_display_name, recorded_at
+    `SELECT id, evidence_type, evidence_hash, recorded_by_principal_id, recorded_at
        FROM policy_evidence_records
       WHERE change_request_id = $1
       ORDER BY evidence_type ASC, recorded_at ASC, id ASC`,
     [envelope.change_request_id],
   );
   const { rows: approvals } = await queryable.query(
-    `SELECT id, approver_principal_id, approver_display_name, decision, reason,
-            evidence_manifest, evidence_set_hash, expires_at, created_at
+    `SELECT id, approver_principal_id, decision, reason,
+            acknowledged_recommendations, evidence_manifest, evidence_set_hash,
+            expires_at, created_at
        FROM policy_approval_records
       WHERE change_request_id = $1
       ORDER BY created_at ASC, id ASC`,
     [envelope.change_request_id],
   );
 
-  return {
-    ...authoritySummary(envelope),
-    evidence,
-    approvals,
-  };
+  return { ...authoritySummary(envelope), evidence, approvals };
 }
 
-export function isApprovalRecordUsable(record, now = new Date()) {
+/** Temporal validity only. W2-02 promotion must reauthorize the approver and
+ * re-evaluate current approval policy; this helper does not imply authority. */
+export function isApprovalRecordTemporallyValid(record, now = new Date()) {
   if (!record || record.decision !== "approved") return false;
   if (!record.expires_at) return true;
   const expiry = new Date(record.expires_at);
   return !Number.isNaN(expiry.getTime()) && expiry.getTime() > now.getTime();
 }
 
-export function assertApprovalRecordUsable(record, now = new Date()) {
-  if (!isApprovalRecordUsable(record, now)) {
-    throw new Error("approval record is not usable or has expired");
+export function assertApprovalRecordTemporallyValid(record, now = new Date()) {
+  if (!isApprovalRecordTemporallyValid(record, now)) {
+    throw new PolicyAuthorityError("approval_record_expired_or_unusable");
   }
   return true;
 }
