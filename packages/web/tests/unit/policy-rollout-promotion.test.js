@@ -196,7 +196,7 @@ describe("Rollout Promotion — governed route contract", () => {
     expect(promoteSection).toMatch(/err\s+instanceof\s+PolicyPromotionError/);
     expect(promoteSection).toMatch(/err\.reason\?\.includes\("authorization_"\)/);
     expect(promoteSection).toMatch(/err\.reason\s*===\s*"promoter_principal_required"/);
-    expect(promoteSection).toMatch(/\?\s*403\s*:\s*400/);
+    expect(promoteSection).toMatch(/authorizationFailure\s*\?\s*403\s*:\s*stateConflict\s*\?\s*409\s*:\s*400/);
   });
 
   it("returns typed policy failures using stable reason codes", () => {
