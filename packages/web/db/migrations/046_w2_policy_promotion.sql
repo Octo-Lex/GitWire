@@ -8,6 +8,13 @@
 --   * repo_config remains the compatibility materialization until W2-03 converts
 --     or disables the remaining direct writers;
 --   * no role grants, production cutover, config layering, or Wave-3 machinery.
+--
+-- Authority identity exception to the general application-table BIGSERIAL
+-- convention: W2-01 established UUID identities for immutable authority records,
+-- so policy_promotion_records continues that model. active_policy_bindings uses
+-- repo_id as its primary key deliberately so PostgreSQL itself enforces exactly
+-- one live governed binding per repository; a surrogate key would not express
+-- that singleton authority invariant.
 
 -- Exact composite keys let promotion records prove their W2-01 bindings without
 -- trusting application-side relationship assembly.
@@ -43,6 +50,7 @@ CREATE TABLE policy_promotion_records (
   evidence_set_hash          TEXT NOT NULL,
   reason                     TEXT,
   promoted_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   CONSTRAINT uq_policy_promotion_change_request UNIQUE (change_request_id),
   CONSTRAINT uq_policy_promotion_version UNIQUE (policy_version_id),
@@ -111,6 +119,7 @@ CREATE TABLE active_policy_bindings (
   promoter_principal_id UUID NOT NULL REFERENCES gitwire_auth.auth_principals(id) ON DELETE RESTRICT,
   evidence_set_hash     TEXT NOT NULL,
   activated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   CONSTRAINT fk_active_policy_version_repo
     FOREIGN KEY (policy_version_id, repo_id)
