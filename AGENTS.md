@@ -227,7 +227,8 @@ Before tagging ANY release:
    If `"unknown"` or mismatched: **treat the release as failed**. Inspect the
    publication manifest, build metadata, and deployment run. Preserve or
    restore the previous validated release via coherent rollback. Use manual
-   rebuild only under the explicitly labeled disaster-recovery procedure in the deployment runbook.
+   rebuild only under the explicitly labeled disaster-recovery procedure in
+   the deployment runbook.
 10. Verify all migrations are applied in the production database
 11. Smoke test the API at `https://gitwire.erlab.uk/health`
 
