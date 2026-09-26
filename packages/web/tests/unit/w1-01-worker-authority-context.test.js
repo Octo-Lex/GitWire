@@ -1,9 +1,11 @@
 // W1-01: worker adoption must carry the server-owned principal/resource pair
 // forward without copying repository identity from the queue payload.
+// W1-04: the same canonical authority is now consumed by enforced worker gates.
 
 import { jest } from "@jest/globals";
 
 const mockAuthorize = jest.fn();
+const mockAuthorizeControlled = jest.fn();
 const mockResolveSystemWorkerContext = jest.fn();
 const mockResolveInstallationWorkerContext = jest.fn();
 const mockResolveRepositoryResource = jest.fn();
@@ -11,6 +13,7 @@ const mockLoggerWarn = jest.fn();
 
 jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
   authorize: mockAuthorize,
+  authorizeControlled: mockAuthorizeControlled,
 }));
 jest.unstable_mockModule("../../src/services/auth/workerContext.js", () => ({
   resolveSystemWorkerContext: mockResolveSystemWorkerContext,
@@ -35,6 +38,7 @@ describe("W1-01 worker authority context", () => {
 
   beforeEach(() => {
     mockAuthorize.mockReset();
+    mockAuthorizeControlled.mockReset();
     mockResolveSystemWorkerContext.mockReset();
     mockResolveInstallationWorkerContext.mockReset();
     mockResolveRepositoryResource.mockReset();
@@ -42,9 +46,21 @@ describe("W1-01 worker authority context", () => {
 
     mockResolveInstallationWorkerContext.mockResolvedValue(principal);
     mockAuthorize.mockResolvedValue(Object.freeze({ allowed: true, code: "allowed" }));
+    mockAuthorizeControlled.mockImplementation(async ({ principal: p, permission, resource, mode }) => ({
+      decision: Object.freeze({
+        allowed: true,
+        code: "allowed",
+        principalId: p?.principalId ?? null,
+        permission,
+        resource,
+      }),
+      persisted: true,
+      mode,
+      blocked: false,
+    }));
   });
 
-  test("carries DB-derived repository identity instead of payload names", async () => {
+  test("carries DB-derived repository identity into the enforced Phase-2 gate", async () => {
     const trustedResource = {
       type: "repository",
       installationId: 7,
@@ -70,22 +86,26 @@ describe("W1-01 worker authority context", () => {
       },
     });
 
+    const canonicalResource = {
+      type: "repository",
+      installationId: 7,
+      repositoryId: 11,
+      organization: "trusted-owner",
+      repository: "trusted-repo",
+      resourceId: null,
+    };
+
     expect(mockResolveRepositoryResource).toHaveBeenCalledWith(7, 11);
-    expect(mockAuthorize).toHaveBeenCalledWith({
+    expect(mockAuthorizeControlled).toHaveBeenCalledWith({
       principal,
       permission: "merge_queue_entry:update",
-      resource: trustedResource,
+      resource: canonicalResource,
+      mode: "enforced",
     });
+    expect(mockAuthorize).not.toHaveBeenCalled();
     expect(result.authority).toEqual({
       principal,
-      resource: {
-        type: "repository",
-        installationId: 7,
-        repositoryId: 11,
-        organization: "trusted-owner",
-        repository: "trusted-repo",
-        resourceId: null,
-      },
+      resource: canonicalResource,
       surfaceId: "worker:phase2",
     });
     expect(result.resource).toBe(result.authority.resource);
@@ -114,10 +134,18 @@ describe("W1-01 worker authority context", () => {
       },
     });
 
-    expect(mockAuthorize).toHaveBeenCalledWith({
+    expect(mockAuthorizeControlled).toHaveBeenCalledWith({
       principal,
       permission: "merge_queue_entry:update",
-      resource: { type: "repository" },
+      resource: {
+        type: "repository",
+        installationId: null,
+        repositoryId: null,
+        organization: null,
+        repository: null,
+        resourceId: null,
+      },
+      mode: "enforced",
     });
     expect(result.authority.resource).toEqual({
       type: "repository",
