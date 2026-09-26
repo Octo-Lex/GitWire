@@ -32,6 +32,8 @@ CREATE TABLE policy_versions (
   CONSTRAINT fk_policy_versions_base_repo
     FOREIGN KEY (base_policy_version_id, repo_id)
     REFERENCES policy_versions(id, repo_id) ON DELETE RESTRICT,
+  CONSTRAINT chk_policy_versions_not_self_based
+    CHECK (base_policy_version_id IS NULL OR base_policy_version_id <> id),
   CONSTRAINT chk_policy_versions_content_hash
     CHECK (content_hash ~ '^sha256:[0-9a-f]{64}$')
 );
@@ -43,7 +45,7 @@ CREATE INDEX idx_policy_versions_content_hash
 
 CREATE TABLE policy_change_requests (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  rollout_plan_id     INTEGER NOT NULL,
+  rollout_plan_id     BIGINT NOT NULL,
   repo_id             BIGINT NOT NULL,
   policy_version_id   UUID NOT NULL UNIQUE,
   author_principal_id UUID NOT NULL REFERENCES gitwire_auth.auth_principals(id) ON DELETE RESTRICT,
@@ -223,7 +225,9 @@ BEGIN
     SELECT COUNT(DISTINCT value->>'evidence_type')
       INTO v_evidence_count
       FROM jsonb_array_elements(NEW.evidence_manifest);
-    IF v_evidence_count <> 4 OR EXISTS (
+    IF jsonb_array_length(NEW.evidence_manifest) <> 4
+       OR v_evidence_count <> 4
+       OR EXISTS (
       SELECT required.type
         FROM (VALUES
           ('validation_result'),
