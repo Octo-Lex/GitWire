@@ -236,9 +236,9 @@ describe("W2-01 migration contract", () => {
   });
 
   test("database derives policy, evidence, and evidence-set hashes from stored JSONB", () => {
-    expect(migration).toMatch(/NEW\.content_hash := 'sha256:' \|\| encode\(digest\(NEW\.policy_document::text/);
-    expect(migration).toMatch(/NEW\.evidence_hash := 'sha256:' \|\| encode\(digest\(NEW\.evidence_payload::text/);
-    expect(migration).toMatch(/NEW\.evidence_set_hash := 'sha256:' \|\| encode\(digest\(NEW\.evidence_manifest::text/);
+    expect(migration).toMatch(/NEW\.content_hash := 'sha256:' \|\| encode\(public\.digest\(NEW\.policy_document::text/);
+    expect(migration).toMatch(/NEW\.evidence_hash := 'sha256:' \|\| encode\(public\.digest\(NEW\.evidence_payload::text/);
+    expect(migration).toMatch(/NEW\.evidence_set_hash := 'sha256:' \|\| encode\(public\.digest\(NEW\.evidence_manifest::text/);
   });
 
   test("database serializes evidence with approval and forbids self-approval", () => {
