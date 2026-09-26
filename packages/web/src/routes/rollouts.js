@@ -24,6 +24,15 @@ import {
 
 export const rolloutRouter = Router();
 
+const POLICY_PROMOTION_CONFLICT_REASONS = new Set([
+  "rollout_state_disallows_promotion",
+  "rollout_state_changed_during_promotion",
+  "stale_policy_base",
+  "first_governed_promotion_requires_null_base",
+  "active_policy_materialization_drift",
+  "repository_binding_changed",
+]);
+
 // routeAuthObserver runs before route handlers. When it successfully records
 // the declaration-derived decision, do not emit a second route-local decision
 // with a less complete resource. If the app observer failed, retain the
@@ -289,23 +298,38 @@ rolloutRouter.post("/:id/promote", async (req, res) => {
     }
 
     const { reason } = req.body || {};
-    await promotePolicyRollout({
+    const committed = await promotePolicyRollout({
       rolloutPlanId: id,
       principal: req.auth,
       reason: reason || null,
     });
 
-    // Preserve the established response shape; getRolloutPlan applies the
-    // compatibility redaction rules before the record leaves the API.
-    const plan = await getRolloutPlan(id);
-    res.json(plan);
+    // Promotion is already durably committed here. Preserve the established
+    // full-plan response when the compatibility read succeeds, but never turn
+    // a successful governed write into a 500 solely because this post-commit
+    // response refresh failed.
+    try {
+      const plan = await getRolloutPlan(id);
+      if (!plan) throw new Error("promoted rollout missing after commit");
+      return res.json(plan);
+    } catch (readErr) {
+      logger.warn(
+        {
+          err: readErr.message,
+          rolloutPlanId: id,
+          promotionId: committed.promotion?.id,
+        },
+        "Governed promotion committed but rollout response refresh failed",
+      );
+      return res.json(committed.rollout);
+    }
   } catch (err) {
     logger.error({ err: err.message, reason: err.reason }, "Failed to promote rollout plan");
     if (err instanceof PolicyPromotionError) {
-      const status = err.reason?.includes("authorization_") ||
-        err.reason === "promoter_principal_required"
-        ? 403
-        : 400;
+      const authorizationFailure = err.reason?.includes("authorization_") ||
+        err.reason === "promoter_principal_required";
+      const stateConflict = POLICY_PROMOTION_CONFLICT_REASONS.has(err.reason);
+      const status = authorizationFailure ? 403 : stateConflict ? 409 : 400;
       return res.status(status).json({ error: err.reason, detail: err.detail ?? undefined });
     }
     res.status(500).json({ error: "Failed to promote rollout plan" });
