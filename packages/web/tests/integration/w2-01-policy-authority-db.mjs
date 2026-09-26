@@ -207,7 +207,7 @@ try {
   ];
   for (const [table, id] of immutableCases) {
     await expectReject(
-      baseClient.query(`UPDATE ${table} SET created_at = created_at WHERE id = $1`, [id]),
+      baseClient.query(`UPDATE ${table} SET id = id WHERE id = $1`, [id]),
       /append-only/,
       `${table} must reject UPDATE`,
     );
