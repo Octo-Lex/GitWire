@@ -149,27 +149,32 @@ export async function adoptWorker({
     jobData?.repositoryId ||
     phase3PayloadRepoId ||
     null;
-  const payloadRepoFullName = jobData?.repoFullName || null;
+  const maintainerRepoFullName = workerId === "worker:maintainer"
+    ? (jobData?.repoFullName || null)
+    : null;
   const candidateInstId = context?.installationId || (installationId ? Number(installationId) : null);
 
-  if (
-    workerId === "worker:phase3" &&
-    effectiveResourceType === "installation" &&
-    candidateInstId &&
-    payloadRepoId
-  ) {
-    const resolvedRepo = await resources.resolveRepositoryResource(
-      candidateInstId,
-      Number(payloadRepoId),
-    );
-    if (resolvedRepo) {
-      resource = { type: "installation", installationId: resolvedRepo.installationId };
-    } else {
+  if (workerId === "worker:phase3" && effectiveResourceType === "installation") {
+    if (!candidateInstId || !payloadRepoId) {
       resource = { type: "installation" };
       logger.warn(
         { workerId, installationId: candidateInstId, repositoryId: payloadRepoId, jobName },
-        "adoptWorker: Phase-3 repository/installation binding failed — resource will fail-closed",
+        "adoptWorker: Phase-3 installation job missing repository/installation binding — resource will fail-closed",
       );
+    } else {
+      const resolvedRepo = await resources.resolveRepositoryResource(
+        candidateInstId,
+        Number(payloadRepoId),
+      );
+      if (resolvedRepo) {
+        resource = { type: "installation", installationId: resolvedRepo.installationId };
+      } else {
+        resource = { type: "installation" };
+        logger.warn(
+          { workerId, installationId: candidateInstId, repositoryId: payloadRepoId, jobName },
+          "adoptWorker: Phase-3 repository/installation binding failed — resource will fail-closed",
+        );
+      }
     }
   } else if (effectiveResourceType === "repository" && candidateInstId && payloadRepoId) {
     resource = await resources.resolveRepositoryResource(candidateInstId, Number(payloadRepoId));
@@ -181,16 +186,19 @@ export async function adoptWorker({
       );
     }
   } else if (
+    workerId === "worker:maintainer" &&
     effectiveResourceType === "repository" &&
     candidateInstId &&
-    payloadRepoFullName &&
-    typeof resources.resolveRepositoryResourceByFullName === "function"
+    maintainerRepoFullName
   ) {
-    resource = await resources.resolveRepositoryResourceByFullName(candidateInstId, payloadRepoFullName);
+    resource = await resources.resolveRepositoryResourceByFullName(
+      candidateInstId,
+      maintainerRepoFullName,
+    );
     if (!resource) {
       resource = { type: "repository" };
       logger.warn(
-        { workerId, installationId: candidateInstId, repoFullName: payloadRepoFullName },
+        { workerId, installationId: candidateInstId, repoFullName: maintainerRepoFullName },
         "adoptWorker: trusted repository full-name lookup failed — resource will fail-closed",
       );
     }
