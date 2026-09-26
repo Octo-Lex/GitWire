@@ -187,9 +187,22 @@ describe("Rollout Promotion — governed route contract", () => {
     expect(promoteSection).not.toMatch(/principal:\s*actor/);
   });
 
-  it("passes optional promotion reason to governed service", () => {
+  it("requires a positive safe-integer rollout id before touching the service", () => {
+    expect(promoteSection).toMatch(/Number\.isSafeInteger\(id\)/);
+    expect(promoteSection).toMatch(/id\s*<=\s*0/);
+    const validationAt = promoteSection.indexOf("Number.isSafeInteger(id)");
+    const serviceAt = promoteSection.indexOf("await promotePolicyRollout");
+    expect(validationAt).toBeGreaterThanOrEqual(0);
+    expect(serviceAt).toBeGreaterThan(validationAt);
+  });
+
+  it("passes only a validated optional promotion reason to governed service", () => {
     expect(promoteSection).toMatch(/const\s*\{\s*reason\s*\}\s*=\s*req\.body\s*\|\|\s*\{\}/);
-    expect(promoteSection).toMatch(/reason:\s*reason\s*\|\|\s*null/);
+    expect(promoteSection).toMatch(/let\s+normalizedReason\s*=\s*null/);
+    expect(promoteSection).toMatch(/typeof\s+reason\s*!==\s*"string"/);
+    expect(promoteSection).toMatch(/normalizedReason\s*=\s*reason\.trim\(\)/);
+    expect(promoteSection).toMatch(/POLICY_PROMOTION_REASON_MAX_LENGTH/);
+    expect(promoteSection).toMatch(/reason:\s*normalizedReason/);
   });
 
   it("maps typed authorization and missing-principal failures to 403", () => {

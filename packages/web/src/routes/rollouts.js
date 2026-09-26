@@ -32,6 +32,7 @@ const POLICY_PROMOTION_CONFLICT_REASONS = new Set([
   "active_policy_materialization_drift",
   "repository_binding_changed",
 ]);
+const POLICY_PROMOTION_REASON_MAX_LENGTH = 2000;
 
 // routeAuthObserver runs before route handlers. When it successfully records
 // the declaration-derived decision, do not emit a second route-local decision
@@ -293,15 +294,31 @@ rolloutRouter.post("/:id/reject", async (req, res) => {
 rolloutRouter.post("/:id/promote", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    if (!id) {
+    if (!Number.isSafeInteger(id) || id <= 0) {
       return res.status(400).json({ error: "Valid plan ID is required" });
     }
 
     const { reason } = req.body || {};
+    let normalizedReason = null;
+    if (reason !== undefined && reason !== null) {
+      if (typeof reason !== "string") {
+        return res.status(400).json({ error: "reason must be a string when provided" });
+      }
+      normalizedReason = reason.trim();
+      if (!normalizedReason) {
+        return res.status(400).json({ error: "reason must be non-empty when provided" });
+      }
+      if (normalizedReason.length > POLICY_PROMOTION_REASON_MAX_LENGTH) {
+        return res.status(400).json({
+          error: `reason must be at most ${POLICY_PROMOTION_REASON_MAX_LENGTH} characters`,
+        });
+      }
+    }
+
     const committed = await promotePolicyRollout({
       rolloutPlanId: id,
       principal: req.auth,
-      reason: reason || null,
+      reason: normalizedReason,
     });
 
     // Promotion is already durably committed here. Preserve the established
