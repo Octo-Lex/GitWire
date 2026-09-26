@@ -7,9 +7,14 @@ const mockTxQuery = jest.fn();
 const mockTransaction = jest.fn(async (fn) => fn({ query: mockTxQuery }));
 const mockAuthorizeControlled = jest.fn();
 const mockInvalidateConfigCache = jest.fn();
+const mockLoggerInfo = jest.fn();
+const mockLoggerError = jest.fn();
 
 jest.unstable_mockModule("../../src/lib/db.js", () => ({
   db: { query: mockQuery, transaction: mockTransaction },
+}));
+jest.unstable_mockModule("../../src/lib/logger.js", () => ({
+  logger: { info: mockLoggerInfo, error: mockLoggerError },
 }));
 jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
   authorizeControlled: mockAuthorizeControlled,
@@ -215,6 +220,8 @@ describe("W2-02 governed promotion", () => {
     mockTransaction.mockClear();
     mockAuthorizeControlled.mockReset();
     mockInvalidateConfigCache.mockReset();
+    mockLoggerInfo.mockReset();
+    mockLoggerError.mockReset();
     mockInvalidateConfigCache.mockResolvedValue(undefined);
   });
 
