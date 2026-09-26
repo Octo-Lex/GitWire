@@ -52,9 +52,11 @@ function installHarness({
   basePolicyVersionId = null,
   active = null,
   rolloutStatus = "approved",
-  proposedMatches = true,
+  proposedConfig = { dry_run: true, review: { enabled: true } },
   authorPrincipalId = authorId,
   approvalDecision = "approved",
+  approvalTemporallyValid = true,
+  approvalExpiresAt = null,
   validationValid = true,
 } = {}) {
   mockAuthorizeControlled.mockResolvedValue(allowedOutcome());
@@ -107,8 +109,7 @@ function installHarness({
           policy_document: { dry_run: true, review: { enabled: true } },
           content_hash: `sha256:${"a".repeat(64)}`,
           rollout_status: rolloutStatus,
-          proposed_config: { dry_run: true, review: { enabled: true } },
-          proposed_matches_version: proposedMatches,
+          proposed_config: proposedConfig,
         }],
       };
     }
@@ -144,7 +145,8 @@ function installHarness({
             evidence_hash: `sha256:${"b".repeat(64)}`,
           }],
           evidence_set_hash: `sha256:${"c".repeat(64)}`,
-          expires_at: null,
+          expires_at: approvalExpiresAt,
+          temporally_valid: approvalTemporallyValid,
           created_at: "2026-09-26T00:01:00Z",
         }],
       };
@@ -283,7 +285,9 @@ describe("W2-02 governed promotion", () => {
   });
 
   test("rejects legacy/mismatched rollout policy drift", async () => {
-    installHarness({ proposedMatches: false });
+    installHarness({
+      proposedConfig: { dry_run: false, review: { enabled: true } },
+    });
 
     await expect(promotePolicyRollout({
       rolloutPlanId: 42,
@@ -355,6 +359,24 @@ describe("W2-02 governed promotion", () => {
       rolloutPlanId: 42,
       principal: promoterPrincipal,
     })).rejects.toMatchObject({ reason: "no_currently_authorized_separated_approval" });
+  });
+
+  test("expired approval authority fails closed using database temporal validity", async () => {
+    installHarness({
+      approvalTemporallyValid: false,
+      approvalExpiresAt: "2026-09-25T23:59:59Z",
+    });
+
+    await expect(promotePolicyRollout({
+      rolloutPlanId: 42,
+      principal: promoterPrincipal,
+    })).rejects.toMatchObject({ reason: "approved_authority_record_missing_or_expired" });
+
+    expect(mockAuthorizeControlled).toHaveBeenCalledTimes(1);
+    const approvalQuery = mockTxQuery.mock.calls
+      .map(([sql]) => sql.replace(/\s+/g, " ").trim())
+      .find((q) => q.includes("FROM policy_approval_records"));
+    expect(approvalQuery).toContain("expires_at > NOW()");
   });
 
   test("live materialization, promotion record, binding, rollout state and history share one transaction", async () => {

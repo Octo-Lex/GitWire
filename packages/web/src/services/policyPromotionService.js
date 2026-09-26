@@ -5,6 +5,7 @@
 // promotion itself; W2-03 converts/disables the remaining direct config/control
 // writers and W2-04 owns layering/provenance/default semantics.
 
+import { isDeepStrictEqual } from "node:util";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { authorizeControlled } from "./auth/authorize.js";
@@ -78,11 +79,12 @@ function manifestValidationRecord(approval, evidenceRows) {
   return null;
 }
 
-function approvalTemporallyValid(approval, now = new Date()) {
-  if (!approval || approval.decision !== "approved") return false;
-  if (!approval.expires_at) return true;
-  const expiry = new Date(approval.expires_at);
-  return !Number.isNaN(expiry.getTime()) && expiry.getTime() > now.getTime();
+function approvalTemporallyValid(approval) {
+  return Boolean(
+    approval
+    && approval.decision === "approved"
+    && approval.temporally_valid === true
+  );
 }
 
 async function selectCurrentAuthorizedApproval({
@@ -150,8 +152,7 @@ async function loadPromotionEnvelope(tx, rolloutPlanId) {
             pv.policy_document,
             pv.content_hash,
             p.status AS rollout_status,
-            p.proposed_config,
-            (p.proposed_config = pv.policy_document) AS proposed_matches_version
+            p.proposed_config
        FROM policy_change_requests cr
        JOIN policy_versions pv
          ON pv.id = cr.policy_version_id
@@ -180,7 +181,9 @@ async function loadAuthorityEvidenceAndApprovals(tx, changeRequestId) {
   const { rows: approvals } = await tx.query(
     `SELECT id, change_request_id, policy_version_id, approver_principal_id,
             decision, reason, acknowledged_recommendations, evidence_manifest,
-            evidence_set_hash, expires_at, created_at
+            evidence_set_hash, expires_at,
+            (expires_at IS NULL OR expires_at > NOW()) AS temporally_valid,
+            created_at
        FROM policy_approval_records
       WHERE change_request_id = $1
       ORDER BY created_at ASC, id ASC`,
@@ -301,7 +304,7 @@ export async function promotePolicyRollout({
         status: envelope.rollout_status,
       });
     }
-    if (envelope.proposed_matches_version !== true) {
+    if (!isDeepStrictEqual(envelope.proposed_config, envelope.policy_document)) {
       throw new PolicyPromotionError("rollout_policy_version_drift");
     }
 
