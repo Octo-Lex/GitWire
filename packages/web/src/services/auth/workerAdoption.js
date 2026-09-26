@@ -152,7 +152,13 @@ export async function adoptWorker({
   const maintainerRepoFullName = workerId === "worker:maintainer"
     ? (jobData?.repoFullName || null)
     : null;
-  const candidateInstId = context?.installationId || (installationId ? Number(installationId) : null);
+  // Fleet authority comes solely from the exact Phase-3 job contract. An
+  // incidental installation candidate must never be embedded in a fleet
+  // resource, because installation-scoped assignments are otherwise eligible
+  // to match a non-null installationId in the central scope query.
+  const candidateInstId = workerId === "worker:phase3" && effectiveResourceType === "fleet"
+    ? null
+    : (context?.installationId || (installationId ? Number(installationId) : null));
 
   if (workerId === "worker:phase3" && effectiveResourceType === "installation") {
     if (!candidateInstId || !payloadRepoId) {

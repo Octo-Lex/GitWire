@@ -1,7 +1,7 @@
 // W1-04 exact-head review regressions.
 //
 // Pins the final scope-hygiene and fail-closed findings discovered during
-// review of PR #301 without broadening the W1-04 runtime set.
+// exact-head review without broadening the W1-04 runtime set.
 
 import { jest } from "@jest/globals";
 
@@ -162,5 +162,41 @@ describe("W1-04 exact-head review regressions", () => {
       }),
       "adoptWorker: Phase-3 installation job missing repository/installation binding — resource will fail-closed",
     );
+  });
+
+  test("Phase-3 fleet jobs discard incidental installation candidates before authorization", async () => {
+    mockAuthorizeControlled.mockImplementation(async ({ resource }) => ({
+      decision: Object.freeze({ allowed: true, code: "allowed", resource }),
+      persisted: true,
+      mode: "enforced",
+      blocked: false,
+    }));
+
+    const result = await adoptWorker({
+      workerId: "worker:phase3",
+      permission: "installation:read",
+      resourceType: "installation",
+      jobName: "policy-reconcile-fleet",
+      systemPrincipalName: "system:phase3-worker",
+      // Mirrors phase3Worker's real call shape: it forwards an installation
+      // candidate whenever job data happens to contain one, even for fleet jobs.
+      installationId: 7,
+      jobData: { installationId: 7, incidentalMetadata: true },
+    });
+
+    expect(result.resource).toEqual({
+      type: "fleet",
+      installationId: null,
+      repositoryId: null,
+      organization: null,
+      repository: null,
+      resourceId: null,
+    });
+    expect(mockAuthorizeControlled).toHaveBeenCalledWith(expect.objectContaining({
+      principal: systemPrincipal,
+      permission: "installation:read",
+      mode: "enforced",
+      resource: result.resource,
+    }));
   });
 });
