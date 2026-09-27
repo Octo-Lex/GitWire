@@ -32,6 +32,13 @@ const POLICY_PROMOTION_CONFLICT_REASONS = new Set([
   "active_policy_materialization_drift",
   "repository_binding_changed",
 ]);
+const POLICY_PROMOTION_AUTHORIZATION_REASONS = new Set([
+  "promoter_principal_required",
+  "promoter_authorization_denied",
+  "promoter_authorization_not_persisted",
+  "approver_authorization_denied",
+  "approver_authorization_not_persisted",
+]);
 const POLICY_PROMOTION_REASON_MAX_LENGTH = 2000;
 
 // routeAuthObserver runs before route handlers. When it successfully records
@@ -343,8 +350,8 @@ rolloutRouter.post("/:id/promote", async (req, res) => {
   } catch (err) {
     logger.error({ err: err.message, reason: err.reason }, "Failed to promote rollout plan");
     if (err instanceof PolicyPromotionError) {
-      const authorizationFailure = err.reason?.includes("authorization_") ||
-        err.reason === "promoter_principal_required";
+      const authorizationFailure = POLICY_PROMOTION_AUTHORIZATION_REASONS.has(err.reason) ||
+        (err.reason === "no_currently_authorized_separated_approval" && Boolean(err.detail?.code));
       const stateConflict = POLICY_PROMOTION_CONFLICT_REASONS.has(err.reason);
       const status = authorizationFailure ? 403 : stateConflict ? 409 : 400;
       return res.status(status).json({ error: err.reason, detail: err.detail ?? undefined });

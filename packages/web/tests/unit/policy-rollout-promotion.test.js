@@ -205,10 +205,14 @@ describe("Rollout Promotion — governed route contract", () => {
     expect(promoteSection).toMatch(/reason:\s*normalizedReason/);
   });
 
-  it("maps typed authorization and missing-principal failures to 403", () => {
-    expect(promoteSection).toMatch(/err\s+instanceof\s+PolicyPromotionError/);
-    expect(promoteSection).toMatch(/err\.reason\?\.includes\("authorization_"\)/);
-    expect(promoteSection).toMatch(/err\.reason\s*===\s*"promoter_principal_required"/);
+  it("maps typed authorization failures to 403 using explicit reason semantics", () => {
+    expect(source).toMatch(/const\s+POLICY_PROMOTION_AUTHORIZATION_REASONS\s*=\s*new Set/);
+    expect(source).toMatch(/"promoter_authorization_denied"/);
+    expect(source).toMatch(/"approver_authorization_not_persisted"/);
+    expect(promoteSection).toMatch(/POLICY_PROMOTION_AUTHORIZATION_REASONS\.has\(err\.reason\)/);
+    expect(promoteSection).toMatch(/err\.reason\s*===\s*"no_currently_authorized_separated_approval"/);
+    expect(promoteSection).toMatch(/Boolean\(err\.detail\?\.code\)/);
+    expect(promoteSection).not.toMatch(/includes\("authorization_"\)/);
     expect(promoteSection).toMatch(/authorizationFailure\s*\?\s*403\s*:\s*stateConflict\s*\?\s*409\s*:\s*400/);
   });
 

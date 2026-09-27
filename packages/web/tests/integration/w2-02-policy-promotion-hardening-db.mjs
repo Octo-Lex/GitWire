@@ -129,6 +129,33 @@ async function insertPromotion({ envelope, rolloutPlanId = envelope.rollout.id, 
   );
 }
 
+async function updateActiveBinding({ envelope, promotion }) {
+  return client.query(
+    `UPDATE active_policy_bindings
+        SET policy_version_id = $2,
+            promotion_record_id = $3,
+            change_request_id = $4,
+            approval_record_id = $5,
+            author_principal_id = $6,
+            approver_principal_id = $7,
+            promoter_principal_id = $8,
+            evidence_set_hash = $9
+      WHERE repo_id = $1
+      RETURNING *`,
+    [
+      repositoryId.toString(),
+      envelope.version.id,
+      promotion.id,
+      envelope.changeRequest.id,
+      envelope.approval.id,
+      authorId,
+      approverId,
+      promoterId,
+      envelope.approval.evidence_set_hash,
+    ],
+  );
+}
+
 try {
   await client.query(
     `INSERT INTO installations (github_id, account_login, account_type)
@@ -232,6 +259,49 @@ try {
     /promotion validation evidence is not explicitly valid/,
     "storage backstop requires validation_result.valid === true",
   );
+
+  const second = await createAuthorityEnvelope({
+    suffix: "second",
+    basePolicyVersionId: first.version.id,
+  });
+  const { rows: [promotion2] } = await insertPromotion({
+    envelope: second,
+    previousPolicyVersionId: first.version.id,
+  });
+  const { rows: [binding2] } = await updateActiveBinding({
+    envelope: second,
+    promotion: promotion2,
+  });
+  assert.equal(binding2.policy_version_id, second.version.id);
+
+  const third = await createAuthorityEnvelope({
+    suffix: "third",
+    basePolicyVersionId: second.version.id,
+  });
+  const { rows: [promotion3] } = await insertPromotion({
+    envelope: third,
+    previousPolicyVersionId: second.version.id,
+  });
+  const { rows: [binding3] } = await updateActiveBinding({
+    envelope: third,
+    promotion: promotion3,
+  });
+  assert.equal(binding3.policy_version_id, third.version.id);
+
+  await expectReject(
+    updateActiveBinding({ envelope: second, promotion: promotion2 }),
+    /active policy binding promotion predecessor does not match current version/,
+    "old immutable promotion records cannot be replayed to roll back live authority",
+  );
+
+  const { rows: [stillCurrent] } = await client.query(
+    `SELECT policy_version_id, promotion_record_id
+       FROM active_policy_bindings
+      WHERE repo_id = $1`,
+    [repositoryId.toString()],
+  );
+  assert.equal(stillCurrent.policy_version_id, third.version.id);
+  assert.equal(stillCurrent.promotion_record_id, promotion3.id);
 
   console.log("W2-02 Postgres review hardening invariants: PASS");
 } finally {

@@ -218,7 +218,9 @@ CREATE TRIGGER trg_policy_promotion_prepare_insert
   FOR EACH ROW EXECUTE FUNCTION prepare_w2_policy_promotion_insert();
 
 -- The mutable pointer may change only to an immutable promotion record whose
--- full authority tuple exactly matches the proposed binding.
+-- full authority tuple exactly matches the proposed binding. On updates, the
+-- immutable promotion record must also name the current active version as its
+-- predecessor so an old record cannot be replayed as an ungoverned rollback.
 CREATE FUNCTION prepare_w2_active_policy_binding_write()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -243,6 +245,13 @@ BEGIN
      OR v_promotion.evidence_set_hash <> NEW.evidence_set_hash
   THEN
     RAISE EXCEPTION 'active policy binding does not match immutable promotion record';
+  END IF;
+
+  IF TG_OP = 'UPDATE'
+     AND NEW.promotion_record_id IS DISTINCT FROM OLD.promotion_record_id
+     AND v_promotion.previous_policy_version_id IS DISTINCT FROM OLD.policy_version_id
+  THEN
+    RAISE EXCEPTION 'active policy binding promotion predecessor does not match current version';
   END IF;
 
   NEW.activated_at := v_promotion.promoted_at;
