@@ -43,10 +43,10 @@ export { AuthorizationMode };
  * shared locks on the principal, matching assignment, and role-permission rows;
  * PostgreSQL holds those locks until the caller's transaction completes. This
  * serializes disable/revoke/permission-removal against the protected effect.
- * In lock mode the positive decision record is written through that same
- * transaction client, so successful effect state and enforced authorization
- * evidence commit together without borrowing a second connection from the pool.
- * Denials retain the established independent best-effort logging path.
+ * In lock mode authorization decisions are written through that same transaction
+ * client, so protected state/allow evidence and denial evidence never require a
+ * second pool checkout while the authority-holding transaction is open.
+ * Non-lock denials retain the established independent best-effort logging path.
  *
  * @param {object} opts
  * @param {object} opts.principal - AuthContext (the resolved caller)
@@ -96,23 +96,23 @@ export async function authorizeWithPersistence({
       lockAuthorityRows,
     });
   } catch (err) {
-    return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err, observeMode);
+    return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err, observeMode, lockAuthorityRows ? queryable : undefined);
   }
   const vcode = principalValidityCode(principalRecord);
   if (vcode !== DecisionCode.ALLOWED) {
-    return denyAndLog(vcode, principal, permission, resource, null, null, undefined, observeMode);
+    return denyAndLog(vcode, principal, permission, resource, null, null, undefined, observeMode, lockAuthorityRows ? queryable : undefined);
   }
 
   // Resource validation: server-owned identifiers are mandatory for scoped
   // resources. Request-supplied names alone never establish scope.
   if (!resource || !resource.type) {
-    return denyAndLog(DecisionCode.RESOURCE_MISSING, principal, permission, resource, null, null, undefined, observeMode);
+    return denyAndLog(DecisionCode.RESOURCE_MISSING, principal, permission, resource, null, null, undefined, observeMode, lockAuthorityRows ? queryable : undefined);
   }
   if (resource.type === "repository" && (!resource.installationId || !resource.repositoryId)) {
-    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null, undefined, observeMode);
+    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null, undefined, observeMode, lockAuthorityRows ? queryable : undefined);
   }
   if (resource.type === "installation" && !resource.installationId) {
-    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null, undefined, observeMode);
+    return denyAndLog(DecisionCode.RESOURCE_UNKNOWN, principal, permission, resource, null, null, undefined, observeMode, lockAuthorityRows ? queryable : undefined);
   }
 
   // Load the principal's active, non-expired, non-revoked role assignments
@@ -163,7 +163,7 @@ export async function authorizeWithPersistence({
       const code = scopeRows.rows.length > 0
         ? DecisionCode.SCOPE_MISMATCH
         : DecisionCode.PERMISSION_MISSING;
-      return denyAndLog(code, principal, permission, resource, null, null, undefined, observeMode);
+      return denyAndLog(code, principal, permission, resource, null, null, undefined, observeMode, lockAuthorityRows ? queryable : undefined);
     }
 
     const match = rows[0];
@@ -188,11 +188,11 @@ export async function authorizeWithPersistence({
     return { decision, persisted };
   } catch (err) {
     logger.warn({ err, principalId: principal.principalId, permission }, "authorize: evaluation failed");
-    return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err, observeMode);
+    return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err, observeMode, lockAuthorityRows ? queryable : undefined);
   }
 }
 
-async function denyAndLog(code, principal, permission, resource, assignmentId, scopeType, err, observeMode = true) {
+async function denyAndLog(code, principal, permission, resource, assignmentId, scopeType, err, observeMode = true, queryable) {
   const decision = createDecision({
     allowed: false,
     code,
@@ -205,7 +205,7 @@ async function denyAndLog(code, principal, permission, resource, assignmentId, s
     authenticationMethod: principal?.authenticationMethod ?? null,
     detail: err ? { error: err.message } : null,
   });
-  const persisted = await logDecision(decision, principal, { observeMode });
+  const persisted = await logDecision(decision, principal, { observeMode }, ...(queryable ? [queryable] : []));
   return { decision, persisted };
 }
 
