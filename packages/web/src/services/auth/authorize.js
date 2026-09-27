@@ -40,9 +40,9 @@ export { AuthorizationMode };
  *
  * Authority-sensitive effects may provide their transaction client as
  * `queryable` and set `lockAuthorityRows`. A positive decision then takes
- * shared locks on the principal, matching assignment, and role-permission rows;
+ * shared locks on the principal, matching assignment, role, and role-permission rows;
  * PostgreSQL holds those locks until the caller's transaction completes. This
- * serializes disable/revoke/permission-removal against the protected effect.
+ * serializes disable/revoke/role-retirement/permission-removal against the protected effect.
  * In lock mode authorization decisions are written through that same transaction
  * client, so protected state/allow evidence and denial evidence never require a
  * second pool checkout while the authority-holding transaction is open.
@@ -125,14 +125,14 @@ export async function authorizeWithPersistence({
   //   installation → must match resource.installationId
   //   repository → must match resource.installationId + repositoryId
   try {
-    const authorityLockClause = lockAuthorityRows ? " FOR SHARE OF apr, arp" : "";
+    const authorityLockClause = lockAuthorityRows ? " FOR SHARE OF apr, ar, arp" : "";
     const assignmentExpiryClock = lockAuthorityRows ? "clock_timestamp()" : "now()";
     const { rows } = await queryable.query(
       `SELECT apr.id AS assignment_id, apr.scope_type, apr.scope_id,
               arp.permission
          FROM gitwire_auth.auth_principal_roles apr
-         JOIN gitwire_auth.auth_role_permissions arp
-           ON arp.role_id = apr.role_id
+         JOIN gitwire_auth.auth_roles ar ON ar.id = apr.role_id AND ar.status = 'active'
+         JOIN gitwire_auth.auth_role_permissions arp ON arp.role_id = ar.id
         WHERE apr.principal_id = $1
           AND apr.revoked_at IS NULL
           AND (apr.expires_at IS NULL OR apr.expires_at > ${assignmentExpiryClock})
@@ -158,7 +158,7 @@ export async function authorizeWithPersistence({
     if (rows.length === 0) {
       const scopeRows = await queryable.query(
         `SELECT 1 FROM gitwire_auth.auth_principal_roles apr
-          JOIN gitwire_auth.auth_role_permissions arp ON arp.role_id = apr.role_id
+          JOIN gitwire_auth.auth_roles ar ON ar.id = apr.role_id AND ar.status = 'active' JOIN gitwire_auth.auth_role_permissions arp ON arp.role_id = ar.id
          WHERE apr.principal_id = $1 AND arp.permission = $2
            AND apr.revoked_at IS NULL
            AND (apr.expires_at IS NULL OR apr.expires_at > ${assignmentExpiryClock})

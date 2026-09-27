@@ -212,7 +212,7 @@ async function loadAuthorityEvidenceAndApprovals(tx, changeRequestId) {
     `SELECT id, change_request_id, policy_version_id, approver_principal_id,
             decision, reason, acknowledged_recommendations, evidence_manifest,
             evidence_set_hash, expires_at,
-            (expires_at IS NULL OR expires_at > NOW()) AS temporally_valid,
+            (expires_at IS NULL OR expires_at > clock_timestamp()) AS temporally_valid,
             created_at
        FROM policy_approval_records
       WHERE change_request_id = $1

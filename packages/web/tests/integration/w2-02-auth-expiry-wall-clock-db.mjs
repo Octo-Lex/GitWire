@@ -1,10 +1,13 @@
-// W2-02 locked authorization expiry proof against real PostgreSQL.
+// W2-02 locked authorization expiry and role-state proof against real PostgreSQL.
 //
 // PostgreSQL NOW() is transaction-start time. A promotion transaction may wait
 // on the repository mutex before it evaluates role assignments, so locked
 // authorization must use wall-clock time for assignment expiry. This proof
 // starts a transaction before an assignment expires, waits until after the
-// expiry instant, then requires the locked enforced decision to deny.
+// expiry instant, then requires the locked enforced decision to deny. It also
+// proves retired roles are non-authoritative and that positive locked decisions
+// hold the matched role row through commit so concurrent retirement cannot race
+// the protected effect.
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -128,6 +131,114 @@ try {
     assert.equal(outcome.decision.code, "permission_missing", "expired assignment must not count as active permission");
   });
 
+  // Re-arm the assignment without expiry, retire its role, and prove role status
+  // is part of the authoritative permission evaluation rather than advisory metadata.
+  await seed.query(
+    `UPDATE gitwire_auth.auth_principal_roles
+        SET expires_at = NULL
+      WHERE id = $1`,
+    [assignment.id],
+  );
+  await seed.query(
+    `UPDATE gitwire_auth.auth_roles
+        SET status = 'retired', retired_at = clock_timestamp()
+      WHERE id = $1`,
+    [roleId],
+  );
+
+  await runtimeDb.transaction(async (tx) => {
+    const outcome = await authorizeControlled({
+      principal: {
+        principalId,
+        authenticationMethod: "api_key",
+      },
+      permission: "policy_rollout_plan:approve",
+      resource,
+      mode: "enforced",
+      queryable: tx,
+      lockAuthorityRows: true,
+    });
+
+    assert.equal(outcome.persisted, true, "retired-role denial evidence must persist");
+    assert.equal(outcome.blocked, true, "retired role must block enforced authorization");
+    assert.equal(outcome.decision.allowed, false, "retired role must not authorize");
+    assert.equal(outcome.decision.code, "permission_missing", "retired-role permission must not count as active");
+  });
+
+  // Reactivate only for the race proof. A successful locked decision must hold
+  // the role row so retirement cannot become effective before the protected
+  // transaction commits.
+  await seed.query(
+    `UPDATE gitwire_auth.auth_roles
+        SET status = 'active', retired_at = NULL
+      WHERE id = $1`,
+    [roleId],
+  );
+
+  await runtimeDb.transaction(async (tx) => {
+    const outcome = await authorizeControlled({
+      principal: {
+        principalId,
+        authenticationMethod: "api_key",
+      },
+      permission: "policy_rollout_plan:approve",
+      resource,
+      mode: "enforced",
+      queryable: tx,
+      lockAuthorityRows: true,
+    });
+
+    assert.equal(outcome.persisted, true);
+    assert.equal(outcome.blocked, false);
+    assert.equal(outcome.decision.allowed, true);
+
+    await seed.query("SET lock_timeout = '250ms'");
+    await assert.rejects(
+      seed.query(
+        `UPDATE gitwire_auth.auth_roles
+            SET status = 'retired', retired_at = clock_timestamp()
+          WHERE id = $1`,
+        [roleId],
+      ),
+      (err) => err?.code === "55P03" && /lock timeout/i.test(err.message),
+      "concurrent role retirement must wait for the effect transaction's authority lock",
+    );
+    await seed.query("SET lock_timeout = '0'");
+  });
+
+  const retiredAfterCommit = await seed.query(
+    `UPDATE gitwire_auth.auth_roles
+        SET status = 'retired', retired_at = clock_timestamp()
+      WHERE id = $1
+        AND status = 'active'
+    RETURNING id`,
+    [roleId],
+  );
+  assert.equal(
+    retiredAfterCommit.rowCount,
+    1,
+    "role retirement must succeed after the authority-holding transaction commits",
+  );
+
+  await runtimeDb.transaction(async (tx) => {
+    const outcome = await authorizeControlled({
+      principal: {
+        principalId,
+        authenticationMethod: "api_key",
+      },
+      permission: "policy_rollout_plan:approve",
+      resource,
+      mode: "enforced",
+      queryable: tx,
+      lockAuthorityRows: true,
+    });
+
+    assert.equal(outcome.persisted, true);
+    assert.equal(outcome.blocked, true, "post-commit retirement must take effect immediately");
+    assert.equal(outcome.decision.allowed, false);
+    assert.equal(outcome.decision.code, "permission_missing");
+  });
+
   const { rows: [logged] } = await seed.query(
     `SELECT count(*)::int AS n
        FROM gitwire_auth.auth_decision_log
@@ -139,9 +250,9 @@ try {
         AND observe_mode = false`,
     [principalId, repositoryId],
   );
-  assert.equal(logged.n, 1, "wall-clock expiry denial must commit durable enforced evidence");
+  assert.equal(logged.n, 3, "expiry and retired-role denials must commit durable enforced evidence");
 
-  console.log("W2-02 locked authorization wall-clock expiry: PASS");
+  console.log("W2-02 locked authorization wall-clock expiry + active-role locking: PASS");
 } finally {
   await seed.end();
 }

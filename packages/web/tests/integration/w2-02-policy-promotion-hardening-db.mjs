@@ -89,7 +89,7 @@ async function createAuthorityEnvelope({
        $1, $2, $3, 'approved', $4, $5::jsonb,
        COALESCE($6::timestamptz, NOW()), $7::timestamptz
      )
-     RETURNING id, evidence_set_hash`,
+     RETURNING id, evidence_set_hash, expires_at`,
     [
       changeRequest.id,
       version.id,
@@ -246,8 +246,59 @@ try {
   await expectReject(
     insertPromotion({ envelope: expired, previousPolicyVersionId: first.version.id }),
     /promotion approval is expired/,
-    "storage backstop rejects an approval expired at the transaction authority snapshot",
+    "storage backstop rejects an already-expired approval",
   );
+
+  // Regression for PostgreSQL transaction-start timestamps: begin while the
+  // approval is valid, hold the transaction open past expires_at, then attempt
+  // the insert. A NOW()-based trigger would incorrectly accept this authority.
+  const wallClockExpiry = await createAuthorityEnvelope({
+    suffix: "wall-clock-expired",
+    basePolicyVersionId: first.version.id,
+    approvalExpiresAt: new Date(Date.now() + 1500).toISOString(),
+  });
+  await client.query("BEGIN");
+  try {
+    const { rows: [started] } = await client.query(
+      `SELECT now() AS transaction_time, clock_timestamp() AS wall_time`,
+    );
+    assert.ok(
+      new Date(started.transaction_time).getTime()
+        < new Date(wallClockExpiry.approval.expires_at).getTime(),
+      "storage regression transaction must begin before approval expiry",
+    );
+
+    const waitMs = Math.max(
+      0,
+      new Date(wallClockExpiry.approval.expires_at).getTime() - Date.now() + 300,
+    );
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+    const { rows: [afterWait] } = await client.query(
+      `SELECT now() AS transaction_time, clock_timestamp() AS wall_time`,
+    );
+    assert.equal(
+      new Date(afterWait.transaction_time).getTime(),
+      new Date(started.transaction_time).getTime(),
+      "NOW() must remain fixed at transaction start for the regression setup",
+    );
+    assert.ok(
+      new Date(afterWait.wall_time).getTime()
+        > new Date(wallClockExpiry.approval.expires_at).getTime(),
+      "wall clock must pass approval expiry before the storage insert",
+    );
+
+    await expectReject(
+      insertPromotion({
+        envelope: wallClockExpiry,
+        previousPolicyVersionId: first.version.id,
+      }),
+      /promotion approval is expired/,
+      "storage backstop must reject authority that expires while its transaction waits",
+    );
+  } finally {
+    await client.query("ROLLBACK");
+  }
 
   const invalid = await createAuthorityEnvelope({
     suffix: "invalid",

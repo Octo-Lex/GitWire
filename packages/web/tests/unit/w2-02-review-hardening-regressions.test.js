@@ -46,9 +46,10 @@ describe("W2-02 review hardening", () => {
     expect(migration46).toMatch(/UNIQUE \(policy_version_id\)/);
   });
 
-  test("approval expiry uses one explicit transaction-start authority snapshot", () => {
-    expect(migration46).toContain("Approval expiry intentionally uses NOW(), PostgreSQL's transaction-start");
-    expect(migration46).toMatch(/v_expires_at <= NOW\(\)/);
+  test("approval expiry uses wall-clock authority in service and storage backstop", () => {
+    expect(migration46).toContain("Approval expiry uses clock_timestamp(), PostgreSQL wall-clock time");
+    expect(migration46).toMatch(/v_expires_at <= clock_timestamp\(\)/);
+    expect(service).toMatch(/expires_at > clock_timestamp\(\)\) AS temporally_valid/);
   });
 
   test("promotion and approval insertion serialize on the same change-request row", () => {
@@ -63,9 +64,10 @@ describe("W2-02 review hardening", () => {
     expect(approvalSection).toMatch(/FROM policy_change_requests[\s\S]*FOR UPDATE/);
   });
 
-  test("central authorization can hold current authority rows through an effect transaction", () => {
+  test("central authorization holds active role authority through an effect transaction", () => {
     expect(principalResolver).toContain('lockAuthorityRows ? " FOR SHARE" : ""');
-    expect(authorize).toContain('lockAuthorityRows ? " FOR SHARE OF apr, arp" : ""');
+    expect(authorize).toContain('lockAuthorityRows ? " FOR SHARE OF apr, ar, arp" : ""');
+    expect(authorize).toContain("JOIN gitwire_auth.auth_roles ar ON ar.id = apr.role_id AND ar.status = 'active'");
     expect(authorize).toContain("authority_lock_requires_transaction_queryable");
     expect(authorize).toMatch(/getPrincipalById\(principal\.principalId, \{[\s\S]*queryable,[\s\S]*lockAuthorityRows/);
   });
@@ -98,6 +100,7 @@ describe("W2-02 review hardening", () => {
       "packages/web/src/services/auth/principalResolver.js",
       "packages/web/src/services/configService.js",
       "packages/web/src/services/policyRolloutService.js",
+      "packages/web/tests/integration/w2-02-policy-promotion-authority-races-db.mjs",
     ]) {
       expect(promotionWorkflow).toContain(`- '${watchedPath}'`);
     }

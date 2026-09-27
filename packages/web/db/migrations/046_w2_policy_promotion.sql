@@ -134,10 +134,10 @@ CREATE TABLE active_policy_bindings (
 -- usable and that the supplied previous version equals the current active
 -- binding. Runtime authorization/revocation checks remain application-owned.
 --
--- Approval expiry intentionally uses NOW(), PostgreSQL's transaction-start
--- timestamp. The service holds the change-request row lock for the promotion
--- transaction, so approval validity is evaluated against one stable authority
--- snapshot rather than changing mid-transaction.
+-- Approval expiry uses clock_timestamp(), PostgreSQL wall-clock time. Promotion
+-- remains serialized by repository/authority locks, but time itself stays live
+-- so a transaction that waits past an approval's expiry cannot commit using
+-- stale authority.
 CREATE FUNCTION prepare_w2_policy_promotion_insert()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -181,7 +181,7 @@ BEGIN
   IF NOT FOUND OR v_decision <> 'approved' THEN
     RAISE EXCEPTION 'promotion requires an approved authority record';
   END IF;
-  IF v_expires_at IS NOT NULL AND v_expires_at <= NOW() THEN
+  IF v_expires_at IS NOT NULL AND v_expires_at <= clock_timestamp() THEN
     RAISE EXCEPTION 'promotion approval is expired';
   END IF;
 
