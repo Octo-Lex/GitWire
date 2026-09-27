@@ -286,3 +286,31 @@ CREATE TRIGGER trg_active_policy_binding_no_delete
 CREATE TRIGGER trg_active_policy_binding_no_truncate
   BEFORE TRUNCATE ON active_policy_bindings
   FOR EACH STATEMENT EXECUTE FUNCTION enforce_w2_policy_promotion_append_only();
+
+-- W2-03 owns conversion of legacy rollback into governed promotion of a prior
+-- immutable policy version. Until then, fail closed at the compatibility
+-- materialization boundary: a legacy rollback must not rewrite repo_config
+-- underneath an active governed binding and leave the authority pointer stale.
+CREATE FUNCTION block_w2_legacy_rollback_with_active_binding()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  IF NEW.updated_by LIKE 'rollout-rollback:%'
+     AND EXISTS (
+       SELECT 1
+         FROM active_policy_bindings
+        WHERE repo_id = NEW.repo_id
+     )
+  THEN
+    RAISE EXCEPTION 'legacy rollback is disabled for governed active policy';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_repo_config_block_governed_legacy_rollback
+  BEFORE INSERT OR UPDATE ON repo_config
+  FOR EACH ROW EXECUTE FUNCTION block_w2_legacy_rollback_with_active_binding();

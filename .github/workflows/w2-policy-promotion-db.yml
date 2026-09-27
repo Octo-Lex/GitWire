@@ -8,6 +8,7 @@ on:
       - 'packages/web/db/migrations/**'
       - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
       - '.github/workflows/w2-policy-promotion-db.yml'
   pull_request:
     branches: [master]
@@ -15,6 +16,7 @@ on:
       - 'packages/web/db/migrations/**'
       - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
       - '.github/workflows/w2-policy-promotion-db.yml'
 
 permissions:
@@ -38,8 +40,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://gitwire:test@127.0.0.1:5432/gitops_hub
+      REDIS_URL: redis://127.0.0.1:6379
       NODE_ENV: test
     steps:
       - uses: actions/checkout@v4
@@ -53,5 +65,7 @@ jobs:
         run: node scripts/migrate.js
       - name: Prove W2-02 Postgres promotion invariants
         run: node packages/web/tests/integration/w2-02-policy-promotion-db.mjs
+      - name: Prove W2-02 service path against Postgres
+        run: node packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs
       - name: Prove W2-02 review hardening invariants
         run: node packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs

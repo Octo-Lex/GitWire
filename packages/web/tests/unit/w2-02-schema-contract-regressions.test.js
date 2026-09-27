@@ -26,4 +26,12 @@ describe("W2-02 schema contract regressions", () => {
     expect(migration).toMatch(/repo_id\s+BIGINT PRIMARY KEY REFERENCES repositories\(github_id\)/);
     expect(migration).toMatch(/Authority identity exception to the general application-table BIGSERIAL/);
   });
+
+  test("legacy rollout rollback fails closed once a governed active binding exists", () => {
+    expect(migration).toMatch(/CREATE FUNCTION block_w2_legacy_rollback_with_active_binding\(\)/);
+    expect(migration).toMatch(/NEW\.updated_by LIKE 'rollout-rollback:%'/);
+    expect(migration).toMatch(/EXISTS\s*\([\s\S]*FROM active_policy_bindings[\s\S]*WHERE repo_id = NEW\.repo_id/);
+    expect(migration).toMatch(/CREATE TRIGGER trg_repo_config_block_governed_legacy_rollback/);
+    expect(migration).toMatch(/BEFORE INSERT OR UPDATE ON repo_config/);
+  });
 });
