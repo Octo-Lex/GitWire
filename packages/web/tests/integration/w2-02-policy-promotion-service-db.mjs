@@ -141,6 +141,17 @@ try {
   );
 
   const authority = await seedAuthorityEnvelope();
+
+  // Mirror application startup so the production compat DB/Redis singletons
+  // used by policyPromotionService are backed by this CI PostgreSQL/Redis pair.
+  const { initRuntime } = await import("@gitwire/runtime");
+  initRuntime({
+    server: { env: "test", logLevel: "silent" },
+    db: { url: databaseUrl },
+    redis: { url: process.env.REDIS_URL || "redis://127.0.0.1:6379" },
+    github: {},
+  });
+
   const { promotePolicyRollout } = await import("../../src/services/policyPromotionService.js");
 
   const committed = await promotePolicyRollout({
