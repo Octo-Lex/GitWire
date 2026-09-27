@@ -13,8 +13,8 @@ const { Client } = pg;
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
-const installationId = 985000001;
-const repositoryId = 985000002;
+const installationId = 986100001;
+const repositoryId = 986100002;
 const authorId = randomUUID();
 const approverId = randomUUID();
 const promoterId = randomUUID();
