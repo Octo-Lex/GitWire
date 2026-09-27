@@ -31,12 +31,20 @@ function repositoryResource(row) {
   });
 }
 
-async function requirePersistedEnforcedAuthorization({ principal, resource, label }) {
+async function requirePersistedEnforcedAuthorization({
+  principal,
+  resource,
+  label,
+  queryable = db,
+  lockAuthorityRows = false,
+}) {
   const outcome = await authorizeControlled({
     principal,
     permission: POLICY_PROMOTION_PERMISSION,
     resource,
     mode: "enforced",
+    queryable,
+    lockAuthorityRows,
   });
 
   if (!outcome.persisted) {
@@ -93,6 +101,8 @@ async function selectCurrentAuthorizedApproval({
   resource,
   authorPrincipalId,
   promoterPrincipalId,
+  queryable = db,
+  lockAuthorityRows = false,
 }) {
   if (approvals.some((record) => record.decision === "rejected")) {
     throw new PolicyPromotionError("promotion_blocked_by_rejection");
@@ -130,6 +140,8 @@ async function selectCurrentAuthorizedApproval({
         },
         resource,
         label: "approver",
+        queryable,
+        lockAuthorityRows,
       });
       return approval;
     } catch (err) {
@@ -274,18 +286,11 @@ export async function promotePolicyRollout({
   if (!principal?.principalId) throw new PolicyPromotionError("promoter_principal_required");
 
   const resourceRow = await resolveRolloutResource(rolloutPlanId);
-  const resource = repositoryResource(resourceRow);
-
-  await requirePersistedEnforcedAuthorization({
-    principal,
-    resource,
-    label: "promoter",
-  });
 
   const result = await db.transaction(async (tx) => {
     // Lock repository before reading mutable authority state. The resource was
-    // server-resolved pre-auth; this lock re-establishes the same repository
-    // identity inside the atomic promotion transaction.
+    // server-resolved before the transaction; this lock re-establishes the
+    // same repository identity inside the atomic promotion transaction.
     const { repo, active, repoConfig } =
       await lockActivePolicyState(tx, resourceRow.repository_id);
 
@@ -294,6 +299,20 @@ export async function promotePolicyRollout({
         || repo.full_name !== resourceRow.full_name) {
       throw new PolicyPromotionError("repository_binding_changed");
     }
+
+    const resource = repositoryResource(repo);
+
+    // Current authorization is part of the same transaction as the effect.
+    // Shared locks on the principal/assignment/permission authority rows remain
+    // held through commit, so disable/revoke/permission-removal cannot race a
+    // positive decision and become effective before this promotion commits.
+    await requirePersistedEnforcedAuthorization({
+      principal,
+      resource,
+      label: "promoter",
+      queryable: tx,
+      lockAuthorityRows: true,
+    });
 
     // Read under the repository lock so rollout state/base checks cannot be
     // separated from the write by a concurrent repository-scoped promotion.
@@ -323,6 +342,8 @@ export async function promotePolicyRollout({
       resource,
       authorPrincipalId: envelope.author_principal_id,
       promoterPrincipalId: principal.principalId,
+      queryable: tx,
+      lockAuthorityRows: true,
     });
 
     const { rows: [promotion] } = await tx.query(

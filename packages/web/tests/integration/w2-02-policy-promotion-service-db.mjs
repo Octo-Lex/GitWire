@@ -1,7 +1,7 @@
 // W2-02 real-Postgres service-path proof.
 // Drives promotePolicyRollout through the production DB/auth code and verifies
 // the atomic materialization, authority binding, compatibility history/state,
-// and the fail-closed legacy rollback guard.
+// current-at-commit authorization locking, and fail-closed legacy rollback guard.
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -16,6 +16,7 @@ const repositoryId = 982000002;
 const authorId = randomUUID();
 const approverId = randomUUID();
 const promoterId = randomUUID();
+const lockProbeId = randomUUID();
 const grantorId = randomUUID();
 const roleId = randomUUID();
 const roleName = `w2-service-proof-${randomUUID()}`;
@@ -112,8 +113,9 @@ try {
        ($1, 'user', 'w2-service-author'),
        ($2, 'user', 'w2-service-approver'),
        ($3, 'user', 'w2-service-promoter'),
-       ($4, 'user', 'w2-service-grantor')`,
-    [authorId, approverId, promoterId, grantorId],
+       ($4, 'user', 'w2-service-lock-probe'),
+       ($5, 'user', 'w2-service-grantor')`,
+    [authorId, approverId, promoterId, lockProbeId, grantorId],
   );
   await client.query(
     `INSERT INTO gitwire_auth.auth_roles (id, name, description)
@@ -129,9 +131,10 @@ try {
     `INSERT INTO gitwire_auth.auth_principal_roles (
        principal_id, role_id, scope_type, scope_id, granted_by
      ) VALUES
-       ($1, $3, 'repository', $4, $5),
-       ($2, $3, 'repository', $4, $5)`,
-    [approverId, promoterId, roleId, repositoryId, grantorId],
+       ($1, $4, 'repository', $5, $6),
+       ($2, $4, 'repository', $5, $6),
+       ($3, $4, 'repository', $5, $6)`,
+    [approverId, promoterId, lockProbeId, roleId, repositoryId, grantorId],
   );
 
   await client.query(
@@ -152,7 +155,64 @@ try {
     github: {},
   });
 
+  const { db: runtimeDb } = await import("../../src/lib/db.js");
+  const { authorizeControlled } = await import("../../src/services/auth/authorize.js");
   const { promotePolicyRollout } = await import("../../src/services/policyPromotionService.js");
+
+  // A positive locked authorization must serialize a concurrent revocation.
+  // The raw client uses a short lock timeout so this proof fails visibly rather
+  // than hanging if the central authorization engine does not hold authority
+  // rows for the lifetime of the caller's effect transaction.
+  await runtimeDb.transaction(async (tx) => {
+    const outcome = await authorizeControlled({
+      principal: {
+        principalId: lockProbeId,
+        authenticationMethod: "api_key",
+      },
+      permission: "policy_rollout_plan:approve",
+      resource: {
+        type: "repository",
+        installationId,
+        repositoryId,
+        fullName: "w2-service-proof/repo",
+      },
+      mode: "enforced",
+      queryable: tx,
+      lockAuthorityRows: true,
+    });
+    assert.equal(outcome.persisted, true);
+    assert.equal(outcome.blocked, false);
+    assert.equal(outcome.decision.allowed, true);
+
+    await client.query("SET lock_timeout = '250ms'");
+    await assert.rejects(
+      client.query(
+        `UPDATE gitwire_auth.auth_principal_roles
+            SET revoked_at = NOW()
+          WHERE principal_id = $1
+            AND role_id = $2`,
+        [lockProbeId, roleId],
+      ),
+      (err) => err?.code === "55P03" && /lock timeout/i.test(err.message),
+      "concurrent assignment revocation must wait for the effect transaction's authority lock",
+    );
+    await client.query("SET lock_timeout = '0'");
+  });
+
+  const postCommitRevocation = await client.query(
+    `UPDATE gitwire_auth.auth_principal_roles
+        SET revoked_at = NOW()
+      WHERE principal_id = $1
+        AND role_id = $2
+        AND revoked_at IS NULL
+    RETURNING id`,
+    [lockProbeId, roleId],
+  );
+  assert.equal(
+    postCommitRevocation.rowCount,
+    1,
+    "revocation must succeed after the authority-holding transaction commits",
+  );
 
   const committed = await promotePolicyRollout({
     rolloutPlanId: Number(authority.rollout.id),

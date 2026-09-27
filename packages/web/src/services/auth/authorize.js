@@ -38,21 +38,60 @@ export { AuthorizationMode };
  * The persistence-aware authorization interface used by observation seams that
  * must distinguish a recorded decision from best-effort logging failure.
  *
+ * Authority-sensitive effects may provide their transaction client as
+ * `queryable` and set `lockAuthorityRows`. A positive decision then takes
+ * shared locks on the principal, matching assignment, and role-permission rows;
+ * PostgreSQL holds those locks until the caller's transaction completes. This
+ * serializes disable/revoke/permission-removal against the protected effect.
+ * Decision evidence remains independently durable through logDecision().
+ *
  * @param {object} opts
  * @param {object} opts.principal - AuthContext (the resolved caller)
  * @param {string} opts.permission - required permission token '<resource_type>:<action>'
  * @param {object} opts.resource - Resource descriptor
+ * @param {boolean} [opts.observeMode]
+ * @param {{query: Function}} [opts.queryable]
+ * @param {boolean} [opts.lockAuthorityRows]
  * @returns {Promise<{decision: Readonly<AuthorizationDecision>, persisted: boolean}>}
  */
-export async function authorizeWithPersistence({ principal, permission, resource, observeMode = true }) {
+export async function authorizeWithPersistence({
+  principal,
+  permission,
+  resource,
+  observeMode = true,
+  queryable = db,
+  lockAuthorityRows = false,
+}) {
   // Defensive: a null principal (unauthenticated path) short-circuits.
   if (!principal || !principal.principalId) {
     return denyAndLog(DecisionCode.UNAUTHENTICATED, principal, permission, resource, null, null, undefined, observeMode);
   }
 
+  // Shared authority-row locks only have the intended lifetime when the caller
+  // owns an explicit transaction. Refuse the global pool wrapper in lock mode
+  // rather than creating a false current-at-commit guarantee.
+  if (!queryable || typeof queryable.query !== "function"
+      || (lockAuthorityRows && queryable === db)) {
+    return denyAndLog(
+      DecisionCode.AUTHORIZATION_ERROR,
+      principal,
+      permission,
+      resource,
+      null,
+      null,
+      new Error(lockAuthorityRows
+        ? "authority_lock_requires_transaction_queryable"
+        : "authorization_queryable_invalid"),
+      observeMode,
+    );
+  }
+
   let principalRecord;
   try {
-    principalRecord = await getPrincipalById(principal.principalId);
+    principalRecord = await getPrincipalById(principal.principalId, {
+      queryable,
+      lockAuthorityRows,
+    });
   } catch (err) {
     return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err, observeMode);
   }
@@ -80,7 +119,8 @@ export async function authorizeWithPersistence({ principal, permission, resource
   //   installation → must match resource.installationId
   //   repository → must match resource.installationId + repositoryId
   try {
-    const { rows } = await db.query(
+    const authorityLockClause = lockAuthorityRows ? " FOR SHARE OF apr, arp" : "";
+    const { rows } = await queryable.query(
       `SELECT apr.id AS assignment_id, apr.scope_type, apr.scope_id,
               arp.permission
          FROM gitwire_auth.auth_principal_roles apr
@@ -98,7 +138,7 @@ export async function authorizeWithPersistence({ principal, permission, resource
                  AND apr.scope_id IN (
                    SELECT github_id FROM repositories WHERE github_id = $5
                  ))
-              )`,
+              )${authorityLockClause}`,
       [
         principal.principalId,
         permission,
@@ -109,7 +149,7 @@ export async function authorizeWithPersistence({ principal, permission, resource
     );
 
     if (rows.length === 0) {
-      const scopeRows = await db.query(
+      const scopeRows = await queryable.query(
         `SELECT 1 FROM gitwire_auth.auth_principal_roles apr
           JOIN gitwire_auth.auth_role_permissions arp ON arp.role_id = apr.role_id
          WHERE apr.principal_id = $1 AND arp.permission = $2
@@ -174,6 +214,8 @@ async function denyAndLog(code, principal, permission, resource, assignmentId, s
  * @param {string} opts.permission
  * @param {object} opts.resource
  * @param {"observe"|"enforced"} [opts.mode]
+ * @param {{query: Function}} [opts.queryable]
+ * @param {boolean} [opts.lockAuthorityRows]
  * @returns {Promise<Readonly<{decision: Readonly<AuthorizationDecision>, persisted: boolean, mode: string, blocked: boolean}>>}
  */
 export async function authorizeControlled({
@@ -181,9 +223,18 @@ export async function authorizeControlled({
   permission,
   resource,
   mode = AuthorizationMode.OBSERVE,
+  queryable = db,
+  lockAuthorityRows = false,
 }) {
   const normalizedMode = normalizeAuthorizationMode(mode);
-  const result = await authorizeWithPersistence({ principal, permission, resource, observeMode: normalizedMode === AuthorizationMode.OBSERVE });
+  const result = await authorizeWithPersistence({
+    principal,
+    permission,
+    resource,
+    observeMode: normalizedMode === AuthorizationMode.OBSERVE,
+    queryable,
+    lockAuthorityRows,
+  });
   return createAuthorizationOutcome({ ...result, mode: normalizedMode });
 }
 

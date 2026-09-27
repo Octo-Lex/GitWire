@@ -18,6 +18,18 @@ const service = readFileSync(
   path.join(repoRoot, "packages/web/src/services/policyPromotionService.js"),
   "utf8",
 );
+const authorize = readFileSync(
+  path.join(repoRoot, "packages/web/src/services/auth/authorize.js"),
+  "utf8",
+);
+const principalResolver = readFileSync(
+  path.join(repoRoot, "packages/web/src/services/auth/principalResolver.js"),
+  "utf8",
+);
+const promotionWorkflow = readFileSync(
+  path.join(repoRoot, ".github/workflows/w2-policy-promotion-db.yml"),
+  "utf8",
+);
 
 describe("W2-02 review hardening", () => {
   test("database binds each promotion to the rollout plan owned by its change request", () => {
@@ -49,5 +61,45 @@ describe("W2-02 review hardening", () => {
     const approvalEnd = migration45.indexOf("CREATE TRIGGER trg_policy_approvals_prepare_insert");
     const approvalSection = migration45.slice(approvalStart, approvalEnd);
     expect(approvalSection).toMatch(/FROM policy_change_requests[\s\S]*FOR UPDATE/);
+  });
+
+  test("central authorization can hold current authority rows through an effect transaction", () => {
+    expect(principalResolver).toContain('lockAuthorityRows ? " FOR SHARE" : ""');
+    expect(authorize).toContain('lockAuthorityRows ? " FOR SHARE OF apr, arp" : ""');
+    expect(authorize).toContain("authority_lock_requires_transaction_queryable");
+    expect(authorize).toMatch(/getPrincipalById\(principal\.principalId, \{[\s\S]*queryable,[\s\S]*lockAuthorityRows/);
+  });
+
+  test("promotion authorizes promoter and approver under the repository mutex and same transaction", () => {
+    const txStart = service.indexOf("const result = await db.transaction");
+    const repositoryLock = service.indexOf("await lockActivePolicyState", txStart);
+    const promoterAuthorization = service.indexOf('label: "promoter"', txStart);
+    const envelopeRead = service.indexOf("const envelope = await loadPromotionEnvelope", txStart);
+
+    expect(txStart).toBeGreaterThanOrEqual(0);
+    expect(repositoryLock).toBeGreaterThan(txStart);
+    expect(promoterAuthorization).toBeGreaterThan(repositoryLock);
+    expect(envelopeRead).toBeGreaterThan(promoterAuthorization);
+
+    const transactionSection = service.slice(txStart);
+    expect(transactionSection).toMatch(
+      /label: "promoter",[\s\S]*queryable: tx,[\s\S]*lockAuthorityRows: true/,
+    );
+    expect(transactionSection).toMatch(
+      /selectCurrentAuthorizedApproval\(\{[\s\S]*queryable: tx,[\s\S]*lockAuthorityRows: true/,
+    );
+  });
+
+  test("dedicated Postgres evidence reruns when production promotion dependencies change", () => {
+    for (const watchedPath of [
+      "packages/web/src/services/policyPromotionService.js",
+      "packages/web/src/routes/rollouts.js",
+      "packages/web/src/services/auth/authorize.js",
+      "packages/web/src/services/auth/principalResolver.js",
+      "packages/web/src/services/configService.js",
+      "packages/web/src/services/policyRolloutService.js",
+    ]) {
+      expect(promotionWorkflow).toContain(`- '${watchedPath}'`);
+    }
   });
 });
