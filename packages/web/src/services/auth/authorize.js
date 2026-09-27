@@ -46,6 +46,9 @@ export { AuthorizationMode };
  * In lock mode authorization decisions are written through that same transaction
  * client, so protected state/allow evidence and denial evidence never require a
  * second pool checkout while the authority-holding transaction is open.
+ * Assignment expiry in lock mode is evaluated against PostgreSQL wall-clock
+ * time rather than transaction-start time, so time spent waiting on a caller's
+ * serialization lock cannot keep an already-expired assignment authoritative.
  * Non-lock denials retain the established independent best-effort logging path.
  *
  * @param {object} opts
@@ -123,6 +126,7 @@ export async function authorizeWithPersistence({
   //   repository → must match resource.installationId + repositoryId
   try {
     const authorityLockClause = lockAuthorityRows ? " FOR SHARE OF apr, arp" : "";
+    const assignmentExpiryClock = lockAuthorityRows ? "clock_timestamp()" : "now()";
     const { rows } = await queryable.query(
       `SELECT apr.id AS assignment_id, apr.scope_type, apr.scope_id,
               arp.permission
@@ -131,7 +135,7 @@ export async function authorizeWithPersistence({
            ON arp.role_id = apr.role_id
         WHERE apr.principal_id = $1
           AND apr.revoked_at IS NULL
-          AND (apr.expires_at IS NULL OR apr.expires_at > now())
+          AND (apr.expires_at IS NULL OR apr.expires_at > ${assignmentExpiryClock})
           AND arp.permission = $2
           AND (
                 apr.scope_type = 'fleet'
@@ -157,6 +161,7 @@ export async function authorizeWithPersistence({
           JOIN gitwire_auth.auth_role_permissions arp ON arp.role_id = apr.role_id
          WHERE apr.principal_id = $1 AND arp.permission = $2
            AND apr.revoked_at IS NULL
+           AND (apr.expires_at IS NULL OR apr.expires_at > ${assignmentExpiryClock})
          LIMIT 1`,
         [principal.principalId, permission]
       );

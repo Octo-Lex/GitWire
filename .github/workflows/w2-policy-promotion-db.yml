@@ -17,6 +17,7 @@ on:
       - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
       - 'packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs'
+      - 'packages/web/tests/integration/w2-02-auth-expiry-wall-clock-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-denial-evidence-db.mjs'
       - 'packages/web/tests/unit/w2-02-review-hardening-regressions.test.js'
       - 'packages/web/tests/unit/w2-02-denial-evidence.test.js'
@@ -36,6 +37,7 @@ on:
       - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
       - 'packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs'
+      - 'packages/web/tests/integration/w2-02-auth-expiry-wall-clock-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-denial-evidence-db.mjs'
       - 'packages/web/tests/unit/w2-02-review-hardening-regressions.test.js'
       - 'packages/web/tests/unit/w2-02-denial-evidence.test.js'
@@ -91,6 +93,8 @@ jobs:
         run: node packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs
       - name: Prove W2-02 authorization pool saturation safety
         run: node packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs
+      - name: Prove W2-02 locked authorization wall-clock expiry
+        run: node packages/web/tests/integration/w2-02-auth-expiry-wall-clock-db.mjs
       - name: Prove W2-02 denial evidence durability
         run: node packages/web/tests/integration/w2-02-policy-promotion-denial-evidence-db.mjs
       - name: Prove W2-02 review hardening invariants
