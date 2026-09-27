@@ -269,7 +269,12 @@ describe("W2-02 governed promotion", () => {
       rolloutPlanId: 42,
       principal: promoterPrincipal,
     })).rejects.toMatchObject({ reason: "promoter_authorization_denied" });
-    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    const statements = mockTxQuery.mock.calls.map(([sql]) => sql.replace(/\s+/g, " ").trim());
+    expect(statements.some((q) => q.startsWith("INSERT INTO policy_promotion_records"))).toBe(false);
+    expect(statements.some((q) => q.startsWith("INSERT INTO repo_config"))).toBe(false);
+    expect(statements.some((q) => q.startsWith("INSERT INTO active_policy_bindings"))).toBe(false);
+    expect(statements.some((q) => q.startsWith("UPDATE policy_rollout_plans"))).toBe(false);
   });
 
   test("requires an immutable W2-01 authority envelope", async () => {
