@@ -43,7 +43,10 @@ export { AuthorizationMode };
  * shared locks on the principal, matching assignment, and role-permission rows;
  * PostgreSQL holds those locks until the caller's transaction completes. This
  * serializes disable/revoke/permission-removal against the protected effect.
- * Decision evidence remains independently durable through logDecision().
+ * In lock mode the positive decision record is written through that same
+ * transaction client, so successful effect state and enforced authorization
+ * evidence commit together without borrowing a second connection from the pool.
+ * Denials retain the established independent best-effort logging path.
  *
  * @param {object} opts
  * @param {object} opts.principal - AuthContext (the resolved caller)
@@ -176,7 +179,12 @@ export async function authorizeWithPersistence({
       authenticationMethod: principal.authenticationMethod,
       detail: { matchCount: rows.length },
     });
-    const persisted = await logDecision(decision, principal, { observeMode });
+    const persisted = await logDecision(
+      decision,
+      principal,
+      { observeMode },
+      lockAuthorityRows ? queryable : db,
+    );
     return { decision, persisted };
   } catch (err) {
     logger.warn({ err, principalId: principal.principalId, permission }, "authorize: evaluation failed");

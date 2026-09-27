@@ -9,12 +9,14 @@ on:
       - 'packages/web/src/services/policyPromotionService.js'
       - 'packages/web/src/routes/rollouts.js'
       - 'packages/web/src/services/auth/authorize.js'
+      - 'packages/web/src/services/auth/decisionLog.js'
       - 'packages/web/src/services/auth/principalResolver.js'
       - 'packages/web/src/services/configService.js'
       - 'packages/web/src/services/policyRolloutService.js'
       - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
+      - 'packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs'
       - 'packages/web/tests/unit/w2-02-review-hardening-regressions.test.js'
       - '.github/workflows/w2-policy-promotion-db.yml'
   pull_request:
@@ -24,12 +26,14 @@ on:
       - 'packages/web/src/services/policyPromotionService.js'
       - 'packages/web/src/routes/rollouts.js'
       - 'packages/web/src/services/auth/authorize.js'
+      - 'packages/web/src/services/auth/decisionLog.js'
       - 'packages/web/src/services/auth/principalResolver.js'
       - 'packages/web/src/services/configService.js'
       - 'packages/web/src/services/policyRolloutService.js'
       - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
+      - 'packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs'
       - 'packages/web/tests/unit/w2-02-review-hardening-regressions.test.js'
       - '.github/workflows/w2-policy-promotion-db.yml'
 
@@ -81,5 +85,7 @@ jobs:
         run: node packages/web/tests/integration/w2-02-policy-promotion-db.mjs
       - name: Prove W2-02 service path against Postgres
         run: node packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs
+      - name: Prove W2-02 authorization pool saturation safety
+        run: node packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs
       - name: Prove W2-02 review hardening invariants
         run: node packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs
