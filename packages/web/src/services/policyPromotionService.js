@@ -119,6 +119,8 @@ async function selectCurrentAuthorizedApproval({
     throw new PolicyPromotionError("approved_authority_record_missing_or_expired");
   }
 
+  let lastAuthorizationDenial = null;
+
   for (const approval of candidates) {
     if (String(approval.approver_principal_id) === String(authorPrincipalId)) {
       continue;
@@ -146,8 +148,24 @@ async function selectCurrentAuthorizedApproval({
       return approval;
     } catch (err) {
       if (!(err instanceof PolicyPromotionError)) throw err;
+      if (err.reason === "approver_authorization_denied") {
+        lastAuthorizationDenial = err;
+        continue;
+      }
+      if (err.reason === "approver_authorization_not_persisted") {
+        throw err;
+      }
       if (!err.reason.startsWith("approver_authorization_")) throw err;
     }
+  }
+
+  if (lastAuthorizationDenial) {
+    return {
+      authorizationError: new PolicyPromotionError(
+        "no_currently_authorized_separated_approval",
+        { code: lastAuthorizationDenial.detail?.code ?? "unknown" },
+      ),
+    };
   }
 
   throw new PolicyPromotionError("no_currently_authorized_separated_approval");
@@ -306,13 +324,23 @@ export async function promotePolicyRollout({
     // Shared locks on the principal/assignment/permission authority rows remain
     // held through commit, so disable/revoke/permission-removal cannot race a
     // positive decision and become effective before this promotion commits.
-    await requirePersistedEnforcedAuthorization({
-      principal,
-      resource,
-      label: "promoter",
-      queryable: tx,
-      lockAuthorityRows: true,
-    });
+    // Expected persisted denials return a sentinel so their enforced decision
+    // evidence commits before the API error is raised outside the transaction.
+    try {
+      await requirePersistedEnforcedAuthorization({
+        principal,
+        resource,
+        label: "promoter",
+        queryable: tx,
+        lockAuthorityRows: true,
+      });
+    } catch (err) {
+      if (err instanceof PolicyPromotionError
+          && err.reason === "promoter_authorization_denied") {
+        return { authorizationError: err };
+      }
+      throw err;
+    }
 
     // Read under the repository lock so rollout state/base checks cannot be
     // separated from the write by a concurrent repository-scoped promotion.
@@ -336,7 +364,7 @@ export async function promotePolicyRollout({
     const { evidenceRows, approvals } =
       await loadAuthorityEvidenceAndApprovals(tx, envelope.change_request_id);
 
-    const approval = await selectCurrentAuthorizedApproval({
+    const approvalSelection = await selectCurrentAuthorizedApproval({
       approvals,
       evidenceRows,
       resource,
@@ -345,6 +373,10 @@ export async function promotePolicyRollout({
       queryable: tx,
       lockAuthorityRows: true,
     });
+    if (approvalSelection?.authorizationError) {
+      return approvalSelection;
+    }
+    const approval = approvalSelection;
 
     const { rows: [promotion] } = await tx.query(
       `INSERT INTO policy_promotion_records (
@@ -463,6 +495,10 @@ export async function promotePolicyRollout({
 
     return { promotion, binding, rollout, repoFullName: repo.full_name };
   });
+
+  if (result.authorizationError) {
+    throw result.authorizationError;
+  }
 
   await invalidateConfigCache(result.repoFullName);
 
