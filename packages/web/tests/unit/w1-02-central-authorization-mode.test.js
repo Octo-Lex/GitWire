@@ -130,6 +130,7 @@ describe("W1-02 central authorization mode", () => {
       result.decision,
       principal,
       { observeMode: false },
+      { query: mockQuery },
     );
   });
 
