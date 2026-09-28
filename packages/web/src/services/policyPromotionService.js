@@ -589,6 +589,15 @@ export async function promotePolicyRollout({
     }
 
     return { promotion, binding, rollout, repoFullName: repo.full_name };
+  }).catch((err) => {
+    // The storage trigger is the final wall-clock approval-expiry backstop. A
+    // trigger exception aborts the transaction before any promotion effect can
+    // commit; translate only that exact PostgreSQL failure into the established
+    // stable domain contract instead of exposing it as an HTTP 500.
+    if (err?.code === "P0001" && err?.message === "promotion approval is expired") {
+      throw new PolicyPromotionError("approved_authority_record_missing_or_expired");
+    }
+    throw err;
   });
 
   if (result.authorizationError) {
