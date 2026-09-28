@@ -330,8 +330,9 @@ CREATE TRIGGER trg_repo_config_block_governed_legacy_rollback
 -- begins. Legacy promotion remains untouched pending W2-03 conversion.
 --
 -- Preserve the legacy trigger semantics for non-governed transitions, but when
--- an approved rollout is entering promoted state through W2-02, copy the exact
--- immutable promotion time rather than transaction-start NOW().
+-- an approved rollout is entering promoted state through W2-02, canonicalize
+-- both rollout audit clocks from the exact immutable promotion timestamp rather
+-- than accepting the millisecond precision of an application round-trip.
 CREATE OR REPLACE FUNCTION update_rollout_updated_at()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -350,6 +351,7 @@ BEGIN
        AND repo_id = NEW.repo_id;
 
     IF FOUND THEN
+      NEW.promoted_at := v_promotion_time;
       NEW.updated_at := v_promotion_time;
       RETURN NEW;
     END IF;

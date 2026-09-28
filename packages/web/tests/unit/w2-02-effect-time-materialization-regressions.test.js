@@ -12,9 +12,10 @@ const migration = readFileSync(
 );
 
 describe("W2-02 promotion effect-time materialization", () => {
-  test("rollout updated_at inherits immutable promotion time only for governed promotion", () => {
+  test("rollout audit clocks inherit immutable promotion time only for governed promotion", () => {
     expect(migration).toContain("OLD.status IS DISTINCT FROM 'promoted'");
     expect(migration).toContain("FROM policy_promotion_records");
+    expect(migration).toContain("NEW.promoted_at := v_promotion_time");
     expect(migration).toContain("NEW.updated_at := v_promotion_time");
     expect(migration).toContain("NEW.updated_at := NOW()");
   });
