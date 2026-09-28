@@ -288,6 +288,59 @@ function changedByToken(principalId, rolloutPlanId) {
   return `policy-promotion:${principalId}:${rolloutPlanId}`;
 }
 
+async function insertPromotionUnderPromoterGrant({
+  tx,
+  envelope,
+  rolloutPlanId,
+  active,
+  approval,
+  principal,
+  reason,
+  promoterAssignmentId,
+}) {
+  // The initial authorization locks the matched assignment, role, permission,
+  // and principal rows against mutation through commit. Time still advances,
+  // so the promotion write itself is conditioned on that authoritative
+  // assignment remaining unexpired at PostgreSQL wall-clock effect time.
+  const { rows: [promotion] } = await tx.query(
+    `INSERT INTO policy_promotion_records (
+       repo_id,
+       rollout_plan_id,
+       change_request_id,
+       policy_version_id,
+       previous_policy_version_id,
+       approval_record_id,
+       author_principal_id,
+       approver_principal_id,
+       promoter_principal_id,
+       evidence_set_hash,
+       reason
+     )
+     SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+       FROM gitwire_auth.auth_principal_roles apr
+      WHERE apr.id = $12
+        AND apr.principal_id = $9
+        AND apr.revoked_at IS NULL
+        AND (apr.expires_at IS NULL OR apr.expires_at > clock_timestamp())
+     RETURNING *`,
+    [
+      envelope.repo_id,
+      rolloutPlanId,
+      envelope.change_request_id,
+      envelope.policy_version_id,
+      active?.policy_version_id ?? null,
+      approval.id,
+      envelope.author_principal_id,
+      approval.approver_principal_id,
+      principal.principalId,
+      approval.evidence_set_hash,
+      reason,
+      promoterAssignmentId ?? null,
+    ],
+  );
+  return promotion ?? null;
+}
+
 /**
  * Atomically promote an approved immutable W2-01 policy version to the
  * repository's governed live-policy binding and repo_config materialization.
@@ -326,8 +379,9 @@ export async function promotePolicyRollout({
     // positive decision and become effective before this promotion commits.
     // Expected persisted denials return a sentinel so their enforced decision
     // evidence commits before the API error is raised outside the transaction.
+    let promoterAuthorization;
     try {
-      await requirePersistedEnforcedAuthorization({
+      promoterAuthorization = await requirePersistedEnforcedAuthorization({
         principal,
         resource,
         label: "promoter",
@@ -378,36 +432,53 @@ export async function promotePolicyRollout({
     }
     const approval = approvalSelection;
 
-    const { rows: [promotion] } = await tx.query(
-      `INSERT INTO policy_promotion_records (
-         repo_id,
-         rollout_plan_id,
-         change_request_id,
-         policy_version_id,
-         previous_policy_version_id,
-         approval_record_id,
-         author_principal_id,
-         approver_principal_id,
-         promoter_principal_id,
-         evidence_set_hash,
-         reason
-       )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       RETURNING *`,
-      [
-        envelope.repo_id,
+    let promotion = await insertPromotionUnderPromoterGrant({
+      tx,
+      envelope,
+      rolloutPlanId,
+      active,
+      approval,
+      principal,
+      reason,
+      promoterAssignmentId: promoterAuthorization.decision?.matchedAssignmentId,
+    });
+
+    if (!promotion) {
+      // The matched grant can expire while repository/envelope/approval work is
+      // in flight even though its row is locked. Reauthorize against the live
+      // wall clock so a still-current alternate grant may be selected; a
+      // persisted denial is returned as a sentinel so its evidence commits.
+      let refreshedPromoterAuthorization;
+      try {
+        refreshedPromoterAuthorization = await requirePersistedEnforcedAuthorization({
+          principal,
+          resource,
+          label: "promoter",
+          queryable: tx,
+          lockAuthorityRows: true,
+        });
+      } catch (err) {
+        if (err instanceof PolicyPromotionError
+            && err.reason === "promoter_authorization_denied") {
+          return { authorizationError: err };
+        }
+        throw err;
+      }
+
+      promotion = await insertPromotionUnderPromoterGrant({
+        tx,
+        envelope,
         rolloutPlanId,
-        envelope.change_request_id,
-        envelope.policy_version_id,
-        active?.policy_version_id ?? null,
-        approval.id,
-        envelope.author_principal_id,
-        approval.approver_principal_id,
-        principal.principalId,
-        approval.evidence_set_hash,
+        active,
+        approval,
+        principal,
         reason,
-      ],
-    );
+        promoterAssignmentId: refreshedPromoterAuthorization.decision?.matchedAssignmentId,
+      });
+      if (!promotion) {
+        throw new PolicyPromotionError("promoter_authorization_expired_before_effect");
+      }
+    }
 
     const actorToken = changedByToken(principal.principalId, rolloutPlanId);
     const previousConfig = repoConfig?.config ?? null;

@@ -1,9 +1,10 @@
 // W2-02 promotion authority-race proof against real PostgreSQL.
 //
-// Proves two exact-head review invariants through the production promotion
-// service: retired roles cannot authorize promotion, and approval expiry is
+// Proves three exact-head review invariants through the production promotion
+// service: retired roles cannot authorize promotion, approval expiry is
 // evaluated against wall-clock time after repository serialization rather than
-// PostgreSQL's transaction-start timestamp.
+// PostgreSQL's transaction-start timestamp, and an expiring promoter grant is
+// revalidated at the protected promotion write after intervening authority work.
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -317,7 +318,150 @@ try {
   assert.equal(expiryState.active_binding_count, 0);
   assert.deepEqual(expiryState.materialized_config, oldPolicy);
 
-  console.log("W2-02 promotion retired-role + approval-expiry race safety: PASS");
+  // An assignment row lock prevents revocation/mutation but cannot stop its
+  // expires_at boundary from passing. Hold the approver principal exclusively
+  // so the service first authorizes and locks the promoter grant, then waits in
+  // later authority work until that promoter grant is wall-clock expired.
+  const promoterExpiryEnvelope = await createAuthorityEnvelope({
+    suffix: "promoter-expiry",
+  });
+  const { rows: [promoterAssignment] } = await client.query(
+    `UPDATE gitwire_auth.auth_principal_roles
+        SET expires_at = clock_timestamp() + interval '3 seconds'
+      WHERE principal_id = $1
+        AND role_id = $2
+        AND scope_type = 'repository'
+        AND scope_id = $3
+      RETURNING id, expires_at`,
+    [promoterId, roleId, repositoryId],
+  );
+  assert.ok(promoterAssignment, "promoter assignment must exist for expiry proof");
+
+  await blocker.query("BEGIN");
+  let promoterBlockerOpen = true;
+  await blocker.query(
+    `SELECT id
+       FROM gitwire_auth.auth_principals
+      WHERE id = $1
+      FOR UPDATE`,
+    [approverId],
+  );
+
+  const promoterExpiryOriginalTransaction = runtime.db.transaction;
+  let resolvePromoterAuthorized;
+  const promoterAuthorized = new Promise((resolve) => {
+    resolvePromoterAuthorized = resolve;
+  });
+
+  runtime.db.transaction = async (fn) => promoterExpiryOriginalTransaction.call(
+    runtime.db,
+    async (tx) => {
+      const observedTx = {
+        query: async (...args) => {
+          const result = await tx.query(...args);
+          const [sql, params = []] = args;
+          const q = typeof sql === "string" ? sql.replace(/\s+/g, " ").trim() : "";
+          if (
+            q.includes("FROM gitwire_auth.auth_principal_roles apr")
+            && q.includes("FOR SHARE OF apr, ar, arp")
+            && String(params[0]) === String(promoterId)
+            && result.rows.length > 0
+          ) {
+            resolvePromoterAuthorized({
+              assignmentId: result.rows[0].assignment_id,
+              observedAt: Date.now(),
+            });
+          }
+          return result;
+        },
+      };
+      return fn(observedTx);
+    },
+  );
+
+  try {
+    const rejection = assert.rejects(
+      promotePolicyRollout({
+        rolloutPlanId: Number(promoterExpiryEnvelope.rollout.id),
+        principal: {
+          principalId: promoterId,
+          authenticationMethod: "api_key",
+        },
+        reason: "promoter-expiry-proof",
+      }),
+      (err) => err instanceof PolicyPromotionError
+        && err.reason === "promoter_authorization_denied"
+        && err.detail?.code === "permission_missing",
+      "service must reject a promoter grant that expires before the protected write",
+    );
+
+    const observedAuthorization = await Promise.race([
+      promoterAuthorized,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error("promoter authorization was not observed before timeout")),
+        1500,
+      )),
+    ]);
+    assert.equal(
+      String(observedAuthorization.assignmentId),
+      String(promoterAssignment.id),
+      "initial promotion authorization must use the expiring promoter assignment",
+    );
+    assert.ok(
+      observedAuthorization.observedAt
+        < new Date(promoterAssignment.expires_at).getTime(),
+      "initial promoter authorization must complete before assignment expiry",
+    );
+
+    const waitMs = Math.max(
+      0,
+      new Date(promoterAssignment.expires_at).getTime() - Date.now() + 300,
+    );
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+    const { rows: [afterPromoterWait] } = await blocker.query(
+      `SELECT clock_timestamp() AS wall_time`,
+    );
+    assert.ok(
+      new Date(afterPromoterWait.wall_time).getTime()
+        > new Date(promoterAssignment.expires_at).getTime(),
+      "wall clock must be past promoter grant expiry before approver work resumes",
+    );
+
+    await blocker.query("COMMIT");
+    promoterBlockerOpen = false;
+    await rejection;
+  } finally {
+    runtime.db.transaction = promoterExpiryOriginalTransaction;
+    if (promoterBlockerOpen) {
+      await blocker.query("ROLLBACK");
+    }
+  }
+
+  const { rows: [promoterExpiryState] } = await client.query(
+    `SELECT p.status,
+            (SELECT count(*)::int FROM policy_promotion_records pr
+              WHERE pr.rollout_plan_id = p.id) AS promotion_count,
+            (SELECT count(*)::int FROM active_policy_bindings apb
+              WHERE apb.repo_id = p.repo_id) AS active_binding_count,
+            (SELECT config FROM repo_config rc WHERE rc.repo_id = p.repo_id) AS materialized_config
+       FROM policy_rollout_plans p
+      WHERE p.id = $1`,
+    [promoterExpiryEnvelope.rollout.id],
+  );
+  assert.equal(promoterExpiryState.status, "approved");
+  assert.equal(promoterExpiryState.promotion_count, 0);
+  assert.equal(promoterExpiryState.active_binding_count, 0);
+  assert.deepEqual(promoterExpiryState.materialized_config, oldPolicy);
+
+  await client.query(
+    `UPDATE gitwire_auth.auth_principal_roles
+        SET expires_at = NULL
+      WHERE id = $1`,
+    [promoterAssignment.id],
+  );
+
+  console.log("W2-02 promotion retired-role + approval/promoter-expiry race safety: PASS");
 } finally {
   await blocker.end();
   await client.end();
