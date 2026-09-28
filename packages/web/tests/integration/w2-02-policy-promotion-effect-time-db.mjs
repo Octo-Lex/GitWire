@@ -3,7 +3,8 @@
 // Proves that an approver grant cannot authorize a promotion after its matched
 // assignment expires, and that an immutable promotion delayed on repository
 // serialization is timestamped at wall-clock effect time rather than at the
-// transaction-start timestamp.
+// transaction-start timestamp. The same immutable effect time must also stamp
+// committed live-policy materialization and rollout/config audit surfaces.
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -346,24 +347,54 @@ try {
   const { rows: [auditTimes] } = await client.query(
     `SELECT pr.promoted_at,
             apb.activated_at,
-            p.promoted_at AS rollout_promoted_at
+            p.promoted_at AS rollout_promoted_at,
+            p.updated_at AS rollout_updated_at,
+            rc.updated_at AS repo_config_updated_at,
+            ch.changed_at AS config_history_changed_at
        FROM policy_promotion_records pr
        JOIN active_policy_bindings apb ON apb.promotion_record_id = pr.id
        JOIN policy_rollout_plans p ON p.id = pr.rollout_plan_id
+       JOIN repo_config rc ON rc.repo_id = pr.repo_id
+       JOIN LATERAL (
+         SELECT changed_at
+           FROM config_history
+          WHERE repo_id = pr.repo_id
+            AND changed_by = (
+              'policy-promotion:' || pr.promoter_principal_id::text || ':' || pr.rollout_plan_id::text
+            )
+          ORDER BY id DESC
+          LIMIT 1
+       ) ch ON TRUE
       WHERE pr.rollout_plan_id = $1`,
     [timestampEnvelope.rollout.id],
   );
   assert.ok(auditTimes);
+  const immutableEffectTime = new Date(auditTimes.promoted_at).getTime();
   assert.equal(
     new Date(auditTimes.activated_at).getTime(),
-    new Date(auditTimes.promoted_at).getTime(),
+    immutableEffectTime,
   );
   assert.equal(
     new Date(auditTimes.rollout_promoted_at).getTime(),
-    new Date(auditTimes.promoted_at).getTime(),
+    immutableEffectTime,
+  );
+  assert.equal(
+    new Date(auditTimes.rollout_updated_at).getTime(),
+    immutableEffectTime,
+    "rollout updated_at must inherit immutable promotion effect time",
+  );
+  assert.equal(
+    new Date(auditTimes.repo_config_updated_at).getTime(),
+    immutableEffectTime,
+    "repo_config.updated_at must inherit immutable promotion effect time",
+  );
+  assert.equal(
+    new Date(auditTimes.config_history_changed_at).getTime(),
+    immutableEffectTime,
+    "config_history.changed_at must inherit immutable promotion effect time",
   );
 
-  console.log("W2-02 approver effect-time authority + promotion wall-clock audit time: PASS");
+  console.log("W2-02 approver effect-time authority + committed promotion audit clocks: PASS");
 } finally {
   await blocker.end();
   await client.end();
