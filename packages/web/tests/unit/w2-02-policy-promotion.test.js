@@ -388,7 +388,7 @@ describe("W2-02 governed promotion", () => {
     const approvalQuery = mockTxQuery.mock.calls
       .map(([sql]) => sql.replace(/\s+/g, " ").trim())
       .find((q) => q.includes("FROM policy_approval_records"));
-    expect(approvalQuery).toContain("expires_at > NOW()");
+    expect(approvalQuery).toContain("expires_at > clock_timestamp()");
   });
 
   test("live materialization, promotion record, binding, rollout state and history share one transaction", async () => {
