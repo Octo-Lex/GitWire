@@ -49,7 +49,7 @@ CREATE TABLE policy_promotion_records (
   promoter_principal_id      UUID NOT NULL REFERENCES gitwire_auth.auth_principals(id) ON DELETE RESTRICT,
   evidence_set_hash          TEXT NOT NULL,
   reason                     TEXT,
-  promoted_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  promoted_at                TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   CONSTRAINT uq_policy_promotion_change_request UNIQUE (change_request_id),

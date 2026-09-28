@@ -17,6 +17,7 @@ on:
       - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-authority-races-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-effect-time-db.mjs'
       - 'packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs'
       - 'packages/web/tests/integration/w2-02-auth-expiry-wall-clock-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-denial-evidence-db.mjs'
@@ -38,6 +39,7 @@ on:
       - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-authority-races-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-effect-time-db.mjs'
       - 'packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs'
       - 'packages/web/tests/integration/w2-02-auth-expiry-wall-clock-db.mjs'
       - 'packages/web/tests/integration/w2-02-policy-promotion-denial-evidence-db.mjs'
@@ -95,6 +97,8 @@ jobs:
         run: node packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs
       - name: Prove W2-02 promotion authority race safety
         run: node packages/web/tests/integration/w2-02-policy-promotion-authority-races-db.mjs
+      - name: Prove W2-02 effect-time authority and audit clock
+        run: node packages/web/tests/integration/w2-02-policy-promotion-effect-time-db.mjs
       - name: Prove W2-02 authorization pool saturation safety
         run: node packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs
       - name: Prove W2-02 locked authorization wall-clock expiry

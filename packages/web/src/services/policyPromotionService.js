@@ -135,7 +135,7 @@ async function selectCurrentAuthorizedApproval({
     }
 
     try {
-      await requirePersistedEnforcedAuthorization({
+      const authorization = await requirePersistedEnforcedAuthorization({
         principal: {
           principalId: approval.approver_principal_id,
           authenticationMethod: null,
@@ -145,7 +145,7 @@ async function selectCurrentAuthorizedApproval({
         queryable,
         lockAuthorityRows,
       });
-      return approval;
+      return { approval, authorization };
     } catch (err) {
       if (!(err instanceof PolicyPromotionError)) throw err;
       if (err.reason === "approver_authorization_denied") {
@@ -297,11 +297,12 @@ async function insertPromotionUnderPromoterGrant({
   principal,
   reason,
   promoterAssignmentId,
+  approverAssignmentId,
 }) {
-  // The initial authorization locks the matched assignment, role, permission,
-  // and principal rows against mutation through commit. Time still advances,
-  // so the promotion write itself is conditioned on that authoritative
-  // assignment remaining unexpired at PostgreSQL wall-clock effect time.
+  // Persisted enforced authorization locks both matched assignment/role/
+  // permission/principal authority chains against mutation through commit.
+  // Wall-clock expiry still advances, so the protected immutable write is
+  // conditioned on both exact matched assignments remaining current at effect.
   const { rows: [promotion] } = await tx.query(
     `INSERT INTO policy_promotion_records (
        repo_id,
@@ -317,11 +318,16 @@ async function insertPromotionUnderPromoterGrant({
        reason
      )
      SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
-       FROM gitwire_auth.auth_principal_roles apr
-      WHERE apr.id = $12
-        AND apr.principal_id = $9
-        AND apr.revoked_at IS NULL
-        AND (apr.expires_at IS NULL OR apr.expires_at > clock_timestamp())
+       FROM gitwire_auth.auth_principal_roles promoter_apr
+       JOIN gitwire_auth.auth_principal_roles approver_apr
+         ON approver_apr.id = $13
+      WHERE promoter_apr.id = $12
+        AND promoter_apr.principal_id = $9
+        AND promoter_apr.revoked_at IS NULL
+        AND (promoter_apr.expires_at IS NULL OR promoter_apr.expires_at > clock_timestamp())
+        AND approver_apr.principal_id = $8
+        AND approver_apr.revoked_at IS NULL
+        AND (approver_apr.expires_at IS NULL OR approver_apr.expires_at > clock_timestamp())
      RETURNING *`,
     [
       envelope.repo_id,
@@ -336,6 +342,7 @@ async function insertPromotionUnderPromoterGrant({
       approval.evidence_set_hash,
       reason,
       promoterAssignmentId ?? null,
+      approverAssignmentId ?? null,
     ],
   );
   return promotion ?? null;
@@ -415,10 +422,10 @@ export async function promotePolicyRollout({
       throw new PolicyPromotionError("promoter_must_differ_from_author");
     }
 
-    const { evidenceRows, approvals } =
+    let { evidenceRows, approvals } =
       await loadAuthorityEvidenceAndApprovals(tx, envelope.change_request_id);
 
-    const approvalSelection = await selectCurrentAuthorizedApproval({
+    let approvalSelection = await selectCurrentAuthorizedApproval({
       approvals,
       evidenceRows,
       resource,
@@ -430,7 +437,7 @@ export async function promotePolicyRollout({
     if (approvalSelection?.authorizationError) {
       return approvalSelection;
     }
-    const approval = approvalSelection;
+    let { approval, authorization: approverAuthorization } = approvalSelection;
 
     let promotion = await insertPromotionUnderPromoterGrant({
       tx,
@@ -441,16 +448,16 @@ export async function promotePolicyRollout({
       principal,
       reason,
       promoterAssignmentId: promoterAuthorization.decision?.matchedAssignmentId,
+      approverAssignmentId: approverAuthorization.decision?.matchedAssignmentId,
     });
 
     if (!promotion) {
-      // The matched grant can expire while repository/envelope/approval work is
-      // in flight even though its row is locked. Reauthorize against the live
-      // wall clock so a still-current alternate grant may be selected; a
-      // persisted denial is returned as a sentinel so its evidence commits.
-      let refreshedPromoterAuthorization;
+      // A matched assignment can expire while immutable-envelope/evidence/
+      // approval work is in flight even though authority rows are locked.
+      // Reauthorize both sides against live wall clock, allowing alternate
+      // current grants/approvals while preserving persisted denial evidence.
       try {
-        refreshedPromoterAuthorization = await requirePersistedEnforcedAuthorization({
+        promoterAuthorization = await requirePersistedEnforcedAuthorization({
           principal,
           resource,
           label: "promoter",
@@ -465,6 +472,22 @@ export async function promotePolicyRollout({
         throw err;
       }
 
+      ({ evidenceRows, approvals } =
+        await loadAuthorityEvidenceAndApprovals(tx, envelope.change_request_id));
+      approvalSelection = await selectCurrentAuthorizedApproval({
+        approvals,
+        evidenceRows,
+        resource,
+        authorPrincipalId: envelope.author_principal_id,
+        promoterPrincipalId: principal.principalId,
+        queryable: tx,
+        lockAuthorityRows: true,
+      });
+      if (approvalSelection?.authorizationError) {
+        return approvalSelection;
+      }
+      ({ approval, authorization: approverAuthorization } = approvalSelection);
+
       promotion = await insertPromotionUnderPromoterGrant({
         tx,
         envelope,
@@ -473,10 +496,11 @@ export async function promotePolicyRollout({
         approval,
         principal,
         reason,
-        promoterAssignmentId: refreshedPromoterAuthorization.decision?.matchedAssignmentId,
+        promoterAssignmentId: promoterAuthorization.decision?.matchedAssignmentId,
+        approverAssignmentId: approverAuthorization.decision?.matchedAssignmentId,
       });
       if (!promotion) {
-        throw new PolicyPromotionError("promoter_authorization_expired_before_effect");
+        throw new PolicyPromotionError("promotion_authorization_expired_before_effect");
       }
     }
 

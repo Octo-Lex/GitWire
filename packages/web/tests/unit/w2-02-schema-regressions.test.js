@@ -43,6 +43,13 @@ describe("W2-02 storage contract", () => {
     expect(migration).toContain("promotion validation evidence is not explicitly valid");
   });
 
+  test("promotion event time uses wall clock and the active binding inherits it", () => {
+    expect(migration).toMatch(
+      /promoted_at\s+TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp\(\)/,
+    );
+    expect(migration).toContain("NEW.activated_at := v_promotion.promoted_at");
+  });
+
   test("repository row is the storage-level promotion serialization point", () => {
     expect(migration).toMatch(
       /FROM repositories\s+WHERE github_id = NEW\.repo_id\s+FOR UPDATE/s,
