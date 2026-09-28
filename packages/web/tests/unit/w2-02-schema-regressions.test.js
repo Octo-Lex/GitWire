@@ -72,16 +72,20 @@ describe("W2-02 service boundary", () => {
   });
 
   test("serializes on repository before the authority write and atomically materializes live policy", () => {
+    const promotionHelperAt = service.indexOf("async function insertPromotionUnderPromoterGrant");
+    const promotionSqlAt = service.indexOf("INSERT INTO policy_promotion_records", promotionHelperAt);
     const lockAt = service.indexOf("await lockActivePolicyState");
     const envelopeAt = service.indexOf("const envelope = await loadPromotionEnvelope", lockAt);
-    const promotionAt = service.indexOf("INSERT INTO policy_promotion_records");
-    const configAt = service.indexOf("INSERT INTO repo_config");
-    const bindingAt = service.indexOf("INSERT INTO active_policy_bindings");
-    const rolloutAt = service.indexOf("UPDATE policy_rollout_plans");
+    const promotionCallAt = service.indexOf("insertPromotionUnderPromoterGrant({", envelopeAt);
+    const configAt = service.indexOf("INSERT INTO repo_config", promotionCallAt);
+    const bindingAt = service.indexOf("INSERT INTO active_policy_bindings", configAt);
+    const rolloutAt = service.indexOf("UPDATE policy_rollout_plans", bindingAt);
+    expect(promotionHelperAt).toBeGreaterThan(0);
+    expect(promotionSqlAt).toBeGreaterThan(promotionHelperAt);
     expect(lockAt).toBeGreaterThan(0);
     expect(envelopeAt).toBeGreaterThan(lockAt);
-    expect(promotionAt).toBeGreaterThan(envelopeAt);
-    expect(configAt).toBeGreaterThan(promotionAt);
+    expect(promotionCallAt).toBeGreaterThan(envelopeAt);
+    expect(configAt).toBeGreaterThan(promotionCallAt);
     expect(bindingAt).toBeGreaterThan(configAt);
     expect(rolloutAt).toBeGreaterThan(bindingAt);
   });
