@@ -7,7 +7,7 @@ import path from "node:path";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../../..");
 const migration = readFileSync(
-  path.join(repoRoot, "packages/web/db/migrations/047_w2_policy_promotion_effect_time_materialization.sql"),
+  path.join(repoRoot, "packages/web/db/migrations/046_w2_policy_promotion.sql"),
   "utf8",
 );
 
