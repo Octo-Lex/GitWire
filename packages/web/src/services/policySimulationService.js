@@ -12,7 +12,7 @@ import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
 import { validateConfig } from "@gitwire/rules";
-import { resolveProposedConfig } from "./configService.js";
+import { resolveProposedConfig, isConfigSourceUnavailable } from "./configService.js";
 import { redactSecrets } from "../lib/redact.js";
 
 // Map decision_log source to pillar name
@@ -64,13 +64,18 @@ export async function simulatePolicy(params = {}) {
   try {
     proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
+    // An unreadable configuration source is an outage, not a verdict on
+    // the user's YAML; the two cases get distinct error surfaces.
+    const sourceOutage = isConfigSourceUnavailable(err);
     return {
       simulated_at: new Date().toISOString(),
       scope: { repo, from: fromDate, to: toDate, limit },
       policy: { valid: false, errors: [err.message] },
       summary: { events_considered: 0, would_act: 0, would_skip: 0, would_block: 0, dry_run: 0, unsupported: 0 },
       results: [],
-      error: "Invalid policy — cannot simulate",
+      error: sourceOutage
+        ? "Configuration sources currently unreadable — cannot simulate"
+        : "Invalid policy — cannot simulate",
     };
   }
 

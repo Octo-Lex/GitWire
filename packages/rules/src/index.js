@@ -1,5 +1,5 @@
 // @gitwire/rules — barrel export
-export { DEFAULT_CONFIG, CONFIG_SCHEMA_VERSION, validateConfig } from "./schema.js";
+export { DEFAULT_CONFIG, CONFIG_SCHEMA_VERSION, validateConfig, isDangerousConfigKey } from "./schema.js";
 export { parseConfig, mergeDeep } from "./parse.js";
 export {
   parseConfigLayer,

@@ -9,7 +9,7 @@
 
 import { logger } from "../lib/logger.js";
 import { validateConfig } from "@gitwire/rules";
-import { resolveProposedConfig } from "./configService.js";
+import { resolveProposedConfig, isConfigSourceUnavailable } from "./configService.js";
 import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { validatePolicy } from "./policyValidationService.js";
 
@@ -67,12 +67,17 @@ export async function recommendGuardrails(params = {}) {
   try {
     proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
+    // An unreadable configuration source is an outage, not a verdict on
+    // the user's YAML; the two cases get distinct error surfaces.
+    const sourceOutage = isConfigSourceUnavailable(err);
     return {
       generated_at: new Date().toISOString(),
       repo: repo || null,
       summary: { critical: 0, warning: 0, info: 0 },
       recommendations: [],
-      error: "Invalid proposed policy — cannot recommend",
+      error: sourceOutage
+        ? "Configuration sources currently unreadable — cannot recommend"
+        : "Invalid proposed policy — cannot recommend",
     };
   }
 
@@ -87,7 +92,10 @@ export async function recommendGuardrails(params = {}) {
     };
   }
 
-  const analysis = await validatePolicy(yamlText);
+  // Analyze the EFFECTIVE proposed policy (resolved through the canonical
+  // layering), not the raw proposal text — inherited active risk from the
+  // org/governed layers must drive recommendations exactly as it will act.
+  const analysis = await validatePolicy(JSON.stringify(proposedConfig));
   const dryRun = isDryRun(proposedConfig);
   const enabledPillars = getEnabledPillars(proposedConfig);
   const risks = analysis.risky_settings || [];

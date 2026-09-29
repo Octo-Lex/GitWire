@@ -354,6 +354,14 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
       .toThrow(/must not contain __proto__|constructor/);
   });
 
+  test("the dangerous-key denylist is not an exported mutable surface", async () => {
+    const mod = await import("../src/index.js");
+    expect(mod.DANGEROUS_CONFIG_KEYS).toBeUndefined();
+    expect(typeof mod.isDangerousConfigKey).toBe("function");
+    expect(mod.isDangerousConfigKey("__proto__")).toBe(true);
+    expect(mod.isDangerousConfigKey("pillars")).toBe(false);
+  });
+
   test("own __proto__ keys fed DIRECTLY to the resolver cannot pollute Object.prototype", () => {
     // Object literals do not create own __proto__ keys (the setter fires
     // instead), so the reproducer must use JSON.parse — the fifth review

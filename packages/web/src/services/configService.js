@@ -124,22 +124,15 @@ export async function getConfigForRepo(repoFullName) {
  */
 export async function resolveProposedConfig(repoFullName, yamlText) {
   const { layer } = parseConfigLayer(yamlText);
-  // The org layer participates when it is readable and valid. A transport
-  // failure while fetching it degrades to "absent" (the resolution contract)
-  // so a transient GitHub outage is never reported to the user as "your
-  // proposed YAML is invalid". A VALIDATION failure in the org file still
-  // propagates — attributed to the exact file by fetchConfigFile.
-  let orgLayer = null;
-  try {
-    orgLayer = await fetchOrgConfig(repoFullName);
-  } catch (err) {
-    if (isConfigValidationError(err)) throw err;
-    logger.warn(
-      { err: err.message, repo: repoFullName },
-      "Org layer unavailable during proposal resolution — treating as absent",
-    );
-  }
-  const governedLayer = await fetchGovernedConfig(repoFullName);
+  // Org and governed layers participate when readable. Operational failures
+  // (ConfigSourceUnavailableError / DB errors) propagate so a preview never
+  // shows an effective policy computed with a layer silently missing; a
+  // validation failure in a fetched source propagates attributed to the
+  // exact file. Previews classify the two error classes distinctly.
+  const [orgLayer, governedLayer] = await Promise.all([
+    fetchOrgConfig(repoFullName),
+    fetchGovernedConfig(repoFullName),
+  ]);
   return resolveConfigLayers({
     defaults: DEFAULT_CONFIG,
     org: orgLayer,
@@ -299,13 +292,36 @@ async function recordHistory(repoId, action, configOld, configNew, changedBy) {
   }
 }
 
+/**
+ * A configuration source EXISTS but could not be read right now (GitHub
+ * 403/5xx/network failure, oversized file, DB failure). This is a different
+ * state from absence: treating an unreadable higher-precedence layer as
+ * absent could expose a more permissive lower layer during an outage (for
+ * example losing a governed dry_run=true restriction). Resolution fails
+ * instead of dropping the layer.
+ */
+export class ConfigSourceUnavailableError extends Error {
+  constructor(source, reason) {
+    super(`Configuration source currently unreadable (${source}): ${reason}`);
+    this.name = "ConfigSourceUnavailableError";
+    this.source = source;
+    this.reason = reason;
+  }
+}
+
+export function isConfigSourceUnavailable(err) {
+  return err instanceof ConfigSourceUnavailableError;
+}
+
 // Fetch a YAML config file from GitHub, returning the sparse layer plus a
 // stable source identity ("{owner}/{repo}@{path}#{blobSha}"). Uses the JSON
 // contents response so the blob SHA (the stable revision) is available.
-// Returns null when the file is absent (404) — an absent layer, never an
-// error-shaped one. A PRESENT but invalid document throws (parseConfigLayer
-// rejects the shape); the sparse contract never partially applies a source.
+//
+//   null             — absent: 404, or an explicitly empty document
+//   validation throw — present but invalid (prefixed with the exact file)
+//   source-unavailable throw — present but unreadable (transport/oversized)
 async function fetchConfigFile(octokit, owner, repoName, path) {
+  const sourceId = `${owner}/${repoName}@${path}`;
   let data;
   try {
     ({ data } = await octokit.request(
@@ -314,18 +330,16 @@ async function fetchConfigFile(octokit, owner, repoName, path) {
     ));
   } catch (err) {
     if (err.status === 404) return null;
-    throw err;
+    throw new ConfigSourceUnavailableError(sourceId, err.message);
   }
-  if (!data || typeof data.content !== "string") {
-    // Contents API returns null content for oversized files (>1MB): the
-    // layer is absent, but say so instead of leaving it silent.
-    if (data?.message) {
-      logger.warn(
-        { owner, repo: repoName, path, apiMessage: data.message },
-        "Config file unreadable via contents API — treating layer as absent",
-      );
-    }
-    return null;
+  if (!data || typeof data.content !== "string" || !data.content || data.encoding === "none") {
+    // Oversized files (>1MB) come back with null/empty content or
+    // encoding "none". The file exists, so resolution fails: a
+    // safety-bearing large config must not silently vanish from the stack.
+    throw new ConfigSourceUnavailableError(
+      sourceId,
+      data?.message || "contents API returned no readable content",
+    );
   }
   const yamlText = Buffer.from(data.content, "base64").toString("utf-8");
   try {
@@ -361,23 +375,21 @@ async function fetchRepoConfig(repoFullName) {
   );
   if (!rows.length) return null;
 
+  let octokit;
   try {
-    const octokit = wrapOctokit(await getInstallationClient(rows[0].installation_id));
-    const [owner, repoName] = repoFullName.split("/");
-
-    for (const path of CONFIG_PATHS) {
-      const found = await fetchConfigFile(octokit, owner, repoName, path);
-      if (found) {
-        logger.info({ repo: repoFullName, path, revision: found.source }, ".gitwire.yml loaded");
-        return found;
-      }
-    }
+    octokit = wrapOctokit(await getInstallationClient(rows[0].installation_id));
   } catch (err) {
-    if (isConfigValidationError(err)) throw err;
-    logger.warn(
-      { err: err.message, repo: repoFullName },
-      "Failed to fetch .gitwire.yml — treating layer as absent",
-    );
+    throw new ConfigSourceUnavailableError(repoFullName, err.message);
+  }
+  const [owner, repoName] = repoFullName.split("/");
+
+  for (const path of CONFIG_PATHS) {
+    // 404/absent returns null; validation and source-unavailable throw.
+    const found = await fetchConfigFile(octokit, owner, repoName, path);
+    if (found) {
+      logger.info({ repo: repoFullName, path, revision: found.source }, ".gitwire.yml loaded");
+      return found;
+    }
   }
 
   return null;
@@ -393,36 +405,34 @@ async function fetchRepoConfig(repoFullName) {
  * version. Returns null when the repo has no materialized live policy.
  */
 async function fetchGovernedConfig(repoFullName) {
-  try {
-    const { rows: [row] } = await db.query(
-      `SELECT rc.config,
-              rc.updated_at,
-              apb.policy_version_id,
-              apb.promotion_record_id
-         FROM repo_config rc
-         JOIN repositories r ON r.github_id = rc.repo_id
-         LEFT JOIN active_policy_bindings apb ON apb.repo_id = rc.repo_id
-        WHERE r.full_name = $1`,
-      [repoFullName],
-    );
-    if (!row || !row.config || Object.keys(row.config).length === 0) return null;
+  // Errors propagate: the governed layer is the highest-precedence safety
+  // authority, and a transient DB failure must never silently remove it
+  // (a promoted dry_run=true restriction would vanish mid-outage).
+  const { rows: [row] } = await db.query(
+    `SELECT rc.config,
+            rc.updated_at,
+            apb.policy_version_id,
+            apb.promotion_record_id
+       FROM repo_config rc
+       JOIN repositories r ON r.github_id = rc.repo_id
+       LEFT JOIN active_policy_bindings apb ON apb.repo_id = rc.repo_id
+      WHERE r.full_name = $1`,
+    [repoFullName],
+  );
+  if (!row || !row.config || Object.keys(row.config).length === 0) return null;
 
-    if (row.policy_version_id && row.promotion_record_id) {
-      return {
-        values: row.config,
-        source: `policy_version:${row.policy_version_id}:promotion:${row.promotion_record_id}`,
-      };
-    }
-
-    // Legacy compatibility row — explicitly not an immutable governed version.
+  if (row.policy_version_id && row.promotion_record_id) {
     return {
       values: row.config,
-      source: `legacy:repo_config:${new Date(row.updated_at).toISOString()}`,
+      source: `policy_version:${row.policy_version_id}:promotion:${row.promotion_record_id}`,
     };
-  } catch (err) {
-    logger.debug({ err: err.message }, "Governed config layer not available");
-    return null;
   }
+
+  // Legacy compatibility row — explicitly not an immutable governed version.
+  return {
+    values: row.config,
+    source: `legacy:repo_config:${new Date(row.updated_at).toISOString()}`,
+  };
 }
 
 // ── Org-level config ────────────────────────────────────────────────────────
@@ -432,46 +442,36 @@ async function fetchGovernedConfig(repoFullName) {
  * Returns { values, source } or null when the org has no config.
  */
 async function fetchOrgConfig(repoFullName) {
+  // Look up org name from installations table. A repo with no installation
+  // row has no org layer (absent); DB and client failures propagate —
+  // either as ConfigSourceUnavailableError or the underlying DB error.
+  const { rows: [repo] } = await db.query(
+    "SELECT r.installation_id, i.account_login " +
+    "FROM repositories r " +
+    "JOIN installations i ON i.github_id = r.installation_id " +
+    "WHERE r.full_name = $1",
+    [repoFullName],
+  );
+  if (!repo) return null;
+
+  let octokit;
   try {
-    // Look up org name from installations table
-    const { rows: [repo] } = await db.query(
-      "SELECT r.installation_id, i.account_login " +
-      "FROM repositories r " +
-      "JOIN installations i ON i.github_id = r.installation_id " +
-      "WHERE r.full_name = $1",
-      [repoFullName],
-    );
-    if (!repo) return null;
-
-    const octokit = wrapOctokit(await getInstallationClient(repo.installation_id));
-
-    for (const path of CONFIG_PATHS) {
-      try {
-        const found = await fetchConfigFile(octokit, repo.account_login, ORG_CONFIG_REPO, path);
-        if (found) {
-          logger.info(
-            { org: repo.account_login, path, revision: found.source },
-            "Org-level .gitwire.yml loaded",
-          );
-          return found;
-        }
-      } catch (err) {
-        if (isConfigValidationError(err)) throw err;
-        if (err.status !== 404) {
-          logger.warn(
-            { err: err.message, org: repo.account_login },
-            "Org config fetch error (non-404)",
-          );
-        }
-        // 404 = no org config repo — that's normal, skip silently
-      }
-    }
+    octokit = wrapOctokit(await getInstallationClient(repo.installation_id));
   } catch (err) {
-    if (isConfigValidationError(err)) throw err;
-    logger.debug(
-      { err: err.message, repo: repoFullName },
-      "Org config resolution failed — treating layer as absent",
-    );
+    throw new ConfigSourceUnavailableError(`${repo.account_login}/${ORG_CONFIG_REPO}`, err.message);
+  }
+
+  for (const path of CONFIG_PATHS) {
+    // 404/absent returns null (no org config repo is the normal case);
+    // validation and source-unavailable failures throw.
+    const found = await fetchConfigFile(octokit, repo.account_login, ORG_CONFIG_REPO, path);
+    if (found) {
+      logger.info(
+        { org: repo.account_login, path, revision: found.source },
+        "Org-level .gitwire.yml loaded",
+      );
+      return found;
+    }
   }
 
   return null;
