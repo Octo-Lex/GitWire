@@ -303,6 +303,26 @@ settings:
     expect(config._meta.version_vector.repo).toBeNull();
   });
 
+  test("legacy-generation cache entries are never accepted as hits", async () => {
+    // A pre-W2-04 cache entry (old defaults, old _meta shape) lives under
+    // the un-generationed key. The generationed prefix means it can never be
+    // returned; the first read resolves fresh and caches in the new space.
+    state.cache.set("gitwire:config:acme/app", JSON.stringify({
+      settings: { dry_run: false },
+      pillars: { triage: { enabled: true } },
+      _meta: { layers: { defaults: true, org: false, repo: false, db: false } },
+    }));
+
+    const config = await getConfigForRepo("acme/app");
+    // Fresh W2-04 resolution won, not the stale legacy entry.
+    expect(config.settings.dry_run).toBe(true);
+    expect(config.pillars.triage.enabled).toBe(false);
+    expect(config._meta.provenance).toBeDefined();
+    // The legacy entry is still there (untouched); the new one sits beside it.
+    expect(state.cache.has("gitwire:config:acme/app")).toBe(true);
+    expect(state.cacheWrites).toBe(1);
+  });
+
   test("preview helper: proposed YAML resolves as a repo layer over the live org layer", async () => {
     state.files.set("acme/gitwire-config@.gitwire.yml", yamlFile(`
 pillars:

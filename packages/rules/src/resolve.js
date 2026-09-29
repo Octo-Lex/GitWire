@@ -209,6 +209,16 @@ export function resolveConfigLayers({ defaults, org, repo, governed } = {}) {
     }
   }
 
+  // Procedural metadata never participates in the effective config: if any
+  // source supplied _meta/_explicitKeys/_hasFile-shaped keys (e.g. a stored
+  // override document carrying a previously attached _meta), strip them
+  // before provenance is finalized and the hash is computed, so the hash
+  // covers configuration values only. Fresh metadata is attached by the
+  // caller after resolution.
+  delete config._meta;
+  delete config._explicitKeys;
+  delete config._hasFile;
+
   const versionVector = {
     defaults: CONFIG_SCHEMA_VERSION,
     org: layerRevision(org),

@@ -31,7 +31,11 @@ import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
 const CACHE_TTL = 300; // 5 minutes
-const CACHE_PREFIX = "gitwire:config:";
+// Resolver-generation segment of the cache key: entries written by a
+// previous resolution model (older defaults, pre-provenance _meta shape)
+// can never be accepted as hits after this generation changes.
+const CACHE_GENERATION = "w2-04.1";
+const CACHE_PREFIX = `gitwire:config:${CACHE_GENERATION}:`;
 
 const CONFIG_PATHS = [".github/.gitwire.yml", ".gitwire.yml"];
 

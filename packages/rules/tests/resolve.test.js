@@ -345,6 +345,41 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
       .toThrow(/Invalid \.gitwire\.yml:/);
   });
 
+  test("prototype-pollution keys are rejected at any depth (CodeQL guard)", () => {
+    expect(() => parseConfigLayer("__proto__:\n  polluted: yes\n"))
+      .toThrow(/must not contain __proto__/);
+    expect(() => parseConfigLayer("pillars:\n  triage:\n    triggers:\n      __proto__:\n        polluted: yes\n"))
+      .toThrow(/must not contain __proto__/);
+    expect(() => parseConfigLayer("constructor:\n  prototype:\n    x: 1\n"))
+      .toThrow(/must not contain __proto__|constructor/);
+    // And the resolver itself stays clean when fed such values directly.
+    expect(() => resolveConfigLayers({
+      repo: { values: { __proto__: { polluted: "yes" }, pillars: {} }, source: "r@1" },
+    })).not.toThrow();
+    const pollutedResolve = resolveConfigLayers({
+      repo: { values: JSON.parse('{"__proto__": {"polluted": "yes"}}'), source: "r@1" },
+    });
+    expect(Object.prototype.polluted).toBeUndefined();
+    expect(pollutedResolve.config).toBeDefined();
+  });
+
+  test("procedural metadata keys supplied by any layer are stripped before hashing", () => {
+    const withMeta = resolveConfigLayers({
+      governed: {
+        values: { _meta: { resolved_at: "1999-01-01T00:00:00Z" }, _explicitKeys: ["x"] },
+        source: "pv:v1:pr:pm1",
+      },
+    });
+    expect(withMeta.config._meta).toBeUndefined();
+    expect(withMeta.config._explicitKeys).toBeUndefined();
+    // The hash is computed after the strip: identical values produce the
+    // identical hash regardless of carried metadata.
+    const withoutMeta = resolveConfigLayers({
+      governed: { values: {}, source: "pv:v1:pr:pm1" },
+    });
+    expect(withMeta.effectiveHash).toBe(withoutMeta.effectiveHash);
+  });
+
   test("quality_gates: a PARTIAL YAML override of 'default' keeps the merged gate", () => {
     // parseConfig semantics: naming a gate "default" — even partially —
     // merges onto the built-in gate instead of replacing it wholesale, and
