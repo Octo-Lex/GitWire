@@ -34,8 +34,9 @@ describe("Policy Recommendations — service contract", () => {
     expect(source).not.toMatch(/validatePolicy\(yamlText\)/);
   });
 
-  it("classifies source outages distinctly from invalid proposals (W2-04)", () => {
-    expect(source).toMatch(/isConfigSourceUnavailable/);
+  it("classifies by validation-ness; non-validation failures are outages (W2-04)", () => {
+    expect(source).toMatch(/isConfigValidationError/);
+    expect(source).not.toMatch(/isConfigSourceUnavailable/);
   });
 
   it("validates with validateConfig", () => {

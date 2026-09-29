@@ -101,11 +101,25 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Delete every provenance entry at or below a replaced pointer. */
+function clearProvenanceBelow(provenance, prefix) {
+  for (const pointer of Object.keys(provenance)) {
+    if (pointer === prefix || pointer.startsWith(prefix + "/")) {
+      delete provenance[pointer];
+    }
+  }
+}
+
 /**
  * Merge `source` (sparse) onto `target`, recording every supplied leaf (and
  * every explicitly supplied non-branch node) into `provenance` under its
  * JSON-pointer path. Arrays replace; plain objects recurse; explicit null is
  * a supplied value.
+ *
+ * Provenance stays consistent with the config tree: replacing a subtree
+ * (an object replaced by a scalar, or a scalar by anything) removes the
+ * replaced subtree's entries, so no dangling pointers survive for consumers
+ * that walk provenance (the quality-gate strip among them).
  *
  * Prototype-safety: dangerous keys (__proto__, constructor,
  * prototype) are ignored at this primitive unconditionally. Bracket access
@@ -119,12 +133,21 @@ function mergeSparse(target, source, path, layerName, provenance) {
     if (isDangerousConfigKey(key)) continue;
     const value = source[key];
     const pointer = path + "/" + escapePointerToken(key);
-    if (isPlainObject(value)) {
-      if (!isPlainObject(target[key])) target[key] = {};
+    if (isPlainObject(value) && isPlainObject(target[key])) {
       mergeSparse(target[key], value, pointer, layerName, provenance);
       // The object node itself was explicitly supplied at this layer.
       provenance[pointer] = layerName;
+    } else if (isPlainObject(value)) {
+      // Object replacing a non-object (or absent key): the fresh node
+      // carries only what this layer supplies into it.
+      clearProvenanceBelow(provenance, pointer);
+      const fresh = {};
+      mergeSparse(fresh, value, pointer, layerName, provenance);
+      target[key] = fresh;
+      provenance[pointer] = layerName;
     } else {
+      // Scalar/array replacement drops any subtree entries below the key.
+      clearProvenanceBelow(provenance, pointer);
       target[key] = value;
       provenance[pointer] = layerName;
     }
@@ -231,6 +254,9 @@ export function resolveConfigLayers({ defaults, org, repo, governed } = {}) {
   delete config._meta;
   delete config._explicitKeys;
   delete config._hasFile;
+  clearProvenanceBelow(provenance, "/_meta");
+  clearProvenanceBelow(provenance, "/_explicitKeys");
+  clearProvenanceBelow(provenance, "/_hasFile");
 
   const versionVector = {
     defaults: CONFIG_SCHEMA_VERSION,

@@ -15,7 +15,7 @@ import { isPillarEnabled, shouldTrigger } from "@gitwire/rules";
 import {
   getConfigForRepo,
   resolveProposedConfig,
-  isConfigSourceUnavailable,
+  isConfigValidationError,
 } from "./configService.js";
 import { validatePolicy } from "./policyValidationService.js";
 import { redactSecrets } from "../lib/redact.js";
@@ -52,9 +52,26 @@ export async function diffPolicyImpact(params = {}) {
   const fromDate = from || new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
   const toDate = to || new Date().toISOString();
 
-  // Step 1: Load current policy
-  const currentConfig = await getConfigForRepo(repo);
-  const currentValidation = await validatePolicy(yamlToText(currentConfig));
+  // Step 1: Load current policy. Source outages surface through the same
+  // structured payload as the proposed side — never an unhandled 500.
+  let currentConfig;
+  try {
+    currentConfig = await getConfigForRepo(repo);
+  } catch (err) {
+    return {
+      compared_at: new Date().toISOString(),
+      repo,
+      current: { valid: false, errors: [err.message] },
+      proposed: { valid: false, errors: [] },
+      changes: null,
+      simulation_impact: null,
+      results: [],
+      error: isConfigValidationError(err)
+        ? "Invalid configuration source — cannot diff"
+        : "Configuration sources currently unreadable — cannot diff",
+    };
+  }
+  const currentValidation = await validatePolicy(JSON.stringify(currentConfig));
   const currentDryRun = isDryRun(currentConfig);
   const currentEnabledPillars = getEnabledPillars(currentConfig);
 
@@ -64,9 +81,10 @@ export async function diffPolicyImpact(params = {}) {
   try {
     proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
-    // An unreadable configuration source is an outage, not a verdict on
-    // the user's YAML; the two cases get distinct error surfaces.
-    const sourceOutage = isConfigSourceUnavailable(err);
+    // Classify by validation-ness: anything that is not a validation
+    // rejection (source outage, DB error, unexpected failure) is an
+    // outage surface, never a verdict on the user's YAML.
+    const invalidProposal = isConfigValidationError(err);
     return {
       compared_at: new Date().toISOString(),
       repo,
@@ -79,9 +97,9 @@ export async function diffPolicyImpact(params = {}) {
       changes: null,
       simulation_impact: null,
       results: [],
-      error: sourceOutage
-        ? "Configuration sources currently unreadable — cannot diff"
-        : "Invalid proposed policy — cannot diff",
+      error: invalidProposal
+        ? "Invalid proposed policy — cannot diff"
+        : "Configuration sources currently unreadable — cannot diff",
     };
   }
 
@@ -110,8 +128,8 @@ export async function diffPolicyImpact(params = {}) {
   // Analyze the EFFECTIVE proposed policy (resolved through the canonical
   // layering), not the raw proposal text — an inherited risky org setting
   // the proposal omits stays active in proposedConfig and must appear in
-  // the risk delta. Same resolved-object pattern as the current side above.
-  const proposedAnalysis = await validatePolicy(yamlToText(proposedConfig));
+  // the risk delta. Serialized identically to the recommendation service.
+  const proposedAnalysis = await validatePolicy(JSON.stringify(proposedConfig));
 
   const pillarsEnabled = proposedEnabledPillars.filter(p => !currentEnabledPillars.includes(p));
   const pillarsDisabled = currentEnabledPillars.filter(p => !proposedEnabledPillars.includes(p));
@@ -227,11 +245,6 @@ function getEnabledPillars(config) {
   return Object.entries(config.pillars || {})
     .filter(([, val]) => val?.enabled !== false)
     .map(([key]) => key);
-}
-
-function yamlToText(config) {
-  // Minimal serialization for validatePolicy (which re-parses)
-  return JSON.stringify(config);
 }
 
 function simulateOne(event, config, dryRun) {

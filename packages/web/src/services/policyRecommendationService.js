@@ -9,7 +9,7 @@
 
 import { logger } from "../lib/logger.js";
 import { validateConfig } from "@gitwire/rules";
-import { resolveProposedConfig, isConfigSourceUnavailable } from "./configService.js";
+import { resolveProposedConfig, isConfigValidationError } from "./configService.js";
 import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { validatePolicy } from "./policyValidationService.js";
 
@@ -67,17 +67,18 @@ export async function recommendGuardrails(params = {}) {
   try {
     proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
-    // An unreadable configuration source is an outage, not a verdict on
-    // the user's YAML; the two cases get distinct error surfaces.
-    const sourceOutage = isConfigSourceUnavailable(err);
+    // Classify by validation-ness: anything that is not a validation
+    // rejection (source outage, DB error, unexpected failure) is an
+    // outage surface, never a verdict on the user's YAML.
+    const invalidProposal = isConfigValidationError(err);
     return {
       generated_at: new Date().toISOString(),
       repo: repo || null,
       summary: { critical: 0, warning: 0, info: 0 },
       recommendations: [],
-      error: sourceOutage
-        ? "Configuration sources currently unreadable — cannot recommend"
-        : "Invalid proposed policy — cannot recommend",
+      error: invalidProposal
+        ? "Invalid proposed policy — cannot recommend"
+        : "Configuration sources currently unreadable — cannot recommend",
     };
   }
 
