@@ -54,6 +54,29 @@ describe("W2-03 direct config API guard", () => {
     expect(result.body?.error).toBe("direct_policy_write_disabled");
   });
 
+  // Express routing is case-insensitive and decodes path parameters, so the
+  // guard's restore check must match every encoding/casing the route matches.
+  test.each([
+    ["/owner/repo/RESTORE/42", "uppercase segment"],
+    ["/owner/repo/Restore/42", "mixed-case segment"],
+    ["/owner/repo/restore/42/", "trailing slash"],
+    ["/owner/repo/restore/42?dry_run=1", "query string"],
+    ["/owner/repo/restore%2F42", "percent-encoded id separator"],
+    ["/owner/repo/restore/%77", "percent-encoded id body"],
+    ["/owner/repo/restore/%", "malformed percent-encoding fails closed"],
+  ])("POST %s (%s) cannot bypass the restore block", (requestPath) => {
+    const result = runGuard("POST", requestPath);
+    expect(result.nextCalled).toBe(false);
+    expect(result.statusCode).toBe(409);
+    expect(result.body?.error).toBe("direct_policy_write_disabled");
+  });
+
+  test("malformed percent-encoding on a read path still reaches the router", () => {
+    const result = runGuard("GET", "/owner/repo/history%");
+    expect(result.nextCalled).toBe(true);
+    expect(result.statusCode).toBeNull();
+  });
+
   test.each([
     ["GET", "/owner/repo"],
     ["GET", "/owner/repo/history"],
