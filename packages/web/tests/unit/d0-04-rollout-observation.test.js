@@ -13,15 +13,19 @@ jest.unstable_mockModule("../../src/lib/logger.js", () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 jest.unstable_mockModule("../../src/services/policyRolloutService.js", () => ({
-  createRolloutPlan: jest.fn(),
   getRolloutPlan: jest.fn(),
   listRolloutPlans: jest.fn(),
-  attachEvidence: jest.fn(),
-  transitionRolloutPlan: jest.fn(),
-  approveRolloutPlan: jest.fn(),
-  rejectRolloutPlan: jest.fn(),
-  promoteRolloutPlan: jest.fn(),
-  rollbackRolloutPlan: jest.fn(),
+}));
+jest.unstable_mockModule("../../src/services/governedPolicyWriterService.js", () => ({
+  createGovernedRolloutPlan: jest.fn(),
+  attachGovernedRolloutEvidence: jest.fn(),
+  transitionGovernedRolloutPlan: jest.fn(),
+  approveGovernedRolloutPlan: jest.fn(),
+  rejectGovernedRolloutPlan: jest.fn(),
+  GovernedPolicyWriterError: class GovernedPolicyWriterError extends Error {},
+}));
+jest.unstable_mockModule("../../src/services/policyAuthorityService.js", () => ({
+  PolicyAuthorityError: class PolicyAuthorityError extends Error {},
 }));
 
 const { observeRolloutAuthorize } = await import("../../src/routes/rollouts.js");

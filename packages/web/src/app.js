@@ -41,6 +41,7 @@ import { apiKeyAuth }           from "./middleware/auth.js";
 import { authContext }          from "./middleware/authContext.js";
 import { routeAuthObserver }    from "./middleware/routeAuthObserver.js";
 import { rateLimiter }          from "./middleware/rateLimiter.js";
+import { directPolicyWriteGuard } from "./middleware/directPolicyWriteGuard.js";
 import { logger } from "./lib/logger.js";
 import { getDeploymentInfo } from "./lib/deploymentInfo.js";
 import { getTriageHealthBlock } from "./services/triageStatusService.js";
@@ -173,6 +174,9 @@ export function createApp() {
 
   // ── Phase 4: Intelligence & Compliance ──────────────────────────────────
   app.use("/api",                 phase4Router);
+
+  // ── W2-03: retire direct live-policy mutation before compatibility routes ─
+  app.use("/api/config", directPolicyWriteGuard);
 
   // ── Config: per-repo .gitwire.yml overrides ─────────────────────────────
   app.use("/api/config",          configRouter);
