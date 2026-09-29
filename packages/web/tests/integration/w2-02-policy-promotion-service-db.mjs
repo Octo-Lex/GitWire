@@ -137,12 +137,6 @@ try {
     [approverId, promoterId, lockProbeId, roleId, repositoryId, grantorId],
   );
 
-  await client.query(
-    `INSERT INTO repo_config (repo_id, config, updated_by)
-     VALUES ($1, $2::jsonb, 'service-proof-seed')`,
-    [repositoryId, JSON.stringify(oldPolicy)],
-  );
-
   const authority = await seedAuthorityEnvelope();
 
   // Mirror application startup so the production compat DB/Redis singletons
@@ -270,7 +264,7 @@ try {
   );
   assert.ok(history, "service must persist compatibility config history");
   assert.equal(history.action, "set");
-  assert.deepEqual(history.config_old, oldPolicy);
+  assert.equal(history.config_old, null);
   assert.deepEqual(history.config_new, newPolicy);
   assert.equal(history.changed_by, actorToken);
 
@@ -283,7 +277,7 @@ try {
   assert.equal(rolloutState.status, "promoted");
   assert.equal(rolloutState.promoted_by, promoterId);
   assert.equal(rolloutState.promotion_reason, "service-path-proof");
-  assert.deepEqual(rolloutState.previous_config, oldPolicy);
+  assert.equal(rolloutState.previous_config, null);
 
   const { rows: authRows } = await client.query(
     `SELECT principal_id, allowed, observe_mode

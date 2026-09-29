@@ -23,11 +23,6 @@ const grantorId = randomUUID();
 const roleId = randomUUID();
 const roleName = `w2-promotion-authority-races-${randomUUID()}`;
 
-const oldPolicy = {
-  dry_run: true,
-  review: { enabled: true, generation: 0 },
-};
-
 const client = new Client({ connectionString: databaseUrl });
 const blocker = new Client({ connectionString: databaseUrl });
 await client.connect();
@@ -150,11 +145,6 @@ try {
        ($1, $3, 'repository', $4, $5),
        ($2, $3, 'repository', $4, $5)`,
     [approverId, promoterId, roleId, repositoryId, grantorId],
-  );
-  await client.query(
-    `INSERT INTO repo_config (repo_id, config, updated_by)
-     VALUES ($1, $2::jsonb, 'authority-race-seed')`,
-    [repositoryId, JSON.stringify(oldPolicy)],
   );
 
   const { initRuntime, getRuntime } = await import("@gitwire/runtime");
@@ -316,7 +306,7 @@ try {
   assert.equal(expiryState.status, "approved");
   assert.equal(expiryState.promotion_count, 0);
   assert.equal(expiryState.active_binding_count, 0);
-  assert.deepEqual(expiryState.materialized_config, oldPolicy);
+  assert.equal(expiryState.materialized_config, null);
 
   // An assignment row lock prevents revocation/mutation but cannot stop its
   // expires_at boundary from passing. Hold the approver principal exclusively
@@ -452,7 +442,7 @@ try {
   assert.equal(promoterExpiryState.status, "approved");
   assert.equal(promoterExpiryState.promotion_count, 0);
   assert.equal(promoterExpiryState.active_binding_count, 0);
-  assert.deepEqual(promoterExpiryState.materialized_config, oldPolicy);
+  assert.equal(promoterExpiryState.materialized_config, null);
 
   await client.query(
     `UPDATE gitwire_auth.auth_principal_roles

@@ -18,7 +18,7 @@ the derivation provenance, and this block is authoritative on disagreement.
   "version": "0.23.1",
   "services": ["gitwire-app", "gitwire-executor-service", "postgres", "redis", "bot", "landing", "tunnel", "dashboard", "docs", "demo"],
   "workers": ["startWebhookWorker", "startTriageWorker", "startCIHealWorker", "startCIEvidenceWorker", "startDiagnosisWorker", "startPatchWorker", "startVerificationWorker", "startCriticWorker", "startSyncWorker", "startMaintainerWorker", "startIssueFixWorker", "startMergeQueueWorker", "startPhase3Worker", "startPhase4Worker"],
-  "migrations": { "first": "001", "last": "046", "count": 46 }
+  "migrations": { "first": "001", "last": "047", "count": 47 }
 }
 ```
 <!-- gitwire:source-of-truth:end -->
@@ -49,7 +49,7 @@ the derivation provenance, and this block is authoritative on disagreement.
 | `infrastructure.md` | `Express API + 9 background workers` | `14` worker handles | Update to `14` |
 | `infrastructure.md` | `no migration runner in the app startup code` | Root `docker-entrypoint.sh` runs `node scripts/migrate.js` fail-closed | Document the entrypoint |
 | `infrastructure.md` | `No maxmemory limit is configured` + recommends `allkeys-lru` | `256mb` + `noeviction` is configured in compose | Correct to `noeviction`/`256mb` |
-| `packages/web/Dockerfile` | Implies it is a production image (has `HEALTHCHECK`, `EXPOSE 3000`) | Referenced only by stale `packages/web/docker-compose.prod.yml`; CI and dev override both use root `Dockerfile` | **Retire both** — legacy package-local deployment surfaces |
+| `packages/web/Dockerfile` | Implies it is a production image (has `HEALTHCHECK`, `EXPOSE 3000`) | Referenced only by stale `packages/web/docker-compose.prod.yml`; CI and dev overrides use root `Dockerfile` | **Retire both** — legacy package-local deployment surfaces |
 
 ## Secondary Dockerfile resolution
 

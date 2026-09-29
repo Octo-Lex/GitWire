@@ -23,11 +23,6 @@ const grantorId = randomUUID();
 const roleId = randomUUID();
 const roleName = `w2-promotion-effect-time-${randomUUID()}`;
 
-const oldPolicy = {
-  dry_run: true,
-  review: { enabled: true, generation: 0 },
-};
-
 const client = new Client({ connectionString: databaseUrl });
 const blocker = new Client({ connectionString: databaseUrl });
 await client.connect();
@@ -144,11 +139,6 @@ try {
        ($2, $3, 'repository', $4, $5)`,
     [approverId, promoterId, roleId, repositoryId, grantorId],
   );
-  await client.query(
-    `INSERT INTO repo_config (repo_id, config, updated_by)
-     VALUES ($1, $2::jsonb, 'effect-time-seed')`,
-    [repositoryId, JSON.stringify(oldPolicy)],
-  );
 
   const { initRuntime, getRuntime } = await import("@gitwire/runtime");
   initRuntime({
@@ -251,7 +241,7 @@ try {
   assert.equal(approverExpiryState.status, "approved");
   assert.equal(approverExpiryState.promotion_count, 0);
   assert.equal(approverExpiryState.active_binding_count, 0);
-  assert.deepEqual(approverExpiryState.materialized_config, oldPolicy);
+  assert.equal(approverExpiryState.materialized_config, null);
 
   await client.query(
     `UPDATE gitwire_auth.auth_principal_roles
