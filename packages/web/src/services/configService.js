@@ -292,6 +292,22 @@ async function recordHistory(repoId, action, configOld, configNew, changedBy) {
   }
 }
 
+// A deployment without GitHub App credentials structurally has no org/repo
+// YAML layers — that is absence, not an outage. Any other client-creation
+// failure IS an outage and fails resolution.
+function isGitHubAppUnconfigured(err) {
+  return /GitHub App not configured/.test(String(err?.message || ""));
+}
+
+async function makeInstallationClient(installationId, sourceId) {
+  try {
+    return wrapOctokit(await getInstallationClient(installationId));
+  } catch (err) {
+    if (isGitHubAppUnconfigured(err)) return null;
+    throw new ConfigSourceUnavailableError(sourceId, err.message);
+  }
+}
+
 /**
  * A configuration source EXISTS but could not be read right now (GitHub
  * 403/5xx/network failure, oversized file, DB failure). This is a different
@@ -375,12 +391,8 @@ async function fetchRepoConfig(repoFullName) {
   );
   if (!rows.length) return null;
 
-  let octokit;
-  try {
-    octokit = wrapOctokit(await getInstallationClient(rows[0].installation_id));
-  } catch (err) {
-    throw new ConfigSourceUnavailableError(repoFullName, err.message);
-  }
+  const octokit = await makeInstallationClient(rows[0].installation_id, repoFullName);
+  if (!octokit) return null; // app unconfigured: no GitHub YAML layers exist
   const [owner, repoName] = repoFullName.split("/");
 
   for (const path of CONFIG_PATHS) {
@@ -454,12 +466,11 @@ async function fetchOrgConfig(repoFullName) {
   );
   if (!repo) return null;
 
-  let octokit;
-  try {
-    octokit = wrapOctokit(await getInstallationClient(repo.installation_id));
-  } catch (err) {
-    throw new ConfigSourceUnavailableError(`${repo.account_login}/${ORG_CONFIG_REPO}`, err.message);
-  }
+  const octokit = await makeInstallationClient(
+    repo.installation_id,
+    `${repo.account_login}/${ORG_CONFIG_REPO}`,
+  );
+  if (!octokit) return null; // app unconfigured: no org layer exists
 
   for (const path of CONFIG_PATHS) {
     // 404/absent returns null (no org config repo is the normal case);
