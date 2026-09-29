@@ -108,9 +108,11 @@ export async function getConfigForRepo(repoFullName) {
 
 /**
  * Resolve a PROPOSED .gitwire.yml as a prospective repository layer over the
- * repository's current org layer and the safe defaults — the canonical
- * layering semantics, so previews (validate/simulate/diff/recommend) never
- * run a second, contradictory precedence algorithm.
+ * repository's current stack — org layer, GOVERNED layer, and the safe
+ * defaults — so previews (validate/simulate/diff/recommend) show exactly the
+ * effective configuration the proposal would produce. Omitting the governed
+ * layer here would make previews report governed values flipping back to
+ * defaults, which a repo-layer proposal cannot do.
  *
  * Throws on invalid YAML/shape exactly like parseConfig().
  * The proposed layer's provenance/vector metadata is intentionally omitted —
@@ -118,11 +120,15 @@ export async function getConfigForRepo(repoFullName) {
  */
 export async function resolveProposedConfig(repoFullName, yamlText) {
   const { layer } = parseConfigLayer(yamlText);
-  const orgLayer = await fetchOrgConfig(repoFullName);
+  const [orgLayer, governedLayer] = await Promise.all([
+    fetchOrgConfig(repoFullName),
+    fetchGovernedConfig(repoFullName),
+  ]);
   return resolveConfigLayers({
     defaults: DEFAULT_CONFIG,
     org: orgLayer,
     repo: { values: layer, source: "proposed:.gitwire.yml" },
+    governed: governedLayer,
   }).config;
 }
 
