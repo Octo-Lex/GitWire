@@ -236,10 +236,18 @@ settings:
     await invalidateConfigCache("acme/app");
     const second = await getConfigForRepo("acme/app");
 
-    // resolved_at is observational and differs; identity does not.
+    // resolved_at is observational only: whatever it happens to be (two
+    // resolutions can even share a millisecond), identity does not move.
     expect(second._meta.effective_hash).toBe(first._meta.effective_hash);
     expect(second._meta.version_vector).toEqual(first._meta.version_vector);
-    expect(second._meta.resolved_at).not.toBe(first._meta.resolved_at);
+    expect(second._meta.provenance).toEqual(first._meta.provenance);
+    expect(second._meta.resolved_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+
+    // Attaching arbitrary observational metadata cannot change a hash that
+    // was computed before the metadata existed.
+    const mutated = JSON.parse(JSON.stringify(first));
+    mutated._meta.resolved_at = "1999-01-01T00:00:00.000Z";
+    expect(mutated._meta.effective_hash).toBe(first._meta.effective_hash);
   });
 
   test("quality-gate compatibility: _meta.layers.org/repo booleans survive", async () => {
