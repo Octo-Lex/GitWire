@@ -337,6 +337,32 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
     });
     expect(resolved.explicitKeys).toEqual([]);
   });
+
+  test("a YAML syntax error is a validation rejection, never an absent layer", () => {
+    expect(() => parseConfigLayer("pillars:\n  triage:\n   enabled: [unclosed"))
+      .toThrow(/Invalid \.gitwire\.yml: YAML syntax error:/);
+    expect(() => parseConfigLayer("\tversion: 1"))
+      .toThrow(/Invalid \.gitwire\.yml:/);
+  });
+
+  test("quality_gates: a PARTIAL YAML override of 'default' keeps the merged gate", () => {
+    // parseConfig semantics: naming a gate "default" — even partially —
+    // merges onto the built-in gate instead of replacing it wholesale, and
+    // the strip pass must not delete the result.
+    const resolved = resolveConfigLayers({
+      repo: repoLayer({
+        quality_gates: {
+          default: {
+            block_on_fail: false,
+          },
+        },
+      }),
+    });
+    expect(resolved.config.quality_gates.default.block_on_fail).toBe(false);
+    // The untouched leaf still comes from defaults (merged, not replaced).
+    expect(resolved.config.quality_gates.default.conditions).toBeDefined();
+    expect(resolved.provenance["/quality_gates/default/conditions"]).toBe("defaults");
+  });
 });
 
 describe("W2-04 safe defaults (A12, A13)", () => {
