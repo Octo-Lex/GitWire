@@ -29,6 +29,15 @@ describe("Policy Recommendations — service contract", () => {
     expect(source).toMatch(/resolveProposedConfig/);
   });
 
+  it("analyzes the RESOLVED proposed policy, not the raw YAML (W2-04)", () => {
+    expect(source).toMatch(/validatePolicy\(JSON.stringify\(proposedConfig\)\)/);
+    expect(source).not.toMatch(/validatePolicy\(yamlText\)/);
+  });
+
+  it("classifies source outages distinctly from invalid proposals (W2-04)", () => {
+    expect(source).toMatch(/isConfigSourceUnavailable/);
+  });
+
   it("validates with validateConfig", () => {
     expect(source).toMatch(/validateConfig/);
   });

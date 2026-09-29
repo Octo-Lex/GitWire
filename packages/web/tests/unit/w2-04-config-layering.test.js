@@ -287,22 +287,63 @@ settings:
     expect(state.cache.size).toBe(0);
   });
 
-  test("the three-way classification is pinned: validation throws, 404 absent, transport absent", async () => {
-    // (a) validation error → reject (proven above); (b) 404 → absent: a
-    // missing file leaves the layer out without failing resolution (proven
-    // by every defaults-only test); (c) non-404 transport failure → the
-    // layer is treated as absent per the frozen contract row "Layer
-    // unavailable → Treat layer as absent", resolution continues, and the
-    // failure direction is safe (dry-run defaults).
+  test("absent vs failed-to-read is pinned: 404 absent, operational failures reject", async () => {
+    // The maintainer review's safety correction: a source that EXISTS but
+    // cannot be read (403/5xx/network, oversized, DB failure) must FAIL
+    // resolution — silently dropping a higher-precedence layer could expose
+    // a more permissive lower layer during an outage. Only genuine absence
+    // (404, empty document, no row) leaves the layer out.
+    //
+    // (a) validation error → reject: proven above.
+    // (b) 404 → absent: proven by every defaults-only test.
+    // (c) non-404 transport failure → ConfigSourceUnavailableError:
     state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
     state.transportError = { status: 403, message: "Resource not accessible by integration" };
+    await expect(getConfigForRepo("acme/app")).rejects.toThrow(
+      /Configuration source currently unreadable \(acme\/(app|gitwire-config)@\.github\/\.gitwire\.yml\)/,
+    );
+    // Nothing cached from a failed resolution.
+    expect(state.cache.has("gitwire:config:w2-04.1:acme/app")).toBe(false);
+  });
 
-    const config = await getConfigForRepo("acme/app");
-    expect(config._meta.layers.repo).toBe(false);
-    expect(config._meta.layers.org).toBe(false);
-    expect(config.pillars.triage.enabled).toBe(false);
-    expect(config.settings.dry_run).toBe(true);
-    expect(config._meta.version_vector.repo).toBeNull();
+  test("the reviewer's scenario: an outage cannot strip a repo safety restriction", async () => {
+    // org: permissive (dry_run=false); repo: safety restriction (dry_run=true).
+    // A GitHub failure while reading the repo YAML must NOT resolve the org's
+    // permissive values — resolution fails instead.
+    state.files.set("acme/gitwire-config@.gitwire.yml", yamlFile(
+      "pillars:\n  triage:\n    enabled: true\nsettings:\n  dry_run: false\n",
+    ));
+    state.files.set("acme/app@.gitwire.yml", yamlFile("settings:\n  dry_run: true\n"));
+    state.transportError = { status: 503, message: "github unavailable" };
+
+    await expect(getConfigForRepo("acme/app")).rejects.toThrow(
+      /Configuration source currently unreadable/,
+    );
+  });
+
+  test("a governed-layer DB failure fails resolution instead of vanishing", async () => {
+    state.governedRows.set("acme/app", {
+      config: { settings: { dry_run: true } },
+      updated_at: new Date("2026-09-29T00:00:00Z"),
+      policy_version_id: "33333333-3333-4333-8333-333333333333",
+      promotion_record_id: "44444444-4444-4444-8444-444444444444",
+    });
+    mockQuery.mockImplementation(async (sql) => {
+      const q = String(sql).replace(/\s+/g, " ");
+      if (q.includes("FROM repo_config rc")) {
+        throw new Error("connection refused");
+      }
+      return { rows: [] };
+    });
+
+    await expect(getConfigForRepo("acme/app")).rejects.toThrow(/connection refused/);
+  });
+
+  test("oversized sources (empty content / encoding none) reject, not absent", async () => {
+    state.files.set("acme/app@.gitwire.yml", { content: "", sha: "bigsha", encoding: "none" });
+    await expect(getConfigForRepo("acme/app")).rejects.toThrow(
+      /currently unreadable \(acme\/app@\.gitwire\.yml\)/,
+    );
   });
 
   test("legacy-generation cache entries are never accepted as hits", async () => {
@@ -356,15 +397,20 @@ pillars:
     expect(live.settings.dry_run).toBe(false);
   });
 
-  test("preview never blames the proposal for an org-layer transport failure", async () => {
+  test("preview surfaces a distinct error class for source outages, not 'invalid YAML'", async () => {
     state.files.set("acme/gitwire-config@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
     state.transportError = { status: 503, message: "github unavailable" };
 
-    // The proposal resolves with the org layer degraded to absent — no
-    // "invalid proposed policy" conflation.
-    const proposed = await resolveProposedConfig("acme/app", "pillars:\n  triage:\n    enabled: true\n");
-    expect(proposed.pillars.triage.enabled).toBe(true);
-    expect(proposed.settings.dry_run).toBe(true);
+    // A preview over an unreadable org layer rejects with the
+    // ConfigSourceUnavailableError class so the preview services report an
+    // outage — never "your proposed policy is invalid".
+    const { isConfigSourceUnavailable } = await import("../../src/services/configService.js");
+    let caught = null;
+    await resolveProposedConfig("acme/app", "pillars:\n  triage:\n    enabled: true\n").catch((err) => {
+      caught = err;
+    });
+    expect(isConfigSourceUnavailable(caught)).toBe(true);
+    expect(caught.message).toMatch(/currently unreadable \(acme\/gitwire-config@\.github\/\.gitwire\.yml\)/);
   });
 
   test("an invalid ORG file rejects with the org file named, never the proposal", async () => {

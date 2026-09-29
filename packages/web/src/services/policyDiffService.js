@@ -10,8 +10,13 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { validateConfig } from "@gitwire/rules";
-import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
-import { getConfigForRepo, resolveProposedConfig } from "./configService.js";
+import { isDryRun } from "@gitwire/rules";
+import { isPillarEnabled, shouldTrigger } from "@gitwire/rules";
+import {
+  getConfigForRepo,
+  resolveProposedConfig,
+  isConfigSourceUnavailable,
+} from "./configService.js";
 import { validatePolicy } from "./policyValidationService.js";
 import { redactSecrets } from "../lib/redact.js";
 
@@ -59,6 +64,9 @@ export async function diffPolicyImpact(params = {}) {
   try {
     proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
+    // An unreadable configuration source is an outage, not a verdict on
+    // the user's YAML; the two cases get distinct error surfaces.
+    const sourceOutage = isConfigSourceUnavailable(err);
     return {
       compared_at: new Date().toISOString(),
       repo,
@@ -71,7 +79,9 @@ export async function diffPolicyImpact(params = {}) {
       changes: null,
       simulation_impact: null,
       results: [],
-      error: "Invalid proposed policy — cannot diff",
+      error: sourceOutage
+        ? "Configuration sources currently unreadable — cannot diff"
+        : "Invalid proposed policy — cannot diff",
     };
   }
 
@@ -97,7 +107,11 @@ export async function diffPolicyImpact(params = {}) {
   const proposedEnabledPillars = getEnabledPillars(proposedConfig);
 
   // Step 3: Compute config/risk/warning diffs
-  const proposedAnalysis = await validatePolicy(yamlText);
+  // Analyze the EFFECTIVE proposed policy (resolved through the canonical
+  // layering), not the raw proposal text — an inherited risky org setting
+  // the proposal omits stays active in proposedConfig and must appear in
+  // the risk delta. Same resolved-object pattern as the current side above.
+  const proposedAnalysis = await validatePolicy(yamlToText(proposedConfig));
 
   const pillarsEnabled = proposedEnabledPillars.filter(p => !currentEnabledPillars.includes(p));
   const pillarsDisabled = currentEnabledPillars.filter(p => !proposedEnabledPillars.includes(p));
