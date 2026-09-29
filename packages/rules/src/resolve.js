@@ -62,7 +62,16 @@ export function parseConfigLayer(yamlContent) {
     return { layer: {}, explicitKeys: [] };
   }
 
-  const parsed = yaml.load(yamlContent);
+  let parsed;
+  try {
+    parsed = yaml.load(yamlContent);
+  } catch (err) {
+    // A YAML syntax error is an invalid source, not an absent one: the
+    // sparse contract rejects present-but-invalid documents. Carry the same
+    // "Invalid .gitwire.yml:" prefix as structural validation failures so
+    // consumers classify both as validation errors.
+    throw new Error("Invalid .gitwire.yml: YAML syntax error: " + (err.message || String(err)));
+  }
 
   if (parsed === null || parsed === undefined) {
     return { layer: {}, explicitKeys: [] };
@@ -145,7 +154,8 @@ function layerRevision(layer) {
  *   provenanceSources— pointer-independent per-layer source identities:
  *                      { defaults, org, repo, governed }
  *   versionVector,   — { defaults, org, repo, governed } source identities
- *   effectiveHash,   — sha256 over canonical {config, provenance, versionVector}
+ *   effectiveHash,   — sha256 over the canonical effective config values
+ *                      only (not provenance, not the vector, not timestamps)
  *   explicitKeys,    — union of top-level keys explicitly supplied by the
  *                      org and repo YAML sources (governed excluded: a
  *                      promoted policy is a full materialization, and gate
@@ -180,18 +190,18 @@ export function resolveConfigLayers({ defaults, org, repo, governed } = {}) {
 
   // quality_gates semantics preserved from parseConfig(): when any YAML
   // source explicitly supplies a gate set, the built-in "default" gate is
-  // removed unless the merged result names a gate "default". The removal
-  // applies ONLY while the surviving "default" gate is still defaults-owned:
-  // a "default" gate supplied by a higher layer (governed promotion) has
-  // already replaced the built-in leaves and must never be stripped by a
-  // lower layer's gate set.
+  // removed — unless the YAML set itself names a "default" gate (in whole or
+  // in part: a partial override merges onto the built-in gate and keeps it,
+  // exactly like parseConfig) or a higher layer (governed promotion) has
+  // supplied "default" itself. The strip therefore applies only while the
+  // ENTIRE surviving gate is still defaults-owned.
   const yamlSuppliedGates = (org?.values && "quality_gates" in org.values) ||
     (repo?.values && "quality_gates" in repo.values);
   if (yamlSuppliedGates && isPlainObject(config.quality_gates) && "default" in config.quality_gates) {
-    const defaultGateStillFromDefaults =
-      provenance["/quality_gates/default/block_on_fail"] === "defaults" ||
+    const defaultGateWhollyFromDefaults =
+      provenance["/quality_gates/default/block_on_fail"] === "defaults" &&
       provenance["/quality_gates/default/conditions"] === "defaults";
-    if (defaultGateStillFromDefaults) {
+    if (defaultGateWhollyFromDefaults) {
       delete config.quality_gates.default;
       delete provenance["/quality_gates/default"];
       delete provenance["/quality_gates/default/conditions"];
