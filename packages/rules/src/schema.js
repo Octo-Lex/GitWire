@@ -164,11 +164,34 @@ export const DEFAULT_CONFIG = {
 
 // Validate that a parsed config object has the expected shape.
 // Returns { valid: true } or { valid: false, errors: string[] }.
+//
+// Prototype-pollution guard: documents carrying __proto__/constructor/
+// prototype keys at ANY depth are invalid. Plain-assignment merges treat
+// those keys as prototype setters rather than own properties, so accepting
+// them would let repository/org YAML mutate Object.prototype process-wide.
+const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function containsDangerousKey(value, depth = 0) {
+  if (depth > 16 || value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => containsDangerousKey(item, depth + 1));
+  }
+  for (const key of Object.keys(value)) {
+    if (DANGEROUS_KEYS.has(key)) return true;
+    if (containsDangerousKey(value[key], depth + 1)) return true;
+  }
+  return false;
+}
+
 export function validateConfig(config) {
   const errors = [];
 
   if (!config || typeof config !== "object") {
     return { valid: false, errors: ["Config must be an object"] };
+  }
+
+  if (containsDangerousKey(config)) {
+    errors.push("config must not contain __proto__, constructor, or prototype keys");
   }
 
   if (config.version !== undefined && typeof config.version !== "number") {
