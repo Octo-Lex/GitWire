@@ -224,41 +224,29 @@ describe("Rollout Rollback — redaction includes new fields", () => {
 describe("Rollout Rollback — route contract", () => {
   const source = readSource("packages/web/src/routes/rollouts.js");
 
-  it("imports rollbackRolloutPlan", () => {
-    expect(source).toMatch(/rollbackRolloutPlan/);
+  it("no longer imports or calls rollbackRolloutPlan", () => {
+    expect(source).not.toMatch(/\brollbackRolloutPlan\b/);
   });
 
   it("registers POST /:id/rollback", () => {
     expect(source).toMatch(/rolloutRouter\.post\("\/:id\/rollback"/);
   });
 
-  it("requires actor in rollback body", () => {
+  it("fails rollback closed with 409 legacy_policy_rollback_disabled", () => {
     const rollbackSection = source.slice(source.indexOf("/:id/rollback"));
-    expect(rollbackSection).toMatch(/actor is required/);
+    expect(rollbackSection).toMatch(/status\(409\)/);
+    expect(rollbackSection).toContain('error: "legacy_policy_rollback_disabled"');
+    expect(rollbackSection).toContain(
+      "Rollback must be performed through a governed immutable policy transition.",
+    );
   });
 
-  it("requires reason in rollback body", () => {
-    const rollbackSection = source.slice(source.indexOf("/:id/rollback"));
-    expect(rollbackSection).toMatch(/reason is required for rollback/);
-  });
-
-  it("handles rollback errors (400 for bad input)", () => {
-    const rollbackSection = source.slice(source.indexOf("/:id/rollback"));
-    expect(rollbackSection).toMatch(/status\(400\)/);
-  });
-
-  it("handles write failure errors (400)", () => {
-    const rollbackSection = source.slice(source.indexOf("/:id/rollback"));
-    expect(rollbackSection).toMatch(/Rollback failed/);
-  });
-
-  it("handles missing snapshot errors (400)", () => {
-    const rollbackSection = source.slice(source.indexOf("/:id/rollback"));
-    expect(rollbackSection).toMatch(/no previous_config/);
-  });
-
-  it("handles not found errors (400)", () => {
-    const rollbackSection = source.slice(source.indexOf("/:id/rollback"));
-    expect(rollbackSection).toMatch(/not found/);
+  it("consults neither body input nor any rollback service before rejecting", () => {
+    const rollbackSection = source.slice(source.indexOf("rolloutRouter.post(\"/:id/rollback\""));
+    expect(rollbackSection).not.toMatch(/actor is required/);
+    expect(rollbackSection).not.toMatch(/reason is required/);
+    expect(rollbackSection).not.toMatch(/Rollback failed/);
+    expect(rollbackSection).not.toMatch(/no previous_config/);
+    expect(rollbackSection).not.toMatch(/not found/);
   });
 });

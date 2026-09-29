@@ -495,7 +495,7 @@ export async function recordPolicyApprovalForRollout({
          change_request_id, policy_version_id, approver_principal_id,
          decision, reason, acknowledged_recommendations,
          evidence_manifest, expires_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
        RETURNING id, change_request_id, policy_version_id, approver_principal_id,
                  decision, reason, acknowledged_recommendations,
                  evidence_manifest, evidence_set_hash, expires_at, created_at`,
@@ -505,8 +505,8 @@ export async function recordPolicyApprovalForRollout({
         principal.principalId,
         decision,
         reason,
-        acknowledgedRecommendations,
-        evidenceManifest,
+        JSON.stringify(acknowledgedRecommendations),
+        JSON.stringify(evidenceManifest),
         normalizedExpiry,
       ],
     );

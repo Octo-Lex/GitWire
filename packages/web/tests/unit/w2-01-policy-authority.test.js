@@ -192,8 +192,10 @@ function installQueryRouter(state) {
           approver_principal_id: params[2],
           decision: params[3],
           reason: params[4],
-          acknowledged_recommendations: params[5],
-          evidence_manifest: params[6],
+          // The service passes JSON strings for the $n::jsonb parameters;
+          // PostgreSQL parses them back to JSON on RETURNING, so mirror that.
+          acknowledged_recommendations: JSON.parse(params[5]),
+          evidence_manifest: JSON.parse(params[6]),
           evidence_set_hash: "sha256:" + "b".repeat(64),
           expires_at: params[7],
           created_at: "2026-09-26T00:02:00Z",

@@ -227,15 +227,16 @@ describe("Rollout Approval — redaction includes new fields", () => {
   });
 });
 
-describe("Rollout Approval — route contract", () => {
+describe("Rollout Approval — route contract (W2-03 governed writers)", () => {
   const source = readSource("packages/web/src/routes/rollouts.js");
 
-  it("imports approveRolloutPlan", () => {
-    expect(source).toMatch(/approveRolloutPlan/);
+  it("imports approveGovernedRolloutPlan", () => {
+    expect(source).toMatch(/approveGovernedRolloutPlan/);
   });
 
-  it("imports rejectRolloutPlan", () => {
-    expect(source).toMatch(/rejectRolloutPlan/);
+  it("imports rejectRolloutPlan via the governed writer", () => {
+    expect(source).toMatch(/rejectGovernedRolloutPlan/);
+    expect(source).toContain('from "../services/governedPolicyWriterService.js"');
   });
 
   it("registers POST /:id/approve", () => {
@@ -246,12 +247,17 @@ describe("Rollout Approval — route contract", () => {
     expect(source).toMatch(/rolloutRouter\.post\("\/:id\/reject"/);
   });
 
-  it("requires actor in approve body", () => {
-    expect(source).toMatch(/actor is required.*GitHub username/);
+  it("derives approve authority from req.auth (body actor is telemetry only)", () => {
+    const approveSection = source.slice(source.indexOf("/:id/approve"));
+    expect(approveSection).toContain("principal: req.auth");
+    expect(approveSection).toContain("legacyActor: actor");
+    expect(source).not.toMatch(/actor is required.*GitHub username/);
   });
 
-  it("requires actor in reject body", () => {
-    expect(source).toMatch(/actor is required.*GitHub username/);
+  it("derives reject authority from req.auth (body actor is telemetry only)", () => {
+    const rejectSection = source.slice(source.indexOf("/:id/reject"));
+    expect(rejectSection).toContain("principal: req.auth");
+    expect(rejectSection).toContain("legacyActor: actor");
   });
 
   it("passes acknowledged_recommendations to service", () => {
@@ -277,8 +283,10 @@ describe("Rollout Approval — route contract", () => {
     expect(approveSection).toMatch(/missing/);
   });
 
-  it("handles unacknowledged error gracefully", () => {
-    const approveSection = source.slice(source.indexOf("approve"));
-    expect(approveSection).toMatch(/not acknowledged/);
+  it("maps governed writer errors (incl. unacknowledged recommendations) through sendGovernedWriterError", () => {
+    const approveSection = source.slice(source.indexOf("/:id/approve"));
+    expect(approveSection).toMatch(/sendGovernedWriterError\(res, err\)/);
+    const governedWriterService = readSource("packages/web/src/services/governedPolicyWriterService.js");
+    expect(governedWriterService).toMatch(/critical_recommendations_unacknowledged/);
   });
 });

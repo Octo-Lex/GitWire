@@ -454,8 +454,8 @@ describe("Policy Rollout — route contract", () => {
     expect(source).toMatch(/proposed_config is required/);
   });
 
-  it("validates created_by in create body", () => {
-    expect(source).toMatch(/created_by is required/);
+  it("validates created_by in create body when provided (author identity is server-owned)", () => {
+    expect(source).toMatch(/created_by must be a string when provided/);
   });
 
   it("validates status in transition body", () => {

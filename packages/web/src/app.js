@@ -175,6 +175,8 @@ export function createApp() {
   app.use("/api",                 phase4Router);
 
   // ── Config: per-repo .gitwire.yml overrides ─────────────────────────────
+  // W2-03: direct live-policy mutation is retired router-level inside
+  // config.js so app.js wiring stays scanner-parseable.
   app.use("/api/config",          configRouter);
   app.use("/api/activity",         activityRouter);
   app.use("/api/readiness",        readinessRouter);
