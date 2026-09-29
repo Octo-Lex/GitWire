@@ -145,10 +145,22 @@ try {
     const approved = await approveGovernedRolloutPlan(Number(plan.id), {
       principal: principal(approverId),
       reason: `approved-${suffix}`,
-      acknowledged_recommendations: [],
+      // Non-empty on purpose: node-postgres serializes JS arrays as PostgreSQL
+      // array literals unless bound as JSON strings, which corrupts or rejects
+      // the jsonb write (the defect this approval exercises).
+      acknowledged_recommendations: ["rec-critical-proof"],
     });
     assert.equal(approved.status, "approved");
     assert.equal(approved.approved_by, approverId);
+    assert.deepEqual(approved.acknowledged_recommendations, ["rec-critical-proof"]);
+    const { rows: [storedAck] } = await client.query(
+      `SELECT acknowledged_recommendations, reviewed_evidence
+         FROM policy_rollout_plans
+        WHERE id = $1`,
+      [plan.id],
+    );
+    assert.deepEqual(storedAck.acknowledged_recommendations, ["rec-critical-proof"]);
+    assert.equal(storedAck.reviewed_evidence.immutable_approval_record_id !== undefined, true);
 
     const { rows: [authority] } = await client.query(
       `SELECT cr.id AS change_request_id,

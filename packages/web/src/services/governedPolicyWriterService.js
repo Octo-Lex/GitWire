@@ -373,16 +373,18 @@ export async function approveGovernedRolloutPlan(id, params = {}) {
               approved_by = $1,
               approved_at = $2,
               approval_reason = $3,
-              acknowledged_recommendations = $4,
-              reviewed_evidence = $5
+              acknowledged_recommendations = $4::jsonb,
+              reviewed_evidence = $5::jsonb
         WHERE id = $6
         RETURNING *`,
       [
         approval.approver_principal_id,
         approval.created_at,
         reason,
-        acknowledged_recommendations,
-        reviewedEvidence,
+        // node-postgres serializes JS arrays as PostgreSQL array literals, not
+        // JSON; bind JSON strings explicitly like recordPolicyApprovalForRollout.
+        JSON.stringify(acknowledged_recommendations),
+        JSON.stringify(reviewedEvidence),
         id,
       ],
     );
