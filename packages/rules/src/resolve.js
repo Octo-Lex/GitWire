@@ -234,9 +234,16 @@ export function resolveConfigLayers({ defaults, org, repo, governed } = {}) {
   const yamlSuppliedGates = (org?.values && "quality_gates" in org.values) ||
     (repo?.values && "quality_gates" in repo.values);
   if (yamlSuppliedGates && isPlainObject(config.quality_gates) && "default" in config.quality_gates) {
+    // Wholly defaults-owned = every provenance entry at or below the
+    // default gate still names the defaults layer (generic walk, so the
+    // check cannot be defeated or narrowed by pointer hard-coding).
+    const gatePrefix = "/quality_gates/default";
+    const defaultGateEntries = Object.keys(provenance).filter(
+      (pointer) => pointer === gatePrefix || pointer.startsWith(gatePrefix + "/"),
+    );
     const defaultGateWhollyFromDefaults =
-      provenance["/quality_gates/default/block_on_fail"] === "defaults" &&
-      provenance["/quality_gates/default/conditions"] === "defaults";
+      defaultGateEntries.length > 0 &&
+      defaultGateEntries.every((pointer) => provenance[pointer] === "defaults");
     if (defaultGateWhollyFromDefaults) {
       delete config.quality_gates.default;
       delete provenance["/quality_gates/default"];
