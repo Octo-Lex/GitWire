@@ -269,6 +269,14 @@ settings:
     expect(state.cache.size).toBe(0);
   });
 
+  test("a YAML SYNTAX error in a present file is rejected, not treated as absent", async () => {
+    // A present-but-unparseable document is an invalid source under the
+    // sparse contract — it must never silently fall back to defaults.
+    state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n   enabled: [unclosed"));
+    await expect(getConfigForRepo("acme/app")).rejects.toThrow(/Invalid \.gitwire\.yml: YAML syntax error:/);
+    expect(state.cache.size).toBe(0);
+  });
+
   test("preview helper: proposed YAML resolves as a repo layer over the live org layer", async () => {
     state.files.set("acme/gitwire-config@.gitwire.yml", yamlFile(`
 pillars:
