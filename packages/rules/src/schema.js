@@ -169,7 +169,10 @@ export const DEFAULT_CONFIG = {
 // prototype keys at ANY depth are invalid. Plain-assignment merges treat
 // those keys as prototype setters rather than own properties, so accepting
 // them would let repository/org YAML mutate Object.prototype process-wide.
-const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+// Keys that plain-assignment merges treat as prototype setters rather than
+// own properties. Shared by validation (rejects documents carrying them)
+// and the resolver's merge walk (ignores them defensively at the primitive).
+export const DANGEROUS_CONFIG_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function containsDangerousKey(value, depth = 0) {
   if (depth > 16 || value === null || typeof value !== "object") return false;
@@ -177,7 +180,7 @@ function containsDangerousKey(value, depth = 0) {
     return value.some((item) => containsDangerousKey(item, depth + 1));
   }
   for (const key of Object.keys(value)) {
-    if (DANGEROUS_KEYS.has(key)) return true;
+    if (DANGEROUS_CONFIG_KEYS.has(key)) return true;
     if (containsDangerousKey(value[key], depth + 1)) return true;
   }
   return false;

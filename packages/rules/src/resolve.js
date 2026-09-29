@@ -22,7 +22,12 @@
 
 import yaml from "js-yaml";
 import { createHash } from "node:crypto";
-import { DEFAULT_CONFIG, CONFIG_SCHEMA_VERSION, validateConfig } from "./schema.js";
+import {
+  DEFAULT_CONFIG,
+  CONFIG_SCHEMA_VERSION,
+  validateConfig,
+  DANGEROUS_CONFIG_KEYS,
+} from "./schema.js";
 
 export const LAYER_ORDER = ["defaults", "org", "repo", "governed"];
 
@@ -101,9 +106,17 @@ function isPlainObject(value) {
  * every explicitly supplied non-branch node) into `provenance` under its
  * JSON-pointer path. Arrays replace; plain objects recurse; explicit null is
  * a supplied value.
+ *
+ * Prototype-safety: keys in DANGEROUS_CONFIG_KEYS (__proto__, constructor,
+ * prototype) are ignored at this primitive unconditionally. Bracket access
+ * on those names resolves to prototype setters/getters, so handling them
+ * here would let crafted layer values mutate Object.prototype even when a
+ * caller bypassed validation. Validation rejects documents carrying them;
+ * this is the defense-in-depth backstop for unvalidated programmatic input.
  */
 function mergeSparse(target, source, path, layerName, provenance) {
   for (const key of Object.keys(source)) {
+    if (DANGEROUS_CONFIG_KEYS.has(key)) continue;
     const value = source[key];
     const pointer = path + "/" + escapePointerToken(key);
     if (isPlainObject(value)) {

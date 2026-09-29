@@ -352,15 +352,23 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
       .toThrow(/must not contain __proto__/);
     expect(() => parseConfigLayer("constructor:\n  prototype:\n    x: 1\n"))
       .toThrow(/must not contain __proto__|constructor/);
-    // And the resolver itself stays clean when fed such values directly.
-    expect(() => resolveConfigLayers({
-      repo: { values: { __proto__: { polluted: "yes" }, pillars: {} }, source: "r@1" },
-    })).not.toThrow();
-    const pollutedResolve = resolveConfigLayers({
-      repo: { values: JSON.parse('{"__proto__": {"polluted": "yes"}}'), source: "r@1" },
-    });
-    expect(Object.prototype.polluted).toBeUndefined();
-    expect(pollutedResolve.config).toBeDefined();
+  });
+
+  test("own __proto__ keys fed DIRECTLY to the resolver cannot pollute Object.prototype", () => {
+    // Object literals do not create own __proto__ keys (the setter fires
+    // instead), so the reproducer must use JSON.parse — the fifth review
+    // round proved the merge primitive was reachable this way from any
+    // caller that bypasses parseConfigLayer validation.
+    const crafted = JSON.parse(
+      '{"__proto__": {"polluted": "yes"}, "settings": {"dry_run": false}}',
+    );
+    const resolved = resolveConfigLayers({ repo: { values: crafted, source: "r@1" } });
+
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+    expect(({}).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf({}).polluted).toBeUndefined();
+    // Legitimate keys from the same crafted document still resolve normally.
+    expect(resolved.config.settings.dry_run).toBe(false);
   });
 
   test("procedural metadata keys supplied by any layer are stripped before hashing", () => {
