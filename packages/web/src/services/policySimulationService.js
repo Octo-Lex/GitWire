@@ -11,7 +11,8 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
-import { parseConfig, validateConfig } from "@gitwire/rules";
+import { validateConfig } from "@gitwire/rules";
+import { resolveProposedConfig } from "./configService.js";
 import { redactSecrets } from "../lib/redact.js";
 
 // Map decision_log source to pillar name
@@ -58,10 +59,10 @@ export async function simulatePolicy(params = {}) {
   const fromDate = from || new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
   const toDate = to || new Date().toISOString();
 
-  // Step 1: Parse and validate the proposed policy
+  // Step 1: Resolve the proposed policy through the canonical layering
   let proposedConfig;
   try {
-    proposedConfig = parseConfig(yamlText);
+    proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
     return {
       simulated_at: new Date().toISOString(),

@@ -9,9 +9,9 @@
 
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
-import { parseConfig, validateConfig } from "@gitwire/rules";
+import { validateConfig } from "@gitwire/rules";
 import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
-import { getConfigForRepo } from "./configService.js";
+import { getConfigForRepo, resolveProposedConfig } from "./configService.js";
 import { validatePolicy } from "./policyValidationService.js";
 import { redactSecrets } from "../lib/redact.js";
 
@@ -53,10 +53,11 @@ export async function diffPolicyImpact(params = {}) {
   const currentDryRun = isDryRun(currentConfig);
   const currentEnabledPillars = getEnabledPillars(currentConfig);
 
-  // Step 2: Parse proposed policy
+  // Step 2: Resolve proposed policy through the canonical layering
+  // (proposal acts as a prospective repo layer over the current org layer)
   let proposedConfig;
   try {
-    proposedConfig = parseConfig(yamlText);
+    proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
     return {
       compared_at: new Date().toISOString(),

@@ -1,15 +1,24 @@
 // @gitwire/rules — schema.js
 // Default config and validation for .gitwire.yml.
 //
-// The DEFAULT_CONFIG applies when a repo has NO .gitwire.yml.
-// Every pillar is enabled (or disabled) with conservative defaults.
+// W2-04 safe defaults: DEFAULT_CONFIG is enrollment-safe. A repository with
+// no organization config, no repository config, and no governed override
+// cannot produce a GitWire mutation solely because it was enrolled —
+// dry-run is on and every mutation-capable pillar is disabled until a layer
+// explicitly enables it.
+
+// Stable identity of the built-in defaults. Part of the configuration
+// version vector; change it whenever DEFAULT_CONFIG semantics change.
+export const CONFIG_SCHEMA_VERSION = "w2-04.1";
 
 export const DEFAULT_CONFIG = {
   version: 1,
 
   pillars: {
     triage: {
-      enabled: true,
+      // W2-04 safe default: mutation-capable pillars start disabled; a layer
+      // (org config, repo config, governed promotion) must explicitly enable.
+      enabled: false,
       auto_label: true,
       auto_comment: true,
       duplicate_detection: true,
@@ -21,7 +30,7 @@ export const DEFAULT_CONFIG = {
     },
 
     ci_healing: {
-      enabled: true,
+      enabled: false,
       auto_patch: true,
       max_fix_attempts: 3,
       min_confidence_to_patch: "medium", // low | medium | high — patches below this are comment-only
@@ -34,7 +43,7 @@ export const DEFAULT_CONFIG = {
     },
 
     maintainer: {
-      enabled: true,
+      enabled: false,
       stale: {
         issues: {
           warn_days: 60,
@@ -74,11 +83,11 @@ export const DEFAULT_CONFIG = {
     },
 
     enforcement: {
-      enabled: true,
+      enabled: false,
     },
 
     trust: {
-      enabled: true,
+      enabled: false,
       flaky_test_detection: true,
       dependency_scanning: true,
     },
@@ -93,7 +102,7 @@ export const DEFAULT_CONFIG = {
     },
 
     ai_review: {
-      enabled: true,
+      enabled: false,
       comment_findings: true,
       // Review engine ("claude" default; future: "codex", "openai")
       engine: "claude",
@@ -127,9 +136,11 @@ export const DEFAULT_CONFIG = {
   },
 
   settings: {
-    dry_run: false,
+    // W2-04 safe default: dry-run until a layer explicitly goes live.
+    dry_run: true,
     // On release.published, close issues that were fixed by GitWire PRs
-    release_close_fixed_issues: true,
+    // Safe default: issue-close behavior is a mutation — opt in explicitly.
+    release_close_fixed_issues: false,
   },
 
   // Named reusable expressions

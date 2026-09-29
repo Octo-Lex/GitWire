@@ -8,7 +8,8 @@
 // This service never writes config or mutates GitHub.
 
 import { logger } from "../lib/logger.js";
-import { parseConfig, validateConfig } from "@gitwire/rules";
+import { validateConfig } from "@gitwire/rules";
+import { resolveProposedConfig } from "./configService.js";
 import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { validatePolicy } from "./policyValidationService.js";
 
@@ -64,7 +65,7 @@ export async function recommendGuardrails(params = {}) {
   // Step 1: Parse + validate proposed policy
   let proposedConfig;
   try {
-    proposedConfig = parseConfig(yamlText);
+    proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
     return {
       generated_at: new Date().toISOString(),

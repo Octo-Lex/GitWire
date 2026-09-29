@@ -25,8 +25,8 @@ describe("Policy Recommendations — service contract", () => {
     expect(source).toMatch(/yaml is required/);
   });
 
-  it("parses proposed policy with parseConfig", () => {
-    expect(source).toMatch(/parseConfig/);
+  it("resolves proposed policy through the canonical layering (W2-04)", () => {
+    expect(source).toMatch(/resolveProposedConfig/);
   });
 
   it("validates with validateConfig", () => {

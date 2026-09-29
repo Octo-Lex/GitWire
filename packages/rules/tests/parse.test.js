@@ -4,19 +4,19 @@ import { DEFAULT_CONFIG, validateConfig } from "../src/schema.js";
 describe("parseConfig", () => {
   test("returns DEFAULT_CONFIG for null input", () => {
     const result = parseConfig(null);
-    expect(result.pillars.triage.enabled).toBe(true);
+    expect(result.pillars.triage.enabled).toBe(false);
     expect(result.pillars.issue_fix.enabled).toBe(false);
     expect(result.version).toBe(1);
   });
 
   test("returns DEFAULT_CONFIG for empty string", () => {
     const result = parseConfig("");
-    expect(result.pillars.triage.enabled).toBe(true);
+    expect(result.pillars.triage.enabled).toBe(false);
   });
 
   test("returns DEFAULT_CONFIG for whitespace-only string", () => {
     const result = parseConfig("   \n\n  ");
-    expect(result.pillars.triage.enabled).toBe(true);
+    expect(result.pillars.triage.enabled).toBe(false);
   });
 
   test("overrides only the specified field, keeps defaults for rest", () => {
@@ -33,9 +33,9 @@ pillars:
     // Preserved from defaults
     expect(result.pillars.triage.auto_label).toBe(true);
     expect(result.pillars.triage.auto_comment).toBe(true);
-    expect(result.pillars.ci_healing.enabled).toBe(true);
+    expect(result.pillars.ci_healing.enabled).toBe(false);
     expect(result.pillars.issue_fix.enabled).toBe(false);
-    expect(result.pillars.maintainer.enabled).toBe(true);
+    expect(result.pillars.maintainer.enabled).toBe(false);
     expect(result.version).toBe(1);
   });
 
@@ -68,7 +68,7 @@ pillars:
     expect(result.pillars.future_feature.enabled).toBe(true);
     expect(result.pillars.future_feature.some_option).toBe(42);
     // Known pillars still present
-    expect(result.pillars.triage.enabled).toBe(true);
+    expect(result.pillars.triage.enabled).toBe(false);
   });
 
   test("overwrites arrays, does not concatenate", () => {
@@ -101,8 +101,8 @@ settings:
 
   test("does not mutate DEFAULT_CONFIG", () => {
     const original = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
-    parseConfig("pillars:\n  triage:\n    enabled: false");
-    expect(DEFAULT_CONFIG.pillars.triage.enabled).toBe(true);
+    parseConfig("pillars:\n  triage:\n    enabled: true");
+    expect(DEFAULT_CONFIG.pillars.triage.enabled).toBe(false);
     expect(JSON.stringify(DEFAULT_CONFIG)).toBe(JSON.stringify(original));
   });
 });

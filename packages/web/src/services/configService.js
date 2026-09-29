@@ -1,14 +1,29 @@
 // src/services/configService.js
-// Fetches .gitwire.yml from GitHub, parses with @gitwire/rules,
-// caches in Redis with 5-minute TTL.
+// Configuration resolution over the W2-04 canonical layering model.
 //
-// Resolution order (highest priority wins):
-//   1. DB overrides (repo_config table — set via dashboard UI)
-//   2. .gitwire.yml file (fetched from GitHub repo)
-//   3. Org-level .gitwire.yml (from {org}/gitwire-config repo)
-//   4. DEFAULT_CONFIG from @gitwire/rules
+// Fetches each sparse source, resolves through @gitwire/rules'
+// resolveConfigLayers(), and caches the complete resolution bundle
+// (config + provenance + version vector + effective hash) in Redis.
+//
+// Resolution order (lowest → highest, sparse — a layer overrides only the
+// values it explicitly supplies):
+//   1. DEFAULT_CONFIG from @gitwire/rules (enrollment-safe)
+//   2. Org-level .gitwire.yml (from {org}/gitwire-config repo)
+//   3. Repo .gitwire.yml (.github/.gitwire.yml, then .gitwire.yml)
+//   4. Governed live-policy materialization (repo_config, written only by
+//      W2-02 governed promotion since W2-03; consumed read-only here)
+//
+// Every org/repo source carries a stable revision (the fetched blob SHA);
+// the governed layer carries the immutable policy version + promotion
+// identity when an active binding exists, or an explicit legacy identity
+// (never falsely labelled immutable) for pre-W2-03 rows.
 
-import { parseConfig, DEFAULT_CONFIG, mergeDeep } from "@gitwire/rules";
+import {
+  parseConfigLayer,
+  resolveConfigLayers,
+  DEFAULT_CONFIG,
+  CONFIG_SCHEMA_VERSION,
+} from "@gitwire/rules";
 import { redis } from "../lib/queue.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
@@ -25,12 +40,21 @@ const ORG_CONFIG_REPO = process.env.GITWIRE_ORG_CONFIG_REPO || "gitwire-config";
 
 /**
  * Get the resolved config for a repo.
- * Merge order: DEFAULT_CONFIG ← org/.gitwire.yml ← repo/.gitwire.yml ← DB overrides
+ *
+ * Returns the effective config with `_meta` carrying the complete W2-04
+ * resolution evidence: layers, provenance (pointer → supplying layer),
+ * provenance_sources (per-layer source identities), version_vector,
+ * effective_hash, org_source, and the observational resolved_at.
+ * `_explicitKeys` lists top-level keys explicitly supplied by the YAML
+ * sources (consumed by quality-gate precedence).
+ *
+ * The cache stores the whole config-with-_meta bundle so a hit can never
+ * return configuration without its resolution evidence.
  */
 export async function getConfigForRepo(repoFullName) {
   const cacheKey = CACHE_PREFIX + repoFullName;
 
-  // 1. Check Redis cache
+  // 1. Check Redis cache (the bundle is cached as one coherent object)
   try {
     const cached = await redis.get(cacheKey);
     if (cached) {
@@ -44,41 +68,35 @@ export async function getConfigForRepo(repoFullName) {
     logger.warn({ err: err.message, repo: repoFullName }, "Redis cache read failed");
   }
 
-  // 2. Start from defaults
-  let config = structuredClone(DEFAULT_CONFIG);
-  let layers = { defaults: true, org: false, repo: false, db: false };
-  let orgSource = null;
+  // 2. Fetch every sparse source with its stable identity
+  const [orgLayer, repoLayer, governedLayer] = await Promise.all([
+    fetchOrgConfig(repoFullName),
+    fetchRepoConfig(repoFullName),
+    fetchGovernedConfig(repoFullName),
+  ]);
 
-  // 3. Layer on org-level .gitwire.yml
-  const orgResult = await fetchOrgConfig(repoFullName);
-  if (orgResult.source !== null) {
-    config = orgResult.config;
-    layers.org = true;
-    orgSource = orgResult.source;
-  }
+  // 3. Canonical sparse resolution
+  const resolution = resolveConfigLayers({
+    defaults: DEFAULT_CONFIG,
+    org: orgLayer,
+    repo: repoLayer,
+    governed: governedLayer,
+  });
 
-  // 4. Layer on repo-level YAML file from GitHub
-  const yamlConfig = await fetchFromGitHub(repoFullName);
-  if (yamlConfig._hasFile === true) {
-    config = yamlConfig;
-    layers.repo = true;
-  }
-
-  // 5. Layer on DB overrides (dashboard UI)
-  const dbOverrides = await fetchDBOverrides(repoFullName);
-  if (dbOverrides && Object.keys(dbOverrides).length > 0) {
-    config = mergeDeep(config, dbOverrides);
-    layers.db = true;
-  }
-
-  // Attach layer metadata for dashboard visibility
+  const config = resolution.config;
+  config._explicitKeys = resolution.explicitKeys;
   config._meta = {
-    layers,
-    org_source: orgSource,
+    layers: resolution.layers,
+    org_source: orgLayer ? orgLayer.source : null,
+    provenance: resolution.provenance,
+    provenance_sources: resolution.provenanceSources,
+    version_vector: resolution.versionVector,
+    effective_hash: resolution.effectiveHash,
+    config_schema_version: CONFIG_SCHEMA_VERSION,
     resolved_at: new Date().toISOString(),
   };
 
-  // 6. Cache in Redis
+  // 4. Cache the complete bundle
   try {
     await redis.set(cacheKey, JSON.stringify(config), "EX", CACHE_TTL);
   } catch (err) {
@@ -86,6 +104,26 @@ export async function getConfigForRepo(repoFullName) {
   }
 
   return config;
+}
+
+/**
+ * Resolve a PROPOSED .gitwire.yml as a prospective repository layer over the
+ * repository's current org layer and the safe defaults — the canonical
+ * layering semantics, so previews (validate/simulate/diff/recommend) never
+ * run a second, contradictory precedence algorithm.
+ *
+ * Throws on invalid YAML/shape exactly like parseConfig().
+ * The proposed layer's provenance/vector metadata is intentionally omitted —
+ * callers preview effective VALUES, not resolution identity.
+ */
+export async function resolveProposedConfig(repoFullName, yamlText) {
+  const { layer } = parseConfigLayer(yamlText);
+  const orgLayer = await fetchOrgConfig(repoFullName);
+  return resolveConfigLayers({
+    defaults: DEFAULT_CONFIG,
+    org: orgLayer,
+    repo: { values: layer, source: "proposed:.gitwire.yml" },
+  }).config;
 }
 
 /**
@@ -239,61 +277,106 @@ async function recordHistory(repoId, action, configOld, configNew, changedBy) {
   }
 }
 
-async function fetchFromGitHub(repoFullName) {
+// Fetch a YAML config file from GitHub, returning the sparse layer plus a
+// stable source identity ("{owner}/{repo}@{path}#{blobSha}"). Uses the JSON
+// contents response so the blob SHA (the stable revision) is available.
+// Returns null when the file is absent (404) — an absent layer, never an
+// error-shaped one. A PRESENT but invalid document throws (parseConfigLayer
+// rejects the shape); the sparse contract never partially applies a source.
+async function fetchConfigFile(octokit, owner, repoName, path) {
+  let data;
+  try {
+    ({ data } = await octokit.request(
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      { owner, repo: repoName, path },
+    ));
+  } catch (err) {
+    if (err.status === 404) return null;
+    throw err;
+  }
+  if (!data || typeof data.content !== "string") return null;
+  const yamlText = Buffer.from(data.content, "base64").toString("utf-8");
+  const { layer } = parseConfigLayer(yamlText);
+  if (Object.keys(layer).length === 0) return null;
+  return {
+    values: layer,
+    source: `${owner}/${repoName}@${path}#${data.sha}`,
+  };
+}
+
+// Validation errors from parseConfigLayer carry this prefix and must always
+// surface; only transport failures degrade a layer to "absent".
+function isConfigValidationError(err) {
+  return typeof err?.message === "string" && err.message.startsWith("Invalid .gitwire.yml");
+}
+
+async function fetchRepoConfig(repoFullName) {
   const { rows } = await db.query(
     "SELECT installation_id FROM repositories WHERE full_name = $1",
-    [repoFullName]
+    [repoFullName],
   );
-  if (!rows.length) return structuredClone(DEFAULT_CONFIG);
+  if (!rows.length) return null;
 
   try {
     const octokit = wrapOctokit(await getInstallationClient(rows[0].installation_id));
-    const [owner, repo] = repoFullName.split("/");
+    const [owner, repoName] = repoFullName.split("/");
 
     for (const path of CONFIG_PATHS) {
-      try {
-        const { data } = await octokit.request(
-          "GET /repos/{owner}/{repo}/contents/{path}",
-          {
-            owner,
-            repo,
-            path,
-            headers: { accept: "application/vnd.github.v3.raw" },
-          }
-        );
-        if (data) {
-          logger.info({ repo: repoFullName, path }, ".gitwire.yml loaded");
-          const parsed = parseConfig(data);
-          parsed._hasFile = true;
-          return parsed;
-        }
-      } catch (err) {
-        if (err.status !== 404) throw err;
+      const found = await fetchConfigFile(octokit, owner, repoName, path);
+      if (found) {
+        logger.info({ repo: repoFullName, path, revision: found.source }, ".gitwire.yml loaded");
+        return found;
       }
     }
   } catch (err) {
+    if (isConfigValidationError(err)) throw err;
     logger.warn(
       { err: err.message, repo: repoFullName },
-      "Failed to fetch .gitwire.yml — using defaults"
+      "Failed to fetch .gitwire.yml — treating layer as absent",
     );
   }
 
-  return structuredClone(DEFAULT_CONFIG);
+  return null;
 }
 
-async function fetchDBOverrides(repoFullName) {
+/**
+ * Fetch the governed live-policy layer (repo_config) with its identity.
+ *
+ * Since W2-03, repo_config is written only by W2-02 governed promotion. When
+ * an active_policy_bindings row exists, the identity is the immutable policy
+ * version + promotion record. Pre-W2-03 legacy rows (no binding) are labeled
+ * explicitly as legacy compatibility data — never as an immutable governed
+ * version. Returns null when the repo has no materialized live policy.
+ */
+async function fetchGovernedConfig(repoFullName) {
   try {
-    const { rows } = await db.query(
-      `SELECT rc.config
-       FROM repo_config rc
-       JOIN repositories r ON r.github_id = rc.repo_id
-       WHERE r.full_name = $1`,
-      [repoFullName]
+    const { rows: [row] } = await db.query(
+      `SELECT rc.config,
+              rc.updated_at,
+              apb.policy_version_id,
+              apb.promotion_record_id
+         FROM repo_config rc
+         JOIN repositories r ON r.github_id = rc.repo_id
+         LEFT JOIN active_policy_bindings apb ON apb.repo_id = rc.repo_id
+        WHERE r.full_name = $1`,
+      [repoFullName],
     );
-    return rows[0]?.config || null;
+    if (!row || !row.config || Object.keys(row.config).length === 0) return null;
+
+    if (row.policy_version_id && row.promotion_record_id) {
+      return {
+        values: row.config,
+        source: `policy_version:${row.policy_version_id}:promotion:${row.promotion_record_id}`,
+      };
+    }
+
+    // Legacy compatibility row — explicitly not an immutable governed version.
+    return {
+      values: row.config,
+      source: `legacy:repo_config:${new Date(row.updated_at).toISOString()}`,
+    };
   } catch (err) {
-    // Table might not exist yet (pre-migration)
-    logger.debug({ err: err.message }, "DB config overrides not available");
+    logger.debug({ err: err.message }, "Governed config layer not available");
     return null;
   }
 }
@@ -301,8 +384,8 @@ async function fetchDBOverrides(repoFullName) {
 // ── Org-level config ────────────────────────────────────────────────────────
 
 /**
- * Fetch org-level .gitwire.yml from the {org}/gitwire-config repo.
- * Returns { config, source } where source is "org/gitwire-config" or null.
+ * Fetch the org-level .gitwire.yml from the {org}/gitwire-config repo.
+ * Returns { values, source } or null when the org has no config.
  */
 async function fetchOrgConfig(repoFullName) {
   try {
@@ -312,53 +395,42 @@ async function fetchOrgConfig(repoFullName) {
       "FROM repositories r " +
       "JOIN installations i ON i.github_id = r.installation_id " +
       "WHERE r.full_name = $1",
-      [repoFullName]
+      [repoFullName],
     );
-    if (!repo) return { config: structuredClone(DEFAULT_CONFIG), source: null };
+    if (!repo) return null;
 
-    // Try to fetch org config from {org}/gitwire-config repo
     const octokit = wrapOctokit(await getInstallationClient(repo.installation_id));
-    const [owner] = repoFullName.split("/");
 
     for (const path of CONFIG_PATHS) {
       try {
-        const { data } = await octokit.request(
-          "GET /repos/{owner}/{repo}/contents/{path}",
-          {
-            owner: repo.account_login,
-            repo: ORG_CONFIG_REPO,
-            path,
-            headers: { accept: "application/vnd.github.v3.raw" },
-          }
-        );
-        if (data) {
+        const found = await fetchConfigFile(octokit, repo.account_login, ORG_CONFIG_REPO, path);
+        if (found) {
           logger.info(
-            { org: repo.account_login, path, source: repo.account_login + "/" + ORG_CONFIG_REPO },
-            "Org-level .gitwire.yml loaded"
+            { org: repo.account_login, path, revision: found.source },
+            "Org-level .gitwire.yml loaded",
           );
-          return {
-            config: parseConfig(data),
-            source: repo.account_login + "/" + ORG_CONFIG_REPO,
-          };
+          return found;
         }
       } catch (err) {
+        if (isConfigValidationError(err)) throw err;
         if (err.status !== 404) {
           logger.warn(
             { err: err.message, org: repo.account_login },
-            "Org config fetch error (non-404)"
+            "Org config fetch error (non-404)",
           );
         }
         // 404 = no org config repo — that's normal, skip silently
       }
     }
   } catch (err) {
+    if (isConfigValidationError(err)) throw err;
     logger.debug(
       { err: err.message, repo: repoFullName },
-      "Org config resolution failed — using defaults"
+      "Org config resolution failed — treating layer as absent",
     );
   }
 
-  return { config: structuredClone(DEFAULT_CONFIG), source: null };
+  return null;
 }
 
 /**

@@ -20,12 +20,12 @@ import { DEFAULT_CONFIG, validateConfig } from "../src/schema.js";
 // ── isPillarEnabled ──────────────────────────────────────────────────────────
 
 describe("isPillarEnabled", () => {
-  test("triage is enabled by default", () => {
-    expect(isPillarEnabled("triage", DEFAULT_CONFIG)).toBe(true);
+  test("triage is disabled by default (W2-04 safe defaults)", () => {
+    expect(isPillarEnabled("triage", DEFAULT_CONFIG)).toBe(false);
   });
 
-  test("ci_healing is enabled by default", () => {
-    expect(isPillarEnabled("ci_healing", DEFAULT_CONFIG)).toBe(true);
+  test("ci_healing is disabled by default (W2-04 safe defaults)", () => {
+    expect(isPillarEnabled("ci_healing", DEFAULT_CONFIG)).toBe(false);
   });
 
   test("issue_fix is disabled by default", () => {
@@ -58,8 +58,8 @@ describe("isPillarEnabled", () => {
 // ── isDryRun ─────────────────────────────────────────────────────────────────
 
 describe("isDryRun", () => {
-  test("returns false by default", () => {
-    expect(isDryRun(DEFAULT_CONFIG)).toBe(false);
+  test("returns true by default (W2-04 dry-run by default)", () => {
+    expect(isDryRun(DEFAULT_CONFIG)).toBe(true);
   });
 
   test("returns true when settings.dry_run is true", () => {
