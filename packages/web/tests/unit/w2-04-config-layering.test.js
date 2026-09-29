@@ -13,6 +13,7 @@ const state = {
   governedRows: new Map(), // full_name -> row or null
   cache: new Map(),
   cacheWrites: 0,
+  transportError: null, // { status, message } — non-404 GitHub failure simulation
 };
 
 const mockQuery = jest.fn();
@@ -44,6 +45,12 @@ jest.unstable_mockModule("../../src/lib/githubWrapper.js", () => ({
   wrapOctokit: jest.fn(() => ({
     request: async (route, params) => {
       if (!route.includes("/contents/")) throw new Error("unexpected route " + route);
+      if (state.transportError) {
+        // Non-404 transport failure (rate limit, 403, 5xx, ECONNREFUSED…)
+        const err = new Error(state.transportError.message);
+        err.status = state.transportError.status;
+        throw err;
+      }
       const key = `${params.owner}/${params.repo}@${params.path}`;
       const file = state.files.get(key);
       if (!file) {
@@ -70,6 +77,7 @@ beforeEach(() => {
   state.orgRows.clear();
   state.governedRows.clear();
   state.cache.clear();
+  state.transportError = null;
   state.cacheWrites = 0;
   state.repoRows = [{ full_name: "acme/app", installation_id: 1 }];
   state.orgRows.set("acme/app", { installation_id: 1, account_login: "acme" });
@@ -275,6 +283,24 @@ settings:
     state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n   enabled: [unclosed"));
     await expect(getConfigForRepo("acme/app")).rejects.toThrow(/Invalid \.gitwire\.yml: YAML syntax error:/);
     expect(state.cache.size).toBe(0);
+  });
+
+  test("the three-way classification is pinned: validation throws, 404 absent, transport absent", async () => {
+    // (a) validation error → reject (proven above); (b) 404 → absent: a
+    // missing file leaves the layer out without failing resolution (proven
+    // by every defaults-only test); (c) non-404 transport failure → the
+    // layer is treated as absent per the frozen contract row "Layer
+    // unavailable → Treat layer as absent", resolution continues, and the
+    // failure direction is safe (dry-run defaults).
+    state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
+    state.transportError = { status: 403, message: "Resource not accessible by integration" };
+
+    const config = await getConfigForRepo("acme/app");
+    expect(config._meta.layers.repo).toBe(false);
+    expect(config._meta.layers.org).toBe(false);
+    expect(config.pillars.triage.enabled).toBe(false);
+    expect(config.settings.dry_run).toBe(true);
+    expect(config._meta.version_vector.repo).toBeNull();
   });
 
   test("preview helper: proposed YAML resolves as a repo layer over the live org layer", async () => {
