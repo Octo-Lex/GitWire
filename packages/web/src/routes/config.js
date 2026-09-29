@@ -17,8 +17,13 @@ import { recommendGuardrails } from "../services/policyRecommendationService.js"
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { observeAuthorize } from "../services/auth/observeAdopt.js";
+import { directPolicyWriteGuard } from "../middleware/directPolicyWriteGuard.js";
 
 export const configRouter = Router();
+
+// W2-03: retire direct live-policy mutation before the compatibility routes.
+// Mounted router-level so app.js keeps only scanner-parseable route mounts.
+configRouter.use(directPolicyWriteGuard);
 
 // ── GET resolved config ──────────────────────────────────────────────────────
 configRouter.get("/:owner/:repo", async (req, res) => {
