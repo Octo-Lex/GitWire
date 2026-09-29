@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import useSWR from "swr";
 import {
   API,
@@ -75,12 +76,14 @@ export default function ConfigPage() {
           Governed live policy — read only. Create policy changes through the
           governed rollout workflow; direct dashboard overrides are disabled.
         </p>
-        <a
+        {/* next/link applies the production basePath; a raw href="/rollouts"
+            would 404 behind nginx where the app is served under /dashboard. */}
+        <Link
           href="/rollouts"
           className="inline-flex mt-3 text-sm font-medium text-accent-green hover:underline"
         >
           Open governed rollout workflow →
-        </a>
+        </Link>
       </div>
 
       <div>
