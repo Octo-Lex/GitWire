@@ -26,17 +26,31 @@ import { logger } from "../../lib/logger.js";
 
 /**
  * Load a principal by id. Returns null if not found.
+ *
+ * Authority-sensitive callers may supply their transaction client and request
+ * a shared row lock. PostgreSQL then holds the principal-status authority row
+ * through that caller's transaction, preventing a concurrent disable/delete
+ * from becoming effective between a positive authorization decision and its
+ * protected effect.
+ *
  * @param {string} principalId - UUID
+ * @param {object} [opts]
+ * @param {{query: Function}} [opts.queryable]
+ * @param {boolean} [opts.lockAuthorityRows]
  * @returns {Promise<PrincipalRecord|null>}
  */
-export async function getPrincipalById(principalId) {
+export async function getPrincipalById(
+  principalId,
+  { queryable = db, lockAuthorityRows = false } = {},
+) {
   if (!principalId) return null;
   try {
-    const { rows } = await db.query(
+    const lockClause = lockAuthorityRows ? " FOR SHARE" : "";
+    const { rows } = await queryable.query(
       `SELECT id, principal_type, display_name, status, auth_epoch,
               github_user_id, installation_id
          FROM gitwire_auth.auth_principals
-        WHERE id = $1`,
+        WHERE id = $1${lockClause}`,
       [principalId]
     );
     if (rows.length === 0) return null;

@@ -17,14 +17,17 @@ import { logger } from "../../lib/logger.js";
 
 /**
  * Record a decision to auth_decision_log. Best-effort; never throws.
+ * Authority-sensitive callers may supply their existing transaction client so
+ * a positive locked authorization does not require a second pool checkout.
  * @param {object} decision - AuthorizationDecision
  * @param {object} [principal] - AuthContext
  * @param {object} [observeOpts] - { legacyExpected, disagreement, observeMode }
- * @returns {Promise<boolean>} true when the row persisted, false on best-effort failure
+ * @param {{query: Function}} [queryable] - DB wrapper/client used for persistence
+ * @returns {Promise<boolean>} true when the insert succeeded, false on best-effort failure
  */
-export async function logDecision(decision, principal, observeOpts = {}) {
+export async function logDecision(decision, principal, observeOpts = {}, queryable = db) {
   try {
-    await db.query(
+    await queryable.query(
       `INSERT INTO gitwire_auth.auth_decision_log
          (principal_id, permission, resource_type,
           resource_installation_id, resource_repository_id,

@@ -89,6 +89,46 @@ describe("W1-02 central authorization mode", () => {
     );
   });
 
+  test("locked denial persists through the caller transaction queryable", async () => {
+    const principal = Object.freeze({
+      principalId: "principal-denied",
+      authenticationMethod: "api_key",
+    });
+    const lockedQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const lockedQueryable = { query: lockedQuery };
+
+    mockGetPrincipalById.mockResolvedValue({ id: "principal-denied" });
+    mockPrincipalValidityCode.mockReturnValue("allowed");
+
+    const result = await authorizeControlled({
+      principal,
+      permission: "repository:update",
+      resource: {
+        type: "repository",
+        installationId: 7,
+        repositoryId: 42,
+      },
+      mode: AuthorizationMode.ENFORCED,
+      queryable: lockedQueryable,
+      lockAuthorityRows: true,
+    });
+
+    expect(result.decision.allowed).toBe(false);
+    expect(result.decision.code).toBe("permission_missing");
+    expect(result.mode).toBe("enforced");
+    expect(result.blocked).toBe(true);
+    expect(result.persisted).toBe(true);
+    expect(mockLogDecision).toHaveBeenCalledWith(
+      result.decision,
+      principal,
+      { observeMode: false },
+      lockedQueryable,
+    );
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
   test("omitted mode preserves legacy observe-only behavior", async () => {
     const result = await authorizeControlled({
       principal: null,
@@ -130,6 +170,7 @@ describe("W1-02 central authorization mode", () => {
       result.decision,
       principal,
       { observeMode: false },
+      { query: mockQuery },
     );
   });
 

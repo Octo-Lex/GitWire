@@ -1,0 +1,113 @@
+name: W2 Policy Promotion DB
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'packages/web/db/migrations/**'
+      - 'packages/web/src/services/policyPromotionService.js'
+      - 'packages/web/src/routes/rollouts.js'
+      - 'packages/web/src/services/auth/authorize.js'
+      - 'packages/web/src/services/auth/decisionLog.js'
+      - 'packages/web/src/services/auth/principalResolver.js'
+      - 'packages/web/src/services/configService.js'
+      - 'packages/web/src/services/policyRolloutService.js'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-approval-expiry-translation-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-authority-races-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-effect-time-db.mjs'
+      - 'packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs'
+      - 'packages/web/tests/integration/w2-02-auth-expiry-wall-clock-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-denial-evidence-db.mjs'
+      - 'packages/web/tests/unit/w2-02-review-hardening-regressions.test.js'
+      - 'packages/web/tests/unit/w2-02-denial-evidence.test.js'
+      - '.github/workflows/w2-policy-promotion-db.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'packages/web/db/migrations/**'
+      - 'packages/web/src/services/policyPromotionService.js'
+      - 'packages/web/src/routes/rollouts.js'
+      - 'packages/web/src/services/auth/authorize.js'
+      - 'packages/web/src/services/auth/decisionLog.js'
+      - 'packages/web/src/services/auth/principalResolver.js'
+      - 'packages/web/src/services/configService.js'
+      - 'packages/web/src/services/policyRolloutService.js'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-approval-expiry-translation-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-authority-races-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-effect-time-db.mjs'
+      - 'packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs'
+      - 'packages/web/tests/integration/w2-02-auth-expiry-wall-clock-db.mjs'
+      - 'packages/web/tests/integration/w2-02-policy-promotion-denial-evidence-db.mjs'
+      - 'packages/web/tests/unit/w2-02-review-hardening-regressions.test.js'
+      - 'packages/web/tests/unit/w2-02-denial-evidence.test.js'
+      - '.github/workflows/w2-policy-promotion-db.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  w2-policy-promotion-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gitwire
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: gitops_hub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gitwire -d gitops_hub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://gitwire:test@127.0.0.1:5432/gitops_hub
+      REDIS_URL: redis://127.0.0.1:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Apply repository migrations
+        run: node scripts/migrate.js
+      - name: Prove W2-02 Postgres promotion invariants
+        run: node packages/web/tests/integration/w2-02-policy-promotion-db.mjs
+      - name: Prove W2-02 service path against Postgres
+        run: node packages/web/tests/integration/w2-02-policy-promotion-service-db.mjs
+      - name: Prove W2-02 approval-expiry error translation
+        run: node packages/web/tests/integration/w2-02-policy-promotion-approval-expiry-translation-db.mjs
+      - name: Prove W2-02 promotion authority race safety
+        run: node packages/web/tests/integration/w2-02-policy-promotion-authority-races-db.mjs
+      - name: Prove W2-02 effect-time authority and audit clock
+        run: node packages/web/tests/integration/w2-02-policy-promotion-effect-time-db.mjs
+      - name: Prove W2-02 authorization pool saturation safety
+        run: node packages/web/tests/integration/w2-02-auth-pool-saturation-db.mjs
+      - name: Prove W2-02 locked authorization wall-clock expiry
+        run: node packages/web/tests/integration/w2-02-auth-expiry-wall-clock-db.mjs
+      - name: Prove W2-02 denial evidence durability
+        run: node packages/web/tests/integration/w2-02-policy-promotion-denial-evidence-db.mjs
+      - name: Prove W2-02 review hardening invariants
+        run: node packages/web/tests/integration/w2-02-policy-promotion-hardening-db.mjs
