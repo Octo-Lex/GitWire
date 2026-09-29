@@ -281,7 +281,9 @@ settings:
     // A present-but-unparseable document is an invalid source under the
     // sparse contract — it must never silently fall back to defaults.
     state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n   enabled: [unclosed"));
-    await expect(getConfigForRepo("acme/app")).rejects.toThrow(/Invalid \.gitwire\.yml: YAML syntax error:/);
+    await expect(getConfigForRepo("acme/app")).rejects.toThrow(
+      /Invalid \.gitwire\.yml in acme\/app@\.gitwire\.yml: YAML syntax error:/,
+    );
     expect(state.cache.size).toBe(0);
   });
 
@@ -352,6 +354,23 @@ pillars:
     // And the live stack agrees.
     const live = await getConfigForRepo("acme/app");
     expect(live.settings.dry_run).toBe(false);
+  });
+
+  test("preview never blames the proposal for an org-layer transport failure", async () => {
+    state.files.set("acme/gitwire-config@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
+    state.transportError = { status: 503, message: "github unavailable" };
+
+    // The proposal resolves with the org layer degraded to absent — no
+    // "invalid proposed policy" conflation.
+    const proposed = await resolveProposedConfig("acme/app", "pillars:\n  triage:\n    enabled: true\n");
+    expect(proposed.pillars.triage.enabled).toBe(true);
+    expect(proposed.settings.dry_run).toBe(true);
+  });
+
+  test("an invalid ORG file rejects with the org file named, never the proposal", async () => {
+    state.files.set("acme/gitwire-config@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: not-a-boolean\n"));
+    await expect(resolveProposedConfig("acme/app", "pillars:\n  trust:\n    enabled: true\n"))
+      .rejects.toThrow(/Invalid \.gitwire\.yml in acme\/gitwire-config@\.gitwire\.yml:/);
   });
 
   test("a governed-supplied 'default' gate survives YAML gate-set stripping", async () => {

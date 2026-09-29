@@ -124,10 +124,22 @@ export async function getConfigForRepo(repoFullName) {
  */
 export async function resolveProposedConfig(repoFullName, yamlText) {
   const { layer } = parseConfigLayer(yamlText);
-  const [orgLayer, governedLayer] = await Promise.all([
-    fetchOrgConfig(repoFullName),
-    fetchGovernedConfig(repoFullName),
-  ]);
+  // The org layer participates when it is readable and valid. A transport
+  // failure while fetching it degrades to "absent" (the resolution contract)
+  // so a transient GitHub outage is never reported to the user as "your
+  // proposed YAML is invalid". A VALIDATION failure in the org file still
+  // propagates — attributed to the exact file by fetchConfigFile.
+  let orgLayer = null;
+  try {
+    orgLayer = await fetchOrgConfig(repoFullName);
+  } catch (err) {
+    if (isConfigValidationError(err)) throw err;
+    logger.warn(
+      { err: err.message, repo: repoFullName },
+      "Org layer unavailable during proposal resolution — treating as absent",
+    );
+  }
+  const governedLayer = await fetchGovernedConfig(repoFullName);
   return resolveConfigLayers({
     defaults: DEFAULT_CONFIG,
     org: orgLayer,
@@ -304,14 +316,36 @@ async function fetchConfigFile(octokit, owner, repoName, path) {
     if (err.status === 404) return null;
     throw err;
   }
-  if (!data || typeof data.content !== "string") return null;
+  if (!data || typeof data.content !== "string") {
+    // Contents API returns null content for oversized files (>1MB): the
+    // layer is absent, but say so instead of leaving it silent.
+    if (data?.message) {
+      logger.warn(
+        { owner, repo: repoName, path, apiMessage: data.message },
+        "Config file unreadable via contents API — treating layer as absent",
+      );
+    }
+    return null;
+  }
   const yamlText = Buffer.from(data.content, "base64").toString("utf-8");
-  const { layer } = parseConfigLayer(yamlText);
-  if (Object.keys(layer).length === 0) return null;
-  return {
-    values: layer,
-    source: `${owner}/${repoName}@${path}#${data.sha}`,
-  };
+  try {
+    const { layer } = parseConfigLayer(yamlText);
+    if (Object.keys(layer).length === 0) return null;
+    return {
+      values: layer,
+      source: `${owner}/${repoName}@${path}#${data.sha}`,
+    };
+  } catch (err) {
+    // Attribute the rejection to the exact file so preview surfaces never
+    // blame a user's proposed YAML for a broken org/repo source.
+    if (isConfigValidationError(err)) {
+      throw new Error(
+        `Invalid .gitwire.yml in ${owner}/${repoName}@${path}: ` +
+        err.message.replace(/^Invalid \.gitwire\.yml:\s*/, ""),
+      );
+    }
+    throw err;
+  }
 }
 
 // Validation errors from parseConfigLayer carry this prefix and must always
