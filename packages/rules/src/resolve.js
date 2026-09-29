@@ -180,16 +180,18 @@ export function resolveConfigLayers({ defaults, org, repo, governed } = {}) {
 
   // quality_gates semantics preserved from parseConfig(): when any YAML
   // source explicitly supplies a gate set, the built-in "default" gate is
-  // removed unless that merged explicit set names a gate "default".
+  // removed unless the merged result names a gate "default". The removal
+  // applies ONLY while the surviving "default" gate is still defaults-owned:
+  // a "default" gate supplied by a higher layer (governed promotion) has
+  // already replaced the built-in leaves and must never be stripped by a
+  // lower layer's gate set.
   const yamlSuppliedGates = (org?.values && "quality_gates" in org.values) ||
     (repo?.values && "quality_gates" in repo.values);
-  if (yamlSuppliedGates && isPlainObject(config.quality_gates)) {
-    const gateNames = new Set(Object.keys(config.quality_gates));
-    const explicitlyNamed = new Set([
-      ...Object.keys(org?.values?.quality_gates || {}),
-      ...Object.keys(repo?.values?.quality_gates || {}),
-    ]);
-    if (gateNames.has("default") && !explicitlyNamed.has("default")) {
+  if (yamlSuppliedGates && isPlainObject(config.quality_gates) && "default" in config.quality_gates) {
+    const defaultGateStillFromDefaults =
+      provenance["/quality_gates/default/block_on_fail"] === "defaults" ||
+      provenance["/quality_gates/default/conditions"] === "defaults";
+    if (defaultGateStillFromDefaults) {
       delete config.quality_gates.default;
       delete provenance["/quality_gates/default"];
       delete provenance["/quality_gates/default/conditions"];
@@ -211,10 +213,12 @@ export function resolveConfigLayers({ defaults, org, repo, governed } = {}) {
     governed: layerRevision(governed),
   };
 
-  // The effective hash is computed from canonical configuration data only.
-  // Source revisions participate in identity through the version vector: a
-  // revision change that does not change effective values changes the vector
-  // while leaving this hash unchanged — that distinction is intentional.
+  // The effective hash is computed from canonical configuration data only
+  // (the effective config values — not provenance, not the vector, not any
+  // timestamp). Source revisions participate in identity through the version
+  // vector: a revision change that does not change effective values changes
+  // the vector while leaving this hash unchanged — that distinction is
+  // intentional.
   const effectiveHash = hashCanonical(config);
 
   return {

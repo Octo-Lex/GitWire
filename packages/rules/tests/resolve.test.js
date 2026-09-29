@@ -304,6 +304,33 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
     expect(resolved.provenance["/quality_gates/default/conditions"]).toBe("defaults");
   });
 
+  test("quality_gates: a governed-supplied 'default' gate is never stripped by YAML gate sets", () => {
+    const resolved = resolveConfigLayers({
+      repo: repoLayer({
+        quality_gates: {
+          strict: {
+            conditions: [{ metric: "readiness_score", operator: ">=", threshold: 70 }],
+            block_on_fail: false,
+          },
+        },
+      }),
+      governed: {
+        values: {
+          quality_gates: {
+            default: {
+              conditions: [{ metric: "readiness_score", operator: ">=", threshold: 95 }],
+              block_on_fail: false,
+            },
+          },
+        },
+        source: "pv:v1:pr:pm1",
+      },
+    });
+    expect(resolved.config.quality_gates.default.conditions[0].threshold).toBe(95);
+    expect(resolved.config.quality_gates.strict).toBeDefined();
+    expect(resolved.provenance["/quality_gates/default/conditions"]).toBe("governed");
+  });
+
   test("governed layer contributes values but not explicitKeys", () => {
     const resolved = resolveConfigLayers({
       governed: { values: { quality_gates: {} }, source: "pv:v1:pr:pm1" },

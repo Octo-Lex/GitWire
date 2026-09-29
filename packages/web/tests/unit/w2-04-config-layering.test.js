@@ -282,4 +282,47 @@ pillars:
     expect(proposed.pillars.triage.auto_label).toBe(false);
     expect(proposed.pillars.ai_review.model).toBe("org-model-x");
   });
+
+  test("preview parity: a governed value survives a proposal that omits it", async () => {
+    // The invariant the exact-head review demanded: for a repo with governed
+    // dry_run=false, a repo-layer proposal that omits dry_run must preview
+    // dry_run=false — the proposal cannot flip a promoted value to defaults.
+    state.governedRows.set("acme/app", {
+      config: { settings: { dry_run: false } },
+      updated_at: new Date("2026-09-29T00:00:00Z"),
+      policy_version_id: "33333333-3333-4333-8333-333333333333",
+      promotion_record_id: "44444444-4444-4444-8444-444444444444",
+    });
+    const proposed = await resolveProposedConfig("acme/app", "pillars:\n  triage:\n    enabled: true\n");
+    expect(proposed.settings.dry_run).toBe(false);
+    // And the live stack agrees.
+    const live = await getConfigForRepo("acme/app");
+    expect(live.settings.dry_run).toBe(false);
+  });
+
+  test("a governed-supplied 'default' gate survives YAML gate-set stripping", async () => {
+    state.governedRows.set("acme/app", {
+      config: {
+        quality_gates: {
+          default: {
+            conditions: [{ metric: "readiness_score", operator: ">=", threshold: 95 }],
+            block_on_fail: false,
+          },
+        },
+      },
+      updated_at: new Date("2026-09-29T00:00:00Z"),
+      policy_version_id: "33333333-3333-4333-8333-333333333333",
+      promotion_record_id: "44444444-4444-4444-8444-444444444444",
+    });
+    state.files.set("acme/app@.gitwire.yml", yamlFile(`
+quality_gates:
+  strict:
+    conditions: [{ metric: readiness_score, operator: ">=", threshold: 70 }]
+`));
+    const config = await getConfigForRepo("acme/app");
+    // The YAML gate set stripped nothing governed: the promoted 'default'
+    // gate keeps its promoted threshold, and the YAML gate is present.
+    expect(config.quality_gates.default.conditions[0].threshold).toBe(95);
+    expect(config.quality_gates.strict).toBeDefined();
+  });
 });
