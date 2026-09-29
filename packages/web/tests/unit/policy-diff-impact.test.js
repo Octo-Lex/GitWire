@@ -38,12 +38,19 @@ describe("Policy Diff Impact — service contract", () => {
   });
 
   it("analyzes the RESOLVED proposed policy, not the raw YAML (W2-04)", () => {
-    expect(source).toMatch(/validatePolicy\(yamlToText\(proposedConfig\)\)/);
+    expect(source).toMatch(/validatePolicy\(JSON.stringify\(proposedConfig\)\)/);
     expect(source).not.toMatch(/validatePolicy\(yamlText\)/);
   });
 
-  it("classifies source outages distinctly from invalid proposals (W2-04)", () => {
-    expect(source).toMatch(/isConfigSourceUnavailable/);
+  it("classifies by validation-ness; non-validation failures are outages (W2-04)", () => {
+    expect(source).toMatch(/isConfigValidationError/);
+    expect(source).not.toMatch(/isConfigSourceUnavailable/);
+  });
+
+  it("wraps the current-config fetch in outage handling (W2-04)", () => {
+    const step1 = source.slice(source.indexOf("Step 1"), source.indexOf("Step 2"));
+    expect(step1).toMatch(/catch/);
+    expect(step1).toMatch(/cannot diff/);
   });
 
   it("validates proposed policy with validateConfig", () => {

@@ -379,6 +379,35 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
     expect(resolved.config.settings.dry_run).toBe(false);
   });
 
+  test("replacing a subtree leaves no dangling provenance entries", () => {
+    const resolved = resolveConfigLayers({
+      repo: repoLayer({ settings: { dry_run: "not-a-boolean-object-replacement" } }),
+    });
+    // The scalar replaced the settings object; no /settings/* children may
+    // survive in provenance for pointers that no longer exist in config.
+    for (const pointer of Object.keys(resolved.provenance)) {
+      const walk = pointer.split("/").filter(Boolean).reduce(
+        (acc, token) => (acc === undefined ? undefined : acc[token.replace(/~1/g, "/").replace(/~0/g, "~")]),
+        resolved.config,
+      );
+      expect({ pointer, reachable: walk !== undefined }).toEqual({ pointer, reachable: true });
+    }
+    expect(resolved.provenance["/settings/dry_run"]).toBe("repo");
+  });
+
+  test("an explicitly supplied non-object 'default' gate is never stripped", () => {
+    // Only reachable programmatically (validation requires gate objects),
+    // but the strip must not read stale child pointers after a replacement.
+    const resolved = resolveConfigLayers({
+      repo: repoLayer({
+        quality_gates: { strict: { conditions: [], block_on_fail: false } },
+      }),
+      governed: { values: { quality_gates: { default: "promoted-scalar-gate" } }, source: "pv:v:pr:p" },
+    });
+    expect(resolved.config.quality_gates.default).toBe("promoted-scalar-gate");
+    expect(resolved.provenance["/quality_gates/default"]).toBe("governed");
+  });
+
   test("procedural metadata keys supplied by any layer are stripped before hashing", () => {
     const withMeta = resolveConfigLayers({
       governed: {

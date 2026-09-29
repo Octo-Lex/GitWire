@@ -379,8 +379,11 @@ async function fetchConfigFile(octokit, owner, repoName, path) {
 }
 
 // Validation errors from parseConfigLayer carry this prefix and must always
-// surface; only transport failures degrade a layer to "absent".
-function isConfigValidationError(err) {
+// surface; only the source being genuinely absent degrades a layer.
+// Preview services classify by validation-ness: anything that is not a
+// validation rejection (ConfigSourceUnavailableError, raw DB errors,
+// unexpected failures) is an outage surface, never "invalid proposal".
+export function isConfigValidationError(err) {
   return typeof err?.message === "string" && err.message.startsWith("Invalid .gitwire.yml");
 }
 
