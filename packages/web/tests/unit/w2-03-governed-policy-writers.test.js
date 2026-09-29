@@ -85,14 +85,18 @@ describe("W2-03 governed policy writer cutover", () => {
     expect(source).toContain('error: "legacy_policy_rollback_disabled"');
   });
 
-  test("direct config mutation guard is mounted before the compatibility router", () => {
+  test("direct config mutation guard is mounted router-level before the compatibility routes", () => {
     const appSource = read("packages/web/src/app.js");
-    const guardMount = appSource.indexOf('app.use("/api/config", directPolicyWriteGuard)');
-    const routerMount = appSource.indexOf('app.use("/api/config",          configRouter)');
+    const configSource = read("packages/web/src/routes/config.js");
+    const guardMount = configSource.indexOf("configRouter.use(directPolicyWriteGuard)");
+    const firstRoute = configSource.indexOf("configRouter.get(");
     const guardSource = read("packages/web/src/middleware/directPolicyWriteGuard.js");
 
+    // Router-level mount keeps app.js limited to scanner-parseable route mounts.
     expect(guardMount).toBeGreaterThan(-1);
-    expect(routerMount).toBeGreaterThan(guardMount);
+    expect(firstRoute).toBeGreaterThan(guardMount);
+    expect(configSource).toContain('from "../middleware/directPolicyWriteGuard.js"');
+    expect(appSource).not.toContain("directPolicyWriteGuard");
     expect(guardSource).toContain('method === "PUT"');
     expect(guardSource).toContain('method === "PATCH"');
     expect(guardSource).toContain('method === "DELETE"');
