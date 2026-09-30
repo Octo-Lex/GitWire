@@ -36,7 +36,7 @@ const baseParams = (overrides = {}) => ({
     principal: { principalId: "11111111-1111-4111-8111-111111111111", authenticationMethod: "api_key" },
     permission: "policy_rollout_plan:approve",
   },
-  resource: { type: "repository", repositoryId: 986200102 },
+  resource: { type: "repository", installationId: 986200001, repositoryId: 986200102 },
   operation: "w3-01.test:op",
   target: { path: "README.md" },
   request: { action: "label", label: "bug" },
@@ -66,7 +66,7 @@ beforeEach(() => {
       code: "granted",
       principalId: "11111111-1111-4111-8111-111111111111",
       permission: "policy_rollout_plan:approve",
-      resource: { type: "repository", repositoryId: 986200102 },
+      resource: { type: "repository", installationId: 986200001, repositoryId: 986200102 },
       policyVersion: "level1",
     },
     persisted: true,
@@ -245,7 +245,7 @@ describe("W3-01 canonical hashing through the service path (A6, A7)", () => {
 describe("W3-01 server-owned attribution (A3)", () => {
   test("resource identity derives from the authoritative id, ignoring caller-supplied display identity", async () => {
     await createMutationCommand(baseParams({
-      resource: { type: "repository", repositoryId: 986200102, identity: "attacker/override", repository: "display-name" },
+      resource: { type: "repository", installationId: 986200001, repositoryId: 986200102, identity: "attacker/override", repository: "display-name" },
     }));
     const insertParams = mockQuery.mock.calls.find((c) => String(c[0]).includes("INSERT INTO public.mutation_commands"))?.[1];
     expect(insertParams[4]).toBe("repository:986200102");

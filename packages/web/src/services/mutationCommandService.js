@@ -70,7 +70,14 @@ function validateInputs({ authority, resource, operation, target, request, idemp
   if (!resource?.type || typeof resource.type !== "string") {
     throw new MutationCommandError("resource_type_required");
   }
-  if (resource.repositoryId === undefined && resource.identity === undefined) {
+  if (resource.type === "repository"
+      && (resource.repositoryId === undefined
+          || resource.installationId === undefined)) {
+    // The authority contract requires the server-owned installationId +
+    // repositoryId pair for repository-scoped resources.
+    throw new MutationCommandError("resource_identity_required");
+  }
+  if (resource.type !== "repository" && resource.identity === undefined) {
     throw new MutationCommandError("resource_identity_required");
   }
   if (!operation || typeof operation !== "string") {
