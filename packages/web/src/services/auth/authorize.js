@@ -264,7 +264,13 @@ export async function authorizeControlled({
     lockAuthorityRows,
     evidenceClient,
   });
-  return createAuthorizationOutcome({ ...result, mode: normalizedMode });
+  const outcome = createAuthorizationOutcome({ ...result, mode: normalizedMode });
+  if (result.evidenceId) {
+    // Transaction-aware evidence mode: surface the in-transaction evidence
+    // row identity without altering the standard outcome contract.
+    return Object.freeze({ ...outcome, evidenceId: result.evidenceId });
+  }
+  return outcome;
 }
 
 /** Preserve the established decision-only contract for all existing callers. */
