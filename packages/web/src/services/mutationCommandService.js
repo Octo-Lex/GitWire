@@ -166,6 +166,7 @@ export async function createMutationCommand(params) {
         principal: authority.principal,
         permission: authority.permission,
         resource,
+        mode: "enforced",
         queryable: tx,
         evidenceClient: tx,
       });
