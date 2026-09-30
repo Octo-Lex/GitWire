@@ -354,15 +354,15 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
       .toThrow(/must not contain __proto__|constructor/);
   });
 
-  test("validator caps at frame 16; the merge primitive is the depth-independent backstop", () => {
-    // Build 20-deep nesting with a dangerous key at the bottom.
-    let deep = { __proto__: { polluted: "yes" } };
-    void deep; // (object literals cannot create own __proto__; use JSON.parse)
-    deep = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+  test("validator caps at frame 16; the merge primitive is the depth-independent backstop", async () => {
+    // Build 20-deep nesting with a dangerous key at the bottom. JSON.parse
+    // creates an own __proto__ property (object literals cannot).
+    let deep = JSON.parse('{"__proto__":{"polluted":"yes"}}');
     for (let i = 0; i < 20; i += 1) deep = { nested: deep };
-    // The validator stops before reaching the key at this depth...
-    const shallowCopy = JSON.parse(JSON.stringify(deep));
-    expect(shallowCopy).toBeDefined();
+    // The validator stops before reaching the key at this depth — assert it
+    // directly rather than leaving the cap implicit.
+    const { validateConfig } = await import("../src/schema.js");
+    expect(validateConfig({ deep }).valid).toBe(true);
     // ...but resolveConfigLayers still neutralizes it at the primitive.
     const resolved = resolveConfigLayers({ repo: { values: deep, source: "r@deep" } });
     expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
