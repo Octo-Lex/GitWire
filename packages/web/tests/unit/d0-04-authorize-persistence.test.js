@@ -9,7 +9,10 @@ jest.unstable_mockModule("../../src/lib/db.js", () => ({ db: { query: mockQuery 
 jest.unstable_mockModule("../../src/lib/logger.js", () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
-jest.unstable_mockModule("../../src/services/auth/decisionLog.js", () => ({ logDecision: mockLogDecision }));
+jest.unstable_mockModule("../../src/services/auth/decisionLog.js", () => ({
+  logDecision: mockLogDecision,
+  persistDecisionEvidence: jest.fn(async () => "test-evidence-id"),
+}));
 jest.unstable_mockModule("../../src/services/auth/principalResolver.js", () => ({
   getPrincipalById: mockGetPrincipalById,
   principalValidityCode: mockPrincipalValidityCode,

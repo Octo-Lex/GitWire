@@ -24,7 +24,6 @@ import { stableStringify, hashCanonical } from "@gitwire/rules";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { authorizeControlled } from "./auth/authorize.js";
-import { persistDecisionEvidence } from "./auth/decisionLog.js";
 
 const INITIAL_EVENT_TYPE = "mutation.command.created";
 
@@ -158,13 +157,17 @@ export async function createMutationCommand(params) {
 
   try {
     return await db.transaction(async (tx) => {
-      // Authorization read MAY share the command transaction's client for
-      // read consistency; authority-row locking is NOT required here.
+      // Authorization read shares the command transaction's client for read
+      // consistency; authority-row locking is NOT required here. The
+      // evidenceClient routes authorize's own decision persistence INTO this
+      // transaction: exactly one evidence row, committed with the command,
+      // stable id returned (throws on failure — nothing downstream survives).
       const outcome = await authorizeControlled({
         principal: authority.principal,
         permission: authority.permission,
         resource,
         queryable: tx,
+        evidenceClient: tx,
       });
       const decision = outcome.decision;
       if (!decision.allowed) {
@@ -172,15 +175,10 @@ export async function createMutationCommand(params) {
           code: decision.code,
         });
       }
-
-      // Command-bound evidence: same transaction, stable id, throws on
-      // failure so nothing downstream survives a failed insert.
-      const evidenceId = await persistDecisionEvidence(
-        decision,
-        authority.principal,
-        tx,
-        { observeMode: false },
-      );
+      const evidenceId = outcome.evidenceId;
+      if (!evidenceId) {
+        throw new MutationCommandError("authorization_evidence_missing");
+      }
 
       const { rows: [command] } = await tx.query(
         `INSERT INTO public.mutation_commands (
