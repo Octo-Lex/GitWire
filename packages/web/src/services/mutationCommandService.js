@@ -138,14 +138,29 @@ export async function createMutationCommand(params) {
   const resourceIdentity = canonicalResourceIdentity(resource);
 
   // Canonical request + deterministic hash (single repository-wide
-  // canonicalization: @gitwire/rules stableStringify/hashCanonical).
+  // canonicalization: @gitwire/rules stableStringify/hashCanonical). The
+  // hash covers the full requested-mutation tuple — operation, authoritative
+  // resource, target, and request body — so materially different intents
+  // under one idempotency key can never be conflated as a replay.
   const canonicalRequest = JSON.parse(stableStringify(request));
-  const requestHash = hashCanonical(request);
+  const requestHash = hashCanonical({
+    operation,
+    resource_type: resource.type,
+    resource_identity: resourceIdentity,
+    target,
+    request,
+  });
 
   // Replay ordering: resolve a committed command BEFORE authorizing, so an
   // ordinary retry never mints redundant command-bound evidence.
   const committed = await findByIdentity(idempotency.namespace, resourceIdentity, idempotency.key, operation);
   if (committed) {
+    // Replay resolution is principal-bound: a different principal reusing
+    // another principal's idempotency identity gets a closed failure with NO
+    // disclosure of the committed command (no id, no hash, no payload).
+    if (String(committed.principal_id) !== String(authority.principal.principalId)) {
+      throw new MutationCommandError("idempotency_principal_mismatch");
+    }
     if (committed.request_hash === requestHash) {
       return { created: false, replay: true, command: committed, initialEvent: null };
     }
@@ -232,6 +247,9 @@ export async function createMutationCommand(params) {
     // pre-check and insert. Resolve deterministically from the database.
     if (isUniqueViolation(err)) {
       const winner = await findByIdentity(idempotency.namespace, resourceIdentity, idempotency.key, operation);
+      if (winner && String(winner.principal_id) !== String(authority.principal.principalId)) {
+        throw new MutationCommandError("idempotency_principal_mismatch");
+      }
       if (winner && winner.request_hash === requestHash) {
         return { created: false, replay: true, command: winner, initialEvent: null };
       }

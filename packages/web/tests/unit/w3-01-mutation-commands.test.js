@@ -182,7 +182,14 @@ describe("W3-01 replay and conflict semantics (A9, A10)", () => {
   const replayRequest = { action: "label", label: "bug" };
   const committedCommand = {
     id: "22222222-2222-4222-8222-222222222222",
-    request_hash: hashCanonical(replayRequest),
+    principal_id: "11111111-1111-4111-8111-111111111111",
+    request_hash: hashCanonical({
+      operation: "w3-01.test:op",
+      resource_type: "repository",
+      resource_identity: "repository:986200102",
+      target: { path: "README.md" },
+      request: replayRequest,
+    }),
   };
 
   test("identical committed replay returns the original and creates nothing", async () => {
@@ -209,6 +216,33 @@ describe("W3-01 replay and conflict semantics (A9, A10)", () => {
       },
     });
     expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  test("a different principal reusing an idempotency identity fails closed with no disclosure", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [committedCommand] });
+    const promise = createMutationCommand(baseParams({
+      authority: {
+        principal: { principalId: "99999999-9999-4999-8999-999999999999" },
+        permission: "policy_rollout_plan:approve",
+      },
+      request: { action: "label", label: "bug" },
+    }));
+    await expect(promise).rejects.toMatchObject({
+      reason: "idempotency_principal_mismatch",
+      detail: null,
+    });
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  test("same key with a materially different target is a conflict, not a replay", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [committedCommand] });
+    const promise = createMutationCommand(baseParams({
+      request: { action: "label", label: "bug" },
+      target: { path: "OTHER.md" },
+    }));
+    await expect(promise).rejects.toMatchObject({
+      reason: "idempotency_conflict",
+    });
   });
 
   test("authorization denial fails closed before any persistence", async () => {
