@@ -65,6 +65,9 @@ jobs:
       DATABASE_URL: postgresql://gitwire:test@127.0.0.1:5432/gitops_hub
       REDIS_URL: redis://127.0.0.1:6379
       NODE_ENV: test
+      # Credential-free CI proof mode: the GitHub App is intentionally
+      # unconfigured here, so YAML layers resolve absent (warned, uncached).
+      GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

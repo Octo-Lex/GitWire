@@ -74,10 +74,13 @@ export async function getConfigForRepo(repoFullName) {
     logger.warn({ err: err.message, repo: repoFullName }, "Redis cache read failed");
   }
 
-  // 2. Fetch every sparse source with its stable identity
+  // 2. Fetch every sparse source with its stable identity. The degradation
+  // context records credential-free absences so the resolution is warned
+  // about and never cached.
+  const degradation = { unconfiguredApp: false };
   const [orgLayer, repoLayer, governedLayer] = await Promise.all([
-    fetchOrgConfig(repoFullName),
-    fetchRepoConfig(repoFullName),
+    fetchOrgConfig(repoFullName, degradation),
+    fetchRepoConfig(repoFullName, degradation),
     fetchGovernedConfig(repoFullName),
   ]);
 
@@ -102,11 +105,19 @@ export async function getConfigForRepo(repoFullName) {
     resolved_at: new Date().toISOString(),
   };
 
-  // 4. Cache the complete bundle
-  try {
-    await redis.set(cacheKey, JSON.stringify(config), "EX", CACHE_TTL);
-  } catch (err) {
-    logger.warn({ err: err.message, repo: repoFullName }, "Redis cache write failed");
+  // 4. Cache the complete bundle — unless this resolution was degraded by a
+  // credential-free absence, which must not be served from cache later.
+  if (degradation.unconfiguredApp) {
+    logger.warn(
+      { repo: repoFullName },
+      "GitHub App credentials absent (explicit credential-free mode) — YAML layers treated absent; resolution NOT cached",
+    );
+  } else {
+    try {
+      await redis.set(cacheKey, JSON.stringify(config), "EX", CACHE_TTL);
+    } catch (err) {
+      logger.warn({ err: err.message, repo: repoFullName }, "Redis cache write failed");
+    }
   }
 
   return config;
@@ -294,18 +305,33 @@ async function recordHistory(repoId, action, configOld, configNew, changedBy) {
   }
 }
 
-// A deployment without GitHub App credentials structurally has no org/repo
-// YAML layers — that is absence, not an outage. Any other client-creation
-// failure IS an outage and fails resolution.
+/**
+ * The deployment's GitHub App credentials are missing (runtime throws
+ * "GitHub App not configured" when appId/privateKey are absent). Typed so
+ * consumers never message-match. This is a deployment MISCONFIGURATION, not
+ * layer absence: by default it fails resolution exactly like any other
+ * unreadable source, because silently resolving without both YAML layers
+ * changes effective policy (and the degraded resolution must never be
+ * silently cached). Credential-free operation — CI proofs, local harnesses —
+ * must opt in explicitly via GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP.
+ */
 function isGitHubAppUnconfigured(err) {
   return /GitHub App not configured/.test(String(err?.message || ""));
 }
 
-async function makeInstallationClient(installationId, sourceId) {
+async function makeInstallationClient(installationId, sourceId, degradation) {
   try {
     return wrapOctokit(await getInstallationClient(installationId));
   } catch (err) {
-    if (isGitHubAppUnconfigured(err)) return null;
+    if (isGitHubAppUnconfigured(err)) {
+      if (allowUnconfiguredGitHubApp()) {
+        // Explicit credential-free mode: layers are absent, but say so and
+        // mark the resolution uncacheable — never silently degrade.
+        degradation.unconfiguredApp = true;
+        return null;
+      }
+      throw new GitHubAppUnconfiguredError(err.message);
+    }
     throw new ConfigSourceUnavailableError(sourceId, err.message);
   }
 }
@@ -329,6 +355,24 @@ export class ConfigSourceUnavailableError extends Error {
 
 export function isConfigSourceUnavailable(err) {
   return err instanceof ConfigSourceUnavailableError;
+}
+
+/**
+ * The deployment's GitHub App credentials are missing (runtime throws
+ * "GitHub App not configured"). A deployment MISCONFIGURATION, not layer
+ * absence: by default it fails resolution like any other unreadable source.
+ * Credential-free operation (CI proofs, local harnesses) opts in explicitly
+ * via GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP.
+ */
+export class GitHubAppUnconfiguredError extends ConfigSourceUnavailableError {
+  constructor(reason) {
+    super("github-app", reason);
+    this.name = "GitHubAppUnconfiguredError";
+  }
+}
+
+export function allowUnconfiguredGitHubApp() {
+  return /^(1|true|yes)$/i.test(String(process.env.GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP ?? ""));
 }
 
 // Fetch a YAML config file from GitHub, returning the sparse layer plus a
@@ -398,15 +442,15 @@ export function isConfigValidationError(err) {
   return typeof err?.message === "string" && err.message.startsWith("Invalid .gitwire.yml");
 }
 
-async function fetchRepoConfig(repoFullName) {
+async function fetchRepoConfig(repoFullName, degradation = { unconfiguredApp: false }) {
   const { rows } = await db.query(
     "SELECT installation_id FROM repositories WHERE full_name = $1",
     [repoFullName],
   );
   if (!rows.length) return null;
 
-  const octokit = await makeInstallationClient(rows[0].installation_id, repoFullName);
-  if (!octokit) return null; // app unconfigured: no GitHub YAML layers exist
+  const octokit = await makeInstallationClient(rows[0].installation_id, repoFullName, degradation);
+  if (!octokit) return null; // credential-free mode: YAML layer absent (warned, uncached)
   const [owner, repoName] = repoFullName.split("/");
 
   for (const path of CONFIG_PATHS) {
@@ -467,7 +511,7 @@ async function fetchGovernedConfig(repoFullName) {
  * Fetch the org-level .gitwire.yml from the {org}/gitwire-config repo.
  * Returns { values, source } or null when the org has no config.
  */
-async function fetchOrgConfig(repoFullName) {
+async function fetchOrgConfig(repoFullName, degradation = { unconfiguredApp: false }) {
   // Look up org name from installations table. A repo with no installation
   // row has no org layer (absent); DB and client failures propagate —
   // either as ConfigSourceUnavailableError or the underlying DB error.
@@ -483,8 +527,9 @@ async function fetchOrgConfig(repoFullName) {
   const octokit = await makeInstallationClient(
     repo.installation_id,
     `${repo.account_login}/${ORG_CONFIG_REPO}`,
+    degradation,
   );
-  if (!octokit) return null; // app unconfigured: no org layer exists
+  if (!octokit) return null; // credential-free mode: org layer absent (warned, uncached)
 
   for (const path of CONFIG_PATHS) {
     // 404/absent returns null (no org config repo is the normal case);
