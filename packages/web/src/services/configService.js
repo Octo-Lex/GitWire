@@ -31,10 +31,12 @@ import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 
 const CACHE_TTL = 300; // 5 minutes
-// Resolver-generation segment of the cache key: entries written by a
-// previous resolution model (older defaults, pre-provenance _meta shape)
-// can never be accepted as hits after this generation changes.
-const CACHE_GENERATION = "w2-04.1";
+// Resolver-generation segment of the cache key, DERIVED from the defaults
+// schema version: entries written by a previous resolution model (older
+// defaults, pre-provenance _meta shape) can never be accepted as hits, and
+// any future DEFAULT_CONFIG change that bumps CONFIG_SCHEMA_VERSION starts
+// a fresh cache namespace automatically.
+const CACHE_GENERATION = `config:${CONFIG_SCHEMA_VERSION}`;
 const CACHE_PREFIX = `gitwire:config:${CACHE_GENERATION}:`;
 
 const CONFIG_PATHS = [".github/.gitwire.yml", ".gitwire.yml"];
@@ -374,10 +376,14 @@ async function fetchConfigFile(octokit, owner, repoName, path) {
     // Attribute the rejection to the exact file so preview surfaces never
     // blame a user's proposed YAML for a broken org/repo source.
     if (isConfigValidationError(err)) {
-      throw new Error(
+      const wrapped = new Error(
         `Invalid .gitwire.yml in ${owner}/${repoName}@${path}: ` +
         err.message.replace(/^Invalid \.gitwire\.yml:\s*/, ""),
       );
+      // Marks the rejection as belonging to a FETCHED source, so preview
+      // surfaces never present it as a verdict on the user's proposal.
+      wrapped.invalidConfigSource = `${owner}/${repoName}@${path}`;
+      throw wrapped;
     }
     throw err;
   }

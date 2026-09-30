@@ -246,9 +246,10 @@ export function resolveConfigLayers({ defaults, org, repo, governed } = {}) {
       defaultGateEntries.every((pointer) => provenance[pointer] === "defaults");
     if (defaultGateWhollyFromDefaults) {
       delete config.quality_gates.default;
-      delete provenance["/quality_gates/default"];
-      delete provenance["/quality_gates/default/conditions"];
-      delete provenance["/quality_gates/default/block_on_fail"];
+      // Delete exactly the computed entry set — no hard-coded pointer list.
+      for (const pointer of defaultGateEntries) {
+        delete provenance[pointer];
+      }
     }
   }
 

@@ -64,10 +64,11 @@ export async function simulatePolicy(params = {}) {
   try {
     proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
-    // Classify by validation-ness: anything that is not a validation
-    // rejection (source outage, DB error, unexpected failure) is an
-    // outage surface, never a verdict on the user's YAML.
-    const invalidProposal = isConfigValidationError(err);
+    // Three-way classification: the user's proposal being invalid, a
+    // FETCHED source being invalid (named in the message), or an outage.
+    // Only the first is a verdict on the submitted YAML.
+    const fetchedSourceInvalid = Boolean(err?.invalidConfigSource);
+    const invalidProposal = isConfigValidationError(err) && !fetchedSourceInvalid;
     return {
       simulated_at: new Date().toISOString(),
       scope: { repo, from: fromDate, to: toDate, limit },

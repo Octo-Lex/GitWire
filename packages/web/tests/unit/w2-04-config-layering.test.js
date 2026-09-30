@@ -64,6 +64,7 @@ jest.unstable_mockModule("../../src/lib/githubWrapper.js", () => ({
 }));
 
 const { getConfigForRepo, resolveProposedConfig } = await import("../../src/services/configService.js");
+const { CONFIG_SCHEMA_VERSION } = await import("@gitwire/rules");
 
 function yamlFile(mapping) {
   return {
@@ -303,7 +304,7 @@ settings:
       /Configuration source currently unreadable \(acme\/(app|gitwire-config)@\.github\/\.gitwire\.yml\)/,
     );
     // Nothing cached from a failed resolution.
-    expect(state.cache.has("gitwire:config:w2-04.1:acme/app")).toBe(false);
+    expect(state.cache.has(`gitwire:config:config:${CONFIG_SCHEMA_VERSION}:acme/app`)).toBe(false);
   });
 
   test("the reviewer's scenario: an outage cannot strip a repo safety restriction", async () => {
@@ -337,6 +338,24 @@ settings:
     });
 
     await expect(getConfigForRepo("acme/app")).rejects.toThrow(/connection refused/);
+  });
+
+  test("fetched-source validation errors carry the invalidConfigSource marker", async () => {
+    // Preview services use this marker to distinguish "a configuration
+    // source is invalid" from "your proposal is invalid".
+    state.files.set("acme/gitwire-config@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: not-a-boolean\n"));
+    let caught = null;
+    await resolveProposedConfig("acme/app", "pillars:\n  trust:\n    enabled: true\n").catch((err) => {
+      caught = err;
+    });
+    expect(caught?.invalidConfigSource).toBe("acme/gitwire-config@.gitwire.yml");
+    expect(caught.message).toContain("Invalid .gitwire.yml in acme/gitwire-config@.gitwire.yml");
+    // And the proposal's own validation error carries NO marker.
+    let own = null;
+    await resolveProposedConfig("acme/app", "pillars:\n  trust:\n    enabled: not-a-boolean\n").catch((err) => {
+      own = err;
+    });
+    expect(own?.invalidConfigSource).toBeUndefined();
   });
 
   test("a 0-byte .gitwire.yml is an explicitly empty layer, not a failure", async () => {
