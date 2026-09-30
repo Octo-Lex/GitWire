@@ -324,28 +324,16 @@ try {
   }
 
   // ── gate-proof 8: both uniqueness constraints reject independently ────────
-  // (guard trigger disabled INSIDE a rolled-back transaction — CI-only, and
-  // the only way to reach the to_version constraint, which the active guard
-  // makes unreachable because to_version = from_version + 1 always)
+  // A BEFORE trigger runs before constraint checking, so proving each
+  // uniqueness constraint independently requires the claim guard disabled —
+  // CI-only, in a fresh transaction (ALTER TABLE is blocked while deferred
+  // trigger events are pending) that rolls back, restoring the guard.
   {
     const cmd = await newCommand("dupclaims");
+    // Commit one valid transition so both duplicate shapes target real rows.
+    await transition(cmd, "claimed", 1);
+
     await client.query("BEGIN");
-    // from_version duplicate
-    await client.query(
-      `INSERT INTO public.mutation_command_transitions
-         (command_id, from_status, to_status, from_version, to_version, transitioned_by)
-       VALUES ($1, 'created', 'claimed', 1, 2, $2)`,
-      [cmd.id, String(principalId)],
-    );
-    await client.query(`UPDATE public.mutation_commands
-        SET status='claimed', version=2,
-            last_transition_at=(SELECT transitioned_at FROM public.mutation_command_transitions WHERE command_id=$1),
-            last_transitioned_by=$2
-      WHERE id=$1`, [cmd.id, String(principalId)]);
-    // Both uniqueness constraints sit behind the claim guard (a BEFORE
-    // trigger runs before constraint checking), so proving each constraint
-    // independently requires the guard disabled — CI-only, inside this
-    // rolled-back transaction.
     await client.query(`ALTER TABLE public.mutation_command_transitions DISABLE TRIGGER trg_mutation_transitions_validate_claim`);
     await assert.rejects(
       client.query(
@@ -355,8 +343,8 @@ try {
         [cmd.id, String(principalId)],
       ),
       (err) => err.code === "23505" && err.constraint === "uq_mutation_transitions_from_version",
+      "from_version duplicate must violate its constraint",
     );
-    // to_version duplicate
     await assert.rejects(
       client.query(
         `INSERT INTO public.mutation_command_transitions
@@ -365,9 +353,15 @@ try {
         [cmd.id, String(principalId)],
       ),
       (err) => err.code === "23505" && err.constraint === "uq_mutation_transitions_to_version",
+      "to_version duplicate must violate its constraint",
     );
-    await client.query(`ALTER TABLE public.mutation_command_transitions ENABLE TRIGGER trg_mutation_transitions_validate_claim`);
     await client.query("ROLLBACK");
+    const { rows: [guardCheck] } = await client.query(
+      `SELECT count(*)::int AS n FROM public.mutation_command_transitions
+        WHERE command_id = $1`,
+      [cmd.id],
+    );
+    assert.equal(guardCheck.n, 1, "rollback leaves only the committed transition");
   }
 
   // ── A3 (proofs 1/2): concurrent same-version claims ───────────────────────
