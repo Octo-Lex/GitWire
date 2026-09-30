@@ -27,8 +27,47 @@ import { logger } from "../../lib/logger.js";
  */
 export async function logDecision(decision, principal, observeOpts = {}, queryable = db) {
   try {
-    await queryable.query(
-      `INSERT INTO gitwire_auth.auth_decision_log
+    const { sql, params } = buildDecisionInsert(decision, principal, observeOpts);
+    await queryable.query(sql, params);
+    return true;
+  } catch (err) {
+    // Best-effort: a logging failure must not change the authorization outcome.
+    logger.warn({ err, code: decision.code }, "decisionLog: insert failed (non-fatal)");
+    return false;
+  }
+}
+
+/**
+ * W3-01 transactional command-bound evidence seam.
+ *
+ * Persists an authorization decision on the caller's transaction client and
+ * returns the inserted row's stable ID. Unlike logDecision this is NOT
+ * best-effort: a failure throws so the surrounding command-creation
+ * transaction (evidence + command + outbox event) rolls back together.
+ * Existing logDecision callers and semantics are unchanged.
+ *
+ * @param {object} decision - AuthorizationDecision
+ * @param {object} [principal] - AuthContext
+ * @param {{query: Function}} client - transaction client (required)
+ * @param {object} [observeOpts] - { legacyExpected, disagreement, observeMode }
+ * @returns {Promise<string>} the committed evidence row id
+ */
+export async function persistDecisionEvidence(decision, principal, client, observeOpts = {}) {
+  if (!client || typeof client.query !== "function") {
+    throw new TypeError("persistDecisionEvidence requires a transaction client");
+  }
+  const { sql, params } = buildDecisionInsert(decision, principal, observeOpts);
+  const { rows: [row] } = await client.query(sql + " RETURNING id", params);
+  if (!row?.id) {
+    throw new Error("authorization evidence insert returned no identity");
+  }
+  return row.id;
+}
+
+function buildDecisionInsert(decision, principal, observeOpts) {
+  void principal; // reserved for future principal-derived columns
+  return {
+    sql: `INSERT INTO gitwire_auth.auth_decision_log
          (principal_id, permission, resource_type,
           resource_installation_id, resource_repository_id,
           resource_organization, resource_repository,
@@ -36,32 +75,26 @@ export async function logDecision(decision, principal, observeOpts = {}, queryab
           policy_version, authentication_method,
           observe_mode, legacy_expected, disagreement, detail)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-      [
-        decision.principalId ?? null,
-        decision.permission,
-        decision.resource?.type ?? "unknown",
-        decision.resource?.installationId ?? null,
-        decision.resource?.repositoryId ?? null,
-        decision.resource?.organization ?? null,
-        decision.resource?.repository ?? null,
-        decision.allowed,
-        decision.code,
-        decision.matchedAssignmentId ?? null,
-        decision.matchedScopeType ?? null,
-        decision.policyVersion ?? "level1",
-        decision.authenticationMethod ?? null,
-        observeOpts.observeMode !== false,
-        observeOpts.legacyExpected ?? null,
-        observeOpts.disagreement ?? null,
-        decision.detail ? JSON.stringify(decision.detail) : null,
-      ]
-    );
-    return true;
-  } catch (err) {
-    // Best-effort: a logging failure must not change the authorization outcome.
-    logger.warn({ err, code: decision.code }, "decisionLog: insert failed (non-fatal)");
-    return false;
-  }
+    params: [
+      decision.principalId ?? null,
+      decision.permission,
+      decision.resource?.type ?? "unknown",
+      decision.resource?.installationId ?? null,
+      decision.resource?.repositoryId ?? null,
+      decision.resource?.organization ?? null,
+      decision.resource?.repository ?? null,
+      decision.allowed,
+      decision.code,
+      decision.matchedAssignmentId ?? null,
+      decision.matchedScopeType ?? null,
+      decision.policyVersion ?? "level1",
+      decision.authenticationMethod ?? null,
+      observeOpts.observeMode !== false,
+      observeOpts.legacyExpected ?? null,
+      observeOpts.disagreement ?? null,
+      decision.detail ? JSON.stringify(decision.detail) : null,
+    ],
+  };
 }
 
 /**
