@@ -41,16 +41,18 @@ try {
     "both uniqueness constraints must be restored",
   );
 
+  // pg_catalog, not information_schema: the standard view does not report
+  // TRUNCATE statement triggers, and here all six must be verified.
   const { rows: triggers } = await client.query(
-    `SELECT trigger_name, event_object_table FROM information_schema.triggers
-      WHERE trigger_schema = 'public'
-        AND trigger_name LIKE 'trg_mutation_%'`,
+    `SELECT c.relname AS table_name, t.tgname AS trigger_name
+       FROM pg_trigger t
+       JOIN pg_class c ON c.oid = t.tgrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relname IN ('mutation_commands', 'mutation_outbox')
+        AND NOT t.tgisinternal`,
   );
-  // information_schema.triggers reports one row per (trigger, event): the
-  // three FOR EACH ROW triggers report UPDATE + DELETE each. Count distinct
-  // triggers per table — three per table, six rows distinct.
-  const distinct = new Set(triggers.map((r) => `${r.event_object_table}:${r.trigger_name}`));
-  assert.equal(distinct.size, 6, "all six append-only triggers must be restored: " + JSON.stringify([...distinct]));
+  assert.equal(triggers.length, 6, "all six append-only triggers must be restored: " + JSON.stringify(triggers));
 
   const { rows: [applied] } = await client.query(
     `SELECT count(*)::int AS n FROM schema_migrations
