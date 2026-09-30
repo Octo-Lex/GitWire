@@ -31,6 +31,7 @@ if (!databaseUrl) throw new Error("DATABASE_URL is required");
 const installationId = 986300101;
 const repositoryId = 986300102;
 const principalId = randomUUID();
+const otherPrincipalId = randomUUID();
 const grantorId = randomUUID();
 const roleId = randomUUID();
 const NS = "w3-01-proof";
@@ -85,8 +86,9 @@ try {
   );
   await client.query(
     `INSERT INTO gitwire_auth.auth_principals (id, principal_type, display_name)
-     VALUES ($1, 'user', 'w3-01-principal'), ($2, 'user', 'w3-01-grantor')`,
-    [principalId, grantorId],
+     VALUES ($1, 'user', 'w3-01-principal'), ($2, 'user', 'w3-01-grantor'),
+            ($3, 'user', 'w3-01-other-principal')`,
+    [principalId, grantorId, otherPrincipalId],
   );
   await client.query(
     `INSERT INTO gitwire_auth.auth_roles (id, name, description)
@@ -169,6 +171,31 @@ try {
     assert.equal(evidence.allowed, true);
     assert.equal(evidence.observe_mode, false, "command path evidence is enforced-mode");
   }
+
+  // ── Cross-principal replay: closed failure, no disclosure ────────────────
+  await assert.rejects(
+    createMutationCommand(base({
+      authority: {
+        principal: { principalId: otherPrincipalId },
+        permission: "w3-01.proof:mutate",
+      },
+      idempotency: { namespace: NS, key: hashA.command.idempotency_key },
+      request: { label: "bug", action: "label" },
+    })),
+    (err) => err.reason === "idempotency_principal_mismatch" && err.detail === null,
+    "a different principal reusing the identity must fail closed with no disclosure",
+  );
+
+  // ── Materially different target under the same key: conflict, not replay ─
+  await assert.rejects(
+    createMutationCommand(base({
+      idempotency: { namespace: NS, key: hashA.command.idempotency_key },
+      request: { label: "bug", action: "label" },
+      target: { path: "OTHER.md" },
+    })),
+    (err) => err.reason === "idempotency_conflict",
+    "the tuple hash must distinguish different targets under one key",
+  );
 
   // ── Group 8: diagnostic conflicting replay ──────────────────────────────
   await assert.rejects(
