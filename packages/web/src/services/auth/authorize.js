@@ -23,7 +23,7 @@ import { logger } from "../../lib/logger.js";
 import { createDecision } from "./context.js";
 import { DecisionCode } from "./denialCodes.js";
 import { getPrincipalById, principalValidityCode } from "./principalResolver.js";
-import { logDecision } from "./decisionLog.js";
+import { logDecision, persistDecisionEvidence } from "./decisionLog.js";
 import {
   AuthorizationMode,
   createAuthorizationOutcome,
@@ -67,6 +67,7 @@ export async function authorizeWithPersistence({
   observeMode = true,
   queryable = db,
   lockAuthorityRows = false,
+  evidenceClient = null,
 }) {
   // Defensive: a null principal (unauthenticated path) short-circuits.
   if (!principal || !principal.principalId) {
@@ -184,6 +185,19 @@ export async function authorizeWithPersistence({
       authenticationMethod: principal.authenticationMethod,
       detail: { matchCount: rows.length },
     });
+    // W3-01 transaction-aware evidence mode: when the caller offers the
+    // command transaction's client, the decision row commits (or rolls back)
+    // WITH the caller's unit and its stable id is returned. Failure throws so
+    // the surrounding transaction cannot commit without its evidence.
+    if (evidenceClient) {
+      const evidenceId = await persistDecisionEvidence(
+        decision,
+        principal,
+        evidenceClient,
+        { observeMode },
+      );
+      return { decision, persisted: true, evidenceId };
+    }
     const persisted = await logDecision(
       decision,
       principal,
@@ -238,6 +252,7 @@ export async function authorizeControlled({
   mode = AuthorizationMode.OBSERVE,
   queryable = db,
   lockAuthorityRows = false,
+  evidenceClient = null,
 }) {
   const normalizedMode = normalizeAuthorizationMode(mode);
   const result = await authorizeWithPersistence({
@@ -247,6 +262,7 @@ export async function authorizeControlled({
     observeMode: normalizedMode === AuthorizationMode.OBSERVE,
     queryable,
     lockAuthorityRows,
+    evidenceClient,
   });
   return createAuthorizationOutcome({ ...result, mode: normalizedMode });
 }

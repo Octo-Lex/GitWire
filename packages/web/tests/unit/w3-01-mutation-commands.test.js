@@ -25,6 +25,7 @@ jest.unstable_mockModule("../../src/services/auth/authorize.js", () => ({
   authorizeControlled: mockAuthorizeControlled,
 }));
 jest.unstable_mockModule("../../src/services/auth/decisionLog.js", () => ({
+  logDecision: jest.fn(async () => true),
   persistDecisionEvidence: jest.fn(async () => "evidence-row-id-1"),
 }));
 
@@ -72,6 +73,7 @@ beforeEach(() => {
     persisted: true,
     mode: "enforced",
     blocked: false,
+    evidenceId: "evidence-row-id-1",
   });
 });
 
@@ -122,6 +124,16 @@ describe("W3-01 scope-boundary regressions (A19, A23)", () => {
     expect(decisionLogSource).toMatch(/Best-effort; never throws/);
     expect(decisionLogSource).toMatch(/decisionLog: insert failed \(non-fatal\)/);
     expect(decisionLogSource).toMatch(/RETURNING id/);
+  });
+
+  test("command-bound evidence is routed through authorize's transaction-aware mode (one row, not two)", () => {
+    const serviceSourceCode = read("packages/web/src/services/mutationCommandService.js")
+      .split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+    expect(serviceSourceCode).toMatch(/evidenceClient: tx/);
+    expect(serviceSourceCode).not.toMatch(/persistDecisionEvidence/);
+    const authorizeSource = read("packages/web/src/services/auth/authorize.js");
+    expect(authorizeSource).toMatch(/evidenceClient/);
+    expect(authorizeSource).toMatch(/persistDecisionEvidence/);
   });
 });
 
