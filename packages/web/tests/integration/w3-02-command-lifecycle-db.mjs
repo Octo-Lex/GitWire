@@ -341,6 +341,13 @@ try {
     // duplicate is necessarily also a from_version duplicate. SET LOCAL
     // resets at commit/rollback; CI-only proof transaction.
     await client.query("SET LOCAL session_replication_role = replica");
+    // CHECK constraints are not triggers (replica role does not suspend
+    // them), and with the step CHECK active a to_version-only duplicate is
+    // mathematically impossible (to = from + 1). Drop the CHECK inside this
+    // CI-only transaction — transactional DDL restores it at ROLLBACK — so
+    // the to_version index is reachable in isolation.
+    await client.query(`ALTER TABLE public.mutation_command_transitions
+        DROP CONSTRAINT chk_mutation_transitions_version_step`);
 
     // A failed statement aborts the transaction, so each duplicate insert
     // runs inside its own savepoint.
