@@ -8,7 +8,8 @@
 // This service never writes config or mutates GitHub.
 
 import { logger } from "../lib/logger.js";
-import { parseConfig, validateConfig } from "@gitwire/rules";
+import { validateConfig } from "@gitwire/rules";
+import { resolveProposedConfig, isConfigValidationError } from "./configService.js";
 import { isPillarEnabled, isDryRun } from "@gitwire/rules";
 import { validatePolicy } from "./policyValidationService.js";
 
@@ -64,14 +65,21 @@ export async function recommendGuardrails(params = {}) {
   // Step 1: Parse + validate proposed policy
   let proposedConfig;
   try {
-    proposedConfig = parseConfig(yamlText);
+    proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
+    // Three-way classification: the user's proposal being invalid, a
+    // FETCHED source being invalid (named in the message), or an outage.
+    // Only the first is a verdict on the submitted YAML.
+    const fetchedSourceInvalid = Boolean(err?.invalidConfigSource);
+    const invalidProposal = isConfigValidationError(err) && !fetchedSourceInvalid;
     return {
       generated_at: new Date().toISOString(),
       repo: repo || null,
       summary: { critical: 0, warning: 0, info: 0 },
       recommendations: [],
-      error: "Invalid proposed policy — cannot recommend",
+      error: invalidProposal
+        ? "Invalid proposed policy — cannot recommend"
+        : "Configuration sources currently unreadable — cannot recommend",
     };
   }
 
@@ -86,7 +94,10 @@ export async function recommendGuardrails(params = {}) {
     };
   }
 
-  const analysis = await validatePolicy(yamlText);
+  // Analyze the EFFECTIVE proposed policy (resolved through the canonical
+  // layering), not the raw proposal text — inherited active risk from the
+  // org/governed layers must drive recommendations exactly as it will act.
+  const analysis = await validatePolicy(JSON.stringify(proposedConfig));
   const dryRun = isDryRun(proposedConfig);
   const enabledPillars = getEnabledPillars(proposedConfig);
   const risks = analysis.risky_settings || [];

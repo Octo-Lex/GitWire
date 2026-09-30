@@ -9,9 +9,14 @@
 
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
-import { parseConfig, validateConfig } from "@gitwire/rules";
-import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
-import { getConfigForRepo } from "./configService.js";
+import { validateConfig } from "@gitwire/rules";
+import { isDryRun } from "@gitwire/rules";
+import { isPillarEnabled, shouldTrigger } from "@gitwire/rules";
+import {
+  getConfigForRepo,
+  resolveProposedConfig,
+  isConfigValidationError,
+} from "./configService.js";
 import { validatePolicy } from "./policyValidationService.js";
 import { redactSecrets } from "../lib/redact.js";
 
@@ -47,17 +52,40 @@ export async function diffPolicyImpact(params = {}) {
   const fromDate = from || new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
   const toDate = to || new Date().toISOString();
 
-  // Step 1: Load current policy
-  const currentConfig = await getConfigForRepo(repo);
-  const currentValidation = await validatePolicy(yamlToText(currentConfig));
+  // Step 1: Load current policy. Source outages surface through the same
+  // structured payload as the proposed side — never an unhandled 500.
+  let currentConfig;
+  try {
+    currentConfig = await getConfigForRepo(repo);
+  } catch (err) {
+    return {
+      compared_at: new Date().toISOString(),
+      repo,
+      current: { valid: false, errors: [err.message] },
+      proposed: { valid: false, errors: [] },
+      changes: null,
+      simulation_impact: null,
+      results: [],
+      error: isConfigValidationError(err)
+        ? "Invalid configuration source — cannot diff"
+        : "Configuration sources currently unreadable — cannot diff",
+    };
+  }
+  const currentValidation = await validatePolicy(JSON.stringify(currentConfig));
   const currentDryRun = isDryRun(currentConfig);
   const currentEnabledPillars = getEnabledPillars(currentConfig);
 
-  // Step 2: Parse proposed policy
+  // Step 2: Resolve proposed policy through the canonical layering
+  // (proposal acts as a prospective repo layer over the current org layer)
   let proposedConfig;
   try {
-    proposedConfig = parseConfig(yamlText);
+    proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
+    // Three-way classification: the user's proposal being invalid, a
+    // FETCHED source being invalid (named in the message), or an outage.
+    // Only the first is a verdict on the submitted YAML.
+    const fetchedSourceInvalid = Boolean(err?.invalidConfigSource);
+    const invalidProposal = isConfigValidationError(err) && !fetchedSourceInvalid;
     return {
       compared_at: new Date().toISOString(),
       repo,
@@ -70,7 +98,9 @@ export async function diffPolicyImpact(params = {}) {
       changes: null,
       simulation_impact: null,
       results: [],
-      error: "Invalid proposed policy — cannot diff",
+      error: invalidProposal
+        ? "Invalid proposed policy — cannot diff"
+        : "Configuration sources currently unreadable — cannot diff",
     };
   }
 
@@ -96,7 +126,11 @@ export async function diffPolicyImpact(params = {}) {
   const proposedEnabledPillars = getEnabledPillars(proposedConfig);
 
   // Step 3: Compute config/risk/warning diffs
-  const proposedAnalysis = await validatePolicy(yamlText);
+  // Analyze the EFFECTIVE proposed policy (resolved through the canonical
+  // layering), not the raw proposal text — an inherited risky org setting
+  // the proposal omits stays active in proposedConfig and must appear in
+  // the risk delta. Serialized identically to the recommendation service.
+  const proposedAnalysis = await validatePolicy(JSON.stringify(proposedConfig));
 
   const pillarsEnabled = proposedEnabledPillars.filter(p => !currentEnabledPillars.includes(p));
   const pillarsDisabled = currentEnabledPillars.filter(p => !proposedEnabledPillars.includes(p));
@@ -212,11 +246,6 @@ function getEnabledPillars(config) {
   return Object.entries(config.pillars || {})
     .filter(([, val]) => val?.enabled !== false)
     .map(([key]) => key);
-}
-
-function yamlToText(config) {
-  // Minimal serialization for validatePolicy (which re-parses)
-  return JSON.stringify(config);
 }
 
 function simulateOne(event, config, dryRun) {

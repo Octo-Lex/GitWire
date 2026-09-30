@@ -31,10 +31,10 @@ configRouter.get("/:owner/:repo", async (req, res) => {
   const fullName = `${owner}/${repo}`;
 
   try {
-    // Get resolved config (defaults + YAML + DB overrides)
+    // Get resolved config (defaults + org YAML + repo YAML + governed layer)
     const config = await getConfigForRepo(fullName);
 
-    // Get DB overrides separately (to show what's overridden vs default)
+    // Get governed-layer overrides separately (to show what's promoted vs default)
     const overrides = await getConfigOverrides(fullName);
 
     // Build pillar status summary
@@ -48,6 +48,9 @@ configRouter.get("/:owner/:repo", async (req, res) => {
 
     res.json({
       config,
+      // W2-04 resolution evidence: active layers, value-level provenance,
+      // per-layer source identities, version vector, effective hash.
+      resolution: config._meta,
       overrides: overrides?.config || {},
       updatedAt: overrides?.updated_at || null,
       updatedBy: overrides?.updated_by || null,

@@ -11,7 +11,8 @@
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { isPillarEnabled, isDryRun, shouldTrigger } from "@gitwire/rules";
-import { parseConfig, validateConfig } from "@gitwire/rules";
+import { validateConfig } from "@gitwire/rules";
+import { resolveProposedConfig, isConfigValidationError } from "./configService.js";
 import { redactSecrets } from "../lib/redact.js";
 
 // Map decision_log source to pillar name
@@ -58,18 +59,25 @@ export async function simulatePolicy(params = {}) {
   const fromDate = from || new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
   const toDate = to || new Date().toISOString();
 
-  // Step 1: Parse and validate the proposed policy
+  // Step 1: Resolve the proposed policy through the canonical layering
   let proposedConfig;
   try {
-    proposedConfig = parseConfig(yamlText);
+    proposedConfig = await resolveProposedConfig(repo, yamlText);
   } catch (err) {
+    // Three-way classification: the user's proposal being invalid, a
+    // FETCHED source being invalid (named in the message), or an outage.
+    // Only the first is a verdict on the submitted YAML.
+    const fetchedSourceInvalid = Boolean(err?.invalidConfigSource);
+    const invalidProposal = isConfigValidationError(err) && !fetchedSourceInvalid;
     return {
       simulated_at: new Date().toISOString(),
       scope: { repo, from: fromDate, to: toDate, limit },
       policy: { valid: false, errors: [err.message] },
       summary: { events_considered: 0, would_act: 0, would_skip: 0, would_block: 0, dry_run: 0, unsupported: 0 },
       results: [],
-      error: "Invalid policy — cannot simulate",
+      error: invalidProposal
+        ? "Invalid policy — cannot simulate"
+        : "Configuration sources currently unreadable — cannot simulate",
     };
   }
 

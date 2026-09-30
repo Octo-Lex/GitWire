@@ -25,6 +25,69 @@ type HistoryEntry = {
   config_new?: unknown;
 };
 
+// W2-04 resolution evidence: which layer supplied each effective value, the
+// per-layer source identities, the version vector, and the effective hash.
+// Answers the operator question: "Why is this effective value X, and which
+// source supplied it?"
+type ResolutionMeta = {
+  layers?: Record<string, boolean>;
+  provenance?: Record<string, string>;
+  provenance_sources?: Record<string, string | null>;
+  version_vector?: Record<string, string | null>;
+  effective_hash?: string;
+  org_source?: string | null;
+};
+
+function ResolutionEvidence({ resolution }: { resolution?: ResolutionMeta | null }) {
+  if (!resolution || !resolution.provenance) return null;
+
+  const byLayer = new Map<string, string[]>();
+  for (const [pointer, layer] of Object.entries(resolution.provenance)) {
+    const list = byLayer.get(layer) || [];
+    list.push(pointer);
+    byLayer.set(layer, list);
+  }
+  const layerOrder = ["governed", "repo", "organization", "org", "defaults"];
+
+  return (
+    <div className="space-y-2">
+      <h2 className="text-sm font-medium text-text-primary">
+        Resolution evidence (W2-04)
+      </h2>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
+        <span>
+          Active layers:
+        </span>
+        {Object.entries(resolution.layers || {})
+          .filter(([, active]) => active)
+          .map(([layer]) => (
+            <span key={layer} className="px-2 py-0.5 rounded bg-surface-2 text-text-secondary">
+              {layer}
+            </span>
+          ))}
+      </div>
+      <dl className="text-xs text-text-secondary space-y-1">
+        {layerOrder
+          .filter((layer) => byLayer.has(layer))
+          .map((layer) => (
+            <div key={layer} className="flex gap-2">
+              <dt className="w-20 shrink-0 text-text-tertiary">{layer}</dt>
+              <dd className="break-all">
+                {byLayer.get(layer)!.length} values ·{" "}
+                <span className="text-text-tertiary">
+                  {resolution.provenance_sources?.[layer] || "—"}
+                </span>
+              </dd>
+            </div>
+          ))}
+      </dl>
+      <div className="text-xs text-text-tertiary break-all">
+        Effective hash: {resolution.effective_hash || "—"}
+      </div>
+    </div>
+  );
+}
+
 export default function ConfigPage() {
   const { data: reposData } = useSWR(API.repos("per_page=100"), fetcher);
   const repos: RepoSummary[] = reposData?.data || [];
@@ -129,6 +192,7 @@ export default function ConfigPage() {
                 </span>
               )}
             </div>
+            <ResolutionEvidence resolution={config.resolution ?? config.config?._meta} />
             <div>
               <h2 className="text-sm font-medium text-text-primary mb-2">
                 Resolved live policy

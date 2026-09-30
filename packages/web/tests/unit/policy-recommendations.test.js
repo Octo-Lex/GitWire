@@ -25,8 +25,18 @@ describe("Policy Recommendations — service contract", () => {
     expect(source).toMatch(/yaml is required/);
   });
 
-  it("parses proposed policy with parseConfig", () => {
-    expect(source).toMatch(/parseConfig/);
+  it("resolves proposed policy through the canonical layering (W2-04)", () => {
+    expect(source).toMatch(/resolveProposedConfig/);
+  });
+
+  it("analyzes the RESOLVED proposed policy, not the raw YAML (W2-04)", () => {
+    expect(source).toMatch(/validatePolicy\(JSON.stringify\(proposedConfig\)\)/);
+    expect(source).not.toMatch(/validatePolicy\(yamlText\)/);
+  });
+
+  it("classifies by validation-ness; non-validation failures are outages (W2-04)", () => {
+    expect(source).toMatch(/isConfigValidationError/);
+    expect(source).not.toMatch(/isConfigSourceUnavailable/);
   });
 
   it("validates with validateConfig", () => {
