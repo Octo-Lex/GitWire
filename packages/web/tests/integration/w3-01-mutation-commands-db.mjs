@@ -465,13 +465,16 @@ try {
   );
 
   // ── Group 14: immutability ──────────────────────────────────────────────
+  // Post-049 the blanket append-only wall on UPDATE became the transition
+  // guard; updates are still rejected — intent immutability preserved —
+  // with the evolved 'intent is immutable' message.
   await assert.rejects(
     client.query(`UPDATE public.mutation_commands SET request = '{}' WHERE id = $1`, [hashA.command.id]),
-    /mutation_commands is append-only/,
+    /mutation_commands is append-only|mutation command intent is immutable/,
   );
   await assert.rejects(
     client.query(`DELETE FROM public.mutation_commands WHERE id = $1`, [hashA.command.id]),
-    /mutation_commands is append-only/,
+    /mutation_commands is append-only|mutation command intent is immutable/,
   );
   await assert.rejects(
     client.query(`UPDATE public.mutation_outbox SET event_type = 'x' WHERE command_id = $1`, [hashA.command.id]),
