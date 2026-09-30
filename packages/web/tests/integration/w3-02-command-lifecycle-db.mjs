@@ -334,7 +334,13 @@ try {
     await transition(cmd, "claimed", 1);
 
     await client.query("BEGIN");
-    await client.query(`ALTER TABLE public.mutation_command_transitions DISABLE TRIGGER trg_mutation_transitions_validate_claim`);
+    // session_replication_role=replica suspends ALL triggers (claim guard,
+    // append-only, deferred check) for this transaction while the unique
+    // indexes keep enforcing — the only honest way to reach each uniqueness
+    // constraint in isolation, since with the step CHECK active a to_version
+    // duplicate is necessarily also a from_version duplicate. SET LOCAL
+    // resets at commit/rollback; CI-only proof transaction.
+    await client.query("SET LOCAL session_replication_role = replica");
 
     // A failed statement aborts the transaction, so each duplicate insert
     // runs inside its own savepoint.
