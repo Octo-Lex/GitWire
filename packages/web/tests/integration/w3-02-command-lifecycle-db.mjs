@@ -206,8 +206,10 @@ try {
       `SELECT status, version FROM public.mutation_commands WHERE id = $1`,
       [cmd.id],
     );
-    assert.deepEqual(row, { status: "created", version: Number(row.version), });
-    assert.equal(Number(row.version), 1);
+    assert.deepEqual(
+      { status: row.status, version: Number(row.version) },
+      { status: "created", version: 1 },
+    );
   }
 
   // ── A8: intent mutation through the transition path rejected ─────────────
