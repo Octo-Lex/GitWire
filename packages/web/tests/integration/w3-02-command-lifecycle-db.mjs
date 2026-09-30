@@ -342,6 +342,11 @@ try {
             last_transition_at=(SELECT transitioned_at FROM public.mutation_command_transitions WHERE command_id=$1),
             last_transitioned_by=$2
       WHERE id=$1`, [cmd.id, String(principalId)]);
+    // Both uniqueness constraints sit behind the claim guard (a BEFORE
+    // trigger runs before constraint checking), so proving each constraint
+    // independently requires the guard disabled — CI-only, inside this
+    // rolled-back transaction.
+    await client.query(`ALTER TABLE public.mutation_command_transitions DISABLE TRIGGER trg_mutation_transitions_validate_claim`);
     await assert.rejects(
       client.query(
         `INSERT INTO public.mutation_command_transitions
@@ -351,8 +356,7 @@ try {
       ),
       (err) => err.code === "23505" && err.constraint === "uq_mutation_transitions_from_version",
     );
-    // to_version duplicate: reachable only with the claim guard disabled
-    await client.query(`ALTER TABLE public.mutation_command_transitions DISABLE TRIGGER trg_mutation_transitions_validate_claim`);
+    // to_version duplicate
     await assert.rejects(
       client.query(
         `INSERT INTO public.mutation_command_transitions
