@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import pg from "pg";
 
+const { Client } = pg;
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
@@ -40,12 +41,18 @@ try {
     "both uniqueness constraints must be restored",
   );
 
+  // pg_catalog, not information_schema: the standard view does not report
+  // TRUNCATE statement triggers, and here all six must be verified.
   const { rows: triggers } = await client.query(
-    `SELECT trigger_name FROM information_schema.triggers
-      WHERE trigger_schema = 'public'
-        AND trigger_name LIKE 'trg_mutation_%'`,
+    `SELECT c.relname AS table_name, t.tgname AS trigger_name
+       FROM pg_trigger t
+       JOIN pg_class c ON c.oid = t.tgrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relname IN ('mutation_commands', 'mutation_outbox')
+        AND NOT t.tgisinternal`,
   );
-  assert.equal(triggers.length, 6, "all six append-only triggers must be restored");
+  assert.equal(triggers.length, 6, "all six append-only triggers must be restored: " + JSON.stringify(triggers));
 
   const { rows: [applied] } = await client.query(
     `SELECT count(*)::int AS n FROM schema_migrations
