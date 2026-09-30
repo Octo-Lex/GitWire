@@ -1,0 +1,96 @@
+name: W3 Mutation Command DB
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'packages/web/db/migrations/048_w3_mutation_commands.sql'
+      - 'packages/web/db/rollbacks/048_w3_mutation_commands.rollback.sql'
+      - 'packages/web/src/services/mutationCommandService.js'
+      - 'packages/web/src/services/auth/decisionLog.js'
+      - 'packages/web/src/services/auth/authorize.js'
+      - 'packages/web/tests/integration/w3-01-mutation-commands-db.mjs'
+      - 'packages/web/tests/unit/w3-01-mutation-commands.test.js'
+      - '.github/workflows/w3-mutation-command-db.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'packages/web/db/migrations/048_w3_mutation_commands.sql'
+      - 'packages/web/db/rollbacks/048_w3_mutation_commands.rollback.sql'
+      - 'packages/web/src/services/mutationCommandService.js'
+      - 'packages/web/src/services/auth/decisionLog.js'
+      - 'packages/web/src/services/auth/authorize.js'
+      - 'packages/web/tests/integration/w3-01-mutation-commands-db.mjs'
+      - 'packages/web/tests/unit/w3-01-mutation-commands.test.js'
+      - '.github/workflows/w3-mutation-command-db.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  w3-mutation-command-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gitwire
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: gitops_hub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gitwire -d gitops_hub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://gitwire:test@127.0.0.1:5432/gitops_hub
+      REDIS_URL: redis://127.0.0.1:6379
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      # Gate groups 1–17 (migration, placement, hashing, evidence linkage and
+      # failure atomicity, replay/conflict incl. diagnostics, concurrency,
+      # single-event, ordering, orphan/duplicate rejection, immutability,
+      # W2-04 identity capture, attribution) + group 21 partial (source
+      # contracts) + group 22 (scope boundary).
+      - name: Apply repository migrations (group 1)
+        run: node scripts/migrate.js
+      - name: Prove W3-01 unit contracts (groups 17, 22)
+        run: cd packages/web && NODE_OPTIONS="--experimental-vm-modules" npx jest tests/unit/w3-01-mutation-commands.test.js --config jest.config.js --runInBand --no-coverage
+      - name: Prove W3-01 against real PostgreSQL (groups 2-16)
+        run: node packages/web/tests/integration/w3-01-mutation-commands-db.mjs
+
+      # Gate groups 18-20: explicit rollback artifact, pre-W3-01 schema
+      # preservation, forward reapply + schema-identity restoration.
+      # Sequence runtime values are excluded from identity by contract.
+      - name: Execute explicit rollback artifact and verify absence/preservation (groups 18-19)
+        run: node packages/web/tests/integration/w3-01-rollback-verify-db.mjs
+      - name: Forward reapply (group 20)
+        run: node scripts/migrate.js
+      - name: Verify schema-identity restoration (group 20)
+        run: node packages/web/tests/integration/w3-01-reapply-verify-db.mjs
+
+      # Gate group 21 (existing machinery regression): the aggregate CI
+      # workflow runs the complete existing suite (managed_actions, review,
+      # triage, merge queue, repair) on this same head; this workflow's unit
+      # step above additionally proves no writer cutover occurred.

@@ -22,6 +22,7 @@ jest.unstable_mockModule("../../src/services/auth/principalResolver.js", () => (
 
 jest.unstable_mockModule("../../src/services/auth/decisionLog.js", () => ({
   logDecision: mockLogDecision,
+  persistDecisionEvidence: jest.fn(async () => "test-evidence-id"),
 }));
 
 const {
