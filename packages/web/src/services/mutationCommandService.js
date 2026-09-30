@@ -88,11 +88,27 @@ function validateInputs({ authority, resource, operation, target, request, idemp
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw new MutationCommandError("request_required");
   }
+  validateIdempotencyIdentity(idempotency);
+}
+
+// Identity fields are producer-owned but shape-constrained: a stable
+// charset and length cap keep idempotency identities from carrying
+// arbitrary payloads while leaving namespace allocation to producers
+// (W3-03 owns producer registration).
+const IDENTITY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+function validateIdempotencyIdentity(idempotency) {
   if (!idempotency?.namespace || typeof idempotency.namespace !== "string") {
     throw new MutationCommandError("namespace_required");
   }
+  if (!IDENTITY_PATTERN.test(idempotency.namespace)) {
+    throw new MutationCommandError("namespace_invalid");
+  }
   if (!idempotency?.key || typeof idempotency.key !== "string") {
     throw new MutationCommandError("idempotency_key_required");
+  }
+  if (!IDENTITY_PATTERN.test(idempotency.key)) {
+    throw new MutationCommandError("idempotency_key_invalid");
   }
 }
 
