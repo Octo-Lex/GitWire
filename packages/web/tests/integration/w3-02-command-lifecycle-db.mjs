@@ -98,7 +98,7 @@ try {
       idempotency: { namespace: NS, key: `c-${suffix}` },
     });
     assert.equal(created.created, true);
-    assert.equal(created.command.version, 1, "new command initializes at version 1");
+    assert.equal(Number(created.command.version), 1, "new command initializes at version 1");
     return created.command;
   }
 
@@ -206,7 +206,8 @@ try {
       `SELECT status, version FROM public.mutation_commands WHERE id = $1`,
       [cmd.id],
     );
-    assert.deepEqual(row, { status: "created", version: 1 });
+    assert.deepEqual(row, { status: "created", version: Number(row.version), });
+    assert.equal(Number(row.version), 1);
   }
 
   // ── A8: intent mutation through the transition path rejected ─────────────
@@ -394,7 +395,7 @@ try {
         [cmd.id],
       );
       assert.deepEqual(
-        { journal_rows: row.journal_rows, version: row.version },
+        { journal_rows: row.journal_rows, version: Number(row.version) },
         { journal_rows: 1, version: 2 },
         "convergence: one journal row, one version increment",
       );

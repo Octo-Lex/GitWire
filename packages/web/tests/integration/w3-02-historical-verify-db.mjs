@@ -24,7 +24,7 @@ try {
   assert.equal(seeded.length, 2, "the workflow seeded exactly two historical commands");
   for (const row of seeded) {
     assert.equal(row.status, "created", "historical command keeps status created");
-    assert.equal(row.version, 1, "historical command initializes at version 1");
+    assert.equal(Number(row.version), 1, "historical command initializes at version 1");
   }
 
   const { rows: [journal] } = await client.query(
