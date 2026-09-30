@@ -335,26 +335,39 @@ try {
 
     await client.query("BEGIN");
     await client.query(`ALTER TABLE public.mutation_command_transitions DISABLE TRIGGER trg_mutation_transitions_validate_claim`);
-    await assert.rejects(
-      client.query(
-        `INSERT INTO public.mutation_command_transitions
-           (command_id, from_status, to_status, from_version, to_version, transitioned_by)
-         VALUES ($1, 'created', 'claimed', 1, 2, $2)`,
-        [cmd.id, String(principalId)],
-      ),
-      (err) => err.code === "23505" && err.constraint === "uq_mutation_transitions_from_version",
-      "from_version duplicate must violate its constraint",
+
+    // A failed statement aborts the transaction, so each duplicate insert
+    // runs inside its own savepoint.
+    async function expectUniqueViolation(sql, params, constraint) {
+      await client.query("SAVEPOINT sp");
+      let caught = null;
+      try {
+        await client.query(sql, params);
+      } catch (err) {
+        caught = err;
+      }
+      assert.ok(caught, `expected a violation of ${constraint}`);
+      assert.equal(caught.code, "23505", constraint);
+      assert.equal(caught.constraint, constraint);
+      await client.query("ROLLBACK TO SAVEPOINT sp");
+      await client.query("RELEASE SAVEPOINT sp");
+    }
+
+    await expectUniqueViolation(
+      `INSERT INTO public.mutation_command_transitions
+         (command_id, from_status, to_status, from_version, to_version, transitioned_by)
+       VALUES ($1, 'created', 'claimed', 1, 2, $2)`,
+      [cmd.id, String(principalId)],
+      "uq_mutation_transitions_from_version",
     );
-    await assert.rejects(
-      client.query(
-        `INSERT INTO public.mutation_command_transitions
-           (command_id, from_status, to_status, from_version, to_version, transitioned_by)
-         VALUES ($1, 'claimed', 'executing', 0, 2, $2)`,
-        [cmd.id, String(principalId)],
-      ),
-      (err) => err.code === "23505" && err.constraint === "uq_mutation_transitions_to_version",
-      "to_version duplicate must violate its constraint",
+    await expectUniqueViolation(
+      `INSERT INTO public.mutation_command_transitions
+         (command_id, from_status, to_status, from_version, to_version, transitioned_by)
+       VALUES ($1, 'claimed', 'executing', 0, 2, $2)`,
+      [cmd.id, String(principalId)],
+      "uq_mutation_transitions_to_version",
     );
+
     await client.query("ROLLBACK");
     const { rows: [guardCheck] } = await client.query(
       `SELECT count(*)::int AS n FROM public.mutation_command_transitions
