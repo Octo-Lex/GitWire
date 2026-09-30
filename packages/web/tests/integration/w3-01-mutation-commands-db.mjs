@@ -121,7 +121,7 @@ try {
       principal: { principalId, authenticationMethod: "api_key" },
       permission: "w3-01.proof:mutate",
     },
-    resource: { type: "repository", repositoryId },
+    resource: { type: "repository", installationId, repositoryId },
     operation: "label.add",
     target: { path: "README.md" },
     request: { label: "bug" },
