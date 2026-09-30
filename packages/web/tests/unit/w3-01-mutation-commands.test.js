@@ -147,6 +147,9 @@ describe("W3-01 validation and policy-context identity (A16, A17)", () => {
     ["missing request", { request: null }],
     ["missing namespace", { idempotency: { key: "k" } }],
     ["missing key", { idempotency: { namespace: "n" } }],
+    ["hostile namespace payload", { idempotency: { namespace: "ns; DROP TABLE x; --", key: "k" } }],
+    ["oversized namespace", { idempotency: { namespace: "a".repeat(129), key: "k" } }],
+    ["key with whitespace/newlines", { idempotency: { namespace: "n", key: "line1\nline2" } }],
   ])("rejects %s", async (_label, overrides) => {
     await expect(createMutationCommand(baseParams(overrides))).rejects.toMatchObject({
       name: "MutationCommandError",
