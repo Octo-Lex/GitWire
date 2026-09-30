@@ -104,8 +104,9 @@ try {
   await client.query(
     `INSERT INTO gitwire_auth.auth_principal_roles (
        principal_id, role_id, scope_type, scope_id, granted_by
-     ) VALUES ($1, $2, 'repository', $3, $4)`,
-    [principalId, roleId, repositoryId, grantorId],
+     ) VALUES ($1, $2, 'repository', $3, $4),
+              ($5, $2, 'repository', $3, $4)`,
+    [principalId, roleId, repositoryId, grantorId, otherPrincipalId],
   );
 
   const { initRuntime } = await import("@gitwire/runtime");
@@ -396,6 +397,48 @@ try {
         [NS, key],
       );
       assert.equal(row.n, 1, "one idempotency identity → one command");
+    } finally {
+      runtime.db.transaction = originalTransaction;
+    }
+  }
+
+  // ── Concurrent cross-principal race: loser fails closed, no disclosure ──
+  {
+    const key = `xpr-${randomUUID()}`;
+    const { getRuntime } = await import("@gitwire/runtime");
+    const runtime = getRuntime();
+    const originalTransaction = runtime.db.transaction;
+    let started = 0;
+    runtime.db.transaction = async (fn) => originalTransaction.call(runtime.db, async (tx) => {
+      started += 1;
+      while (started < 2) await new Promise((r) => setTimeout(r, 5));
+      return fn(tx);
+    });
+    try {
+      const make = (pid) => createMutationCommand(base({
+        authority: { principal: { principalId: pid }, permission: "w3-01.proof:mutate" },
+        idempotency: { namespace: NS, key },
+      }));
+      const results = await Promise.allSettled([make(principalId), make(otherPrincipalId)]);
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      assert.equal(fulfilled.length, 1, "exactly one principal's creator wins");
+      assert.equal(rejected.length, 1, "the cross-principal loser fails");
+      assert.equal(rejected[0].reason.reason, "idempotency_principal_mismatch",
+        "loser reason is the principal mismatch, not a conflict leak");
+      assert.equal(rejected[0].reason.detail, null, "no command id / hash disclosure");
+
+      const { rows: [row] } = await client.query(
+        `SELECT
+           (SELECT count(*)::int FROM public.mutation_commands
+             WHERE namespace = $1 AND idempotency_key = $2) AS commands,
+           (SELECT count(*)::int FROM public.mutation_outbox o
+             JOIN public.mutation_commands c ON c.id = o.command_id
+             WHERE c.namespace = $1 AND c.idempotency_key = $2) AS events`,
+        [NS, key],
+      );
+      assert.deepEqual({ commands: row.commands, events: row.events },
+        { commands: 1, events: 1 }, "one command, one event after the cross-principal race");
     } finally {
       runtime.db.transaction = originalTransaction;
     }

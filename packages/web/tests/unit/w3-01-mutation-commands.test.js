@@ -221,6 +221,44 @@ describe("W3-01 replay and conflict semantics (A9, A10)", () => {
     expect(mockTransaction).not.toHaveBeenCalled();
   });
 
+  test("unique-violation loser against ANOTHER principal's committed command fails closed (concurrent race branch)", async () => {
+    // The security-important branch #388 added but left unproven: the
+    // pre-check misses (empty), the transaction loses the insert race
+    // (23505 on the uniqueness constraint), and the committed winner
+    // belongs to a DIFFERENT principal. Resolution must fail closed with
+    // idempotency_principal_mismatch and no command/hash disclosure.
+    let call = 0;
+    mockQuery.mockImplementation(async (sql) => {
+      const q = typeof sql === "string" ? sql : "";
+      call += 1;
+      if (q.includes("INSERT INTO public.mutation_commands")) {
+        const err = new Error("duplicate key value violates unique constraint \"uq_mutation_commands_idempotency\"");
+        err.code = "23505";
+        err.constraint = "uq_mutation_commands_idempotency";
+        throw err;
+      }
+      if (q.includes("FROM public.mutation_commands")) {
+        if (call === 1) return { rows: [] }; // pre-check: not yet committed
+        // loser re-read after rollback: another principal's winner
+        return { rows: [{
+          id: "33333333-3333-4333-8333-333333333333",
+          principal_id: "99999999-9999-4999-8999-999999999999",
+          request_hash: "sha256:" + "e".repeat(64),
+        }] };
+      }
+      if (q.includes("INSERT INTO public.mutation_outbox")) {
+        return { rows: [{ seq: 9, event_id: "event-9" }] };
+      }
+      return { rows: [] };
+    });
+
+    let caught = null;
+    await createMutationCommand(baseParams()).catch((err) => { caught = err; });
+    expect(caught).toBeInstanceOf(MutationCommandError);
+    expect(caught.reason).toBe("idempotency_principal_mismatch");
+    expect(caught.detail).toBeNull(); // no command id, no request hash disclosed
+  });
+
   test("a different principal reusing an idempotency identity fails closed with no disclosure", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [committedCommand] });
     const promise = createMutationCommand(baseParams({
