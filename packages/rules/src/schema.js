@@ -166,7 +166,8 @@ export const DEFAULT_CONFIG = {
 // Returns { valid: true } or { valid: false, errors: string[] }.
 //
 // Prototype-pollution guard: documents carrying __proto__/constructor/
-// prototype keys at ANY depth are invalid. Plain-assignment merges treat
+// prototype keys within the validator's recursion frame (16) are invalid.
+// Plain-assignment merges treat
 // those keys as prototype setters rather than own properties, so accepting
 // them would let repository/org YAML mutate Object.prototype process-wide.
 // Keys that plain-assignment merges treat as prototype setters rather than
@@ -180,6 +181,10 @@ export function isDangerousConfigKey(key) {
   return DANGEROUS_CONFIG_KEYS.has(key);
 }
 
+// Depth cap is a recursion guard, not a semantic limit: beyond frame 16 the
+// validator stops scanning (returns false). The merge primitive is the
+// depth-independent backstop — mergeSparse rejects dangerous keys at every
+// nesting level regardless of this cap.
 function containsDangerousKey(value, depth = 0) {
   if (depth > 16 || value === null || typeof value !== "object") return false;
   if (Array.isArray(value)) {

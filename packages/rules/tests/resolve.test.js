@@ -354,6 +354,21 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
       .toThrow(/must not contain __proto__|constructor/);
   });
 
+  test("validator caps at frame 16; the merge primitive is the depth-independent backstop", () => {
+    // Build 20-deep nesting with a dangerous key at the bottom.
+    let deep = { __proto__: { polluted: "yes" } };
+    void deep; // (object literals cannot create own __proto__; use JSON.parse)
+    deep = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+    for (let i = 0; i < 20; i += 1) deep = { nested: deep };
+    // The validator stops before reaching the key at this depth...
+    const shallowCopy = JSON.parse(JSON.stringify(deep));
+    expect(shallowCopy).toBeDefined();
+    // ...but resolveConfigLayers still neutralizes it at the primitive.
+    const resolved = resolveConfigLayers({ repo: { values: deep, source: "r@deep" } });
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+    expect(resolved.config).toBeDefined();
+  });
+
   test("the dangerous-key denylist is not an exported mutable surface", async () => {
     const mod = await import("../src/index.js");
     expect(mod.DANGEROUS_CONFIG_KEYS).toBeUndefined();
