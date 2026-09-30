@@ -1,3 +1,5 @@
+settings:
+  dry_run: false
 pillars:
   ai_review:
     enabled: true
