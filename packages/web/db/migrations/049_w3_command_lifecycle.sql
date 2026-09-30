@@ -60,7 +60,10 @@ CREATE TABLE public.mutation_command_transitions (
   from_version    BIGINT      NOT NULL,
   to_version      BIGINT      NOT NULL,
   transitioned_by text        NOT NULL,
-  transitioned_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- date_trunc to milliseconds: clock_timestamp() carries microseconds, but
+  -- clients round-trip timestamptz as millisecond Dates — the guard's
+  -- journal-vs-row timestamp equality requires a client-stable instant.
+  transitioned_at timestamptz NOT NULL DEFAULT date_trunc('milliseconds', clock_timestamp()),
   reason          text,
 
   -- The claim INSERT is the compare-and-swap arbiter: one edge out of a
