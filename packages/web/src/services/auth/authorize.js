@@ -185,18 +185,12 @@ export async function authorizeWithPersistence({
       authenticationMethod: principal.authenticationMethod,
       detail: { matchCount: rows.length },
     });
-    // W3-01 transaction-aware evidence mode: when the caller offers the
-    // command transaction's client, the decision row commits (or rolls back)
-    // WITH the caller's unit and its stable id is returned. Failure throws so
-    // the surrounding transaction cannot commit without its evidence.
+    // W3-01 transaction-aware evidence mode: defer persistence to the
+    // caller so the decision row commits with the caller's unit and its
+    // stable id returns. Failures propagate RAW — an evidence outage is
+    // never converted into an authorization denial.
     if (evidenceClient) {
-      const evidenceId = await persistDecisionEvidence(
-        decision,
-        principal,
-        evidenceClient,
-        { observeMode },
-      );
-      return { decision, persisted: true, evidenceId };
+      return { decision, pendingEvidence: true };
     }
     const persisted = await logDecision(
       decision,
@@ -209,6 +203,24 @@ export async function authorizeWithPersistence({
     logger.warn({ err, principalId: principal.principalId, permission }, "authorize: evaluation failed");
     return denyAndLog(DecisionCode.AUTHORIZATION_ERROR, principal, permission, resource, null, null, err, observeMode, lockAuthorityRows ? queryable : undefined);
   }
+}
+
+// Post-evaluation decision persistence. Split from evaluation so the
+// W3-01 transaction-aware evidence mode's failures propagate RAW to the
+// caller's transaction instead of being converted into an authorization
+// denial (an evidence outage is not a verdict on the principal).
+async function persistEvaluatedDecision(result, principal, observeMode, queryable, lockAuthorityRows, evidenceClient) {
+  const { decision } = result;
+  // The decision row commits (or rolls back) WITH the caller's unit and its
+  // stable id is returned. Failure throws so the surrounding transaction
+  // cannot commit without its evidence — never masquerading as a denial.
+  const evidenceId = await persistDecisionEvidence(
+    decision,
+    principal,
+    evidenceClient,
+    { observeMode },
+  );
+  return { decision, persisted: true, evidenceId };
 }
 
 async function denyAndLog(code, principal, permission, resource, assignmentId, scopeType, err, observeMode = true, queryable) {
@@ -255,7 +267,7 @@ export async function authorizeControlled({
   evidenceClient = null,
 }) {
   const normalizedMode = normalizeAuthorizationMode(mode);
-  const result = await authorizeWithPersistence({
+  const evaluated = await authorizeWithPersistence({
     principal,
     permission,
     resource,
@@ -264,6 +276,9 @@ export async function authorizeControlled({
     lockAuthorityRows,
     evidenceClient,
   });
+  const result = evaluated.pendingEvidence
+    ? await persistEvaluatedDecision(evaluated, principal, normalizedMode === AuthorizationMode.OBSERVE, queryable, lockAuthorityRows, evidenceClient)
+    : evaluated;
   const outcome = createAuthorizationOutcome({ ...result, mode: normalizedMode });
   if (result.evidenceId) {
     // Transaction-aware evidence mode: surface the in-transaction evidence
@@ -275,6 +290,17 @@ export async function authorizeControlled({
 
 /** Preserve the established decision-only contract for all existing callers. */
 export async function authorize(opts) {
-  const { decision } = await authorizeWithPersistence(opts);
-  return decision;
+  const evaluated = await authorizeWithPersistence(opts);
+  if (evaluated.pendingEvidence) {
+    const result = await persistEvaluatedDecision(
+      evaluated,
+      opts.principal,
+      opts.observeMode !== false,
+      opts.queryable,
+      opts.lockAuthorityRows,
+      opts.evidenceClient ?? null,
+    );
+    return result.decision;
+  }
+  return evaluated.decision;
 }
