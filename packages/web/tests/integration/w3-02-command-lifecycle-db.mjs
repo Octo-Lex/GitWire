@@ -130,11 +130,11 @@ try {
       [cmd.id],
     );
     assert.equal(row.status, "claimed");
-    assert.equal(row.version, 2);
+    assert.equal(Number(row.version), 2);
     assert.equal(String(row.last_transitioned_by), String(row.journal_by));
     assert.equal(new Date(row.last_transition_at).getTime(), new Date(row.journal_at).getTime());
     assert.deepEqual(
-      [row.from_status, row.to_status, row.from_version, row.to_version],
+      [row.from_status, row.to_status, Number(row.from_version), Number(row.to_version)],
       ["created", "claimed", 1, 2],
     );
   }
