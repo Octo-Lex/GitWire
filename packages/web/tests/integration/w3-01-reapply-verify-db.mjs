@@ -42,11 +42,15 @@ try {
   );
 
   const { rows: triggers } = await client.query(
-    `SELECT trigger_name FROM information_schema.triggers
+    `SELECT trigger_name, event_object_table FROM information_schema.triggers
       WHERE trigger_schema = 'public'
         AND trigger_name LIKE 'trg_mutation_%'`,
   );
-  assert.equal(triggers.length, 6, "all six append-only triggers must be restored");
+  // information_schema.triggers reports one row per (trigger, event): the
+  // three FOR EACH ROW triggers report UPDATE + DELETE each. Count distinct
+  // triggers per table — three per table, six rows distinct.
+  const distinct = new Set(triggers.map((r) => `${r.event_object_table}:${r.trigger_name}`));
+  assert.equal(distinct.size, 6, "all six append-only triggers must be restored: " + JSON.stringify([...distinct]));
 
   const { rows: [applied] } = await client.query(
     `SELECT count(*)::int AS n FROM schema_migrations
