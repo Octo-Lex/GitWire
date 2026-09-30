@@ -339,6 +339,16 @@ settings:
     await expect(getConfigForRepo("acme/app")).rejects.toThrow(/connection refused/);
   });
 
+  test("a 0-byte .gitwire.yml is an explicitly empty layer, not a failure", async () => {
+    // GitHub returns content:"" with encoding "base64" for an empty file —
+    // that is an empty document (absent layer), distinct from oversized
+    // sources that come back with encoding "none".
+    state.files.set("acme/app@.gitwire.yml", { content: "", sha: "emptysha", encoding: "base64" });
+    const config = await getConfigForRepo("acme/app");
+    expect(config._meta.layers.repo).toBe(false);
+    expect(config.settings.dry_run).toBe(true);
+  });
+
   test("oversized sources (empty content / encoding none) reject, not absent", async () => {
     state.files.set("acme/app@.gitwire.yml", { content: "", sha: "bigsha", encoding: "none" });
     await expect(getConfigForRepo("acme/app")).rejects.toThrow(

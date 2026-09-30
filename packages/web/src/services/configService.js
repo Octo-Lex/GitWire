@@ -348,14 +348,19 @@ async function fetchConfigFile(octokit, owner, repoName, path) {
     if (err.status === 404) return null;
     throw new ConfigSourceUnavailableError(sourceId, err.message);
   }
-  if (!data || typeof data.content !== "string" || !data.content || data.encoding === "none") {
-    // Oversized files (>1MB) come back with null/empty content or
-    // encoding "none". The file exists, so resolution fails: a
-    // safety-bearing large config must not silently vanish from the stack.
+  if (!data || typeof data.content !== "string" || data.encoding === "none") {
+    // Oversized files (>1MB) come back with null content or encoding
+    // "none". The file exists, so resolution fails: a safety-bearing large
+    // config must not silently vanish from the stack.
     throw new ConfigSourceUnavailableError(
       sourceId,
       data?.message || "contents API returned no readable content",
     );
+  }
+  if (data.content === "") {
+    // A 0-byte file is an explicitly empty document — an empty layer, not
+    // an unreadable source (GitHub returns encoding "base64" here).
+    return null;
   }
   const yamlText = Buffer.from(data.content, "base64").toString("utf-8");
   try {
