@@ -14,6 +14,7 @@ const state = {
   cache: new Map(),
   cacheWrites: 0,
   transportError: null, // { status, message } — non-404 GitHub failure simulation
+  clientError: null, // message thrown by getInstallationClient (e.g. unconfigured App)
 };
 
 const mockQuery = jest.fn();
@@ -39,7 +40,10 @@ jest.unstable_mockModule("../../src/lib/logger.js", () => ({
   },
 }));
 jest.unstable_mockModule("../../src/lib/github.js", () => ({
-  getInstallationClient: jest.fn(async () => ({ kind: "installation" })),
+  getInstallationClient: jest.fn(async () => {
+    if (state.clientError) throw new Error(state.clientError);
+    return { kind: "installation" };
+  }),
 }));
 jest.unstable_mockModule("../../src/lib/githubWrapper.js", () => ({
   wrapOctokit: jest.fn(() => ({
@@ -79,6 +83,8 @@ beforeEach(() => {
   state.governedRows.clear();
   state.cache.clear();
   state.transportError = null;
+  state.clientError = null;
+  delete process.env.GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP;
   state.cacheWrites = 0;
   state.repoRows = [{ full_name: "acme/app", installation_id: 1 }];
   state.orgRows.set("acme/app", { installation_id: 1, account_login: "acme" });
@@ -373,6 +379,28 @@ settings:
     await expect(getConfigForRepo("acme/app")).rejects.toThrow(
       /currently unreadable \(acme\/app@\.gitwire\.yml\)/,
     );
+  });
+
+  test("missing GitHub App credentials fail resolution by default — typed, not absent", async () => {
+    const { GitHubAppUnconfiguredError } = await import("../../src/services/configService.js");
+    state.clientError = "GitHub App not configured. Set GITHUB_APP_ID and GITHUB_PRIVATE_KEY in .env";
+    let caught = null;
+    await getConfigForRepo("acme/app").catch((err) => { caught = err; });
+    expect(caught).toBeInstanceOf(GitHubAppUnconfiguredError);
+    expect(state.cache.size).toBe(0);
+  });
+
+  test("explicit credential-free mode: layers absent, warned, resolution NOT cached", async () => {
+    process.env.GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP = "true";
+    state.clientError = "GitHub App not configured. Set GITHUB_APP_ID and GITHUB_PRIVATE_KEY in .env";
+    state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
+    const config = await getConfigForRepo("acme/app");
+    // YAML layers absent; safe defaults won.
+    expect(config._meta.layers.repo).toBe(false);
+    expect(config._meta.layers.org).toBe(false);
+    expect(config.pillars.triage.enabled).toBe(false);
+    // The degraded resolution must not be cached.
+    expect(state.cacheWrites).toBe(0);
   });
 
   test("legacy-generation cache entries are never accepted as hits", async () => {
