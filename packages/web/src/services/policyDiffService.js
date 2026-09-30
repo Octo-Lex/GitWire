@@ -139,7 +139,7 @@ export async function diffPolicyImpact(params = {}) {
   const currentRisks = currentValidation.risky_settings || [];
   const proposedRisks = proposedAnalysis.risky_settings || [];
   const risksAdded = proposedRisks.filter(r => !currentRisks.some(c => c.path === r.path));
-  const risksRemoved = currentRisks.filter(c => !proposedRisks.some(r => c.path === c.path));
+  const risksRemoved = currentRisks.filter(c => !proposedRisks.some(r => r.path === c.path));
 
   // Warning diffs — compare by path+message
   const currentWarnings = currentValidation.warnings || [];
