@@ -91,8 +91,22 @@ jobs:
       # single-event, ordering, orphan/duplicate rejection, immutability,
       # W2-04 identity capture, attribution) + group 21 partial (source
       # contracts) + group 22 (scope boundary).
-      - name: Apply repository migrations (group 1)
-        run: node scripts/migrate.js
+      # Historical upgrade proof FIRST (A20): two-stage on the main proof
+      # database — apply 001-048, seed two commands on the 048 schema, then
+      # apply 049 and verify deterministic initialization. (A separate
+      # database is impossible here: Level-1 roles are cluster-global and
+      # migration 039 refuses to adopt pre-existing ones.)
+      - name: Two-stage migration (001-048, seed, 049)
+        run: |
+          set -e
+          mkdir -p /tmp/w3hist
+          mv packages/web/db/migrations/049_w3_command_lifecycle.sql /tmp/w3hist/
+          node scripts/migrate.js
+          node packages/web/tests/integration/w3-02-historical-seed-db.mjs
+          mv /tmp/w3hist/049_w3_command_lifecycle.sql packages/web/db/migrations/
+          node scripts/migrate.js
+      - name: Verify historical initialization (version 1 / created / empty journal)
+        run: node packages/web/tests/integration/w3-02-historical-verify-db.mjs
       - name: Prove W3-01 unit contracts (groups 17, 22)
         run: cd packages/web && NODE_OPTIONS="--experimental-vm-modules" npx jest tests/unit/w3-01-mutation-commands.test.js --config jest.config.js --runInBand --no-coverage
       - name: Prove W3-01 against real PostgreSQL (groups 2-16)
@@ -118,29 +132,6 @@ jobs:
         run: node packages/web/tests/integration/w3-01-reapply-verify-db.mjs
       - name: Verify 049 schema-identity restoration
         run: node packages/web/tests/integration/w3-02-reapply-verify-db.mjs
-
-      # W3-02 historical-upgrade proof (A20): a SECOND database migrated in
-      # two stages (001-048, seed two commands, then 049) proves
-      # deterministic version-1 initialization with no synthetic journal
-      # entries. Sequence runtime values are excluded by contract.
-      - name: Historical upgrade proof (two-stage migration on a fresh database)
-        run: |
-          set -e
-          node --input-type=module -e "
-          import pg from 'pg';
-          const c = new pg.Client({ connectionString: process.env.DATABASE_URL });
-          await c.connect();
-          await c.query('CREATE DATABASE gitops_hist');
-          await c.end();
-          console.log('hist database created');
-          "
-          mkdir -p /tmp/w3hist
-          mv packages/web/db/migrations/049_w3_command_lifecycle.sql /tmp/w3hist/
-          DATABASE_URL=postgresql://gitwire:test@127.0.0.1:5432/gitops_hist node scripts/migrate.js
-          DATABASE_URL=postgresql://gitwire:test@127.0.0.1:5432/gitops_hist node packages/web/tests/integration/w3-02-historical-seed-db.mjs
-          mv /tmp/w3hist/049_w3_command_lifecycle.sql packages/web/db/migrations/
-          DATABASE_URL=postgresql://gitwire:test@127.0.0.1:5432/gitops_hist node scripts/migrate.js
-          DATABASE_URL=postgresql://gitwire:test@127.0.0.1:5432/gitops_hist node packages/web/tests/integration/w3-02-historical-verify-db.mjs
 
       # Gate group 21 (existing machinery regression): the aggregate CI
       # workflow runs the complete existing suite (managed_actions, review,
