@@ -98,7 +98,7 @@ try {
       idempotency: { namespace: NS, key: `c-${suffix}` },
     });
     assert.equal(created.created, true);
-    assert.equal(created.command.version, 1, "new command initializes at version 1");
+    assert.equal(Number(created.command.version), 1, "new command initializes at version 1");
     return created.command;
   }
 
@@ -130,11 +130,11 @@ try {
       [cmd.id],
     );
     assert.equal(row.status, "claimed");
-    assert.equal(row.version, 2);
+    assert.equal(Number(row.version), 2);
     assert.equal(String(row.last_transitioned_by), String(row.journal_by));
     assert.equal(new Date(row.last_transition_at).getTime(), new Date(row.journal_at).getTime());
     assert.deepEqual(
-      [row.from_status, row.to_status, row.from_version, row.to_version],
+      [row.from_status, row.to_status, Number(row.from_version), Number(row.to_version)],
       ["created", "claimed", 1, 2],
     );
   }
@@ -206,7 +206,10 @@ try {
       `SELECT status, version FROM public.mutation_commands WHERE id = $1`,
       [cmd.id],
     );
-    assert.deepEqual(row, { status: "created", version: 1 });
+    assert.deepEqual(
+      { status: row.status, version: Number(row.version) },
+      { status: "created", version: 1 },
+    );
   }
 
   // ── A8: intent mutation through the transition path rejected ─────────────
@@ -321,46 +324,70 @@ try {
   }
 
   // ── gate-proof 8: both uniqueness constraints reject independently ────────
-  // (guard trigger disabled INSIDE a rolled-back transaction — CI-only, and
-  // the only way to reach the to_version constraint, which the active guard
-  // makes unreachable because to_version = from_version + 1 always)
+  // A BEFORE trigger runs before constraint checking, so proving each
+  // uniqueness constraint independently requires the claim guard disabled —
+  // CI-only, in a fresh transaction (ALTER TABLE is blocked while deferred
+  // trigger events are pending) that rolls back, restoring the guard.
   {
     const cmd = await newCommand("dupclaims");
+    // Commit one valid transition so both duplicate shapes target real rows.
+    await transition(cmd, "claimed", 1);
+
     await client.query("BEGIN");
-    // from_version duplicate
-    await client.query(
+    // session_replication_role=replica suspends ALL triggers (claim guard,
+    // append-only, deferred check) for this transaction while the unique
+    // indexes keep enforcing — the only honest way to reach each uniqueness
+    // constraint in isolation, since with the step CHECK active a to_version
+    // duplicate is necessarily also a from_version duplicate. SET LOCAL
+    // resets at commit/rollback; CI-only proof transaction.
+    await client.query("SET LOCAL session_replication_role = replica");
+    // CHECK constraints are not triggers (replica role does not suspend
+    // them), and with the step CHECK active a to_version-only duplicate is
+    // mathematically impossible (to = from + 1). Drop the CHECK inside this
+    // CI-only transaction — transactional DDL restores it at ROLLBACK — so
+    // the to_version index is reachable in isolation.
+    await client.query(`ALTER TABLE public.mutation_command_transitions
+        DROP CONSTRAINT chk_mutation_transitions_version_step`);
+
+    // A failed statement aborts the transaction, so each duplicate insert
+    // runs inside its own savepoint.
+    async function expectUniqueViolation(sql, params, constraint) {
+      await client.query("SAVEPOINT sp");
+      let caught = null;
+      try {
+        await client.query(sql, params);
+      } catch (err) {
+        caught = err;
+      }
+      assert.ok(caught, `expected a violation of ${constraint}`);
+      assert.equal(caught.code, "23505", constraint);
+      assert.equal(caught.constraint, constraint);
+      await client.query("ROLLBACK TO SAVEPOINT sp");
+      await client.query("RELEASE SAVEPOINT sp");
+    }
+
+    await expectUniqueViolation(
       `INSERT INTO public.mutation_command_transitions
          (command_id, from_status, to_status, from_version, to_version, transitioned_by)
        VALUES ($1, 'created', 'claimed', 1, 2, $2)`,
       [cmd.id, String(principalId)],
+      "uq_mutation_transitions_from_version",
     );
-    await client.query(`UPDATE public.mutation_commands
-        SET status='claimed', version=2,
-            last_transition_at=(SELECT transitioned_at FROM public.mutation_command_transitions WHERE command_id=$1),
-            last_transitioned_by=$2
-      WHERE id=$1`, [cmd.id, String(principalId)]);
-    await assert.rejects(
-      client.query(
-        `INSERT INTO public.mutation_command_transitions
-           (command_id, from_status, to_status, from_version, to_version, transitioned_by)
-         VALUES ($1, 'created', 'claimed', 1, 2, $2)`,
-        [cmd.id, String(principalId)],
-      ),
-      (err) => err.code === "23505" && err.constraint === "uq_mutation_transitions_from_version",
+    await expectUniqueViolation(
+      `INSERT INTO public.mutation_command_transitions
+         (command_id, from_status, to_status, from_version, to_version, transitioned_by)
+       VALUES ($1, 'claimed', 'executing', 0, 2, $2)`,
+      [cmd.id, String(principalId)],
+      "uq_mutation_transitions_to_version",
     );
-    // to_version duplicate: reachable only with the claim guard disabled
-    await client.query(`ALTER TABLE public.mutation_command_transitions DISABLE TRIGGER trg_mutation_transitions_validate_claim`);
-    await assert.rejects(
-      client.query(
-        `INSERT INTO public.mutation_command_transitions
-           (command_id, from_status, to_status, from_version, to_version, transitioned_by)
-         VALUES ($1, 'claimed', 'executing', 0, 2, $2)`,
-        [cmd.id, String(principalId)],
-      ),
-      (err) => err.code === "23505" && err.constraint === "uq_mutation_transitions_to_version",
-    );
-    await client.query(`ALTER TABLE public.mutation_command_transitions ENABLE TRIGGER trg_mutation_transitions_validate_claim`);
+
     await client.query("ROLLBACK");
+    const { rows: [guardCheck] } = await client.query(
+      `SELECT count(*)::int AS n FROM public.mutation_command_transitions
+        WHERE command_id = $1`,
+      [cmd.id],
+    );
+    assert.equal(guardCheck.n, 1, "rollback leaves only the committed transition");
   }
 
   // ── A3 (proofs 1/2): concurrent same-version claims ───────────────────────
@@ -394,7 +421,7 @@ try {
         [cmd.id],
       );
       assert.deepEqual(
-        { journal_rows: row.journal_rows, version: row.version },
+        { journal_rows: row.journal_rows, version: Number(row.version) },
         { journal_rows: 1, version: 2 },
         "convergence: one journal row, one version increment",
       );

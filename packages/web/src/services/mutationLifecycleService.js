@@ -77,7 +77,10 @@ async function fetchCommand(queryable, commandId) {
       LIMIT 1`,
     [commandId],
   );
-  return row ?? null;
+  if (!row) return null;
+  // node-postgres returns BIGINT as string; normalize so the frozen
+  // classification compares numbers.
+  return { ...row, version: Number(row.version) };
 }
 
 // The frozen zero-row/conflict classification: after any claim or advance

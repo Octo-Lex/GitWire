@@ -11,6 +11,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 
+const { Client } = pg;
+
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
@@ -24,7 +26,7 @@ try {
   assert.equal(seeded.length, 2, "the workflow seeded exactly two historical commands");
   for (const row of seeded) {
     assert.equal(row.status, "created", "historical command keeps status created");
-    assert.equal(row.version, 1, "historical command initializes at version 1");
+    assert.equal(Number(row.version), 1, "historical command initializes at version 1");
   }
 
   const { rows: [journal] } = await client.query(
