@@ -2,7 +2,7 @@
 // YAML parser with deep-merge onto defaults.
 
 import yaml from "js-yaml";
-import { DEFAULT_CONFIG, validateConfig } from "./schema.js";
+import { DEFAULT_CONFIG, validateConfig, isDangerousConfigKey } from "./schema.js";
 
 /**
  * Parse a .gitwire.yml string into a resolved config object.
@@ -47,20 +47,40 @@ export function parseConfig(yamlContent) {
  * Deep merge source into target. Arrays are replaced, not concatenated.
  * Mutates and returns target.
  */
-export function mergeDeep(target, source) {
-  for (const key of Object.keys(source)) {
-    if (
-      source[key] &&
-      typeof source[key] === "object" &&
-      !Array.isArray(source[key]) &&
-      target[key] &&
-      typeof target[key] === "object" &&
-      !Array.isArray(target[key])
-    ) {
-      mergeDeep(target[key], source[key]);
-    } else {
-      target[key] = source[key];
+/**
+ * Deep merge source into target. Arrays are replaced, not concatenated.
+ * Mutates and returns target.
+ * Ancestors are tracked so YAML anchor/alias cycles fail with a clear
+ * validation error instead of overflowing the stack; shared (acyclic)
+ * aliases still merge at every path they appear on.
+ */
+export function mergeDeep(target, source, ancestors = new Set()) {
+  if (ancestors.has(source)) {
+    throw new Error(
+      "Invalid .gitwire.yml: cyclic reference (YAML anchor/alias cycle) cannot be merged",
+    );
+  }
+  ancestors.add(source);
+  try {
+    for (const key of Object.keys(source)) {
+      // Defense-in-depth for this legacy assignment-based merge: dangerous
+      // keys are prototype setters under plain assignment, never own data.
+      if (isDangerousConfigKey(key)) continue;
+      if (
+        source[key] &&
+        typeof source[key] === "object" &&
+        !Array.isArray(source[key]) &&
+        target[key] &&
+        typeof target[key] === "object" &&
+        !Array.isArray(target[key])
+      ) {
+        mergeDeep(target[key], source[key], ancestors);
+      } else {
+        target[key] = source[key];
+      }
     }
+  } finally {
+    ancestors.delete(source);
   }
   return target;
 }
