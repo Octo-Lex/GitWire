@@ -354,19 +354,33 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
       .toThrow(/must not contain __proto__|constructor/);
   });
 
-  test("validator caps at frame 16; the merge primitive is the depth-independent backstop", async () => {
+  test("the validator is depth-independent: a 20-deep dangerous key is rejected everywhere", async () => {
     // Build 20-deep nesting with a dangerous key at the bottom. JSON.parse
     // creates an own __proto__ property (object literals cannot).
     let deep = JSON.parse('{"__proto__":{"polluted":"yes"}}');
     for (let i = 0; i < 20; i += 1) deep = { nested: deep };
-    // The validator stops before reaching the key at this depth — assert it
-    // directly rather than leaving the cap implicit.
     const { validateConfig } = await import("../src/schema.js");
-    expect(validateConfig({ deep }).valid).toBe(true);
-    // ...but resolveConfigLayers still neutralizes it at the primitive.
+    expect(validateConfig({ deep }).valid).toBe(false);
+    // And the resolver still neutralizes direct programmatic input.
     const resolved = resolveConfigLayers({ repo: { values: deep, source: "r@deep" } });
     expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
     expect(resolved.config).toBeDefined();
+  });
+
+  test("legacy parseConfig(): a 20+ deep dangerous key is rejected with Object.prototype untouched", async () => {
+    const { parseConfig } = await import("../src/parse.js");
+    let deep = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+    for (let i = 0; i < 24; i += 1) deep = { nested: deep };
+    const yamlText = JSON.stringify(deep); // JSON is valid YAML
+    expect(() => parseConfig(yamlText)).toThrow(/must not contain __proto__/);
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+    expect(({}).polluted).toBeUndefined();
+    // mergeDeep as defense-in-depth: even a directly-passed dangerous key
+    // cannot mutate the target through the legacy merge.
+    const { mergeDeep } = await import("../src/parse.js");
+    const target = {};
+    mergeDeep(target, JSON.parse('{"__proto__":{"poisoned":1}}'));
+    expect(Object.hasOwn(Object.prototype, "poisoned")).toBe(false);
   });
 
   test("the dangerous-key denylist is not an exported mutable surface", async () => {
@@ -375,6 +389,37 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
     expect(typeof mod.isDangerousConfigKey).toBe("function");
     expect(mod.isDangerousConfigKey("__proto__")).toBe(true);
     expect(mod.isDangerousConfigKey("pillars")).toBe(false);
+  });
+
+  test("the validator terminates on cyclic (YAML anchor/alias) structures", async () => {
+    const { validateConfig } = await import("../src/schema.js");
+    // Self-referential document WITHOUT a dangerous key: validation must
+    // terminate (a boolean answer, not a hang) and not throw.
+    const cyclic = { settings: { dry_run: true } };
+    cyclic.settings.self = cyclic.settings;
+    const verdict = validateConfig(cyclic);
+    expect(typeof verdict.valid).toBe("boolean");
+    // A cycle that reaches a dangerous key still detects it.
+    const dangerous = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+    const root = { cycle: {} };
+    root.cycle.back = root;
+    root.deep = dangerous;
+    expect(validateConfig(root).valid).toBe(false);
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+  });
+
+  test("mergeDeep rejects cyclic documents by name instead of overflowing the stack", async () => {
+    const { mergeDeep } = await import("../src/parse.js");
+    const { DEFAULT_CONFIG } = await import("../src/schema.js");
+    // YAML anchors/aliases materialize as cycles; realistic cyclic documents
+    // are rejected by validation shape checks first, but mergeDeep is an
+    // exported legacy surface, so the merge itself must survive a cycle:
+    // a named rejection, never unbounded recursion.
+    const cyclic = {};
+    cyclic.quality_gates = cyclic; // self-reference down a defaults-shaped path
+    const target = structuredClone(DEFAULT_CONFIG);
+    expect(() => mergeDeep(target, cyclic)).toThrow(/cyclic reference/);
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
   });
 
   test("own __proto__ keys fed DIRECTLY to the resolver cannot pollute Object.prototype", () => {

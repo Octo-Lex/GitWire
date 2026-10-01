@@ -24,8 +24,8 @@ const mockRedis = {
     state.cache.set(key, value);
     state.cacheWrites += 1;
   }),
-  del: jest.fn(async (key) => {
-    state.cache.delete(key);
+  del: jest.fn(async (...keys) => {
+    for (const key of keys) state.cache.delete(key);
   }),
 };
 
@@ -44,6 +44,9 @@ jest.unstable_mockModule("../../src/lib/github.js", () => ({
     if (state.clientError) throw new Error(state.clientError);
     return { kind: "installation" };
   }),
+  // The credential probe: null exactly when the App factory cannot construct
+  // (the runtime getWebhookApp swallows factory errors into null).
+  getWebhookApp: jest.fn(() => (state.clientError ? null : { kind: "app" })),
 }));
 jest.unstable_mockModule("../../src/lib/githubWrapper.js", () => ({
   wrapOctokit: jest.fn(() => ({
@@ -243,6 +246,32 @@ settings:
     expect(third._meta.effective_hash).not.toBe(first._meta.effective_hash);
   });
 
+  test("invalidation removes entries under BOTH credential-state fingerprints", async () => {
+    state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
+    await getConfigForRepo("acme/app");
+    expect(state.cacheWrites).toBe(1);
+
+    // A leftover from the other credential state (e.g. an entry written by a
+    // previously-configured deployment) lives next to the current one.
+    const [configuredKey] = [...state.cache.keys()];
+    expect(configuredKey).toContain(":configured-required:acme/app");
+    const staleKey = configuredKey.replace(
+      ":configured-required:",
+      ":unconfigured-allowed:",
+    );
+    state.cache.set(staleKey, JSON.stringify({ stale: true }));
+    expect(state.cache.size).toBe(2);
+
+    const { invalidateConfigCache } = await import("../../src/services/configService.js");
+    await invalidateConfigCache("acme/app");
+    // Neither credential state's entry outlives invalidation.
+    expect(state.cache.size).toBe(0);
+    expect(mockRedis.del).toHaveBeenCalledWith(
+      expect.stringContaining(":unconfigured-allowed:acme/app"),
+      expect.stringContaining(":configured-required:acme/app"),
+    );
+  });
+
   test("A19: repeated resolution over identical sources is hash-stable", async () => {
     state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
     const { invalidateConfigCache } = await import("../../src/services/configService.js");
@@ -382,8 +411,8 @@ settings:
   });
 
   test("missing GitHub App credentials fail resolution by default — typed, not absent", async () => {
-    const { GitHubAppUnconfiguredError } = await import("../../src/services/configService.js");
     state.clientError = "GitHub App not configured. Set GITHUB_APP_ID and GITHUB_PRIVATE_KEY in .env";
+    const { GitHubAppUnconfiguredError } = await import("../../src/services/configService.js");
     let caught = null;
     await getConfigForRepo("acme/app").catch((err) => { caught = err; });
     expect(caught).toBeInstanceOf(GitHubAppUnconfiguredError);
@@ -401,6 +430,28 @@ settings:
     expect(config.pillars.triage.enabled).toBe(false);
     // The degraded resolution must not be cached.
     expect(state.cacheWrites).toBe(0);
+  });
+
+  test("a warm cache written under configured credentials is not served after credentials disappear", async () => {
+    // Credentials valid: resolution succeeds and is cached.
+    state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
+    const fresh = await getConfigForRepo("acme/app");
+    expect(fresh._meta.layers.repo).toBe(true);
+    expect(state.cacheWrites).toBe(1);
+
+    // Credentials disappear and the deployment has NOT opted into
+    // credential-free mode: the fail-resolution rule must hold on a would-be
+    // cache hit — not only on a miss.
+    state.clientError = "GitHub App not configured. Set GITHUB_APP_ID and GITHUB_PRIVATE_KEY in .env";
+    const { GitHubAppUnconfiguredError } = await import("../../src/services/configService.js");
+    let caught = null;
+    await getConfigForRepo("acme/app").catch((err) => { caught = err; });
+    expect(caught).toBeInstanceOf(GitHubAppUnconfiguredError);
+    // The stale permissive policy from the warm cache was never returned.
+    expect(caught).not.toHaveProperty("_meta");
+    // Under the new credential state nothing further was written by the
+    // failed resolution.
+    expect(state.cacheWrites).toBe(1);
   });
 
   test("legacy-generation cache entries are never accepted as hits", async () => {

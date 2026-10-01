@@ -25,7 +25,7 @@ import {
   CONFIG_SCHEMA_VERSION,
 } from "@gitwire/rules";
 import { redis } from "../lib/queue.js";
-import { getInstallationClient } from "../lib/github.js";
+import { getInstallationClient, getWebhookApp } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
 import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
@@ -37,7 +37,13 @@ const CACHE_TTL = 300; // 5 minutes
 // any future DEFAULT_CONFIG change that bumps CONFIG_SCHEMA_VERSION starts
 // a fresh cache namespace automatically.
 const CACHE_GENERATION = `config:${CONFIG_SCHEMA_VERSION}`;
-const CACHE_PREFIX = `gitwire:config:${CACHE_GENERATION}:`;
+// Cache eligibility is tied to the credential-configuration state: the
+// fingerprint segment means a change in that state misses every warm entry
+// written under the other state. (credentialFingerprint is declared later in
+// this module; these are call-time template functions, so hoisting is safe.)
+const cachePrefixFor = (fingerprint = credentialFingerprint()) =>
+  `gitwire:config:${CACHE_GENERATION}:${fingerprint}:`;
+const CACHE_PREFIX = `gitwire:config:${CACHE_GENERATION}:`; // plugin cache (no policy content)
 
 const CONFIG_PATHS = [".github/.gitwire.yml", ".gitwire.yml"];
 
@@ -58,7 +64,16 @@ const ORG_CONFIG_REPO = process.env.GITWIRE_ORG_CONFIG_REPO || "gitwire-config";
  * return configuration without its resolution evidence.
  */
 export async function getConfigForRepo(repoFullName) {
-  const cacheKey = CACHE_PREFIX + repoFullName;
+  // Credential-state gate BEFORE the cache: missing App credentials (without
+  // the explicit credential-free opt-in) fail resolution even when a warm
+  // entry exists from a previously-configured deployment.
+  if (!githubAppConfigured() && !allowUnconfiguredGitHubApp()) {
+    throw new GitHubAppUnconfiguredError(
+      "GitHub App credentials absent (App factory)",
+    );
+  }
+
+  const cacheKey = cachePrefixFor() + repoFullName;
 
   // 1. Check Redis cache (the bundle is cached as one coherent object)
   try {
@@ -243,7 +258,12 @@ export async function deleteConfigOverrides(repoFullName, deletedBy = "dashboard
  */
 export async function invalidateConfigCache(repoFullName) {
   try {
-    await redis.del(CACHE_PREFIX + repoFullName);
+    // Invalidate BOTH credential-state variants: an entry written under the
+    // other fingerprint must not survive invalidation until its TTL.
+    await redis.del(
+      cachePrefixFor("unconfigured-allowed") + repoFullName,
+      cachePrefixFor("configured-required") + repoFullName,
+    );
     logger.info({ repo: repoFullName }, "Config cache invalidated");
   } catch (err) {
     logger.warn({ err: err.message }, "Failed to invalidate config cache");
@@ -373,6 +393,28 @@ export class GitHubAppUnconfiguredError extends ConfigSourceUnavailableError {
 
 export function allowUnconfiguredGitHubApp() {
   return /^(1|true|yes)$/i.test(String(process.env.GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP ?? ""));
+}
+
+// A cached bundle is only eligible while the deployment's credential
+// configuration is unchanged: a policy resolved under configured credentials
+// must never be served from a warm cache after credentials disappear (the
+// fail-resolution rule must hold on cache hits too, not only misses).
+function credentialFingerprint() {
+  return allowUnconfiguredGitHubApp() ? "unconfigured-allowed" : "configured-required";
+}
+
+// Synchronous credential-configuration probe: getWebhookApp() builds the App
+// from the canonical appId/privateKey and returns null exactly when those
+// credentials are absent (synchronous, memoized, no network) — the same
+// factory getInstallationClient() ultimately needs, probed without importing
+// the eager-validating config module. The fail-resolution rule must hold
+// unconditionally — a warm cache must never paper over missing credentials.
+function githubAppConfigured() {
+  try {
+    return getWebhookApp() !== null;
+  } catch {
+    return false;
+  }
 }
 
 // Fetch a YAML config file from GitHub, returning the sparse layer plus a
