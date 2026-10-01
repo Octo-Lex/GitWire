@@ -1,0 +1,41 @@
+name: Master Push-CI Watchdog
+
+# 421-C: independently detect when master advances but GitHub fails to
+# instantiate the genuine event=push CI run for that exact head SHA.
+# Detect and report; never repair. Deliberately NOT triggered by push or
+# workflow_run — it must observe the event pipeline from outside it.
+on:
+  schedule:
+    - cron: '*/5 * * * *' # 5-minute cadence against a ~10-minute grace
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: 'Test-only: evaluate this commit SHA beyond grace instead of live master (e.g. a historical missing-event head)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: master-push-ci-watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest # GitHub-hosted only; never the production runner
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run push-CI liveness watchdog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WATCHDOG_TARGET_SHA: ${{ github.event.inputs.target_sha || '' }}
+        run: node scripts/master-push-ci-watchdog.mjs
