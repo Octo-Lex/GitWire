@@ -67,7 +67,25 @@ try {
     (err) => err instanceof MutationTransitionError && err.reason === "stale_version",
   );
 
-  console.log("W3-02 historical upgrade verification: PASS (version 1 / created / empty journal)");
+  // Self-clean: this proof runs FIRST on the shared proof database, so it
+  // must leave no state for the later W3-01/W3-02 proofs. The append-only
+  // walls correctly refuse DELETE; the cleanup suspends every trigger for one
+  // CI-only transaction (SET LOCAL session_replication_role = replica) and
+  // removes the seeded commands and the transition produced above. The
+  // upgrade assertions above already ran against the real, guarded schema.
+  await client.query("BEGIN");
+  await client.query("SET LOCAL session_replication_role = replica");
+  await client.query(`DELETE FROM public.mutation_command_transitions WHERE command_id = ANY($1)`, [seeded.map((row) => row.id)]);
+  await client.query(`DELETE FROM public.mutation_commands WHERE id = ANY($1)`, [seeded.map((row) => row.id)]);
+  await client.query("COMMIT");
+
+  const { rows: [after] } = await client.query(
+    `SELECT (SELECT count(*)::int FROM public.mutation_commands) AS commands,
+            (SELECT count(*)::int FROM public.mutation_command_transitions) AS journal`,
+  );
+  assert.deepEqual(after, { commands: 0, journal: 0 }, "proof database pristine after cleanup");
+
+  console.log("W3-02 historical upgrade verification: PASS (version 1 / created / empty journal; self-cleaned)");
 } finally {
   await client.end();
 }
