@@ -36,10 +36,13 @@ describe("repository config safety-posture coupling", () => {
     expect(() => loadRepoConfig()).not.toThrow();
   });
 
-  it("dry_run is set explicitly (currently false: deliberate live-mode opt-in for AI review)", () => {
+  it("dry_run is set explicitly AND currently false (deliberate live-mode opt-in for AI review)", () => {
     const config = loadRepoConfig();
-    // The explicit setting is the load-bearing fact: someone chose it.
+    // Both facts are load-bearing: someone chose, and the choice is live mode
+    // because the AI review gate must actually run. A flip to true must fail
+    // here and be a conscious review decision, not a silent drift.
     expect(Object.prototype.hasOwnProperty.call(config.settings ?? {}, "dry_run")).toBe(true);
+    expect(config.settings.dry_run).toBe(false);
   });
 
   it("every enabled pillar is enumerated explicitly — nothing rides implicit defaults", () => {

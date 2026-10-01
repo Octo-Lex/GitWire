@@ -354,19 +354,33 @@ describe("resolveConfigLayers — precedence and sparsity", () => {
       .toThrow(/must not contain __proto__|constructor/);
   });
 
-  test("validator caps at frame 16; the merge primitive is the depth-independent backstop", async () => {
+  test("the validator is depth-independent: a 20-deep dangerous key is rejected everywhere", async () => {
     // Build 20-deep nesting with a dangerous key at the bottom. JSON.parse
     // creates an own __proto__ property (object literals cannot).
     let deep = JSON.parse('{"__proto__":{"polluted":"yes"}}');
     for (let i = 0; i < 20; i += 1) deep = { nested: deep };
-    // The validator stops before reaching the key at this depth — assert it
-    // directly rather than leaving the cap implicit.
     const { validateConfig } = await import("../src/schema.js");
-    expect(validateConfig({ deep }).valid).toBe(true);
-    // ...but resolveConfigLayers still neutralizes it at the primitive.
+    expect(validateConfig({ deep }).valid).toBe(false);
+    // And the resolver still neutralizes direct programmatic input.
     const resolved = resolveConfigLayers({ repo: { values: deep, source: "r@deep" } });
     expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
     expect(resolved.config).toBeDefined();
+  });
+
+  test("legacy parseConfig(): a 20+ deep dangerous key is rejected with Object.prototype untouched", async () => {
+    const { parseConfig } = await import("../src/parse.js");
+    let deep = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+    for (let i = 0; i < 24; i += 1) deep = { nested: deep };
+    const yamlText = JSON.stringify(deep); // JSON is valid YAML
+    expect(() => parseConfig(yamlText)).toThrow(/must not contain __proto__/);
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+    expect(({}).polluted).toBeUndefined();
+    // mergeDeep as defense-in-depth: even a directly-passed dangerous key
+    // cannot mutate the target through the legacy merge.
+    const { mergeDeep } = await import("../src/parse.js");
+    const target = {};
+    mergeDeep(target, JSON.parse('{"__proto__":{"poisoned":1}}'));
+    expect(Object.hasOwn(Object.prototype, "poisoned")).toBe(false);
   });
 
   test("the dangerous-key denylist is not an exported mutable surface", async () => {

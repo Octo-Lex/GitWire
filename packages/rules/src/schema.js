@@ -166,7 +166,7 @@ export const DEFAULT_CONFIG = {
 // Returns { valid: true } or { valid: false, errors: string[] }.
 //
 // Prototype-pollution guard: documents carrying __proto__/constructor/
-// prototype keys within the validator's recursion frame (16) are invalid.
+// prototype keys at ANY depth are invalid.
 // Plain-assignment merges treat
 // those keys as prototype setters rather than own properties, so accepting
 // them would let repository/org YAML mutate Object.prototype process-wide.
@@ -181,18 +181,25 @@ export function isDangerousConfigKey(key) {
   return DANGEROUS_CONFIG_KEYS.has(key);
 }
 
-// Depth cap is a recursion guard, not a semantic limit: beyond frame 16 the
-// validator stops scanning (returns false). The merge primitive is the
-// depth-independent backstop — mergeSparse rejects dangerous keys at every
-// nesting level regardless of this cap.
-function containsDangerousKey(value, depth = 0) {
-  if (depth > 16 || value === null || typeof value !== "object") return false;
-  if (Array.isArray(value)) {
-    return value.some((item) => containsDangerousKey(item, depth + 1));
-  }
-  for (const key of Object.keys(value)) {
-    if (isDangerousConfigKey(key)) return true;
-    if (containsDangerousKey(value[key], depth + 1)) return true;
+// Iterative, depth-independent traversal: the validator rejects dangerous
+// keys at ANY nesting level (an explicit stack replaces recursion, so deep
+// documents cannot slip past a frame limit and cannot overflow the stack).
+function containsDangerousKey(root) {
+  if (root === null || typeof root !== "object") return false;
+  const stack = [root];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item !== null && typeof item === "object") stack.push(item);
+      }
+      continue;
+    }
+    for (const key of Object.keys(value)) {
+      if (isDangerousConfigKey(key)) return true;
+      const child = value[key];
+      if (child !== null && typeof child === "object") stack.push(child);
+    }
   }
   return false;
 }

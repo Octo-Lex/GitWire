@@ -2,7 +2,7 @@
 // YAML parser with deep-merge onto defaults.
 
 import yaml from "js-yaml";
-import { DEFAULT_CONFIG, validateConfig } from "./schema.js";
+import { DEFAULT_CONFIG, validateConfig, isDangerousConfigKey } from "./schema.js";
 
 /**
  * Parse a .gitwire.yml string into a resolved config object.
@@ -49,6 +49,9 @@ export function parseConfig(yamlContent) {
  */
 export function mergeDeep(target, source) {
   for (const key of Object.keys(source)) {
+    // Defense-in-depth for this legacy assignment-based merge: dangerous
+    // keys are prototype setters under plain assignment, never own data.
+    if (isDangerousConfigKey(key)) continue;
     if (
       source[key] &&
       typeof source[key] === "object" &&

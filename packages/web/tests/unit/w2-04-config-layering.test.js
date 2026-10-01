@@ -29,6 +29,9 @@ const mockRedis = {
   }),
 };
 
+const mockConfig = { github: { appId: "test-app-id", privateKey: "test-key" } };
+jest.unstable_mockModule("../../config/index.js", () => ({ config: mockConfig }));
+
 jest.unstable_mockModule("../../src/lib/db.js", () => ({ db: { query: mockQuery } }));
 jest.unstable_mockModule("../../src/lib/queue.js", () => ({ redis: mockRedis }));
 jest.unstable_mockModule("../../src/lib/logger.js", () => ({
@@ -85,6 +88,8 @@ beforeEach(() => {
   state.transportError = null;
   state.clientError = null;
   delete process.env.GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP;
+  // Default: the deployment is configured (canonical config carries creds).
+  mockConfig.github = { appId: "test-app-id", privateKey: "test-key" };
   state.cacheWrites = 0;
   state.repoRows = [{ full_name: "acme/app", installation_id: 1 }];
   state.orgRows.set("acme/app", { installation_id: 1, account_login: "acme" });
@@ -383,7 +388,7 @@ settings:
 
   test("missing GitHub App credentials fail resolution by default — typed, not absent", async () => {
     const { GitHubAppUnconfiguredError } = await import("../../src/services/configService.js");
-    state.clientError = "GitHub App not configured. Set GITHUB_APP_ID and GITHUB_PRIVATE_KEY in .env";
+    mockConfig.github = { appId: "", privateKey: "" };
     let caught = null;
     await getConfigForRepo("acme/app").catch((err) => { caught = err; });
     expect(caught).toBeInstanceOf(GitHubAppUnconfiguredError);
@@ -392,6 +397,7 @@ settings:
 
   test("explicit credential-free mode: layers absent, warned, resolution NOT cached", async () => {
     process.env.GITWIRE_CONFIG_ALLOW_UNCONFIGURED_GITHUB_APP = "true";
+    mockConfig.github = { appId: "", privateKey: "" };
     state.clientError = "GitHub App not configured. Set GITHUB_APP_ID and GITHUB_PRIVATE_KEY in .env";
     state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
     const config = await getConfigForRepo("acme/app");
@@ -401,6 +407,29 @@ settings:
     expect(config.pillars.triage.enabled).toBe(false);
     // The degraded resolution must not be cached.
     expect(state.cacheWrites).toBe(0);
+  });
+
+  test("a warm cache written under configured credentials is not served after credentials disappear", async () => {
+    // Credentials valid: resolution succeeds and is cached.
+    state.files.set("acme/app@.gitwire.yml", yamlFile("pillars:\n  triage:\n    enabled: true\n"));
+    const fresh = await getConfigForRepo("acme/app");
+    expect(fresh._meta.layers.repo).toBe(true);
+    expect(state.cacheWrites).toBe(1);
+
+    // Credentials disappear and the deployment has NOT opted into
+    // credential-free mode: the fail-resolution rule must hold on a would-be
+    // cache hit — not only on a miss.
+    mockConfig.github = { appId: "", privateKey: "" };
+    const { GitHubAppUnconfiguredError } = await import("../../src/services/configService.js");
+    let caught = null;
+    await getConfigForRepo("acme/app").catch((err) => { caught = err; });
+    expect(caught).toBeInstanceOf(GitHubAppUnconfiguredError);
+    // The stale permissive policy from the warm cache was never returned.
+    expect(caught).not.toHaveProperty("_meta");
+    // Under the new credential state nothing further was written by the
+    // failed resolution.
+    expect(state.cacheWrites).toBe(1);
+    mockConfig.github = { appId: "test-app-id", privateKey: "test-key" };
   });
 
   test("legacy-generation cache entries are never accepted as hits", async () => {
