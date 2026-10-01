@@ -12,6 +12,15 @@ on:
       - 'packages/web/src/services/auth/authorize.js'
       - 'packages/web/tests/integration/w3-01-mutation-commands-db.mjs'
       - 'packages/web/tests/unit/w3-01-mutation-commands.test.js'
+      - 'packages/web/db/migrations/049_w3_command_lifecycle.sql'
+      - 'packages/web/db/rollbacks/049_w3_command_lifecycle.rollback.sql'
+      - 'packages/web/src/services/mutationLifecycleService.js'
+      - 'packages/web/tests/integration/w3-02-command-lifecycle-db.mjs'
+      - 'packages/web/tests/integration/w3-02-historical-seed-db.mjs'
+      - 'packages/web/tests/integration/w3-02-historical-verify-db.mjs'
+      - 'packages/web/tests/integration/w3-02-rollback-verify-db.mjs'
+      - 'packages/web/tests/integration/w3-02-reapply-verify-db.mjs'
+      - 'packages/web/tests/unit/w3-02-command-lifecycle.test.js'
       - '.github/workflows/w3-mutation-command-db.yml'
   pull_request:
     branches: [master]
@@ -23,6 +32,15 @@ on:
       - 'packages/web/src/services/auth/authorize.js'
       - 'packages/web/tests/integration/w3-01-mutation-commands-db.mjs'
       - 'packages/web/tests/unit/w3-01-mutation-commands.test.js'
+      - 'packages/web/db/migrations/049_w3_command_lifecycle.sql'
+      - 'packages/web/db/rollbacks/049_w3_command_lifecycle.rollback.sql'
+      - 'packages/web/src/services/mutationLifecycleService.js'
+      - 'packages/web/tests/integration/w3-02-command-lifecycle-db.mjs'
+      - 'packages/web/tests/integration/w3-02-historical-seed-db.mjs'
+      - 'packages/web/tests/integration/w3-02-historical-verify-db.mjs'
+      - 'packages/web/tests/integration/w3-02-rollback-verify-db.mjs'
+      - 'packages/web/tests/integration/w3-02-reapply-verify-db.mjs'
+      - 'packages/web/tests/unit/w3-02-command-lifecycle.test.js'
       - '.github/workflows/w3-mutation-command-db.yml'
 
 permissions:
@@ -73,22 +91,47 @@ jobs:
       # single-event, ordering, orphan/duplicate rejection, immutability,
       # W2-04 identity capture, attribution) + group 21 partial (source
       # contracts) + group 22 (scope boundary).
-      - name: Apply repository migrations (group 1)
-        run: node scripts/migrate.js
+      # Historical upgrade proof FIRST (A20): two-stage on the main proof
+      # database — apply 001-048, seed two commands on the 048 schema, then
+      # apply 049 and verify deterministic initialization. (A separate
+      # database is impossible here: Level-1 roles are cluster-global and
+      # migration 039 refuses to adopt pre-existing ones.)
+      - name: Two-stage migration (001-048, seed, 049)
+        run: |
+          set -e
+          mkdir -p /tmp/w3hist
+          mv packages/web/db/migrations/049_w3_command_lifecycle.sql /tmp/w3hist/
+          node scripts/migrate.js
+          node packages/web/tests/integration/w3-02-historical-seed-db.mjs
+          mv /tmp/w3hist/049_w3_command_lifecycle.sql packages/web/db/migrations/
+          node scripts/migrate.js
+      - name: Verify historical initialization (version 1 / created / empty journal)
+        run: node packages/web/tests/integration/w3-02-historical-verify-db.mjs
       - name: Prove W3-01 unit contracts (groups 17, 22)
         run: cd packages/web && NODE_OPTIONS="--experimental-vm-modules" npx jest tests/unit/w3-01-mutation-commands.test.js --config jest.config.js --runInBand --no-coverage
       - name: Prove W3-01 against real PostgreSQL (groups 2-16)
         run: node packages/web/tests/integration/w3-01-mutation-commands-db.mjs
 
-      # Gate groups 18-20: explicit rollback artifact, pre-W3-01 schema
-      # preservation, forward reapply + schema-identity restoration.
-      # Sequence runtime values are excluded from identity by contract.
-      - name: Execute explicit rollback artifact and verify absence/preservation (groups 18-19)
+      # W3-02 lifecycle proofs: claim-then-advance CAS, guards, journal
+      # coupling, concurrency, append-only journal, raw-SQL boundary.
+      - name: Prove W3-02 unit contracts
+        run: cd packages/web && NODE_OPTIONS="--experimental-vm-modules" npx jest tests/unit/w3-02-command-lifecycle.test.js --config jest.config.js --runInBand --no-coverage
+      - name: Prove W3-02 claim-then-advance against real PostgreSQL
+        run: node packages/web/tests/integration/w3-02-command-lifecycle-db.mjs
+
+      # Rollback cycle: 049 first (restores the exact 048 trigger), then 048,
+      # then reapply both and verify both schema identities. Sequence runtime
+      # values are excluded from identity by contract.
+      - name: Rollback 049 and verify exact 048-trigger restoration
+        run: node packages/web/tests/integration/w3-02-rollback-verify-db.mjs
+      - name: Rollback 048 and verify pre-W3-01 schema preservation
         run: node packages/web/tests/integration/w3-01-rollback-verify-db.mjs
-      - name: Forward reapply (group 20)
+      - name: Forward reapply (048 + 049)
         run: node scripts/migrate.js
-      - name: Verify schema-identity restoration (group 20)
+      - name: Verify 048 schema-identity restoration
         run: node packages/web/tests/integration/w3-01-reapply-verify-db.mjs
+      - name: Verify 049 schema-identity restoration
+        run: node packages/web/tests/integration/w3-02-reapply-verify-db.mjs
 
       # Gate group 21 (existing machinery regression): the aggregate CI
       # workflow runs the complete existing suite (managed_actions, review,
