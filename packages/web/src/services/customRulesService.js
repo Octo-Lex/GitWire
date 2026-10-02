@@ -24,6 +24,7 @@ import {
   BLOCKED_REASONS,
 } from "./actionStateMachine.js";
 import { logger } from "../lib/logger.js";
+import { repoPluginsEnabled } from "../lib/pluginGate.js";
 
 const PR_FILES_PER_PAGE = 100;
 const SUPPORTED_ACTIONS = new Set([
@@ -364,13 +365,20 @@ export async function evaluateAndExecuteCustomRules(eventName, payload, installa
   }
 
   let pluginFilters = {};
-  try {
-    const pluginSources = await getPluginsForRepo(repoFullName);
-    if (Array.isArray(pluginSources) && pluginSources.length > 0) {
-      pluginFilters = loadPlugins(pluginSources);
+  // #425 containment: repository plugin files are arbitrary JavaScript
+  // executed in this process; loading them is operator-gated and default-off
+  // until the isolation boundary replaces in-process execution. The gate is
+  // evaluated BEFORE the plugin files are fetched, so disabled deployments
+  // never even treat repository plugin content as loadable source.
+  if (repoPluginsEnabled()) {
+    try {
+      const pluginSources = await getPluginsForRepo(repoFullName);
+      if (Array.isArray(pluginSources) && pluginSources.length > 0) {
+        pluginFilters = loadPlugins(pluginSources);
+      }
+    } catch (_e) {
+      // Plugins are optional and remain outside the D0-03 isolation boundary.
     }
-  } catch (_e) {
-    // Plugins are optional and remain outside the D0-03 isolation boundary.
   }
 
   const matched = evaluateRules(ctx, config, pluginFilters);

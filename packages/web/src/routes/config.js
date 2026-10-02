@@ -18,6 +18,7 @@ import { db } from "../lib/db.js";
 import { logger } from "../lib/logger.js";
 import { observeAuthorize } from "../services/auth/observeAdopt.js";
 import { directPolicyWriteGuard } from "../middleware/directPolicyWriteGuard.js";
+import { playgroundPluginsEnabled } from "../lib/pluginGate.js";
 
 export const configRouter = Router();
 
@@ -286,9 +287,18 @@ configRouter.post("/playground", async (req, res) => {
       return res.status(400).json({ error: "context must be an object" });
     }
 
-    // Load plugins if provided
+    // Load plugins if provided — #425 containment: plugin source submitted to
+    // the playground is arbitrary JavaScript executed in this process; it is
+    // rejected unless the deployment explicitly opted in (operator-only flag).
     let pluginFilters = {};
     if (Array.isArray(pluginSources) && pluginSources.length > 0) {
+      if (!playgroundPluginsEnabled()) {
+        return res.status(400).json({
+          error:
+            "Playground plugin execution is disabled on this deployment " +
+            "(operator default-off; set GITWIRE_ENABLE_PLAYGROUND_PLUGINS=true to enable)",
+        });
+      }
       try {
         pluginFilters = loadPlugins(pluginSources);
       } catch (err) {
