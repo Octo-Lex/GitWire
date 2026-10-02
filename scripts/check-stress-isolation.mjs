@@ -75,6 +75,7 @@ const KNOWN_DOCKERFILES = new Set([
   "docs/Dockerfile",                      // docs image
   "packages/demo-dashboard/Dockerfile",   // demo image
   "validator-image/Dockerfile",           // validator image
+  "plugin-sandbox/Dockerfile",            // #425 plugin sandbox image (disposable; runs untrusted plugin code inside the OS boundary)
 ]);
 
 // Matches: Dockerfile, Dockerfile.dev, Dockerfile.prod, dockerfile, etc.
