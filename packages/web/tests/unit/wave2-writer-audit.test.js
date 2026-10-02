@@ -76,7 +76,7 @@ const AUDIT = {
   ],
 
   managed_actions: [
-    { file: "services/customRulesService.js", line: 515, func: "evaluateAndExecuteCustomRules", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
+    { file: "services/customRulesService.js", line: 527, func: "evaluateAndExecuteCustomRules", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 578, func: "ciHealWorker", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 756, func: "ciHealWorker labelAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
     { file: "workers/ciHealWorker.js", line: 783, func: "ciHealWorker revAction", principalIdExpr: "principalId", contextSource: "adoptWorker evidence context", legacyActor: "n/a", classification: "worker_auth_context" },
