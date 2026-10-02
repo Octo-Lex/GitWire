@@ -1,0 +1,10 @@
+{
+  "name": "gitwire-plugin-sandbox",
+  "private": true,
+  "version": "0.23.1",
+  "type": "module",
+  "description": "Image-local manifest: installs @gitwire/rules from the copied workspace source for the plugin sandbox runner.",
+  "dependencies": {
+    "@gitwire/rules": "file:./packages/rules"
+  }
+}
