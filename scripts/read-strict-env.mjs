@@ -108,6 +108,29 @@ function parseStrict(file) {
 function main() {
   const argv = process.argv.slice(2);
 
+  // Mode 3: --get-optional KEY <file> — same strict parsing, but an absent or
+  // empty key is NOT an error: prints nothing and exits 0. For optional pairs
+  // (both-or-neither semantics checked by the caller); malformed files,
+  // duplicates, and forbidden metacharacters still fail exactly like --get.
+  if (argv[0] === "--get-optional") {
+    const [, key, file] = argv;
+    if (!key || !file) {
+      fail("usage: read-strict-env.mjs --get-optional <KEY> <file>");
+    }
+    let values;
+    try {
+      values = parseStrict(file);
+    } catch (err) {
+      fail(err.message);
+    }
+    const value = values.get(key);
+    if (value === undefined || value.length === 0) {
+      return; // absent/empty is the documented optional posture — not an error
+    }
+    process.stdout.write(value + "\n");
+    return;
+  }
+
   // Mode 2: --get KEY <file>
   if (argv[0] === "--get") {
     const [, key, file] = argv;
