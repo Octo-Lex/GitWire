@@ -355,6 +355,21 @@ jobs:
         run: |
           docker run --rm --entrypoint node gitwire-validator:ci -e "const p=require('/opt/gitwire-base/package.json');if(!p.scripts||!p.scripts.lint){console.error('lint script missing');process.exit(1)}console.log('lint script OK')"
 
+  docker-build-plugin-sandbox-image:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the plugin sandbox image (#425 isolation boundary)
+        run: docker build -t gitwire-plugin-sandbox:ci -f plugin-sandbox/Dockerfile .
+      - name: Verify the runner resolves @gitwire/rules inside the image
+        run: |
+          docker run --rm --entrypoint node gitwire-plugin-sandbox:ci -e "import('@gitwire/rules').then(m => { if (!m.evaluateRules || !m.DEFAULT_CONFIG) { console.error('rules package incomplete'); process.exit(1); } return import('@gitwire/rules/plugins'); }).then(m => { if (typeof m.loadPlugins !== 'function') { console.error('loader missing'); process.exit(1); } console.log('plugin sandbox OK'); })"
+      - name: Verify the image runs as non-root uid 1000
+        run: |
+          [ "$(docker run --rm --entrypoint node gitwire-plugin-sandbox:ci -e 'console.log(process.getuid())')" = "1000" ] || { echo "::error::sandbox image is not non-root"; exit 1; }
+
   # ── Release image publication ────────────────────────────────────────────
   # Runs ONLY for successful master pushes. Builds the three release images
   # once, smoke-tests them locally, then pushes the exact same images to GHCR.
