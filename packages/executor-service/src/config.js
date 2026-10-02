@@ -58,6 +58,15 @@ export function loadExecutorServiceConfig() {
   const validator_image_ref = process.env.GITWIRE_VALIDATOR_IMAGE_REF || null;
   const validator_image_digest = process.env.GITWIRE_VALIDATOR_IMAGE_DIGEST || null;
 
+  // ── plugin sandbox image identity (#425; null when unset) ────────────────
+  // Optional capability: repository/playground plugin evaluation is
+  // operator-gated default-off on the app side, and the sandbox identity is
+  // only consulted when the app calls /v1/plugin-eval. Absence refuses
+  // plugin evaluation (fail-closed) but does not affect overall readiness —
+  // unlike the validator, plugin evaluation is not a core capability.
+  const plugin_sandbox_image_ref = process.env.GITWIRE_PLUGIN_SANDBOX_IMAGE_REF || null;
+  const plugin_sandbox_image_digest = process.env.GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST || null;
+
   // ── build identity (from Dockerfile ENV; normalize missing to "unknown") ─
   const git_sha = process.env.GITWIRE_COMMIT_SHA || "unknown";
   const built_at = process.env.GITWIRE_BUILT_AT || "unknown";
@@ -80,6 +89,8 @@ export function loadExecutorServiceConfig() {
     service_token,
     validator_image_ref,
     validator_image_digest,
+    plugin_sandbox_image_ref,
+    plugin_sandbox_image_digest,
     git_sha,
     built_at,
     validatorIdentityComplete,

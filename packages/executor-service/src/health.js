@@ -50,6 +50,11 @@ export function buildHealthResponse({ config, probeResult }) {
     runtime_version: probeResult ? probeResult.runtime_version : null,
     validator_image_ref: config.validator_image_ref,
     validator_image_digest: config.validator_image_digest,
+    // #425: plugin sandbox identity is OPTIONAL (plugins are operator-gated
+    // default-off on the app side). Absence reports false here and refuses
+    // plugin evaluation at request time; it does not affect readiness.
+    plugin_sandbox_image_configured:
+      Boolean(config.plugin_sandbox_image_ref) && Boolean(config.plugin_sandbox_image_digest),
     ready,
   };
 }

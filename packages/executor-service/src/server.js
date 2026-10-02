@@ -12,6 +12,7 @@ import { createServer as httpCreateServer } from "node:http";
 import { buildHealthResponse } from "./health.js";
 import { probeRuntime as defaultProbe } from "./runtimeProbe.js";
 import { runValidatorJob } from "./validatorRunner.js";
+import { runPluginEvaluation } from "./pluginSandboxRunner.js";
 
 /**
  * Build an HTTP server for the executor service.
@@ -106,6 +107,56 @@ export function createServer({ config, probe = defaultProbe }) {
           inconclusive_detail: err?.message || "unknown executor error",
           executor_service_id: config.executor_service_id,
           executor_service_version: config.executor_service_version,
+        }));
+      }
+      return;
+    }
+
+    // ── POST /v1/plugin-eval ───────────────────────────────────────────────
+    // #425 isolation boundary: narrowly typed plugin evaluation in the
+    // disposable sandbox. Same auth posture as /v1/validate (shared bearer
+    // token; private network is the primary boundary, token the second).
+    if (req.method === "POST" && req.url === "/v1/plugin-eval") {
+      if (!config.service_token) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ overall: "fail", fail_reason: "executor_error", fail_detail: "service token not configured" }));
+        return;
+      }
+      const auth = req.headers.authorization || "";
+      if (auth !== `Bearer ${config.service_token}`) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+
+      let body;
+      try {
+        const chunks = [];
+        for await (const chunk of req) {
+          chunks.push(chunk);
+          if (Buffer.concat(chunks).length > 16 * 1024 * 1024) {
+            res.writeHead(413, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "payload_too_large" }));
+            return;
+          }
+        }
+        body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid_json" }));
+        return;
+      }
+
+      try {
+        const report = await runPluginEvaluation({ request: body, config });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(report));
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          overall: "fail",
+          fail_reason: "executor_error",
+          fail_detail: err?.message || "unknown executor error",
         }));
       }
       return;
