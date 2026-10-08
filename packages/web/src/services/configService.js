@@ -647,7 +647,7 @@ export async function getPluginsForRepo(repoFullName) {
     }
 
     // Cache the source list (not the functions — they're not serializable)
-    // The caller will load them with loadPlugins()
+    // The caller ships these sources to the executor's plugin sandbox (#425).
     const result = pluginSources;
     try {
       await redis.set(cacheKey, JSON.stringify(result), "EX", CACHE_TTL);
