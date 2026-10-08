@@ -140,6 +140,7 @@ function createValidRepoFixture() {
     "docs/Dockerfile",
     "packages/demo-dashboard/Dockerfile",
     "validator-image/Dockerfile",
+    "plugin-sandbox/Dockerfile",
   ]) {
     const abs = path.join(dir, rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
