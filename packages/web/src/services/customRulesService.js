@@ -9,7 +9,6 @@
 //   4. Execute each matched rule's actions via the managed-action lifecycle
 
 import { evaluateRules } from "@gitwire/rules";
-import { loadPlugins } from "@gitwire/rules/plugins";
 import { getConfigForRepo, getPluginsForRepo } from "./configService.js";
 import { getInstallationClient } from "../lib/github.js";
 import { wrapOctokit } from "../lib/githubWrapper.js";
@@ -25,6 +24,7 @@ import {
 } from "./actionStateMachine.js";
 import { logger } from "../lib/logger.js";
 import { repoPluginsEnabled } from "../lib/pluginGate.js";
+import { evaluateViaPluginSandbox, PluginEvaluationError } from "../lib/pluginSandboxClient.js";
 
 const PR_FILES_PER_PAGE = 100;
 const SUPPORTED_ACTIONS = new Set([
@@ -364,24 +364,72 @@ export async function evaluateAndExecuteCustomRules(eventName, payload, installa
     applyFreshPRContext(ctx, fresh);
   }
 
-  let pluginFilters = {};
-  // #425 containment: repository plugin files are arbitrary JavaScript
-  // executed in this process; loading them is operator-gated and default-off
-  // until the isolation boundary replaces in-process execution. The gate is
-  // evaluated BEFORE the plugin files are fetched, so disabled deployments
-  // never even treat repository plugin content as loadable source.
+  // #425 isolation: repository plugin files are arbitrary JavaScript. The app
+  // NEVER executes them — when the operator gate is on, the COMPLETE
+  // plugin-dependent evaluation is delegated to the executor service's
+  // disposable sandbox and only a serialized matched-rule result returns.
+  // When the gate is off (default), it is evaluated BEFORE the plugin files
+  // are fetched, so disabled deployments never even treat repository plugin
+  // content as loadable source, and rules evaluate locally without plugins.
+  // Sandbox failure is fail-closed: it propagates as a typed error, never a
+  // silent continue with altered rule semantics.
+  let matched = [];
   if (repoPluginsEnabled()) {
-    try {
-      const pluginSources = await getPluginsForRepo(repoFullName);
-      if (Array.isArray(pluginSources) && pluginSources.length > 0) {
-        pluginFilters = loadPlugins(pluginSources);
+    const pluginSources = await getPluginsForRepo(repoFullName);
+    if (Array.isArray(pluginSources) && pluginSources.length > 0) {
+      const report = await evaluateViaPluginSandbox({
+        kind: "custom_rules",
+        ctx,
+        config,
+        plugin_sources: pluginSources,
+      });
+      if (!report.evaluation_ok) {
+        // The sandbox round trip passed but evaluation inside it failed —
+        // same fail-closed treatment as a sandbox failure.
+        throw new PluginEvaluationError("evaluation_error", report.evaluation_error);
       }
-    } catch (_e) {
-      // Plugins are optional and remain outside the D0-03 isolation boundary.
+      // AUTHORITY BOUNDARY (P1 correction): the sandbox returns matched
+      // rule IDENTIFIERS only — never action definitions. Every identifier
+      // is validated against the trusted, resolved configuration and the
+      // executed actions are reconstructed EXCLUSIVELY from that config.
+      // A fabricated sandbox response (plugin code controls the sandbox
+      // process) can never authorize actions outside the configured
+      // policy. Plugin filter output may still influence WHICH configured
+      // rules match — that is its intended function, not its authority.
+      const trustedRules = (config && typeof config.custom_rules === "object" && config.custom_rules) || {};
+      const reportedNames = report.result;
+      if (!Array.isArray(reportedNames)) {
+        throw new PluginEvaluationError("malformed_result",
+          "sandbox result is not a list of rule identifiers");
+      }
+      const seenNames = new Set();
+      matched = [];
+      for (const name of reportedNames) {
+        if (typeof name !== "string" || name.length === 0) {
+          throw new PluginEvaluationError("malformed_result",
+            `sandbox returned a non-string rule identifier: ${JSON.stringify(name)}`);
+        }
+        if (seenNames.has(name)) {
+          throw new PluginEvaluationError("malformed_result",
+            `sandbox returned duplicate rule identifier: ${name}`);
+        }
+        seenNames.add(name);
+        if (!Object.prototype.hasOwnProperty.call(trustedRules, name)) {
+          throw new PluginEvaluationError("undeclared_rule",
+            `sandbox reported rule '${name}' which is not declared in the resolved configuration — fabricated output cannot authorize actions`);
+        }
+        const trustedRule = trustedRules[name];
+        if (!trustedRule || typeof trustedRule.if !== "string") continue;
+        // Actions come ONLY from the trusted config entry (same source the
+        // local evaluateRules path uses: rule.run).
+        matched.push({ name, actions: trustedRule.run || [] });
+      }
+    } else {
+      matched = evaluateRules(ctx, config, {});
     }
+  } else {
+    matched = evaluateRules(ctx, config, {});
   }
-
-  const matched = evaluateRules(ctx, config, pluginFilters);
   if (matched.length === 0) return [];
 
   logger.info(
