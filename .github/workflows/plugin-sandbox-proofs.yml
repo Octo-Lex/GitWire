@@ -1,0 +1,105 @@
+name: Plugin Sandbox Proofs
+
+# #425 isolation boundary — live proofs. Builds the disposable sandbox image,
+# pushes it to an ephemeral local registry (so docker inspect carries genuine
+# RepoDigests for the digest gate), and drives the real executor runner
+# through the frozen completion proofs. App-side proofs (default-off gates,
+# no local fallback, zero docker authority in gitwire-app) run in the web
+# unit suite.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'plugin-sandbox/**'
+      - 'packages/executor-service/src/pluginSandboxRunner.js'
+      - 'packages/executor-service/src/server.js'
+      - 'packages/executor-service/src/config.js'
+      - 'packages/executor-service/tests/integration/plugin-sandbox-live.mjs'
+      - 'packages/rules/src/**'
+      - '.github/workflows/plugin-sandbox-proofs.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'plugin-sandbox/**'
+      - 'packages/executor-service/src/pluginSandboxRunner.js'
+      - 'packages/executor-service/src/server.js'
+      - 'packages/executor-service/src/config.js'
+      - 'packages/executor-service/tests/integration/plugin-sandbox-live.mjs'
+      - 'packages/rules/src/**'
+      - '.github/workflows/plugin-sandbox-proofs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  live-proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build the sandbox image
+        run: docker build -t localhost:5000/gitwire-plugin-sandbox:ci -f plugin-sandbox/Dockerfile .
+
+      - name: Start an ephemeral local registry
+        run: docker run -d --name proofs-registry -p 127.0.0.1:5000:5000 registry:2
+
+      - name: Push and capture the registry digest
+        id: push
+        run: |
+          docker push localhost:5000/gitwire-plugin-sandbox:ci
+          DIGEST="$(docker inspect --format '{{json .RepoDigests}}' localhost:5000/gitwire-plugin-sandbox:ci | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);const m=(a[0]||'').match(/(sha256:[0-9a-f]{64})$/);if(!m){console.error('no RepoDigest');process.exit(1)}console.log(m[1])})")"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "ref=localhost:5000/gitwire-plugin-sandbox:ci" >> "$GITHUB_OUTPUT"
+
+      - name: Run the live proofs against the real container boundary
+        env:
+          GITWIRE_PLUGIN_SANDBOX_IMAGE_REF: ${{ steps.push.outputs.ref }}
+          GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: node packages/executor-service/tests/integration/plugin-sandbox-live.mjs
+
+      # #425 deploy-path regressions that need real Docker + a real pushed
+      # digest: the preflight's pinned-image presence guarantee. The pure
+      # cases (neither key, one key, ref/digest format) run in ci.yml's
+      # release-tooling job.
+      - name: Deploy preflight regressions (pinned-image presence)
+        env:
+          REF: ${{ steps.push.outputs.ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          bash <<'SCRIPT'
+            set -euo pipefail
+            source scripts/deploy-release.sh
+            assert_rejected() {
+              if ( "$@" ) >/dev/null 2>&1; then
+                echo "FAIL (expected rejection, succeeded): $*" >&2
+                exit 1
+              fi
+            }
+
+            # BOTH valid + pinned image present locally → success
+            GITWIRE_PLUGIN_SANDBOX_IMAGE_REF="$REF"
+            GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST="$DIGEST"
+            validate_plugin_sandbox_pair && echo "ok: both valid + pinned present → success"
+
+            # TAG present but CONFIGURED DIGEST absent → must fail (the
+            # presence guarantee covers the exact pinned content, and the
+            # tag-only fallback is gone)
+            OTHER="sha256:$(printf 'd%.0s' $(seq 1 64))"
+            GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST="$OTHER"
+            assert_rejected validate_plugin_sandbox_pair \
+              && echo "ok: tag present, configured digest absent → rejected"
+          SCRIPT
+
+      - name: Verify the PR-side image build also passes smoke checks
+        run: |
+          docker run --rm --entrypoint node localhost:5000/gitwire-plugin-sandbox:ci -e "import('@gitwire/rules').then(m => { if (!m.evaluateRules || !m.DEFAULT_CONFIG) { console.error('rules package incomplete'); process.exit(1); } console.log('sandbox rules package OK'); })"
+
+      - name: Stop the registry
+        if: always()
+        run: docker rm -f proofs-registry || true

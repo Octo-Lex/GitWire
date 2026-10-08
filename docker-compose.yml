@@ -78,6 +78,13 @@ services:
       # on ready=true; an unset value here makes that gate fail closed.
       GITWIRE_VALIDATOR_IMAGE_REF: ${GITWIRE_VALIDATOR_IMAGE_REF:?GITWIRE_VALIDATOR_IMAGE_REF must be set}
       GITWIRE_VALIDATOR_IMAGE_DIGEST: ${GITWIRE_VALIDATOR_IMAGE_DIGEST:?GITWIRE_VALIDATOR_IMAGE_DIGEST must be set}
+      # #425 plugin sandbox identity — OPTIONAL (plugin evaluation is
+      # operator-gated default-off on the app side; absence refuses
+      # /v1/plugin-eval fail-closed without affecting readiness). Set BOTH
+      # or NEITHER. REF is repository[:tag] WITHOUT a digest suffix — the
+      # executor pins and runs ref@digest itself.
+      GITWIRE_PLUGIN_SANDBOX_IMAGE_REF: ${GITWIRE_PLUGIN_SANDBOX_IMAGE_REF:-}
+      GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST: ${GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST:-}
     volumes:
       # CT-local Docker socket mounted into the EXECUTOR SERVICE ONLY.
       # NOT mounted into gitwire-app. See docs/architecture/v0.23-executor-service.md

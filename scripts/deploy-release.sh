@@ -119,6 +119,13 @@ read_prod_env() {
   node "$REPO_ROOT/scripts/read-strict-env.mjs" --get "$1" "$PROD_ENV"
 }
 
+# Optional-key variant for both-or-neither pairs: absent/empty is the
+# documented default posture, not an error (strict parsing still applies —
+# malformed files fail exactly like read_prod_env).
+read_prod_env_optional() {
+  node "$REPO_ROOT/scripts/read-strict-env.mjs" --get-optional "$1" "$PROD_ENV"
+}
+
 # Deployment-time Compose wrapper. Uses the STAGED release env (from the
 # manifest), NOT releases/current — which may not exist yet (first deploy)
 # or may point to the previous release.
@@ -271,6 +278,12 @@ strict_parse_production_env() {
   GITWIRE_DEMO_IMAGE="$(read_prod_env GITWIRE_DEMO_IMAGE)"
   GITWIRE_VALIDATOR_IMAGE_REF="$(read_prod_env GITWIRE_VALIDATOR_IMAGE_REF)"
   GITWIRE_VALIDATOR_IMAGE_DIGEST="$(read_prod_env GITWIRE_VALIDATOR_IMAGE_DIGEST)"
+  # #425 plugin sandbox identity — OPTIONAL pair (both or neither), read via
+  # the optional lookup: blank means plugin evaluation stays disabled
+  # (fail-closed refusal at request time), which is the default posture, and
+  # a production.env WITHOUT either key must parse cleanly.
+  GITWIRE_PLUGIN_SANDBOX_IMAGE_REF="$(read_prod_env_optional GITWIRE_PLUGIN_SANDBOX_IMAGE_REF)"
+  GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST="$(read_prod_env_optional GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST)"
 }
 
 # Write the staged release env from the manifest-extracted refs.
@@ -311,6 +324,51 @@ validate_validator_ref_format() {
     *@"$GITWIRE_VALIDATOR_IMAGE_DIGEST") ;;
     *) fail "validator ref does not end with the configured digest: $GITWIRE_VALIDATOR_IMAGE_REF" ;;
   esac
+}
+
+# #425 plugin sandbox identity — optional pair, both-or-neither, with a ref
+# contract OPPOSITE to the validator's on purpose: the sandbox REF is
+# repository[:tag] WITHOUT a digest suffix, because the executor itself pins
+# and runs ref@digest (the validator runs its digest-qualified ref directly).
+validate_plugin_sandbox_pair() {
+  FAILURE_STAGE="validate_plugin_sandbox_pair"
+  local ref="$GITWIRE_PLUGIN_SANDBOX_IMAGE_REF"
+  local digest="$GITWIRE_PLUGIN_SANDBOX_IMAGE_DIGEST"
+
+  # Both-or-neither.
+  if [[ -z "$ref" && -z "$digest" ]]; then
+    log "plugin sandbox identity not configured — plugin evaluation stays disabled (default posture)"
+    return 0
+  fi
+  [[ -n "$ref" && -n "$digest" ]] \
+    || fail "plugin sandbox identity must set BOTH GITWIRE_PLUGIN_SANDBOX_IMAGE_REF and _DIGEST, or neither"
+
+  # Digest format: sha256:<64 lowercase hex>.
+  printf '%s' "$digest" | grep -qE '^sha256:[0-9a-f]{64}$' \
+    || fail "plugin sandbox digest format invalid (expected sha256:<64 hex>): $digest"
+
+  # Ref contract: repository[:tag] WITHOUT a digest suffix. A digest-qualified
+  # ref here is a configuration error (the executor appends the configured
+  # digest itself; an embedded digest would either duplicate or contradict).
+  case "$ref" in
+    *@sha256:*) fail "plugin sandbox ref must be repository[:tag] WITHOUT a digest suffix (the executor pins ref@digest itself): $ref" ;;
+    *:*) ;;  # repository:tag — fine
+    *) ;;    # bare repository — fine (latest implied); the digest pins content
+  esac
+
+  # The PINNED image must be present locally — ${ref}@${digest} itself, not
+  # merely the mutable tag: the preflight's guarantee is that the exact
+  # content the executor will run (it pins ref@digest) is on the host. A
+  # tag-only fallback would prove nothing about the configured digest.
+  docker image inspect "${ref}@${digest}" >/dev/null 2>&1 \
+    || fail "plugin sandbox image '${ref}@${digest}' not present locally. Publish it (see docs/installation/deployment-runbook.md § plugin sandbox image), then: docker pull ${ref}@${digest}"
+  # Belt and braces: prove the configured digest appears in the pinned
+  # reference's RepoDigests (catches a locally-retagged mismatch).
+  local pinned_digests
+  pinned_digests="$(docker inspect --format '{{json .RepoDigests}}' "${ref}@${digest}" 2>/dev/null || true)"
+  printf '%s' "$pinned_digests" | grep -q "$digest" \
+    || fail "plugin sandbox pinned image's RepoDigests do not contain the configured digest: $pinned_digests"
+  log "plugin sandbox identity OK (${ref} @ ${digest:0:19}…)"
 }
 
 # Preflight: transition marker + secondary image refs resolve + production.env
@@ -1115,6 +1173,7 @@ main() {
   verify_infra_health
   validate_validator_ref_format
   pull_validator_image
+  validate_plugin_sandbox_pair
   require_secondary_preflight
   # ── Pre-mutation: validate the rollback target BEFORE changing anything ──
   validate_previous_release

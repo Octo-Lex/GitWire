@@ -9,7 +9,6 @@ import { Router } from "express";
 import { getConfigForRepo, getConfigOverrides, setConfigOverrides, deleteConfigOverrides, getConfigHistory, restoreConfigVersion } from "../services/configService.js";
 import { DEFAULT_CONFIG, validateConfig } from "@gitwire/rules";
 import { evaluateExpr, evaluateExprWithTrace } from "@gitwire/rules/expr";
-import { loadPlugins } from "@gitwire/rules/plugins";
 import { validatePolicy } from "../services/policyValidationService.js";
 import { simulatePolicy } from "../services/policySimulationService.js";
 import { diffPolicyImpact } from "../services/policyDiffService.js";
@@ -19,6 +18,7 @@ import { logger } from "../lib/logger.js";
 import { observeAuthorize } from "../services/auth/observeAdopt.js";
 import { directPolicyWriteGuard } from "../middleware/directPolicyWriteGuard.js";
 import { playgroundPluginsEnabled } from "../lib/pluginGate.js";
+import { evaluateViaPluginSandbox } from "../lib/pluginSandboxClient.js";
 
 export const configRouter = Router();
 
@@ -287,9 +287,11 @@ configRouter.post("/playground", async (req, res) => {
       return res.status(400).json({ error: "context must be an object" });
     }
 
-    // Load plugins if provided — #425 containment: plugin source submitted to
-    // the playground is arbitrary JavaScript executed in this process; it is
-    // rejected unless the deployment explicitly opted in (operator-only flag).
+    // Plugins if provided — #425 isolation: plugin source submitted to the
+    // playground is arbitrary JavaScript; the app NEVER executes it. It is
+    // rejected unless the deployment explicitly opted in (operator-only
+    // flag), and when opted in the COMPLETE evaluation is delegated to the
+    // executor service's disposable sandbox (fail-closed; no local path).
     let pluginFilters = {};
     if (Array.isArray(pluginSources) && pluginSources.length > 0) {
       if (!playgroundPluginsEnabled()) {
@@ -299,12 +301,31 @@ configRouter.post("/playground", async (req, res) => {
             "(operator default-off; set GITWIRE_ENABLE_PLAYGROUND_PLUGINS=true to enable)",
         });
       }
+      let sandboxReport;
       try {
-        pluginFilters = loadPlugins(pluginSources);
+        sandboxReport = await evaluateViaPluginSandbox({
+          kind: "playground",
+          expression,
+          context,
+          expressions,
+          plugin_sources: pluginSources,
+        });
       } catch (err) {
-        return res.status(400).json({ error: `Plugin load error: ${err.message}` });
+        return res.status(502).json({
+          error: `Plugin evaluation sandbox failed (${err.reason || "sandbox_failure"}): ${err.message}`,
+        });
       }
+      if (!sandboxReport.evaluation_ok) {
+        return res.status(400).json({ error: `Plugin evaluation error: ${sandboxReport.evaluation_error}` });
+      }
+      // The sandbox evaluated the expression WITH the plugin filters; return
+      // its serialized result/trace in the SAME shape as the local path —
+      // no local re-evaluation with plugin-dependent expressions.
+      const { result, trace } = sandboxReport.result ?? {};
+      return res.json({ result, trace, evaluated_at: new Date().toISOString(), evaluatedIn: "plugin-sandbox" });
     }
+
+    // No plugins: local evaluation with no untrusted code involved.
 
     // Resolve named expressions
     const exprContext = { ...context };
