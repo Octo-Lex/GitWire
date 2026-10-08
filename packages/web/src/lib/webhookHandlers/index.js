@@ -77,7 +77,13 @@ export async function routeWebhookToQueue(eventName, payload, deliveryId, meta =
     }
   }
 
-  const handler = handlers[eventName];
+  // Own-property selection only (CodeQL #28): `handlers` is a plain object,
+  // so an inherited property name (constructor, toString, valueOf, __proto__)
+  // would otherwise resolve and dispatch to an unexpected target instead of
+  // falling back to the generic-event queue.
+  const handler = Object.hasOwn(handlers, eventName)
+    ? handlers[eventName]
+    : null;
 
   if (handler) {
     await handler(payload, deliveryId, ctx, meta);
