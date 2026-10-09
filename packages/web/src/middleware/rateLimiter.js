@@ -18,10 +18,18 @@ export function rateLimiter(req, res, next) {
     return next();
   }
 
-  // Identity: prefer API key, fall back to IP
-  const identity = req.headers.authorization?.slice(7)?.trim()
-    || req.ip
-    || "unknown";
+  // Identity: a properly formed Bearer token, else the request IP. The
+  // recognition is EXACTLY apiKeyAuth's ("Bearer " prefix, case-sensitive,
+  // single space): anything looser re-opens the rotation bypass (e.g.
+  // "Bearer\t<rotating>" or "bearer <rotating>" are NOT Bearer for auth,
+  // so they must not mint limiter buckets either). Reproduced end-to-end
+  // in rate-limiter-behavior.test.js; remediation pinned in
+  // rate-limiter-identity.test.js.
+  const authHeader = req.headers.authorization;
+  const bearerToken = typeof authHeader === "string" && authHeader.startsWith("Bearer ")
+    ? authHeader.slice(7).trim()
+    : "";
+  const identity = bearerToken || req.ip || "unknown";
 
   const key = `ratelimit:${identity}`;
 
