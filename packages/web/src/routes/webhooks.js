@@ -208,14 +208,66 @@ webhookRouter.post(
 // ── Middleware: capture raw body for signature verification ──────────────────
 // Express's built-in json() middleware consumes the body stream.
 // We need the raw Buffer to verify the HMAC signature correctly.
-function express_raw_body_middleware() {
-  return (req, _res, next) => {
+//
+// #10 resource-exhaustion guard: GitHub's documented webhook payload ceiling
+// is 25 MB — nothing legitimate can exceed it, so the stream is rejected
+// WHILE READING once the received byte count passes the cap. Content-Length
+// is checked first as an early-out optimization only; it is client-supplied
+// and never the enforcement. Oversized requests get 413 without HMAC
+// verification, JSON parsing, or dispatch.
+const WEBHOOK_MAX_BODY_BYTES = 25 * 1024 * 1024;
+
+export function express_raw_body_middleware() {
+  return (req, res, next) => {
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isInteger(declared) && declared > WEBHOOK_MAX_BODY_BYTES) {
+      return res.status(413).json({ error: "Payload too large" });
+    }
+
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => {
+    let received = 0;
+    let settled = false;
+
+    const detach = () => {
+      req.removeListener("data", onData);
+      req.removeListener("end", onEnd);
+      req.removeListener("error", onError);
+    };
+
+    const onData = (chunk) => {
+      received += chunk.length;
+      if (received > WEBHOOK_MAX_BODY_BYTES) {
+        settled = true;
+        detach();
+        // Respond once and discard the rest of the stream without
+        // buffering. Destroying the socket instead would race an RST
+        // against the in-flight 413 and the peer could lose the response;
+        // draining bounds memory while the closed connection reaps the
+        // socket when the peer finishes.
+        res.setHeader("connection", "close");
+        res.status(413).json({ error: "Payload too large" });
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      detach();
+      // Byte-exact: the accepted body reaches HMAC verification unchanged.
       req.rawBody = Buffer.concat(chunks);
       next();
-    });
-    req.on("error", next);
+    };
+    const onError = (err) => {
+      if (settled) return;
+      settled = true;
+      detach();
+      next(err);
+    };
+
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
   };
 }
