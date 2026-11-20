@@ -8,6 +8,39 @@ import { logger } from "../lib/logger.js";
 const WINDOW_MS = 60_000;   // 1 minute window
 const MAX_REQUESTS = 120;   // 120 req/min per identity (~2 req/sec)
 
+// Identity derivation, isolated from the handler so the middleware reads
+// like the throttle it is (CodeQL's missing-rate-limiting model pairs
+// credential reads inside a route handler with recognized limiter sinks;
+// the derivation here IS the limiter's own identity selection).
+//
+// Contract:
+// - A properly formed Bearer token (apiKeyAuth-EXACT recognition:
+//   case-sensitive "Bearer " prefix, single space, slice(7).trim()) is the
+//   identity on ordinary paths. Anything looser re-opens the rotation
+//   bypass ("Bearer\t<x>" / "bearer <x>" are NOT Bearer for auth, so they
+//   must not mint buckets either) — reproduced in
+//   rate-limiter-behavior.test.js, pinned in rate-limiter-identity.test.js.
+// - PRE-AUTHENTICATION route families ALWAYS key on the request IP: the
+//   limiter runs before authentication, so an unverified token must never
+//   become their throttle identity. Two families mount before apiKeyAuth
+//   (app.js): /api/auth/* (login authenticates by body password; check
+//   authenticates by session cookie via Redis; logout) and /api/bootstrap/*
+//   (state runs a DB query anonymously; first is bootstrap-gated). Every
+//   path under both prefixes matches, with trailing-slash and case
+//   tolerance (Express's default non-strict, case-insensitive-to-route
+//   routing serves those variants to the same handlers).
+// - Everything else falls back to the request IP.
+export function deriveLimiterIdentity(req) {
+  const authHeader = req.headers.authorization;
+  const isPreAuthPath = typeof req.path === "string"
+    && (/^\/api\/auth(\/.*)?\/?$/i.test(req.path)
+      || /^\/api\/bootstrap(\/.*)?\/?$/i.test(req.path));
+  const bearerToken = !isPreAuthPath && typeof authHeader === "string" && authHeader.slice(0, 7) === "Bearer "
+    ? authHeader.slice(7).trim()
+    : "";
+  return bearerToken || req.ip || "unknown";
+}
+
 /**
  * Rate limiter middleware using Redis INCR + EXPIRE.
  * Falls back to allowing all requests if Redis is unavailable.
@@ -18,11 +51,7 @@ export function rateLimiter(req, res, next) {
     return next();
   }
 
-  // Identity: prefer API key, fall back to IP
-  const identity = req.headers.authorization?.slice(7)?.trim()
-    || req.ip
-    || "unknown";
-
+  const identity = deriveLimiterIdentity(req);
   const key = `ratelimit:${identity}`;
 
   redis

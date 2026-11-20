@@ -1,5 +1,5 @@
-// src/middleware.ts
-// Next.js middleware — redirects unauthenticated users to /login.
+// src/proxy.ts (renamed from middleware.ts for Next.js 16.4+)
+// Next.js proxy (formerly middleware) — redirects unauthenticated users to /login.
 // Checks for the gitwire-session cookie on all page routes.
 // Allows /login, /_next/*, and static assets without auth.
 
@@ -21,7 +21,7 @@ function isPublicAsset(pathname: string): boolean {
   );
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow public paths and static assets
