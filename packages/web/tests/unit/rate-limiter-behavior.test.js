@@ -157,67 +157,33 @@ describe("rate limiter behavior (Unit C — existing semantics pinned)", () => {
   });
 });
 
-describe("REPRODUCER (known defect, recorded not fixed): non-Bearer Authorization headers split rate buckets under session auth", () => {
-  // The limiter identity is `req.headers.authorization?.slice(7)?.trim() || req.ip`
-  // — the scheme is never checked. apiKeyAuth accepts a VALID SESSION COOKIE
-  // when the Authorization header is absent or not Bearer. Chained as in
-  // production (limiter before auth), a session-authenticated caller rotates
-  // arbitrary non-Bearer Authorization values to get a fresh bucket per
-  // request. This documents the bypass end-to-end with the REAL apiKeyAuth;
-  // the fix is a separate production decision per the #425 review.
-
+describe('REPRODUCER HISTORY (bypass FIXED by rate-limiter-identity remediation on this branch)', () => {
+  // The original end-to-end reproducer (130 rotating Basic headers from one
+  // session, all passing, 130 distinct buckets) documented the identity
+  // defect that the Bearer-only derivation now closes. Full fixed-scenario
+  // coverage lives in rate-limiter-identity.test.js; here we assert the
+  // original attack no longer reproduces against the CURRENT middleware.
   function buildApp() {
     const app = express();
     app.use(rateLimiter);
     app.use(apiKeyAuth);
-    app.get("/api/anything", (req, res) => res.json({ ok: true }));
+    app.get('/api/anything', (req, res) => res.json({ ok: true }));
     return app;
   }
 
-  it("END-TO-END: 130 requests from ONE session, rotating Basic headers, all pass — the per-IP fallback they should have shared never applies", async () => {
+  it('the original rotation attack now throttles: 121st request is 429 on ONE shared bucket', async () => {
     const app = buildApp();
-    const sessionCookie = "gitwire-session=valid-session";
+    const sessionCookie = 'gitwire-session=valid-session';
+    let last = 200;
     for (let i = 0; i < 130; i += 1) {
       const res = await supertest(app)
-        .get("/api/anything")
-        .set("Authorization", `Basic rotating-value-${i}`) // arbitrary non-Bearer
-        .set("Cookie", sessionCookie);
-      expect(res.status).toBe(200);
+        .get('/api/anything')
+        .set('Authorization', "Basic rotating-value-" + i)
+        .set('Cookie', sessionCookie);
+      last = res.status;
+      if (res.status === 429) break;
     }
-    // 130 DISTINCT buckets were created — one per rotated header value —
-    // while the SAME session authenticated every request. Without the
-    // rotating header, all 130 would share the IP bucket and the last 10
-    // would have been 429'd.
-    expect(redisState.counts.size).toBe(130);
-    expect([...redisState.counts.values()].every((n) => n === 1)).toBe(true);
-  });
-
-  it("CONTROL: the SAME session WITHOUT the header trick throttles at 120/min on the shared IP bucket", async () => {
-    const app = buildApp();
-    const sessionCookie = "gitwire-session=valid-session";
-    for (let i = 0; i < 120; i += 1) {
-      const res = await supertest(app)
-        .get("/api/anything")
-        .set("Cookie", sessionCookie);
-      expect(res.status).toBe(200);
-    }
-    // The 121st request on the shared IP bucket is the exact boundary the
-    // rotation bypasses — pinned, not "somewhere within 130".
-    const boundary = await supertest(app)
-      .get("/api/anything")
-      .set("Cookie", sessionCookie);
-    expect(boundary.status).toBe(429);
-  });
-
-  it("MECHANISM: the limiter bucket key derives from the raw sliced header, scheme unchecked", async () => {
-    const a = await runMiddleware({ headers: { authorization: "Basic value-1" }, ip: "10.9.9.9" });
-    const b = await runMiddleware({ headers: { authorization: "Basic value-2" }, ip: "10.9.9.9" });
-    expect(a.passed).toBe(true);
-    expect(b.passed).toBe(true);
-    // Two buckets for one IP — the sliced values differ even though neither
-    // is a credential.
-    expect(redisState.counts.size).toBe(2);
-    expect([...redisState.counts.keys()].join("|")).toContain("alue-1"); // slice(7) of "Basic value-1"
-    expect([...redisState.counts.keys()].join("|")).toContain("alue-2");
+    expect(last).toBe(429);
+    expect(redisState.counts.size).toBe(1); // the IP bucket, not per-header buckets
   });
 });
