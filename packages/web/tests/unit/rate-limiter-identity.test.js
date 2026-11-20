@@ -40,8 +40,9 @@ jest.unstable_mockModule("../../config/index.js", () => ({
 
 process.env.API_KEY = "unit-test-api-key";
 
-const { rateLimiter } = await import("../../src/middleware/rateLimiter.js");
+const { rateLimiter, deriveLimiterIdentity } = await import("../../src/middleware/rateLimiter.js");
 const { apiKeyAuth } = await import("../../src/middleware/auth.js");
+const { extractBearerToken } = await import("../../src/middleware/bearerToken.js");
 
 const express = (await import("express")).default;
 const supertest = (await import("supertest")).default;
@@ -268,7 +269,9 @@ describe("identity derivation contract (middleware-level)", () => {
     ["basic value-2"],
     ["Bearer"],                       // malformed: no token after scheme
     ["Bearer "],                      // malformed: whitespace only
-    ["Bearer\tgap-token"],            // malformed: tab not matched by \\s+? (regex ^Bearer\\s+ — tab IS \\s; assert below)
+    ["Bearer\tgap-token"],            // malformed: tab is not the literal-space separator of the shared
+                                      // recognizer ("Bearer " via extractBearerToken) — apiKeyAuth rejects
+                                      // it with 401, so the limiter must bucket it as anonymous IP too
     [""],                             // empty header value
   ])("non-Bearer or malformed header %j falls back to the IP bucket", async (authorization) => {
     redisState.counts.clear();
@@ -288,5 +291,70 @@ describe("identity derivation contract (middleware-level)", () => {
     expect(otherKey.passed).toBe(true);
     const plainIp = await runMiddleware({ ip: "10.2.2.2" });
     expect(plainIp.passed).toBe(true);
+  });
+});
+
+describe("CONTRACT: apiKeyAuth and deriveLimiterIdentity share one Bearer recognizer (bearerToken.js)", () => {
+  // The two mechanisms were previously unlinked copies kept in sync only by
+  // comments. Both now call extractBearerToken(), so this corpus pins the
+  // ONE recognition rule both depend on: a header authenticates (given a
+  // valid key) exactly when the shared recognizer extracts a token, and the
+  // limiter keys on that token exactly when the same recognizer extracts
+  // one. Divergence in either direction is a test failure, not a silent
+  // bucket-rotation regression.
+
+  const VALID_KEY = "unit-test-api-key"; // process.env.API_KEY set at module load (auth.js keys Set)
+
+  async function authAccepts(authorization) {
+    let accepted = false;
+    const req = {
+      path: "/api/repos", // not auth-skipped, not pre-auth-family
+      headers: authorization === undefined ? {} : { authorization },
+      ip: "10.9.9.9",
+    };
+    const res = { status() { return this; }, json() { return this; } };
+    await apiKeyAuth(req, res, () => { accepted = true; });
+    return accepted;
+  }
+
+  it.each([
+    ["Bearer unit-test-api-key", "unit-test-api-key", true],
+    ["Bearer   unit-test-api-key   ", "unit-test-api-key", true], // trim() tolerates surrounding whitespace AFTER the scheme
+    ["Bearer not-the-key", "not-the-key", false], // recognized form, invalid key → 401, identity still the token
+    ["bearer unit-test-api-key", "", false],      // lowercase scheme is not Bearer for EITHER mechanism
+    ["BEARER unit-test-api-key", "", false],      // case-sensitive scheme
+    ["Bearer\tunit-test-api-key", "", false],     // tab is not the literal-space separator
+    ["Basic unit-test-api-key", "", false],
+    ["Bearer", "", false],
+    ["Bearer ", "", false],                       // whitespace-only token
+    ["", "", false],
+    [undefined, "", false],
+  ])("corpus %j → token %j, apiKeyAuth accepts: %s", async (authorization, expectedToken, expectedAccept) => {
+    // The shared recognizer decides both behaviors from one input.
+    expect(extractBearerToken(authorization)).toBe(expectedToken);
+    await expect(authAccepts(authorization)).resolves.toBe(expectedAccept);
+
+    // Limiter identity (ordinary path): the token when the recognizer found
+    // one, otherwise the IP. A recognized-but-invalid token ("Bearer
+    // not-the-key") still mints its own bucket — authentication and throttle
+    // identity are intentionally coupled ONLY on pre-auth families, where
+    // the override below forces the IP.
+    const identity = deriveLimiterIdentity({
+      path: "/api/repos",
+      headers: authorization === undefined ? {} : { authorization },
+      ip: "10.9.9.9",
+    });
+    expect(identity).toBe(expectedToken || "10.9.9.9");
+  });
+
+  it("PRE-AUTH OVERRIDE: even a well-formed valid Bearer keys the IP on /api/auth/* and /api/bootstrap/*", () => {
+    for (const path of ["/api/auth/login", "/api/auth/check", "/api/bootstrap/state", "/api/bootstrap/first"]) {
+      const identity = deriveLimiterIdentity({
+        path,
+        headers: { authorization: `Bearer ${VALID_KEY}` },
+        ip: "10.9.9.9",
+      });
+      expect(identity).toBe("10.9.9.9");
+    }
   });
 });

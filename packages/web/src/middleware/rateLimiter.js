@@ -4,6 +4,7 @@
 
 import { redis } from "../lib/queue.js";
 import { logger } from "../lib/logger.js";
+import { extractBearerToken } from "./bearerToken.js";
 
 const WINDOW_MS = 60_000;   // 1 minute window
 const MAX_REQUESTS = 120;   // 120 req/min per identity (~2 req/sec)
@@ -14,12 +15,14 @@ const MAX_REQUESTS = 120;   // 120 req/min per identity (~2 req/sec)
 // the derivation here IS the limiter's own identity selection).
 //
 // Contract:
-// - A properly formed Bearer token (apiKeyAuth-EXACT recognition:
-//   case-sensitive "Bearer " prefix, single space, slice(7).trim()) is the
-//   identity on ordinary paths. Anything looser re-opens the rotation
-//   bypass ("Bearer\t<x>" / "bearer <x>" are NOT Bearer for auth, so they
-//   must not mint buckets either) — reproduced in
-//   rate-limiter-behavior.test.js, pinned in rate-limiter-identity.test.js.
+// - A properly formed Bearer token is the identity on ordinary paths. The
+//   recognition is apiKeyAuth-EXACT because both callers share one
+//   implementation: extractBearerToken() in bearerToken.js (case-sensitive
+//   "Bearer " prefix, single space, slice(7).trim()). Anything looser
+//   re-opens the rotation bypass ("Bearer\t<x>" / "bearer <x>" are NOT
+//   Bearer for auth, so they must not mint buckets either) — reproduced in
+//   rate-limiter-behavior.test.js, pinned by the corpus contract test in
+//   rate-limiter-identity.test.js.
 // - PRE-AUTHENTICATION route families ALWAYS key on the request IP: the
 //   limiter runs before authentication, so an unverified token must never
 //   become their throttle identity. Two families mount before apiKeyAuth
@@ -31,13 +34,10 @@ const MAX_REQUESTS = 120;   // 120 req/min per identity (~2 req/sec)
 //   routing serves those variants to the same handlers).
 // - Everything else falls back to the request IP.
 export function deriveLimiterIdentity(req) {
-  const authHeader = req.headers.authorization;
   const isPreAuthPath = typeof req.path === "string"
     && (/^\/api\/auth(\/.*)?\/?$/i.test(req.path)
       || /^\/api\/bootstrap(\/.*)?\/?$/i.test(req.path));
-  const bearerToken = !isPreAuthPath && typeof authHeader === "string" && authHeader.slice(0, 7) === "Bearer "
-    ? authHeader.slice(7).trim()
-    : "";
+  const bearerToken = isPreAuthPath ? "" : extractBearerToken(req.headers.authorization);
   return bearerToken || req.ip || "unknown";
 }
 

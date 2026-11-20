@@ -8,6 +8,7 @@
 import { config } from "../../config/index.js";
 import { logger } from "../lib/logger.js";
 import { redis } from "../lib/queue.js";
+import { extractBearerToken } from "./bearerToken.js";
 
 const SESSION_PREFIX = "gitwire:session:";
 
@@ -71,13 +72,11 @@ export async function apiKeyAuth(req, res, next) {
     return next();
   }
 
-  // Extract key from header or query param
-  let providedKey = null;
-
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith("Bearer ")) {
-    providedKey = authHeader.slice(7).trim();
-  }
+  // Extract key from header or query param.
+  // Recognition lives in the shared bearerToken.js helper so apiKeyAuth and
+  // the rate limiter cannot drift apart (the limiter derives its identity
+  // from the exact same forms auth accepts).
+  const providedKey = extractBearerToken(req.headers.authorization) || null;
 
   // Check session cookie if no Bearer token
   if (!providedKey) {
