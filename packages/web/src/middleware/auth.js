@@ -72,10 +72,11 @@ export async function apiKeyAuth(req, res, next) {
     return next();
   }
 
-  // Extract key from header or query param.
-  // Recognition lives in the shared bearerToken.js helper so apiKeyAuth and
-  // the rate limiter cannot drift apart (the limiter derives its identity
-  // from the exact same forms auth accepts).
+  // Extract the key from the Authorization header (the only in-header
+  // channel; there is no query-parameter key path). Recognition lives in
+  // the shared bearerToken.js helper so apiKeyAuth and the rate limiter
+  // cannot drift apart (the limiter derives its identity from the exact
+  // same forms auth accepts).
   const providedKey = extractBearerToken(req.headers.authorization) || null;
 
   // Check session cookie if no Bearer token
