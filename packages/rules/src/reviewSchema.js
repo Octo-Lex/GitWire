@@ -240,6 +240,72 @@ export function reportToLegacy(report) {
 // JSON Extraction Cascade
 // ════════════════════════════════════════════════════════════════════════════
 
+const WS = /\s/;
+
+/**
+ * Bounded scan for the embedded-findings pattern (CodeQL
+ * js/polynomial-redos #3).
+ *
+ * Replaces `text.match(/\{"findings"\s*:\s*\[[\s\S]*?\]\s*,\s*"overall_correctness"/)`.
+ * That regex retried its literal prefix at EVERY index, and per candidate
+ * rescanned the remaining suffix with the lazy body — quadratic on inputs
+ * that repeat `{"findings":[` without ever completing the pattern. This
+ * scanner never rescans: two monotonic indexOf passes (one over the tail
+ * literal, one over the head literal) with O(1) shape checks per candidate,
+ * so total work is linear in the input.
+ *
+ * Semantics preserved from the regex (pinned by
+ * tests/review-schema-findings-pattern.test.js):
+ * - a match exists at a `{"findings"` occurrence iff skipping one
+ *   whitespace run reaches `:`, then one more whitespace run reaches `[`,
+ *   and some `]` follows that `[` with only whitespace, a comma, and
+ *   whitespace before the literal `"overall_correctness"`
+ * - the FIRST such occurrence (in position order) is returned, identical to
+ *   the regex engine's first-match start. (The old code's extra
+ *   `trimmed.indexOf(matchText)` was provably redundant: an earlier
+ *   occurrence of the full matched text would itself have been an earlier
+ *   pattern match, contradicting first-match selection.)
+ *
+ * @param {string} text - full trimmed LLM output
+ * @returns {number} start index of the first pattern match, or -1
+ */
+function findFindingsPatternStart(text) {
+  // Pass 1 — every valid close: a `]` immediately followed (modulo the two
+  // whitespace runs) by `,"overall_correctness"`. Scan the tail LITERAL once
+  // and walk left; each character is visited a constant number of times.
+  const TAIL = '"overall_correctness"';
+  const validCloses = [];
+  for (let t = text.indexOf(TAIL); t !== -1; t = text.indexOf(TAIL, t + 1)) {
+    let i = t - 1;
+    while (i >= 0 && WS.test(text[i])) i -= 1; // whitespace before the quote
+    if (i >= 0 && text[i] === ",") {
+      i -= 1;
+      while (i >= 0 && WS.test(text[i])) i -= 1; // whitespace before the comma
+      if (i >= 0 && text[i] === "]") validCloses.push(i);
+    }
+  }
+  if (validCloses.length === 0) return -1;
+  validCloses.sort((a, b) => a - b); // collected right-to-left
+
+  // Pass 2 — candidate heads in order; O(1) shape check plus an
+  // existence test against the sorted close list.
+  const HEAD = '{"findings"';
+  const lastClose = validCloses[validCloses.length - 1];
+  for (let s = text.indexOf(HEAD); s !== -1; s = text.indexOf(HEAD, s + 1)) {
+    let p = s + HEAD.length;
+    while (p < text.length && WS.test(text[p])) p += 1; // \s* before ':'
+    if (text[p] !== ":") continue;
+    p += 1;
+    while (p < text.length && WS.test(text[p])) p += 1; // \s* before '['
+    if (text[p] !== "[") continue;
+    p += 1;
+    // A valid close at or after the body start — the lazy body may be
+    // empty (`[]` puts the close exactly at p).
+    if (lastClose >= p) return s;
+  }
+  return -1;
+}
+
 /**
  * Deterministic fenced-block scanner (CodeQL js/polynomial-redos #1/#2).
  *
@@ -372,11 +438,12 @@ export function extractReviewJSON(text) {
 
   // Strategy 5: Try to find JSON embedded in text (common with Claude)
   // Look for patterns like: {"findings": [...], "overall_correctness": ...}
-  const jsonPattern = /\{"findings"\s*:\s*\[[\s\S]*?\]\s*,\s*"overall_correctness"/;
-  const jsonMatch = trimmed.match(jsonPattern);
-  if (jsonMatch) {
-    const startIdx = trimmed.indexOf(jsonMatch[0]);
-    const subStr = trimmed.slice(startIdx);
+  // Bounded scan (findFindingsPatternStart) — the replaced regex retried its
+  // literal prefix at every index and rescanned the remaining suffix per
+  // candidate, quadratic on repeated incomplete prefixes (CodeQL #3).
+  const matchStart = findFindingsPatternStart(trimmed);
+  if (matchStart !== -1) {
+    const subStr = trimmed.slice(matchStart);
     const endBrace = findMatchingBrace(subStr);
     if (endBrace > 0) {
       try {
