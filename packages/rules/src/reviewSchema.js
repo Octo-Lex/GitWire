@@ -241,12 +241,62 @@ export function reportToLegacy(report) {
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
+ * Deterministic fenced-block scanner (CodeQL js/polynomial-redos #1/#2).
+ *
+ * Replaces the two regex strategies — the fenced matcher in single-match
+ * and matchAll form. That regex's greedy \s* (which matches newlines)
+ * interacting with the following \n? made the whitespace bridge ambiguous:
+ * on pathological inputs (a fence followed by very long whitespace runs, no
+ * closing fence) the engine re-splits the whitespace while the lazy body
+ * expands, giving quadratic — and with matchAll, multiplied — work on the
+ * shared review-worker event loop. This scanner pairs opening and closing
+ * fences with monotonic indexOf cursors: every character is visited a
+ * bounded number of times, so worst-case work is linear in the input
+ * regardless of whitespace shape.
+ *
+ * Semantics preserved from the regex pair (pinned by
+ * tests/review-schema-fence-scanner.test.js alongside the pre-existing
+ * fence tests in reviewSchema.test.js):
+ * - fences pair sequentially: an opening ``` runs to the NEXT ``` (its
+ *   close); scanning resumes after the close — identical to matchAll's
+ *   continuation after each completed match
+ * - a `json` label immediately after the opening fence is stripped from the
+ *   body (the regex's (?:json)? consumption); JSON content never begins
+ *   with the letters "json", so the strip cannot destroy a parseable body
+ * - callers trim bodies before JSON.parse exactly as before, so exact
+ *   boundary whitespace is irrelevant (and was under the regex too)
+ * - an unclosed trailing fence yields no block; odd fence counts pair
+ *   floor(n/2) blocks, identical to matchAll's completed matches
+ *
+ * @param {string} text - full LLM output
+ * @returns {string[]} fence bodies, in document order (untrimmed)
+ */
+export function scanFencedBlocks(text) {
+  const blocks = [];
+  let cursor = 0;
+  for (;;) {
+    const open = text.indexOf("```", cursor);
+    if (open === -1) break;
+    const close = text.indexOf("```", open + 3);
+    if (close === -1) break; // trailing unclosed fence — no complete block remains
+    let body = text.slice(open + 3, close);
+    // Strip the immediate optional "json" label plus its following
+    // whitespace run (down to zero), mirroring the regex's label branch.
+    body = body.replace(/^json\s*/, "");
+    blocks.push(body);
+    cursor = close + 3;
+  }
+  return blocks;
+}
+
+/**
  * Extract a JSON review report from LLM output text.
  * Tries multiple extraction strategies in order.
  *
  * Strategies:
  *   1. Direct JSON.parse
- *   2. Strip markdown fences (```json ... ```)
+ *   2. Strip markdown fences (```json ... ```) — deterministic scanner
+ *      (scanFencedBlocks), not a regex
  *   3. Extract first {...} block at top level
  *   4. JSONL stream parsing (one JSON object per line)
  *   5. Nested structured_output/result unwrapping
@@ -269,11 +319,13 @@ export function extractReviewJSON(text) {
     // continue
   }
 
-  // Strategy 2: Strip markdown fences
-  const fenceMatch = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (fenceMatch) {
+  // Strategy 2: Strip markdown fences — deterministic scanner (linear
+  // worst-case; the old regex pair was polynomial on adversarial whitespace,
+  // CodeQL #1/#2).
+  const fencedBlocks = scanFencedBlocks(trimmed);
+  if (fencedBlocks.length >= 1) {
     try {
-      const parsed = JSON.parse(fenceMatch[1].trim());
+      const parsed = JSON.parse(fencedBlocks[0].trim());
       return { json: unwrapNested(parsed), strategy: "fenced" };
     } catch (_e) {
       // continue
@@ -281,11 +333,10 @@ export function extractReviewJSON(text) {
   }
 
   // Strategy 2b: Multiple fences — try last one (often the actual result)
-  const allFences = [...trimmed.matchAll(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/g)];
-  if (allFences.length > 1) {
-    for (let i = allFences.length - 1; i >= 0; i--) {
+  if (fencedBlocks.length > 1) {
+    for (let i = fencedBlocks.length - 1; i >= 0; i -= 1) {
       try {
-        const parsed = JSON.parse(allFences[i][1].trim());
+        const parsed = JSON.parse(fencedBlocks[i].trim());
         return { json: unwrapNested(parsed), strategy: "fenced_multi" };
       } catch (_e) {
         // continue
