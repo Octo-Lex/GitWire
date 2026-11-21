@@ -650,6 +650,19 @@ EOF
 # rename to releases/<sha>. Finally advance current via temp-symlink + mv -Tf.
 # The whole release record (images.env + release.json) is transactional, not
 # just the symlink.
+# ── Post-success protected image prune ─────────────────────────────────────
+# Prevents the 2026-11-21 incident class (image accumulation -> disk 100%)
+# WITHOUT ever removing pinned dependencies (the same incident's validator
+# loss). Non-fatal by design: the deployment is already complete and
+# verified; a prune warning is surfaced, never a rollback.
+prune_images() {
+  FAILURE_STAGE="prune_images"
+  if ! bash "$REPO_ROOT/scripts/prune-protected-images.sh" "$PROD_ENV" "3" "10"; then
+    log "WARN: protected image prune failed or refused — deployment unaffected; investigate image retention"
+    return 0
+  fi
+}
+
 persist_release_refs() {
   FAILURE_STAGE="persist_release_refs"
   local staging_dir release_dir current_link tmp_link
@@ -1191,6 +1204,7 @@ main() {
   verify_image_identity
   verify_non_interference
   persist_release_refs
+  prune_images
 
   FINAL_STATUS="success"
   FAILURE_STAGE="complete"
