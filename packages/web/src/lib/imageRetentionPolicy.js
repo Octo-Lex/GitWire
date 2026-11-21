@@ -1,0 +1,96 @@
+// src/lib/imageRetentionPolicy.js
+// Protected image-retention selection policy (#425 incident follow-up,
+// second disk-exhaustion incident; authorized design + implementation).
+//
+// Docker's "unused image" is NOT GitWire's "disposable image": the pinned
+// validator dependency (ghcr.io/octo-lex/gitwire-validator@sha256:…) is
+// never referenced by a running container, yet the deploy REQUIRES it to
+// resolve locally — an unrestricted `docker image prune -a` deleted it on
+// 2026-11-21 and blocked the release deployment. This module computes the
+// SAFE removal set:
+//
+//   KEEP — any image whose repo@digest EXACTLY equals a protected
+//   reference (the digest-qualified deploy pins parsed from the
+//   production environment: validator, app, executor, dashboard, and any
+//   other @sha256-qualified ref present there). Exact match only — a
+//   shared repository or tag confers no protection;
+//   KEEP — any image EXACTLY referenced by a running container (by image
+//   id or by its repo:tag reference) — never by bare repository name,
+//   which would retain every image of a running repo and defeat the
+//   accumulation cure;
+//   KEEP — the N most recent images per repository name (rollback
+//   candidates; N defaults to 3: current + two previous releases);
+//   REMOVE — everything else.
+//
+// Pure function: the caller gathers the inputs (docker CLI or fixtures in
+// tests) and executes the removal. The executor script
+// (scripts/prune-protected-images.sh) refuses to run without at least one
+// protected ref, so an empty pin list can never degrade into an
+// unrestricted prune.
+
+/**
+ * @typedef {Object} ImageRecord
+ * @property {string} repository  image repository (e.g. ghcr.io/octo-lex/gitwire-app)
+ * @property {string} [tag]       image tag (e.g. latest, sha-abc123)
+ * @property {string} [digest]    repo digest without the repo@ prefix (sha256:…)
+ * @property {string} id          image id
+ * @property {string} created     sortable creation timestamp (ISO or epoch)
+ *
+ * @param {Object} input
+ * @param {ImageRecord[]} input.images            full local image inventory
+ * @param {string[]}      input.protectedRefs     digest-qualified refs that must survive (deploy pins)
+ * @param {string[]}      input.runningImages     image ids/repo:tag refs used by running containers
+ * @param {number}        [input.keepPerRepo=3]   rollback candidates retained per repository
+ * @returns {{ keep: ImageRecord[], remove: ImageRecord[], keptProtected: string[], keptRollback: number }}
+ */
+export function selectImagesToRemove({ images, protectedRefs, runningImages, keepPerRepo = 3 }) {
+  const protectedSet = new Set(
+    (protectedRefs || []).filter((r) => r.includes("@sha256:")),
+  );
+  const runningSet = new Set(runningImages || []);
+
+  const keep = new Set(); // by id
+  const keptProtected = [];
+
+  // 1. Explicitly protected refs (digest-qualified).
+  for (const img of images) {
+    if (!img.digest) continue;
+    const ref = `${img.repository}@${img.digest}`;
+    if (protectedSet.has(ref)) {
+      keep.add(img.id);
+      keptProtected.push(ref);
+    }
+  }
+
+  // 2. Referenced by a running container: exact matches only (image id,
+  //    or the full repo:tag the container runs). A bare repository match
+  //    would protect every digest under a running repo — the retention
+  //    failure mode this policy exists to prevent.
+  for (const img of images) {
+    const runningRef = img.tag ? `${img.repository}:${img.tag}` : null;
+    if (runningSet.has(img.id) || (runningRef && runningSet.has(runningRef))) {
+      keep.add(img.id);
+    }
+  }
+
+  // 3. Rollback candidates: the N most recent per repository name.
+  const byRepo = new Map();
+  for (const img of images) {
+    if (!byRepo.has(img.repository)) byRepo.set(img.repository, []);
+    byRepo.get(img.repository).push(img);
+  }
+  let keptRollback = 0;
+  for (const [repo, list] of byRepo) {
+    list.sort((a, b) => String(b.created).localeCompare(String(a.created)));
+    for (const img of list.slice(0, keepPerRepo)) {
+      if (keep.has(img.id)) continue;
+      keep.add(img.id);
+      keptRollback += 1;
+    }
+    void repo;
+  }
+
+  const keepArr = images.filter((i) => keep.has(i.id));
+  const remove = images.filter((i) => !keep.has(i.id));
+  return { keep: keepArr, remove, keptProtected, keptRollback };
+}
