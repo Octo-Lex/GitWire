@@ -22,6 +22,13 @@ import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFr
 import { sanitizeWebhookPayload } from "../lib/githubSanitize.js";
 import { routeWebhookToQueue } from "../lib/webhookHandlers/index.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
+import {
+  webhookTelemetryBegin,
+  webhookTelemetryBytes,
+  webhookTelemetryBodyComplete,
+  webhookTelemetryHandoff,
+  webhookTelemetryRelease,
+} from "../lib/webhookTelemetry.js";
 
 export const webhookRouter = Router();
 
@@ -31,6 +38,9 @@ webhookRouter.post(
   "/github",
   express_raw_body_middleware(),
   async (req, res) => {
+    // Body-retention accounting ends HERE (finally), not at transport
+    // termination: the handler owns req.rawBody until it settles.
+    try {
     const eventName  = req.headers["x-github-event"];
     const deliveryId = req.headers["x-github-delivery"];
     const signature  = req.headers["x-hub-signature-256"];
@@ -199,6 +209,13 @@ webhookRouter.post(
 
     // Respond immediately — processing happens asynchronously
     res.status(202).json({ queued: true, deliveryId });
+    } finally {
+      // Settlement is the sole post-handoff release; no-op pre-handoff
+      // (transport events already released) or on double invocation.
+      if (typeof req.webhookTelemetrySettle === "function") {
+        req.webhookTelemetrySettle();
+      }
+    }
   }
 );
 
@@ -219,6 +236,47 @@ const WEBHOOK_MAX_BODY_BYTES = 25 * 1024 * 1024;
 
 export function express_raw_body_middleware() {
   return (req, res, next) => {
+    // ── #10-A telemetry (observation only — zero admission effect) ────────
+    // Tracks, per request entering this middleware: body-retention lifetime
+    // (entry → response termination), buffered bytes, streaming duration,
+    // and terminal outcome. Aggregates surface on /health. See
+    // lib/webhookTelemetry.js for the accounting contract.
+    const telId = webhookTelemetryBegin();
+    let handedOff = false;
+    const classifyAndRelease = () => {
+      if (res.writableEnded) {
+        const code = res.statusCode;
+        const outcome =
+          code >= 200 && code < 300 ? "completed"
+          : code === 400 ? "rejected_400"
+          : code === 401 ? "rejected_401"
+          : code === 413 ? "rejected_413"
+          : "error";
+        webhookTelemetryRelease(telId, outcome);
+      } else {
+        webhookTelemetryRelease(telId, "aborted");
+      }
+    };
+    // Transport termination releases accounting ONLY before handoff (the
+    // rejection and stream-error paths, where no handler ever owns the
+    // body). After handoff the async route handler retains req.rawBody
+    // until it settles — a client disconnect mid-handler does NOT end body
+    // retention — so transport events are recorded for classification and
+    // the route's finally (req.webhookTelemetrySettle) is the sole release.
+    const onTransportTerminated = () => {
+      if (handedOff) return; // handler still owns the body
+      classifyAndRelease();
+    };
+    // finish classifies by terminal status; close is the robust catch-all
+    // (fires on finish, client abort, and socket destroy — Node deprecated
+    // req "aborted" in its favor). Exactly-once release makes the overlap
+    // harmless: whichever fires first wins.
+    res.on("finish", onTransportTerminated);
+    res.on("close", onTransportTerminated);
+    req.on("aborted", onTransportTerminated);
+    // Handler settlement hook: invoked from the route handler's finally.
+    req.webhookTelemetrySettle = classifyAndRelease;
+
     // Post-rejection error swallow: both rejection paths resume the stream
     // (draining without buffering) after the 413 is committed. A resumed
     // Node stream with NO error listener would emit an uncaught 'error'
@@ -280,6 +338,7 @@ export function express_raw_body_middleware() {
         return;
       }
       chunks.push(chunk);
+      webhookTelemetryBytes(telId, chunk.length);
     };
     const onEnd = () => {
       if (settled) return;
@@ -287,6 +346,9 @@ export function express_raw_body_middleware() {
       detach();
       // Byte-exact: the accepted body reaches HMAC verification unchanged.
       req.rawBody = Buffer.concat(chunks);
+      webhookTelemetryBodyComplete(telId);
+      handedOff = true;
+      webhookTelemetryHandoff(telId);
       next();
     };
     const onError = (err) => {
