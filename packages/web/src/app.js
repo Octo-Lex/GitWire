@@ -44,6 +44,7 @@ import { rateLimiter }          from "./middleware/rateLimiter.js";
 import { logger } from "./lib/logger.js";
 import { getDeploymentInfo } from "./lib/deploymentInfo.js";
 import { getTriageHealthBlock } from "./services/triageStatusService.js";
+import { webhookTelemetrySnapshot } from "./lib/webhookTelemetry.js";
 import { db } from "./lib/db.js";
 import { config } from "../config/index.js";
 
@@ -134,6 +135,17 @@ export function createApp() {
       logger.warn({ err: err.message }, "/health: triage status read failed");
     }
 
+    // Webhook ingress telemetry (#10-A) — coarse, anonymous-safe capacity
+    // evidence: concurrent body-retaining requests, retained bytes, interval
+    // and lifetime high-water marks, outcomes, durations. Never degrades the
+    // top-level status; observation only.
+    let webhookTelemetry = null;
+    try {
+      webhookTelemetry = webhookTelemetrySnapshot();
+    } catch (err) {
+      logger.warn({ err: err.message }, "/health: webhook telemetry snapshot failed");
+    }
+
     // Top-level status degrades on either deployment OR triage signals
     const overallStatus =
       deploymentStatus === "degraded" || triageBlock.status === "degraded" || triageBlock.status === "unknown"
@@ -145,6 +157,7 @@ export function createApp() {
       service: "gitwire",
       ts: new Date().toISOString(),
       workflows: { triage: triageBlock },
+      webhook_ingress: webhookTelemetry,
       ...deployment,
     });
   });
