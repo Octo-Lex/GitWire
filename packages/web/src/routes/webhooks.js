@@ -22,6 +22,12 @@ import { createGitwireCheck, updateGitwireCheck, buildCheckSummary, conclusionFr
 import { sanitizeWebhookPayload } from "../lib/githubSanitize.js";
 import { routeWebhookToQueue } from "../lib/webhookHandlers/index.js";
 import { adoptWorker, workerPrincipalId } from "../services/auth/workerAdoption.js";
+import {
+  webhookTelemetryBegin,
+  webhookTelemetryBytes,
+  webhookTelemetryBodyComplete,
+  webhookTelemetryRelease,
+} from "../lib/webhookTelemetry.js";
 
 export const webhookRouter = Router();
 
@@ -219,6 +225,34 @@ const WEBHOOK_MAX_BODY_BYTES = 25 * 1024 * 1024;
 
 export function express_raw_body_middleware() {
   return (req, res, next) => {
+    // ── #10-A telemetry (observation only — zero admission effect) ────────
+    // Tracks, per request entering this middleware: body-retention lifetime
+    // (entry → response termination), buffered bytes, streaming duration,
+    // and terminal outcome. Aggregates surface on /health. See
+    // lib/webhookTelemetry.js for the accounting contract.
+    const telId = webhookTelemetryBegin();
+    const releaseTelemetry = () => {
+      if (res.writableEnded) {
+        const code = res.statusCode;
+        const outcome =
+          code >= 200 && code < 300 ? "completed"
+          : code === 400 ? "rejected_400"
+          : code === 401 ? "rejected_401"
+          : code === 413 ? "rejected_413"
+          : "error";
+        webhookTelemetryRelease(telId, outcome);
+      } else {
+        webhookTelemetryRelease(telId, "aborted");
+      }
+    };
+    // finish classifies by terminal status; close is the robust catch-all
+    // (fires on finish, client abort, and socket destroy — Node deprecated
+    // req "aborted" in its favor). Exactly-once release makes the overlap
+    // harmless: whichever fires first wins.
+    res.on("finish", releaseTelemetry);
+    res.on("close", releaseTelemetry);
+    req.on("aborted", releaseTelemetry);
+
     // Post-rejection error swallow: both rejection paths resume the stream
     // (draining without buffering) after the 413 is committed. A resumed
     // Node stream with NO error listener would emit an uncaught 'error'
@@ -280,6 +314,7 @@ export function express_raw_body_middleware() {
         return;
       }
       chunks.push(chunk);
+      webhookTelemetryBytes(telId, chunk.length);
     };
     const onEnd = () => {
       if (settled) return;
@@ -287,6 +322,7 @@ export function express_raw_body_middleware() {
       detach();
       // Byte-exact: the accepted body reaches HMAC verification unchanged.
       req.rawBody = Buffer.concat(chunks);
+      webhookTelemetryBodyComplete(telId);
       next();
     };
     const onError = (err) => {
