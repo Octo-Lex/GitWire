@@ -60,7 +60,7 @@ export default function CustomRulesPage() {
       ? API.repoConfig(
           selectedRepo.split("/")[0],
           selectedRepo.split("/")[1]
-        ).replace("/api/config/", "/api/config/") + "/custom-rules"
+        ) + "/custom-rules"
       : null,
     fetcher
   );

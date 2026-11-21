@@ -15,6 +15,15 @@ describe('API URL builders', () => {
     expect(API.repos('page=2&limit=10')).toBe('/api/repos?page=2&limit=10');
   });
 
+  // CodeQL #4 regression: the custom-rules page constructs its URL as
+  // API.repoConfig(owner, repo) + '/custom-rules' (a self-replacing no-op
+  // .replace('/api/config/', '/api/config/') was removed). This pins the
+  // generated URL against the live backend route
+  // configRouter.get('/:owner/:repo/custom-rules').
+  test('custom-rules page URL: repoConfig + /custom-rules unchanged', () => {
+    expect(API.repoConfig('o', 'r') + '/custom-rules').toBe('/api/config/o/r/custom-rules');
+  });
+
   test('repo detail path', () => {
     expect(API.repo('o', 'r')).toBe('/api/repos/o/r');
   });
