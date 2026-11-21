@@ -1,6 +1,8 @@
 // tests/unit/webhook-body-limit.test.js
 // #10 regressions: the webhook raw-body middleware enforces a streaming size
 // cap. Oversized payloads are rejected with 413 DURING reading — before HMAC
+// (res stubs provide .on because the #10-A instrumented middleware registers
+// its finish listener at entry, as real Express responses support natively)
 // verification, JSON parsing, or dispatch — while accepted bodies reach the
 // route byte-exact. Content-Length is an early-out only; actual bytes are
 // the enforcement.
@@ -147,7 +149,7 @@ describe("#10 — streaming body-size cap on the webhook route", () => {
     const json = jest.fn();
     const setHeader = jest.fn();
     const status = jest.fn(() => ({ json }));
-    const res = { status, setHeader };
+    const res = { status, setHeader, on: jest.fn(() => res) };
     const next = jest.fn();
     mw(req, res, next);
     await new Promise((r) => setImmediate(r));
@@ -203,7 +205,7 @@ describe("#10 — late stream errors after rejection (both paths)", () => {
     const json = jest.fn();
     const setHeader = jest.fn();
     const status = jest.fn(() => ({ json }));
-    const res = { status, setHeader };
+    const res = { status, setHeader, on: jest.fn(() => res) };
     const next = jest.fn();
     mw(req, res, next);
     await new Promise((r) => setImmediate(r));
@@ -227,7 +229,7 @@ describe("#10 — late stream errors after rejection (both paths)", () => {
     const json = jest.fn();
     const setHeader = jest.fn();
     const status = jest.fn(() => ({ json }));
-    const res = { status, setHeader };
+    const res = { status, setHeader, on: jest.fn(() => res) };
     const next = jest.fn();
     mw(req, res, next);
     req.push(Buffer.alloc(26 * 1024 * 1024 + 1));
@@ -246,7 +248,7 @@ describe("#10 — late stream errors after rejection (both paths)", () => {
     const mw = express_raw_body_middleware();
     const req = new Readable({ read() {} });
     req.headers = {};
-    const res = { status: jest.fn(() => ({ json: jest.fn() })), setHeader: jest.fn() };
+    const res = { status: jest.fn(() => ({ json: jest.fn() })), setHeader: jest.fn(), on: jest.fn(() => res) };
     mw(req, res, jest.fn());
     req.push(Buffer.alloc(26 * 1024 * 1024 + 1));
     await new Promise((r) => setImmediate(r));
@@ -270,7 +272,7 @@ describe("#10 — earlier listeners survive the declared-length rejection (no bl
     req.on("end", probeEnd);
     req.on("error", probeError);
 
-    const res = { status: jest.fn(() => ({ json: jest.fn() })), setHeader: jest.fn() };
+    const res = { status: jest.fn(() => ({ json: jest.fn() })), setHeader: jest.fn(), on: jest.fn(() => res) };
     mw(req, res, jest.fn());
     await new Promise((r) => setImmediate(r));
 
@@ -291,7 +293,7 @@ describe("#10 — middleware-level stream semantics", () => {
     const mw = express_raw_body_middleware();
     const req = new Readable({ read() {} });
     req.headers = { "content-length": String(25 * 1024 * 1024) };
-    const res = { status: jest.fn(() => ({ json: jest.fn() })), setHeader: jest.fn() };
+    const res = { status: jest.fn(() => ({ json: jest.fn() })), setHeader: jest.fn(), on: jest.fn(() => res) };
     const next = jest.fn();
     mw(req, res, next);
     req.push(Buffer.from("{}"));
@@ -306,7 +308,7 @@ describe("#10 — middleware-level stream semantics", () => {
     const mw = express_raw_body_middleware();
     const req = new Readable({ read() {} });
     req.headers = {};
-    const res = { status: jest.fn(() => ({ json: jest.fn() })), setHeader: jest.fn() };
+    const res = { status: jest.fn(() => ({ json: jest.fn() })), setHeader: jest.fn(), on: jest.fn(() => res) };
     const next = jest.fn();
     mw(req, res, next);
     req.push(Buffer.from("part"));
@@ -329,7 +331,7 @@ describe("#10 — middleware-level stream semantics", () => {
     const json = jest.fn();
     const setHeader = jest.fn();
     const status = jest.fn(() => ({ json }));
-    const res = { status, setHeader };
+    const res = { status, setHeader, on: jest.fn(() => res) };
     const next = jest.fn();
     mw(req, res, next);
     req.push(Buffer.alloc(26 * 1024 * 1024 + 1));
