@@ -3,6 +3,7 @@
 // Handles graceful shutdown on SIGTERM/SIGINT.
 
 import { createApp } from "./app.js";
+import { reportFatalStartupError } from "./startupFatal.js";
 import { startWebhookWorker } from "./workers/webhookWorker.js";
 import { startTriageWorker }  from "./workers/triageWorker.js";
 import { startCIHealWorker }  from "./workers/ciHealWorker.js";
@@ -106,7 +107,4 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  logger.error({ err }, "Fatal startup error");
-  process.exit(1);
-});
+main().catch(reportFatalStartupError);
