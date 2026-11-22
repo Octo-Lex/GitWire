@@ -17,7 +17,7 @@ the Level 1 authority architecture is correctly implemented. It is
 organized around the inventory findings (F-01..F-15) recorded in
 [`./current-state-inventory.md`](./current-state-inventory.md), the
 test matrix in [`./level-1-core.md`](./level-1-core.md) §15, and the
-binding decisions in [`../adr/`](../adr/) ADR-0001..0008.
+binding decisions in [`../adr/`](../adr/README.md) ADR-0001..0008.
 
 Every entry names a defect or invariant and the expected observable
 result. Where the expected result depends on database rejection, the

@@ -144,7 +144,7 @@ To enable plugin evaluation in production:
    inspect then carries RepoDigests — the executor's digest gate rejects
    local-only builds).
 2. Read the manifest digest from the push output (or
-   `docker inspect --format '{{json .RepoDigests}}'`), then pull it to the
+   <code v-pre>docker inspect --format '{{json .RepoDigests}}'</code>), then pull it to the
    production host digest-pinned: `docker pull <registry>/gitwire-plugin-sandbox@sha256:<digest>`.
 3. Set BOTH values in `production.env`:
    - `GITWIRE_PLUGIN_SANDBOX_IMAGE_REF=<registry>/gitwire-plugin-sandbox[:<tag>]`
@@ -810,13 +810,13 @@ After a deployment, confirm all of the following:
 | New tables exist | `\dt` in psql | Includes release-specific tables |
 | Container version matches | `curl localhost:3000/health` (`.version`) | Release version |
 | Container git_sha matches | `curl localhost:3000/health` (`.git_sha`) | Release commit SHA — **NOT `"unknown"`** |
-| Container on fresh image | `docker inspect -f '{{.Image}}' gitwire-gitwire-app-1` | Matches `docker images gitwire-gitwire-app:latest -q` |
+| Container on fresh image | <code v-pre>docker inspect -f '{{.Image}}' gitwire-gitwire-app-1</code> | Matches `docker images gitwire-gitwire-app:latest -q` |
 | All containers healthy | `docker ps` | 10 containers, all `(healthy)` (v0.23.0+: includes executor-service) |
 | API responds | `curl localhost:3000/health` | `{"status":"ok"}` |
 | External URL works | `curl https://gitwire.erlab.uk/health` | `{"status":"ok"}` |
 | No errors in logs | `docker logs gitwire-gitwire-app-1 --tail 50` | No exceptions |
 | Redis memory durable | `redis-cli CONFIG GET maxmemory` | `268435456` (after recreate) |
-| Executor service healthy | `docker inspect -f '{{.State.Health.Status}}' gitwire-gitwire-executor-service-1` | `"healthy"` |
+| Executor service healthy | <code v-pre>docker inspect -f '{{.State.Health.Status}}' gitwire-gitwire-executor-service-1</code> | `"healthy"` |
 | Executor service reachable from app | `curl localhost:3000/health` (`.executor.selected_backend_id`) | `"executor-service"` |
 | App has NO Docker socket | `docker exec gitwire-gitwire-app-1 ls /var/run/docker.sock 2>&1` | `No such file or directory` |
 
