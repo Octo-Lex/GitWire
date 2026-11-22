@@ -26,6 +26,10 @@
 #        decision, not an inference from a pin.
 #   R5 — The current release record is MANDATORY: it must exist, parse,
 #        and name the three release services, or cleanup stops.
+#   Lock directory contract — the prune lock lives in <repo>/releases, the
+#        directory the deploy account owns. That directory must be owned by
+#        the effective user and not writable by group or others, and the
+#        lock must open; otherwise cleanup stops before any inspection.
 #
 # Sources for protected refs:
 #   1. <production.env> — comment-stripped; any registry's @sha256 refs
@@ -47,10 +51,40 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 log() { echo "[image-retention] $*"; }
 die() { echo "::error:: $*" >&2; exit 1; }
 
+# ── Lock directory contract. ──────────────────────────────────────────────
 # One prune at a time — overlapping runs race on rmi and make outcomes
-# unexplainable. Lock lives beside the production config (root-owned).
-LOCK_PATH="$(dirname "$PROD_ENV")/.gitwire-image-prune.lock"
-exec 9>"$LOCK_PATH"
+# unexplainable.
+#
+# The lock lives in <repo>/releases: the directory the deploy account owns
+# and writes release records into. It used to sit beside the production
+# config, which is root-owned. The deploy account could not open it there,
+# so this step failed on every deployment (2026-11-22) and no retention ran.
+#
+# Both conditions are checked on every run:
+#   - the directory is owned by the effective user
+#   - it is not writable by group or others
+# The open below truncates whatever the path points at. In a directory
+# other accounts can write, they could aim the lock at any file this
+# account can write, or hold it to stop retention. And a run by another
+# account would leave behind a lock file that account owns — one the
+# deploy account then cannot open.
+LOCK_DIR="$REPO_ROOT/releases"
+[ -d "$LOCK_DIR" ] || die "lock directory missing: $LOCK_DIR — refusing to prune"
+LOCK_DIR_STAT="$(stat -c '%u %a' "$LOCK_DIR" 2>/dev/null)" || die "lock directory not inspectable: $LOCK_DIR — refusing to prune"
+read -r LOCK_DIR_OWNER LOCK_DIR_MODE <<< "$LOCK_DIR_STAT"
+case "$LOCK_DIR_MODE" in
+  ''|*[!0-7]*) die "lock directory mode unreadable (got: ${LOCK_DIR_MODE:-empty}) — refusing to prune" ;;
+esac
+[ "$LOCK_DIR_OWNER" = "$(id -u)" ] || die "lock directory $LOCK_DIR is owned by uid ${LOCK_DIR_OWNER:-?}, not by the account running this script (uid $(id -u)) — refusing to prune"
+if (( (8#$LOCK_DIR_MODE & 8#022) != 0 )); then
+  die "lock directory $LOCK_DIR is writable by group or others (mode $LOCK_DIR_MODE) — refusing to prune"
+fi
+LOCK_PATH="$LOCK_DIR/.gitwire-image-prune.lock"
+# A failed open refuses through die() on purpose: a bare failed redirection
+# exits on set -e with the shell's own message only, which nothing surfaces.
+if ! exec 9>"$LOCK_PATH"; then
+  die "cannot open image-prune lock $LOCK_PATH — refusing to prune"
+fi
 flock -n 9 || die "another prune is already running"
 
 # Any registry's digest-qualified reference (comment-stripped so a

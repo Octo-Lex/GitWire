@@ -9,16 +9,31 @@
 //
 // The stub `docker` records every invocation to a log so tests can assert
 // "no rmi was ever invoked" — the strongest form of fail-closed.
+//
+// Lock directory contract (2026-11-22): the prune lock lives in
+// <repo>/releases, the directory the deploy account owns. The first shipped
+// version put it beside the root-owned production config; the deploy
+// account could not open it there, so every deployment logged a warning and
+// no retention ran. The lock tests pin the lock to the account-owned
+// directory and prove three things: creation without root, exclusion by the
+// real flock, and refusal — with no docker call at all — whenever the
+// lock directory or the lock itself does not qualify.
 
 import { jest } from "@jest/globals";
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync, spawn } from "node:child_process";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const SCRIPT = join(REPO_ROOT, "scripts", "prune-protected-images.sh");
+
+// Resolved through the unmodified PATH, before any test prepends a stub
+// directory to it.
+const bashText = (cmd) => execFileSync("bash", ["-c", cmd], { encoding: "utf8" }).trim();
+const REAL_STAT_PATH = bashText("command -v stat");
+const shQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 // Distinct 64-hex digests for n up to 255: two hex digits repeated 32x.
 const D = (n) => `sha256:${n.toString(16).padStart(2, "0").repeat(32)}`;
@@ -28,12 +43,16 @@ const DASH = "ghcr.io/octo-lex/gitwire-dashboard";
 const VAL = "ghcr.io/octo-lex/gitwire-validator";
 const PG = "docker.io/library/postgres";
 
-function fixture({ psFail = false, inspectFail = false, images = [], runningIds = [], runningNames = [], envRefs = true, extraReleaseDirs = [] } = {}) {
+function fixture({ psFail = false, inspectFail = false, images = [], runningIds = [], runningNames = [], envRefs = true, extraReleaseDirs = [], flockStub = true, lockDirStat = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "prune-test-"));
   const binDir = join(dir, "bin");
   mkdirSync(binDir);
   const work = join(dir, "work");
   mkdirSync(join(work, "releases"), { recursive: true });
+  // The prune lock lives in releases/. Pin the directory to production's
+  // shape — owned by the account running the script, mode 0755 — so a
+  // group-writable umask cannot make the fixture differ from it.
+  chmodSync(join(work, "releases"), 0o755);
   // Production topology: releases/current is a symlink to releases/<sha>.
   // The <sha> target dir ALSO appears in directory listings with the same
   // records — the selector must exclude both entries.
@@ -100,6 +119,9 @@ function fixture({ psFail = false, inspectFail = false, images = [], runningIds 
   const STUB = [
     '#!/usr/bin/env bash',
     'echo "docker $*" >> "$PRUNE_TEST_LOG"',
+    // Test hook: hold the first docker call, so a second prune can be
+    // started while this one is provably past the lock.
+    'if [ "$1" = "ps" ] && [ "$2" = "-q" ] && [ -n "${PRUNE_TEST_PS_DELAY_S:-}" ]; then sleep "$PRUNE_TEST_PS_DELAY_S"; fi',
     'if [ "$1" = "ps" ]; then',
     '  if [ "${PRUNE_TEST_PS_FAIL:-0}" = "1" ]; then exit 1; fi',
     '  if [ "$2" = "--format" ]; then',
@@ -123,10 +145,28 @@ function fixture({ psFail = false, inspectFail = false, images = [], runningIds 
   ].join("\n") + "\n";
   writeFileSync(join(binDir, "docker"), STUB);
   chmodSync(join(binDir, "docker"), 0o755);
-  writeFileSync(join(binDir, "flock"), [
-    "#!/usr/bin/env bash",
-    "exit 0",
-  ].join("\n") + "\n");
+  // Default: a stub that always reports "acquired", so the tests outside the
+  // lock suite do not depend on util-linux flock. The lock tests pass
+  // flockStub:false and get the real binary from PATH.
+  if (flockStub) {
+    writeFileSync(join(binDir, "flock"), ["#!/usr/bin/env bash", "exit 0"].join("\n") + "\n");
+    chmodSync(join(binDir, "flock"), 0o755);
+  }
+  if (lockDirStat !== null) {
+    // Answers ONLY the lock-directory query from fixture data: ownership
+    // cannot be forged for real without root. Any other stat call falls
+    // through to the real binary.
+    writeFileSync(join(binDir, "stat"), [
+      "#!/usr/bin/env bash",
+      'if [ "$1" = "-c" ] && [ "$2" = "%u %a" ]; then',
+      '  [ "$PRUNE_TEST_LOCKDIR_STAT" != "uninspectable" ] || exit 1',
+      '  printf "%s\\n" "$PRUNE_TEST_LOCKDIR_STAT"',
+      "  exit 0",
+      "fi",
+      'exec "$PRUNE_TEST_REAL_STAT" "$@"',
+    ].join("\n") + "\n");
+    chmodSync(join(binDir, "stat"), 0o755);
+  }
   writeFileSync(join(binDir, "df"), [
     "#!/usr/bin/env bash",
     'echo "Filesystem 50G 11G 40G 22% /"',
@@ -137,15 +177,16 @@ function fixture({ psFail = false, inspectFail = false, images = [], runningIds 
     PRUNE_TEST_RUNNING_PS_IDS: runningIds.map((i) => i.slice(0, 12)).join("\n"),
     PRUNE_TEST_RUNNING_IDS: runningIds.join("\n"),
     PRUNE_TEST_RUNNING_NAMES: runningNames.join("\n"),
+    PRUNE_TEST_LOCKDIR_STAT: lockDirStat ?? "",
+    PRUNE_TEST_REAL_STAT: REAL_STAT_PATH,
   };
   const logFile = join(dir, "docker.log");
-  chmodSync(join(binDir, "flock"), 0o755);
   chmodSync(join(binDir, "df"), 0o755);
   return { dir, binDir, work, envFile, logFile, envPayloads };
 }
 
-function spawnPrune(fx, { extraEnv = {}, dryRun = true, workTree } = {}) {
-  const env = {
+function pruneEnv(fx, extraEnv = {}) {
+  return {
     ...process.env,
     PATH: `${fx.binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
     PRUNE_TEST_PS_FAIL: "0",
@@ -154,6 +195,10 @@ function spawnPrune(fx, { extraEnv = {}, dryRun = true, workTree } = {}) {
     PRUNE_TEST_LOG: fx.logFile,
     ...extraEnv,
   };
+}
+
+function spawnPrune(fx, { extraEnv = {}, dryRun = true, workTree } = {}) {
+  const env = pruneEnv(fx, extraEnv);
   if (dryRun) env.DRY_RUN = "1";
   return spawnSync("bash", [join(workTree, "scripts", "prune-protected-images.sh"), fx.envFile, "3", "10"], {
     env,
@@ -302,6 +347,198 @@ describe("prune script — shell-level fail-closed + selection regressions (R3/R
     expect(out).not.toContain("val9");   // pinned validator — protected, not eligible
     expect(out).not.toContain("pg16");   // unmanaged repository — never eligible
   });
+  it("EXECUTION PATH (not a dry run): rmi is invoked for exactly the selected ids — never for a protected, running, rollback-recorded, validator, or unmanaged image", () => {
+    // Same inventory as the dry-run positive path, with DRY_RUN unset: the
+    // removal loop itself runs (against the stub). This is the first test
+    // that exercises the loop — before 2026-11-22 it had never run on any
+    // host, because the lock step failed before it.
+    const fx = fixture({
+      images: BASE_IMAGES,
+      runningIds: ["sha256:" + "f".repeat(64)],
+      runningNames: [`${APP}@${D(5)}`],
+    });
+    const workTree = stageWorkTree(fx);
+    const r = spawnPrune(fx, { workTree, dryRun: false });
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("DRY RUN");
+    expect(dockerLog(fx).split("\n").filter((l) => l.startsWith("docker rmi")).sort())
+      .toEqual(["docker rmi --force app6", "docker rmi --force app7"]);
+    expect(r.stdout).toContain("removal: 2 succeeded, 0 failed");
+  });
 });
 
-import { rmSync, chmodSync, utimesSync, readdirSync, symlinkSync } from "node:fs";
+// ── Lock directory contract ────────────────────────────────────────────────
+// The lock lives in <repo>/releases (owned by the account that runs the
+// script). Production's shape is reproduced here: its production config
+// directory is root-owned, so that account cannot write next to it.
+const lockPath = (fx) => join(fx.work, "releases", ".gitwire-image-prune.lock");
+const RUN_UID = bashText("id -u");
+const REAL_FLOCK = (() => { try { return bashText("command -v flock") !== ""; } catch { return false; } })();
+
+async function waitFor(cond, { timeoutMs = 15_000, stepMs = 25 } = {}) {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error("waitFor: condition not met in time");
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+}
+
+describe("prune script — lock directory contract", () => {
+  jest.setTimeout(60_000);
+
+  // A directory-permission proof is void where the permission cannot bite:
+  // root bypasses it, and Windows does not enforce directory modes.
+  const canDenyDirWrite = process.platform !== "win32" && RUN_UID !== "0";
+  // util-linux flock is not shipped with Git for Windows.
+  const itWithFlock = REAL_FLOCK ? it : it.skip;
+  const itPosixMode = process.platform !== "win32" ? it : it.skip;
+
+  // A refusal must be explicit (a workflow-command error, not a bare shell
+  // message), non-zero, and must happen before ANY docker call — stronger
+  // than "no rmi".
+  function expectRefusal(fx, r, message) {
+    expect(r.stderr).toContain("::error::");
+    expect(r.stderr).toContain(message);
+    expect(r.status).not.toBe(0);
+    expect(dockerLog(fx)).toBe("");
+  }
+
+  it("L0 regression: the lock is created in <repo>/releases, never beside production.env", () => {
+    const fx = fixture({ images: BASE_IMAGES });
+    const workTree = stageWorkTree(fx);
+    const r = spawnPrune(fx, { workTree });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("decision:");
+    expect(existsSync(lockPath(fx))).toBe(true);
+    expect(existsSync(join(fx.work, ".gitwire-image-prune.lock"))).toBe(false);
+  });
+
+  (canDenyDirWrite ? it : it.skip)(
+    "L1 production's shape: a NON-ROOT account that cannot write the production config directory locks in releases/ and reaches a decision", () => {
+      const fx = fixture({ images: BASE_IMAGES });
+      const workTree = stageWorkTree(fx);
+      chmodSync(fx.work, 0o555); // production: /opt/gitwire/config is root-owned, the deploy account is not root
+      try {
+        const r = spawnPrune(fx, { workTree });
+        expect(r.status).toBe(0);
+        expect(r.stdout).toContain("decision:");
+        expect(existsSync(join(fx.work, ".gitwire-image-prune.lock"))).toBe(false);
+        const lock = lockPath(fx);
+        expect(existsSync(lock)).toBe(true);
+        // Created by the account that ran the script: no privilege was needed or used.
+        expect(bashText(`stat -c %u ${shQuote(lock)}`)).toBe(RUN_UID);
+      } finally {
+        chmodSync(fx.work, 0o755);
+      }
+    });
+
+  (RUN_UID !== "0" ? it : it.skip)(
+    "L1 the lock is created by a non-root account in a directory that account owns", () => {
+      const fx = fixture({ images: BASE_IMAGES });
+      const workTree = stageWorkTree(fx);
+      const r = spawnPrune(fx, { workTree });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("decision:");
+      expect(bashText(`stat -c %u ${shQuote(lockPath(fx))}`)).toBe(RUN_UID);
+    });
+
+  it.each(["1755", "2755", "4755"])(
+    "L1 special bits without group/other write are accepted (mode %s)", (mode) => {
+      const fx = fixture({ images: BASE_IMAGES, lockDirStat: `${RUN_UID} ${mode}` });
+      const workTree = stageWorkTree(fx);
+      const r = spawnPrune(fx, { workTree });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("decision:");
+    });
+
+  itWithFlock(
+    "L2 real flock: two concurrent prunes — exactly one proceeds; the other refuses before any docker call", async () => {
+      const fx = fixture({ images: BASE_IMAGES, flockStub: false });
+      const workTree = stageWorkTree(fx);
+      const logB = join(fx.dir, "docker-b.log");
+      // A: takes the lock, then blocks inside its (stubbed) docker phase.
+      const envA = pruneEnv(fx, { PRUNE_TEST_PS_DELAY_S: "4" });
+      envA.DRY_RUN = "1";
+      const a = spawn("bash", [join(workTree, "scripts", "prune-protected-images.sh"), fx.envFile, "3", "10"], { env: envA, cwd: fx.work });
+      let outA = "";
+      a.stdout.on("data", (c) => { outA += c; });
+      const closedA = new Promise((resolve) => a.on("close", resolve));
+      // B starts only once A is provably past the lock.
+      await waitFor(() => existsSync(fx.logFile) && readFileSync(fx.logFile, "utf8").includes("docker ps -q"));
+      const b = spawnPrune(fx, { workTree, extraEnv: { PRUNE_TEST_LOG: logB } });
+      expect(b.status).not.toBe(0);
+      expect(b.stderr).toContain("::error::");
+      expect(b.stderr).toContain("another prune is already running");
+      expect(existsSync(logB)).toBe(false); // B never reached docker: it has no call log at all
+      expect(await closedA).toBe(0);
+      expect(outA).toContain("decision:");
+      expect(readFileSync(fx.logFile, "utf8")).not.toContain("rmi"); // dry-run
+    });
+
+  itWithFlock(
+    "L3 real flock: a lock held by another process is refused with no docker call, and the same invocation succeeds once it is released", async () => {
+      const fx = fixture({ images: BASE_IMAGES, flockStub: false });
+      const workTree = stageWorkTree(fx);
+      const held = join(fx.dir, "held");
+      const release = join(fx.dir, "release");
+      const holder = spawn("bash", ["-c", 'exec 9>"$LOCK"; flock 9; : > "$HELD"; while [ ! -e "$RELEASE" ]; do sleep 0.05; done'], {
+        env: { ...process.env, LOCK: lockPath(fx), HELD: held, RELEASE: release },
+      });
+      const holderClosed = new Promise((resolve) => holder.on("close", resolve));
+      try {
+        await waitFor(() => existsSync(held));
+        expectRefusal(fx, spawnPrune(fx, { workTree }), "another prune is already running");
+      } finally {
+        writeFileSync(release, "");
+        await holderClosed;
+      }
+      const after = spawnPrune(fx, { workTree });
+      expect(after.status).toBe(0);
+      expect(after.stdout).toContain("decision:");
+    });
+
+  it("L3 the lock cannot be opened: refuses before any docker call", () => {
+    const fx = fixture({ images: BASE_IMAGES });
+    const workTree = stageWorkTree(fx);
+    mkdirSync(lockPath(fx)); // a directory where the lock file must be created: the open fails on every platform
+    expectRefusal(fx, spawnPrune(fx, { workTree }), "cannot open image-prune lock");
+  });
+
+  it("L3 the lock directory is missing: refuses before any docker call", () => {
+    const fx = fixture({ images: BASE_IMAGES });
+    const workTree = stageWorkTree(fx);
+    renameSync(join(fx.work, "releases"), join(fx.work, "releases.moved"));
+    expectRefusal(fx, spawnPrune(fx, { workTree }), "lock directory missing");
+  });
+
+  it.each([
+    [`${Number(RUN_UID) + 1} 755`, `is owned by uid ${Number(RUN_UID) + 1}, not by the account running this script`],
+    ["uninspectable", "lock directory not inspectable"],
+    [`${RUN_UID} 7x5`, "lock directory mode unreadable"],
+  ])("L3 lock directory reported as %j: refuses before any docker call", (statLine, message) => {
+    const fx = fixture({ images: BASE_IMAGES, lockDirStat: statLine });
+    const workTree = stageWorkTree(fx);
+    expectRefusal(fx, spawnPrune(fx, { workTree }), message);
+  });
+
+  it.each(["777", "775", "1777", "2775", "1775", "727"])(
+    "L3 lock directory writable by group or others (mode %s): refuses before any docker call", (mode) => {
+      const fx = fixture({ images: BASE_IMAGES, lockDirStat: `${RUN_UID} ${mode}` });
+      const workTree = stageWorkTree(fx);
+      expectRefusal(fx, spawnPrune(fx, { workTree }), `writable by group or others (mode ${mode})`);
+    });
+
+  itPosixMode("L3 lock directory REALLY writable by others (chmod 0777, no stub): refuses before any docker call", () => {
+    const fx = fixture({ images: BASE_IMAGES });
+    const workTree = stageWorkTree(fx);
+    const releases = join(fx.work, "releases");
+    chmodSync(releases, 0o777);
+    try {
+      expectRefusal(fx, spawnPrune(fx, { workTree }), "writable by group or others (mode 777)");
+    } finally {
+      chmodSync(releases, 0o755);
+    }
+  });
+});
+
+import { rmSync, chmodSync, utimesSync, readdirSync, symlinkSync, renameSync } from "node:fs";
