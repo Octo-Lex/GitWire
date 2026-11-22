@@ -42,12 +42,15 @@ The API backend is expected at `http://localhost:3000`. Configure via `NEXT_PUBL
 
 ## Production
 
-The dashboard builds as a Next.js standalone Docker image:
+The dashboard builds as a Next.js standalone Docker image. It is an npm workspace, so its dependencies are locked in the repository root's `package-lock.json`, and the image is built from the repository root:
 
 ```bash
-docker build -t gitwire-dashboard .
+# From the repository root
+docker build -t gitwire-dashboard -f packages/web-dashboard/Dockerfile .
 docker run -p 3001:3001 gitwire-dashboard
 ```
+
+The image installs its dependencies with `npm ci` from that lockfile, and CI compares the packages inside the built image with it (`scripts/compare-image-deps.mjs`).
 
 See the monorepo `docker-compose.yml` for the full deployment configuration.
 
