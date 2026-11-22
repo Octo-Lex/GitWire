@@ -1,0 +1,30 @@
+# Read INSTEAD of the repository's .dockerignore: a builder gives the ignore
+# file named after the Dockerfile precedence over the context's own.
+#
+# Allowlist. Nothing enters the build context except what the COPY lines in
+# this Dockerfile name: the root manifests and packages/web-dashboard. The
+# dashboard is an npm workspace, so its dependencies are locked in the root
+# package-lock.json and that is where the image installs them from.
+#
+# Build from the repository root:
+#   docker build -f packages/web-dashboard/Dockerfile .
+#
+# Each rule is decided by the last pattern that matches it, so the order is:
+# exclude everything, let the two directories back in, then narrow again.
+*
+!package.json
+!package-lock.json
+!packages
+packages/*
+!packages/web-dashboard
+
+# Rebuilt inside the image, or local to one developer's checkout.
+packages/web-dashboard/node_modules
+packages/web-dashboard/.next
+packages/web-dashboard/coverage
+packages/web-dashboard/tsconfig.tsbuildinfo
+packages/web-dashboard/.env*
+packages/web-dashboard/.ouroboros
+
+# The image is a production build and does not run the test suite.
+packages/web-dashboard/tests
