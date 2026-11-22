@@ -1,5 +1,5 @@
 # GitWire Dashboard — Next.js frontend
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app
 COPY package.json ./
 RUN npm install
@@ -21,7 +21,7 @@ LABEL org.opencontainers.image.source="https://github.com/Octo-Lex/GitWire"
 
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 

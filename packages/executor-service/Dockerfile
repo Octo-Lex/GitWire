@@ -11,7 +11,7 @@
 # (it will be able to run validator containers via the mounted socket), but
 # the service itself drops root and runs as uid 1000.
 
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 WORKDIR /app
 
 # Install docker-cli so probeRuntime() can shell out to `docker --version`

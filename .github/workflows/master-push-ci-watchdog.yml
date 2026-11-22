@@ -32,7 +32,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Run push-CI liveness watchdog
         env:
           GH_TOKEN: ${{ github.token }}

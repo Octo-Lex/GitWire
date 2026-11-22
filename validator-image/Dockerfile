@@ -13,7 +13,7 @@
 # to a registry so docker inspect shows RepoDigests containing the configured
 # digest — the executor-service verifies this and rejects non-digest-pinned images.
 
-FROM node:20-bookworm-slim
+FROM node:24-bookworm-slim
 
 # node:20-bookworm-slim already ships a non-root `node` user at uid/gid 1000,
 # which matches the executor's --user=1000:1000 contract. Reuse it rather than

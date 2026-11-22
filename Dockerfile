@@ -1,6 +1,6 @@
 # GitWire production container
 # Build context: monorepo root (C:\Next-Era\GitWire)
-FROM node:20-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 
