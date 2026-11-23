@@ -68,6 +68,23 @@ jobs:
       - name: Check build output
         run: test -f docs/.vitepress/dist/index.html
 
+  # ── PostgreSQL readiness check ───────────────────────────────────────────
+  # The smoke tests of the release jobs wait for PostgreSQL with pg_isready.
+  # Over the Unix socket that check can pass against the temporary server the
+  # postgres image runs during its own setup, and then fail in the restart
+  # window (#501). This job shows, against a real postgres container, that the
+  # TCP form of the check does not answer before the real server is up.
+  pg-readiness-check:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: The readiness check over TCP never passes early
+        run: bash scripts/test-pg-readiness-race.sh
+      - name: No socket-form pg_isready remains in the workflow
+        run: bash scripts/check-pg-readiness-tcp.sh
+
   # ── Package test jobs ─────────────────────────────────────────────────────
   # Each package gets its own job so failures are attributed clearly.
   # No --passWithNoTests: a suite with zero tests is a CI failure.
@@ -208,7 +225,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U gitwire -d gitops_hub"
+          --health-cmd "pg_isready -h 127.0.0.1 -U gitwire -d gitops_hub"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -585,12 +602,15 @@ jobs:
           docker run -d --name "$REDIS_CONTAINER" --network "$SMOKE_NET" \
             redis:7-alpine
 
-          # Fail-closed PostgreSQL readiness
+          # Fail-closed PostgreSQL readiness. The check goes over TCP: the
+          # postgres image starts a temporary server during its own setup that
+          # listens on the Unix socket only, and a socket check can pass
+          # against it and then fail in the restart window (#501).
           for i in $(seq 1 30); do
-            docker exec "$PG_CONTAINER" pg_isready -U gitwire -d gitops_hub 2>/dev/null && break
+            docker exec "$PG_CONTAINER" pg_isready -h 127.0.0.1 -U gitwire -d gitops_hub 2>/dev/null && break
             sleep 1
           done
-          if ! docker exec "$PG_CONTAINER" pg_isready -U gitwire -d gitops_hub 2>/dev/null; then
+          if ! docker exec "$PG_CONTAINER" pg_isready -h 127.0.0.1 -U gitwire -d gitops_hub 2>/dev/null; then
             echo "::error::PostgreSQL did not become ready"
             exit 1
           fi
@@ -863,8 +883,10 @@ jobs:
           docker run -d --name "$PG" --network "$SMOKE_NET" \
             -e POSTGRES_USER=gitwire -e POSTGRES_PASSWORD=test -e POSTGRES_DB=gitops_hub postgres:16-alpine
           docker run -d --name "$REDIS" --network "$SMOKE_NET" redis:7-alpine
-          for i in $(seq 1 30); do docker exec "$PG" pg_isready -U gitwire -d gitops_hub 2>/dev/null && break; sleep 1; done
-          docker exec "$PG" pg_isready -U gitwire -d gitops_hub 2>/dev/null || { echo "::error::PG not ready"; exit 1; }
+          # PostgreSQL readiness over TCP, for the reason given in the
+          # publish job above (#501).
+          for i in $(seq 1 30); do docker exec "$PG" pg_isready -h 127.0.0.1 -U gitwire -d gitops_hub 2>/dev/null && break; sleep 1; done
+          docker exec "$PG" pg_isready -h 127.0.0.1 -U gitwire -d gitops_hub 2>/dev/null || { echo "::error::PG not ready"; exit 1; }
           CI_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
           docker run -d --name "$APP" --network "$SMOKE_NET" \
             -e DATABASE_URL="postgresql://gitwire:test@${PG}:5432/gitops_hub" \
