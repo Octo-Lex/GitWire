@@ -11,7 +11,7 @@
 # (it will be able to run validator containers via the mounted socket), but
 # the service itself drops root and runs as uid 1000.
 
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 WORKDIR /app
 
 # Install docker-cli so probeRuntime() can shell out to `docker --version`
@@ -29,7 +29,7 @@ RUN apk add --no-cache docker-cli wget
 # tempdirs there (mounted as a Docker volume in compose for Docker-in-LXC visibility).
 RUN mkdir -p /workspace-tmp && chown 1000:1000 /workspace-tmp && chmod 777 /workspace-tmp
 
-# Drop root. node:20-alpine already ships a non-root `node` user at uid 1000
+# Drop root. node:24-alpine already ships a non-root `node` user at uid 1000
 # (gid 1000), which matches the validator container's non-root contract.
 # Creating a fresh executor group at gid 1000 collides with the existing node
 # group, so we reuse the built-in node user instead.
