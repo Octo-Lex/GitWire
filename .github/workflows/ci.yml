@@ -82,6 +82,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: The readiness check over TCP never passes early
         run: bash scripts/test-pg-readiness-race.sh
+      - name: No socket-form pg_isready remains in the workflow
+        run: bash scripts/check-pg-readiness-tcp.sh
 
   # ── Package test jobs ─────────────────────────────────────────────────────
   # Each package gets its own job so failures are attributed clearly.
@@ -223,7 +225,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U gitwire -d gitops_hub"
+          --health-cmd "pg_isready -h 127.0.0.1 -U gitwire -d gitops_hub"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
