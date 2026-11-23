@@ -1,0 +1,79 @@
+name: Redis Restore Proof
+
+# The synthetic restore trial of #10-R1: generated jobs, no secrets, two throwaway
+# Redis instances. Run on this study branch only; not part of the pull requests.
+on:
+  push:
+    branches: ["study/redis-restore-synthetic"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci --ignore-scripts
+
+      - name: Start two empty Redis instances
+        run: |
+          docker run -d --name redis-a -p 6379:6379 redis:7-alpine --appendonly no --save ""
+          docker run -d --name redis-b -p 6380:6379 redis:7-alpine --appendonly no --save ""
+          for port in 6379 6380; do
+            for i in $(seq 1 30); do
+              docker run --rm --network host redis:7-alpine redis-cli -p $port ping >/dev/null 2>&1 && break
+              sleep 1
+            done
+          done
+          docker run --rm --network host redis:7-alpine redis-cli -p 6379 ping
+          docker run --rm --network host redis:7-alpine redis-cli -p 6380 ping
+
+      - name: Phase 1 — work on A and take the snapshot while a job is active
+        id: phase1
+        run: |
+          set -o pipefail
+          node scripts/redis-restore-proof.mjs | tee phase1.json
+          node -e '
+            const out = JSON.parse(require("fs").readFileSync("phase1.json", "utf8"));
+            const bad = Object.entries(out.states).filter(([, s]) => s !== "completed" && s !== "active" && s !== "waiting" && s !== "delayed");
+            if (out.states.J0 !== "completed" || out.states.J1 !== "active" || out.states.JD !== "delayed") {
+              console.error("unexpected states at the snapshot:", out.states); process.exit(1);
+            }
+            if (!out.finishedOnA.includes("J0") || !out.finishedOnA.includes("J1")) {
+              console.error("J0 and J1 must have finished on A:", out.finishedOnA); process.exit(1);
+            }
+            console.log("states at the snapshot are as designed:", JSON.stringify(out.states));
+          '
+
+      - name: Move the snapshot into instance B, as a restore would
+        run: |
+          docker cp redis-a:/data/dump.rdb ./dump.rdb
+          ls -la dump.rdb
+          docker stop redis-b
+          docker cp ./dump.rdb redis-b:/data/dump.rdb
+          docker start redis-b
+          for i in $(seq 1 30); do
+            docker run --rm --network host redis:7-alpine redis-cli -p 6380 ping >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker run --rm --network host redis:7-alpine redis-cli -p 6380 dbsize
+
+      - name: Phase 2 — start a worker on the restored queue
+        env:
+          RESUME: "1"
+        run: node scripts/redis-restore-proof.mjs
+
+      - name: Keep the outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: restore-proof
+          path: phase1.json
+          if-no-files-found: ignore
