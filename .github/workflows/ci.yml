@@ -359,6 +359,26 @@ jobs:
             exit 1
           fi
           echo "::notice::executor-service serves with status=ok, ready=false (expected in CI)"
+      # The service runs validator containers as --user=1000:1000 and writes
+      # into its workspace as the image's own non-root user. Both depend on
+      # the image: the node user has to exist at uid 1000 and gid 1000, the
+      # service has to run as that user, and the workspace has to accept its
+      # writes. This is checked in the image itself, so that a change of the
+      # base image cannot move it unnoticed.
+      - name: Verify the process user and the workspace contract in the image
+        run: |
+          echo "node in the image: $(docker run --rm --network none --entrypoint node gitwire-executor-service:ci -v)"
+          ID=$(docker exec gitwire-executor-service-ci sh -c 'id')
+          echo "service process identity: $ID"
+          # The whole number has to match: uid=1000, not uid=10000.
+          echo "$ID" | grep -qE '(^|\s)uid=1000(\(|\s)' || { echo "::error::the service does not run as uid 1000: $ID"; exit 1; }
+          echo "$ID" | grep -qE '(^|\s)gid=1000(\(|\s)' || { echo "::error::the service does not run as gid 1000: $ID"; exit 1; }
+          docker exec gitwire-executor-service-ci sh -c 'id node' | grep -qE 'uid=1000\(node\) gid=1000\(node\)' || { echo "::error::the node user is not uid 1000 and gid 1000"; exit 1; }
+          docker exec gitwire-executor-service-ci sh -c 'test -d /workspace-tmp && touch /workspace-tmp/.ci-write-check && rm /workspace-tmp/.ci-write-check' \
+            || { echo "::error::the service user cannot write into /workspace-tmp"; exit 1; }
+          docker exec gitwire-executor-service-ci sh -c 'test -x /usr/bin/docker && docker --version' \
+            || { echo "::error::docker-cli is missing from the image"; exit 1; }
+          echo "::notice::the image keeps the identity contract: node user at 1000:1000, service runs as it, workspace writable, docker-cli present"
       - name: Dump executor-service logs on failure
         if: failure()
         run: docker logs gitwire-executor-service-ci || true
