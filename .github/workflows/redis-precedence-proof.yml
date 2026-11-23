@@ -1,0 +1,26 @@
+name: Redis RDB vs AOF Precedence Proof
+
+# Synthetic proof for restore-safety #508: with AOF enabled, a restored
+# dump.rdb beside an existing AOF is ignored — the AOF state wins. Isolated,
+# synthetic keys, no secrets. Study branch only.
+on:
+  push:
+    branches: ["study/redis-rdb-vs-aof*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  precedence-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install the distribution redis engine
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq redis-server redis-tools
+      - name: Run the precedence proof
+        run: node scripts/redis-rdb-vs-aof-precedence-proof.mjs
