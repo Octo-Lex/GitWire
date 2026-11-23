@@ -280,8 +280,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # Build context is the repository root: the dashboard's dependencies are
+      # locked in the root package-lock.json. See packages/web-dashboard/Dockerfile.
       - name: Build the dashboard image
-        run: docker build -t gitwire-dashboard:ci -f packages/web-dashboard/Dockerfile packages/web-dashboard
+        run: docker build -t gitwire-dashboard:ci -f packages/web-dashboard/Dockerfile .
+      # The Dockerfile installs from the lockfile with npm ci. This proves the
+      # image holds what the lockfile pins: every package version inside it
+      # has to be in package-lock.json, or the job fails.
+      - name: Compare the image's packages with the lockfile
+        run: node scripts/compare-image-deps.mjs --image gitwire-dashboard:ci
       - name: Boot the dashboard and check it serves
         run: |
           docker run -d --name gitwire-dashboard-ci -p 3001:3001 \
@@ -522,7 +529,8 @@ jobs:
             --build-arg GITWIRE_BUILT_AT="${{ steps.meta.outputs.built_at }}" \
             --build-arg GITWIRE_VERSION="${{ steps.meta.outputs.version }}" \
             -t "${{ steps.meta.outputs.dashboard_tag }}" \
-            packages/web-dashboard
+            -f packages/web-dashboard/Dockerfile \
+            .
 
       - name: Verify OCI revision labels
         run: |
@@ -535,6 +543,11 @@ jobs:
             fi
             echo "✓ $img OCI revision: $ACTUAL"
           done
+
+      # The dashboard release image is installed from the lockfile. Refuse to
+      # publish one that holds a package version the lockfile does not pin.
+      - name: Compare the dashboard release image's packages with the lockfile
+        run: node scripts/compare-image-deps.mjs --image "${{ steps.meta.outputs.dashboard_tag }}"
 
       - name: Smoke-test app image (fail-closed)
         env:
@@ -800,7 +813,12 @@ jobs:
             --build-arg GITWIRE_BUILT_AT="${{ steps.meta.outputs.built_at }}" \
             --build-arg GITWIRE_VERSION="${{ steps.meta.outputs.version }}" \
             -t gitwire-dashboard:release-test \
-            packages/web-dashboard
+            -f packages/web-dashboard/Dockerfile \
+            .
+
+      # Same check as publish-release-images, against the local release-test tag.
+      - name: Compare the dashboard image's packages with the lockfile
+        run: node scripts/compare-image-deps.mjs --image gitwire-dashboard:release-test
 
       - name: Verify OCI revision labels
         run: |

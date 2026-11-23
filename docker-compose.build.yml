@@ -50,8 +50,10 @@ services:
   dashboard:
     image: gitwire-dashboard:dev
     build:
-      context: packages/web-dashboard
-      dockerfile: Dockerfile
+      # The dashboard's dependencies are locked in the root package-lock.json,
+      # so its Dockerfile is built from the repository root.
+      context: .
+      dockerfile: packages/web-dashboard/Dockerfile
       args:
         GITWIRE_COMMIT_SHA: ${GITWIRE_COMMIT_SHA:-dev}
         GITWIRE_BUILT_AT: ${GITWIRE_BUILT_AT:-unknown}
