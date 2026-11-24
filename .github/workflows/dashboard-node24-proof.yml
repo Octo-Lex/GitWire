@@ -52,7 +52,7 @@ jobs:
       - name: Exercise the Next.js image optimizer path and scan logs
         run: |
           printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' | base64 -d > /tmp/proof.png
-          docker cp /tmp/proof.png dash-proof-run:packages/web-dashboard/public/proof.png
+          docker cp /tmp/proof.png dash-proof-run:/app/packages/web-dashboard/public/proof.png
           CODE=$(curl -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:3001/_next/image?url=%2Fproof.png&w=64&q=75')
           echo "image optimizer status for a raster input: $CODE"
           if docker logs dash-proof-run 2>&1 | grep -qiE "sharp|binary|Cannot find module|ERR_DLOPEN"; then
