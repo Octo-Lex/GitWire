@@ -39,6 +39,12 @@ esac
 `);
 chmodSync(join(stub, 'docker'), 0o755);
 
+// backup.sh hard-codes its production paths; plant stand-ins for the run.
+const sudo = (args) => spawnSync('sudo', args, { encoding: 'utf8' });
+if (sudo(['mkdir', '-p', '/opt/gitwire/packages/web']).status !== 0) die('sudo mkdir failed');
+if (sudo(['bash', '-c', 'echo FAKE_ENV_SECRET > /opt/gitwire/packages/web/.env']).status !== 0) die('could not plant the fake .env');
+if (sudo(['bash', '-c', 'echo FAKE_COMPOSE > /opt/gitwire/docker-compose.yml']).status !== 0) die('could not plant the fake compose file');
+
 // Run the REAL backup.sh with the stub docker and a temp destination.
 const env = { ...process.env, PATH: `${stub}:${process.env.PATH}` };
 const r = spawnSync('bash', [join(ROOT, 'scripts/backup.sh'), DEST], { env, encoding: 'utf8' });
