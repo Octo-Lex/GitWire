@@ -1,0 +1,31 @@
+name: Restore safety tests (#508 phase 1)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["study/restore-safety-tests*"]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test 1 - roles-first restore
+        run: node scripts/restore-safety-tests/roles-first.test.mjs
+
+      - name: Test 2 - both-schema verification
+        run: node scripts/restore-safety-tests/both-schemas.test.mjs
+
+      - name: Test 3 - RDB version gate
+        run: node scripts/restore-safety-tests/rdb-version-gate.test.mjs
+
+      - name: Test 4 - active-writer block
+        run: node scripts/restore-safety-tests/writer-block.test.mjs
+
+      - name: Test 5 - worker barrier
+        run: node scripts/restore-safety-tests/worker-barrier.test.mjs
