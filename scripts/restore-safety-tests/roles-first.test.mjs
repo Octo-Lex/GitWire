@@ -48,7 +48,8 @@ startPg(C.name, C.port);
 sql(C.name, "CREATE ROLE gitwire NOLOGIN");
 sql(C.name, "CREATE ROLE gitwire_app LOGIN");
 sql(C.name, "GRANT gitwire TO gitwire_app");
-const goodRestore = run(['docker', 'exec', B.name, 'pg_restore', '-U', 'postgres', '-d', 'postgres', DUMP]);
+run(['docker', 'cp', '/tmp/t1.dump', `${C.name}:${DUMP}`]);
+const goodRestore = run(['docker', 'exec', C.name, 'pg_restore', '-U', 'postgres', '-d', 'postgres', DUMP]);
 if (goodRestore.code !== 0) die('restore failed with roles present: ' + goodRestore.out.slice(0, 300));
 
 // Verify the authorization model (R1): owners, memberships, login capability.
