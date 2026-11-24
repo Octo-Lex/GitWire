@@ -14,8 +14,9 @@ const DEST = mkdtempSync(join(tmpdir(), 'backup-perm-'));
 
 // The stub docker: emulates every container call backup.sh makes.
 const stub = join(DEST, 'stubbin');
-const { mkdirSync, writeFileSync } = await import('node:fs');
+const { mkdirSync, writeFileSync, chmodSync } = await import('node:fs');
 mkdirSync(stub);
+chmodSync(stub, 0o755);
 writeFileSync(join(stub, 'docker'), `#!/usr/bin/env bash
 case "$1 $2" in
   "exec gitwire-postgres-1") case "$3" in
@@ -36,6 +37,7 @@ case "$1 $2" in
   *) exit 0;;
 esac
 `);
+chmodSync(join(stub, 'docker'), 0o755);
 
 // Run the REAL backup.sh with the stub docker and a temp destination.
 const env = { ...process.env, PATH: `${stub}:${process.env.PATH}` };
