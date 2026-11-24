@@ -85,6 +85,21 @@ jobs:
       - name: No socket-form pg_isready remains in the workflow
         run: bash scripts/check-pg-readiness-tcp.sh
 
+  # backup.sh carries secrets (.env, PEM, DB dump). This pins the #502
+  # contract: the script creates its artifacts owner-only, and an owner
+  # reader can read every artifact back.
+  backup-permissions:
+    runs-on: ubuntu-latest
+    needs: syntax-check
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: backup.sh creates owner-only artifacts
+        run: node scripts/test-backup-permissions.mjs
+
   # ── Package test jobs ─────────────────────────────────────────────────────
   # Each package gets its own job so failures are attributed clearly.
   # No --passWithNoTests: a suite with zero tests is a CI failure.

@@ -11,6 +11,9 @@
 # Restorable with: ./scripts/restore.sh <backup_dir>
 
 set -euo pipefail
+# All backup artifacts are created owner-only (700 dirs / 600 files): the
+# archive carries secrets (.env, PEM). See issue #502.
+umask 077
 
 DEST="${1:-/opt/gitwire/backups}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
