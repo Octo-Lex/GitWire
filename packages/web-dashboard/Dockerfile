@@ -12,7 +12,7 @@
 #
 # Dockerfile.dockerignore, next to this file, stands in for the root
 # .dockerignore. It admits only what the COPY lines name.
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app
 
 # The dependency manifests and the dashboard source. The source is copied
@@ -50,7 +50,7 @@ LABEL org.opencontainers.image.source="https://github.com/Octo-Lex/GitWire"
 
 RUN npm run build --workspace=packages/web-dashboard
 
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
