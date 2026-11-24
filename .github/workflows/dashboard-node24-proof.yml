@@ -1,0 +1,63 @@
+name: Dashboard Node 24 proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["study/dashboard-node24*"]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the final dashboard image
+        run: docker build -t dash-proof:final -f packages/web-dashboard/Dockerfile .
+
+      - name: Node version in the builder stage
+        run: |
+          docker build --target builder -t dash-proof:builder -f packages/web-dashboard/Dockerfile .
+          B=$(docker run --rm --network none --entrypoint node dash-proof:builder -v)
+          echo "builder stage node: $B"
+          case "$B" in v24.*) ;; *) exit 1 ;; esac
+
+      - name: Node version in the runner stage
+        run: |
+          R=$(docker run --rm --network none --entrypoint node dash-proof:final -v)
+          echo "runner stage node: $R"
+          case "$R" in v24.*) ;; *) exit 1 ;; esac
+
+
+      - name: SVG assets inside the final image
+        run: |
+          S=$(docker run --rm --network none --entrypoint sh dash-proof:final -c 'ls packages/web-dashboard/public/*.svg | wc -l')
+          echo "svg files in image: $S"
+          if [ "$S" -lt 5 ]; then echo "svg check failed"; exit 1; fi
+
+      - name: Boot the image and probe the Next.js image optimizer
+        run: |
+          docker run -d --name dash-proof-run -p 3001:3001 -e NEXT_PUBLIC_API_URL="http://localhost:3000" -e HOSTNAME="0.0.0.0" dash-proof:final
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3001/dashboard >/dev/null 2>&1; then break; fi
+            STATUS=$(docker inspect -f '{{.State.Status}}' dash-proof-run 2>/dev/null || echo "gone")
+            [ "$STATUS" = "exited" ] && { docker logs dash-proof-run; exit 1; }
+            sleep 2
+          done
+          curl -fsS -o /dev/null -w "dashboard http %{http_code}\n" http://127.0.0.1:3001/dashboard
+
+      - name: Exercise the Next.js image optimizer path and scan logs
+        run: |
+          printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' | base64 -d > /tmp/proof.png
+          docker cp /tmp/proof.png dash-proof-run:packages/web-dashboard/public/proof.png
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:3001/_next/image?url=%2Fproof.png&w=64&q=75')
+          echo "image optimizer status for a raster input: $CODE"
+          if docker logs dash-proof-run 2>&1 | grep -qiE "sharp|binary|Cannot find module|ERR_DLOPEN"; then
+            docker logs dash-proof-run
+            exit 1
+          fi
+          docker rm -f dash-proof-run >/dev/null
+          echo "no sharp or binary load errors in the server logs"
